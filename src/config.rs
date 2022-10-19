@@ -1,5 +1,5 @@
 use {
-    serde::Deserialize,
+    serde::{de, Deserialize, Deserializer},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
     },
@@ -57,7 +57,43 @@ pub struct ConfigGrpc {
     /// Address of Grpc service.
     pub address: SocketAddr,
     /// Capacity of the channel per connection
+    #[serde(deserialize_with = "deserialize_channel_capacity")]
     pub channel_capacity: usize,
+}
+
+fn deserialize_channel_capacity<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(UsizeStr::deserialize(deserializer)?.value)
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+struct UsizeStr {
+    value: usize,
+}
+
+impl<'de> Deserialize<'de> for UsizeStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Integer(usize),
+            String(String),
+        }
+
+        match Value::deserialize(deserializer)? {
+            Value::Integer(value) => Ok(UsizeStr { value }),
+            Value::String(value) => value
+                .replace('_', "")
+                .parse::<usize>()
+                .map_err(de::Error::custom)
+                .map(|value| UsizeStr { value }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

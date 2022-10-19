@@ -5,7 +5,7 @@
     },
     "grpc": {
         "address": "0.0.0.0:10000",
-        "channel_capacity": 100000
+        "channel_capacity": "100_000"
     },
     "prometheus": {
         "address": "0.0.0.0:8999"
