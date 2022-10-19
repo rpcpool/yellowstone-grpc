@@ -1,0 +1,63 @@
+# Source:
+# https://github.com/solana-labs/solana-accountsdb-plugin-postgres/blob/master/.github/workflows/test.yml
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+
+      - name: Set rust version
+        run: |
+          source ci/rust-version.sh
+          echo "RUST_STABLE=$rust_stable" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          override: true
+          profile: minimal
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_STABLE}}
+
+      - name: cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - name: cargo clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --workspace --all-targets #-- --deny=warnings
+
+      - name: Build
+        run: ./ci/cargo-build-test.sh

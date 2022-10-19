@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package geyser;
+
+service Geyser {
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeUpdate) {}
+}
+
+message SubscribeRequest {
+  bool any = 1;
+  repeated string accounts = 2;
+  repeated string owners = 3;
+}
+
+message SubscribeUpdate {
+  oneof update_oneof {
+    SubscribeUpdateAccount account = 1;
+    SubscribeUpdateSlot slot = 2;
+  }
+}
+
+message SubscribeUpdateAccount {
+  SubscribeUpdateAccountInfo account = 1;
+  uint64 slot = 2;
+  bool is_startup = 3;
+}
+
+message SubscribeUpdateAccountInfo {
+  bytes pubkey = 1;
+  uint64 lamports = 2;
+  bytes owner = 3;
+  bool executable = 4;
+  uint64 rent_epoch = 5;
+  bytes data = 6;
+  uint64 write_version = 7;
+}
+
+message SubscribeUpdateSlot {
+  uint64 slot = 1;
+  optional uint64 parent = 2;
+  SubscribeUpdateSlotStatus status = 3;
+}
+
+enum SubscribeUpdateSlotStatus {
+  PROCESSED = 0;
+  ROOTED = 1;
+  CONFIRMED = 2;
+}

@@ -1,0 +1,66 @@
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+
+      - name: Set rust version
+        run: |
+          source ci/rust-version.sh
+          echo "RUST_STABLE=$rust_stable" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          override: true
+          profile: minimal
+          components: rustfmt
+
+      - name: Check Solana version
+        run: |
+          echo "CI_TAG=${GITHUB_REF#refs/*/}" >> "$GITHUB_ENV"
+          echo "CI_OS_NAME=linux" >> "$GITHUB_ENV"
+
+          SOLANA_VERSION="$(./ci/solana-version.sh)"
+          SOLANA_VERSION="v${SOLANA_VERSION#=}"
+          echo "SOLANA_VERSION=$SOLANA_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build release tarball
+        run: ./ci/create-tarball.sh
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          body: |
+            ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
+            solana ${{ env.SOLANA_VERSION }}
+            rust ${{ env.RUST_STABLE }}
+          files: |
+            ${{ env.GEYSER_PLUGIN_NAME }}-release-*
+
