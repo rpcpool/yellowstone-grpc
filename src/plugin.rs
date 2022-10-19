@@ -1,13 +1,7 @@
 use {
     crate::{
         config::Config,
-        grpc::{
-            proto::{
-                subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
-                SubscribeUpdateAccountInfo, SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
-            },
-            GrpcService,
-        },
+        grpc::{GrpcService, Message},
         prom::{PrometheusService, SLOT_STATUS},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -24,7 +18,7 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    grpc_channel: mpsc::UnboundedSender<SubscribeUpdate>,
+    grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
 }
@@ -81,23 +75,9 @@ impl GeyserPlugin for Plugin {
         is_startup: bool,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        let _ = inner.grpc_channel.send(match account {
-            ReplicaAccountInfoVersions::V0_0_1(info) => SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
-                    account: Some(SubscribeUpdateAccountInfo {
-                        pubkey: info.pubkey.into(),
-                        lamports: info.lamports,
-                        owner: info.owner.into(),
-                        executable: info.executable,
-                        rent_epoch: info.rent_epoch,
-                        data: info.data.into(),
-                        write_version: info.write_version,
-                    }),
-                    slot,
-                    is_startup,
-                })),
-            },
-        });
+        let _ = inner
+            .grpc_channel
+            .send(Message::UpdateAccount((account, slot, is_startup).into()));
 
         Ok(())
     }
@@ -109,17 +89,9 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        let _ = inner.grpc_channel.send(SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot,
-                parent,
-                status: match status {
-                    SlotStatus::Processed => SubscribeUpdateSlotStatus::Processed,
-                    SlotStatus::Confirmed => SubscribeUpdateSlotStatus::Confirmed,
-                    SlotStatus::Rooted => SubscribeUpdateSlotStatus::Rooted,
-                } as i32,
-            })),
-        });
+        let _ = inner
+            .grpc_channel
+            .send(Message::UpdateSlot((slot, parent, status).into()));
 
         SLOT_STATUS
             .with_label_values(&[match status {

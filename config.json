@@ -1,5 +1,5 @@
 {
-    "libpath": "../target/debug/libsolana_geyser_grpc.so",
+    "libpath": "target/debug/libsolana_geyser_grpc.so",
     "log": {
         "level": "info"
     },

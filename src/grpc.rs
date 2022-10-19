@@ -1,15 +1,20 @@
 use {
     crate::{
         config::ConfigGrpc,
-        filters::AccountsFilter,
+        filters::Filter,
         grpc::proto::{
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
         },
         prom::CONNECTIONS_TOTAL,
     },
     log::*,
+    solana_geyser_plugin_interface::geyser_plugin_interface::{
+        ReplicaAccountInfoVersions, SlotStatus,
+    },
+    solana_sdk::{pubkey::Pubkey, signature::Signature},
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
@@ -29,9 +34,110 @@ pub mod proto {
 }
 
 #[derive(Debug)]
+pub struct UpdateAccountMessageAccount {
+    pub pubkey: Pubkey,
+    pub lamports: u64,
+    pub owner: Pubkey,
+    pub executable: bool,
+    pub rent_epoch: u64,
+    pub data: Vec<u8>,
+    pub write_version: u64,
+    pub txn_signature: Option<Signature>,
+}
+
+#[derive(Debug)]
+pub struct UpdateAccountMessage {
+    pub account: UpdateAccountMessageAccount,
+    pub slot: u64,
+    pub is_startup: bool,
+}
+
+impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for UpdateAccountMessage {
+    fn from((account, slot, is_startup): (ReplicaAccountInfoVersions<'a>, u64, bool)) -> Self {
+        Self {
+            account: match account {
+                ReplicaAccountInfoVersions::V0_0_1(info) => UpdateAccountMessageAccount {
+                    pubkey: Pubkey::new(info.pubkey),
+                    lamports: info.lamports,
+                    owner: Pubkey::new(info.owner),
+                    executable: info.executable,
+                    rent_epoch: info.rent_epoch,
+                    data: info.data.into(),
+                    write_version: info.write_version,
+                    txn_signature: None,
+                },
+            },
+            slot,
+            is_startup,
+        }
+    }
+}
+
+impl UpdateAccountMessage {
+    fn with_filters(&self, filters: Vec<String>) -> SubscribeUpdate {
+        SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(SubscribeUpdateAccountInfo {
+                    pubkey: self.account.pubkey.as_ref().into(),
+                    lamports: self.account.lamports,
+                    owner: self.account.owner.as_ref().into(),
+                    executable: self.account.executable,
+                    rent_epoch: self.account.rent_epoch,
+                    data: self.account.data.clone(),
+                    write_version: self.account.write_version,
+                    txn_signature: self.account.txn_signature.map(|sig| sig.as_ref().into()),
+                }),
+                slot: self.slot,
+                is_startup: self.is_startup,
+                filters,
+            })),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct UpdateSlotMessage {
+    slot: u64,
+    parent: Option<u64>,
+    status: SubscribeUpdateSlotStatus,
+}
+
+impl From<(u64, Option<u64>, SlotStatus)> for UpdateSlotMessage {
+    fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
+        Self {
+            slot,
+            parent,
+            status: match status {
+                SlotStatus::Processed => SubscribeUpdateSlotStatus::Processed,
+                SlotStatus::Confirmed => SubscribeUpdateSlotStatus::Confirmed,
+                SlotStatus::Rooted => SubscribeUpdateSlotStatus::Rooted,
+            },
+        }
+    }
+}
+
+impl From<&UpdateSlotMessage> for SubscribeUpdate {
+    fn from(msg: &UpdateSlotMessage) -> Self {
+        Self {
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: msg.slot,
+                parent: msg.parent,
+                status: msg.status as i32,
+            })),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Message {
+    UpdateAccount(UpdateAccountMessage),
+    UpdateSlot(UpdateSlotMessage),
+}
+
+#[derive(Debug)]
 struct ClientConnection {
     id: usize,
-    accounts_filter: AccountsFilter,
+    filter: Filter,
     stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
 }
 
@@ -46,7 +152,7 @@ impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
     ) -> Result<
-        (mpsc::UnboundedSender<SubscribeUpdate>, oneshot::Sender<()>),
+        (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
     > {
         // Bind service address
@@ -86,7 +192,7 @@ impl GrpcService {
     }
 
     async fn send_loop(
-        mut update_channel_rx: mpsc::UnboundedReceiver<SubscribeUpdate>,
+        mut update_channel_rx: mpsc::UnboundedReceiver<Message>,
         mut new_clients_rx: mpsc::UnboundedReceiver<ClientConnection>,
     ) {
         let mut clients: HashMap<usize, ClientConnection> = HashMap::new();
@@ -97,20 +203,32 @@ impl GrpcService {
                     let mut ids_closed = vec![];
 
                     for client in clients.values() {
-                        let message = match &message.update_oneof {
-                            Some(UpdateOneof::Account(SubscribeUpdateAccount {
-                                account: Some(SubscribeUpdateAccountInfo { pubkey, owner,.. }),
-                                ..
-                            })) if !client.accounts_filter.is_account_selected(pubkey, owner) => {
-                                continue;
-                            }
-                            _ => message.clone(),
-                        };
+                        if let Some(message) = match &message {
+                            Message::UpdateAccount(message) => {
+                                let mut filter = client.filter.create_accounts_match();
+                                filter.match_account(&message.account.pubkey);
+                                filter.match_owner(&message.account.owner);
 
-                        match client.stream_tx.try_send(Ok(message)) {
-                            Ok(()) => {},
-                            Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(client.id),
-                            Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(client.id),
+                                let filters = filter.get_filters();
+                                if !filters.is_empty() {
+                                    Some(message.with_filters(filters))
+                                } else {
+                                    None
+                                }
+                            }
+                            Message::UpdateSlot(message) => {
+                                if client.filter.is_slots_enabled() {
+                                    Some(message.into())
+                                } else {
+                                    None
+                                }
+                            }
+                        } {
+                            match client.stream_tx.try_send(Ok(message)) {
+                                Ok(()) => {},
+                                Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(client.id),
+                                Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(client.id),
+                            }
                         }
                     }
 
@@ -152,8 +270,7 @@ impl Geyser for GrpcService {
         let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
         info!("{}, new subscriber", id);
 
-        let data = request.get_ref();
-        let accounts_filter = match AccountsFilter::new(data.any, &data.accounts, &data.owners) {
+        let filter = match Filter::try_from(request.get_ref()) {
             Ok(filter) => filter,
             Err(error) => {
                 let message = format!("failed to create filter: {:?}", error);
@@ -165,7 +282,7 @@ impl Geyser for GrpcService {
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
         if let Err(_error) = self.new_clients_tx.send(ClientConnection {
             id,
-            accounts_filter,
+            filter,
             stream_tx,
         }) {
             return Err(Status::internal(""));

@@ -2398,7 +2398,6 @@ name = "solana-geyser-grpc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bs58",
  "cargo-lock",
  "clap",
  "futures",
@@ -2412,6 +2411,7 @@ dependencies = [
  "serde_json",
  "solana-geyser-plugin-interface",
  "solana-logger",
+ "solana-sdk",
  "tokio",
  "tokio-stream",
  "tonic",

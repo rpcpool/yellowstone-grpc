@@ -22,3 +22,20 @@ new message: Ok(SubscribeUpdate { update_oneof: Some(Account(SubscribeUpdateAcco
 new message: Ok(SubscribeUpdate { update_oneof: Some(Slot(SubscribeUpdateSlot { slot: 3159, parent: None, status: Confirmed })) })
 ^C
 ```
+
+### Filters
+
+See [proto/geyser.proto](proto/geyser.proto).
+
+#### Slots
+
+   - `enabled` — broadcast slots updates
+
+#### Account
+
+Accounts can be filtered by:
+
+   - `account` — acount Pubkey, match to any Pubkey from the array
+   - `owner` — account owner Pubkey, match to any Pubkey from the array
+
+All fields in filter are optional, if all filters are empty then all accounts broadcasted. Fields works as logical `AND`. Values in the arrays works as logical `OR`.

@@ -7,9 +7,18 @@ service Geyser {
 }
 
 message SubscribeRequest {
-  bool any = 1;
-  repeated string accounts = 2;
-  repeated string owners = 3;
+  SubscribeRequestSlots slots = 1;
+  repeated SubscribeRequestAccounts accounts = 2;
+}
+
+message SubscribeRequestSlots {
+  bool enabled = 1;
+}
+
+message SubscribeRequestAccounts {
+  string filter = 1;
+  repeated string account = 2;
+  repeated string owner = 3;
 }
 
 message SubscribeUpdate {
@@ -20,9 +29,10 @@ message SubscribeUpdate {
 }
 
 message SubscribeUpdateAccount {
-  SubscribeUpdateAccountInfo account = 1;
-  uint64 slot = 2;
-  bool is_startup = 3;
+  repeated string filters = 1;
+  SubscribeUpdateAccountInfo account = 2;
+  uint64 slot = 3;
+  bool is_startup = 4;
 }
 
 message SubscribeUpdateAccountInfo {
@@ -33,6 +43,7 @@ message SubscribeUpdateAccountInfo {
   uint64 rent_epoch = 5;
   bytes data = 6;
   uint64 write_version = 7;
+  optional bytes txn_signature = 8;
 }
 
 message SubscribeUpdateSlot {

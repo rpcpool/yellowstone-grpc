@@ -1,7 +1,10 @@
 use {
     clap::Parser,
     futures::stream::StreamExt,
-    solana_geyser_grpc::grpc::proto::{geyser_client::GeyserClient, SubscribeRequest},
+    solana_geyser_grpc::grpc::proto::{
+        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestAccounts,
+        SubscribeRequestSlots,
+    },
     tonic::Request,
 };
 
@@ -13,14 +16,14 @@ struct Args {
     endpoint: String,
 
     #[clap(short, long)]
-    /// Stream all accounts
-    any: bool,
+    /// Subscribe on slots updates
+    slots: bool,
 
-    #[clap(short, long, conflicts_with = "any")]
+    #[clap(short, long)]
     /// Filter by Account Pubkey
-    accounts: Vec<String>,
+    account: Vec<String>,
 
-    #[clap(short, long, conflicts_with = "any")]
+    #[clap(short, long)]
     /// Filter by Owner Pubkey
     owner: Vec<String>,
 }
@@ -31,16 +34,24 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = GeyserClient::connect(args.endpoint).await?;
     let request = Request::new(SubscribeRequest {
-        any: args.any,
-        accounts: args.accounts,
-        owners: args.owner,
+        slots: Some(SubscribeRequestSlots {
+            enabled: args.slots,
+        }),
+        accounts: vec![SubscribeRequestAccounts {
+            filter: "client".to_owned(),
+            account: args.account,
+            owner: args.owner,
+        }],
     });
     let response = client.subscribe(request).await?;
     let mut stream = response.into_inner();
 
     println!("stream opened");
     while let Some(message) = stream.next().await {
-        println!("new message: {:?}", message);
+        match message {
+            Ok(message) => println!("new message: {:?}", message),
+            Err(error) => eprintln!("error: {:?}", error),
+        }
     }
     println!("stream closed");
 
