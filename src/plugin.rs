@@ -5,8 +5,8 @@ use {
         prom::{PrometheusService, SLOT_STATUS},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, Result as PluginResult,
-        SlotStatus,
+        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions,
+        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     std::time::Duration,
     tokio::{
@@ -75,9 +75,8 @@ impl GeyserPlugin for Plugin {
         is_startup: bool,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        let _ = inner
-            .grpc_channel
-            .send(Message::UpdateAccount((account, slot, is_startup).into()));
+        let message = Message::Account((account, slot, is_startup).into());
+        let _ = inner.grpc_channel.send(message);
 
         Ok(())
     }
@@ -89,9 +88,8 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        let _ = inner
-            .grpc_channel
-            .send(Message::UpdateSlot((slot, parent, status).into()));
+        let message = Message::Slot((slot, parent, status).into());
+        let _ = inner.grpc_channel.send(message);
 
         SLOT_STATUS
             .with_label_values(&[match status {
@@ -102,6 +100,22 @@ impl GeyserPlugin for Plugin {
             .set(slot as i64);
 
         Ok(())
+    }
+
+    fn notify_transaction(
+        &mut self,
+        transaction: ReplicaTransactionInfoVersions<'_>,
+        slot: u64,
+    ) -> PluginResult<()> {
+        let inner = self.inner.as_ref().expect("initialized");
+        let message = Message::Transaction((transaction, slot).into());
+        let _ = inner.grpc_channel.send(message);
+
+        Ok(())
+    }
+
+    fn transaction_notifications_enabled(&self) -> bool {
+        true
     }
 }
 

@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import public "solana-storage-v1.10.40.proto";
+
 package geyser;
 
 service Geyser {
@@ -7,32 +9,40 @@ service Geyser {
 }
 
 message SubscribeRequest {
-  SubscribeRequestSlots slots = 1;
-  repeated SubscribeRequestAccounts accounts = 2;
+  map<string, SubscribeRequestFilterAccounts> accounts = 1;
+  map<string, SubscribeRequestFilterSlots> slots = 2;
+  map<string, SubscribeRequestFilterTransactions> transactions = 3;
 }
 
-message SubscribeRequestSlots {
-  bool enabled = 1;
-}
-
-message SubscribeRequestAccounts {
-  string filter = 1;
+message SubscribeRequestFilterAccounts {
+  bool any = 1;
   repeated string account = 2;
   repeated string owner = 3;
 }
 
+message SubscribeRequestFilterSlots {
+  bool any = 1;
+}
+
+message SubscribeRequestFilterTransactions {
+  bool any = 1;
+  bool vote = 2;
+  bool failed = 3;
+}
+
 message SubscribeUpdate {
+  repeated string filters = 1;
   oneof update_oneof {
-    SubscribeUpdateAccount account = 1;
-    SubscribeUpdateSlot slot = 2;
+    SubscribeUpdateAccount account = 2;
+    SubscribeUpdateSlot slot = 3;
+    SubscribeUpdateTransaction transaction = 4;
   }
 }
 
 message SubscribeUpdateAccount {
-  repeated string filters = 1;
-  SubscribeUpdateAccountInfo account = 2;
-  uint64 slot = 3;
-  bool is_startup = 4;
+  SubscribeUpdateAccountInfo account = 1;
+  uint64 slot = 2;
+  bool is_startup = 3;
 }
 
 message SubscribeUpdateAccountInfo {
@@ -43,7 +53,7 @@ message SubscribeUpdateAccountInfo {
   uint64 rent_epoch = 5;
   bytes data = 6;
   uint64 write_version = 7;
-  optional bytes txn_signature = 8;
+  // bytes txn_signature = 8;
 }
 
 message SubscribeUpdateSlot {
@@ -56,4 +66,17 @@ enum SubscribeUpdateSlotStatus {
   PROCESSED = 0;
   ROOTED = 1;
   CONFIRMED = 2;
+}
+
+message SubscribeUpdateTransaction {
+  SubscribeUpdateTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUpdateTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
+  solana.storage.ConfirmedBlock.TransactionStatusMeta meta = 4;
+  // uint64 index = 5;
 }

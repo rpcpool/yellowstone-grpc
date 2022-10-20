@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1"
+bincode = "1"
 clap = { version = "3", features = ["cargo", "derive"] }
 futures = "0.3"
 hyper = { version = "0.14", features = ["server"] }
@@ -21,6 +22,7 @@ serde_json = "1"
 solana-geyser-plugin-interface = "=1.10.40"
 solana-logger = "=1.10.40"
 solana-sdk = "=1.10.40"
+solana-transaction-status = "=1.10.40"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1"
 tonic = { version = "0.8", features = ["gzip"] }

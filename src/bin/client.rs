@@ -1,10 +1,11 @@
 use {
     clap::Parser,
     futures::stream::StreamExt,
-    solana_geyser_grpc::grpc::proto::{
-        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestAccounts,
-        SubscribeRequestSlots,
+    solana_geyser_grpc::proto::{
+        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
+    std::collections::HashMap,
     tonic::Request,
 };
 
@@ -15,9 +16,13 @@ struct Args {
     /// Service endpoint
     endpoint: String,
 
-    #[clap(short, long)]
+    #[clap(long)]
     /// Subscribe on slots updates
     slots: bool,
+
+    #[clap(long)]
+    /// Subscribe on accounts updates
+    accounts: bool,
 
     #[clap(short, long)]
     /// Filter by Account Pubkey
@@ -26,22 +31,61 @@ struct Args {
     #[clap(short, long)]
     /// Filter by Owner Pubkey
     owner: Vec<String>,
+
+    #[clap(long)]
+    /// Subscribe on transactions updates
+    transactions: bool,
+
+    #[clap(short, long)]
+    /// Filter vote transactions
+    vote: bool,
+
+    #[clap(short, long)]
+    /// Filter failed transactions
+    failed: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    let mut accounts = HashMap::new();
+    if args.accounts {
+        accounts.insert(
+            "client".to_owned(),
+            SubscribeRequestFilterAccounts {
+                any: args.account.is_empty() && args.owner.is_empty(),
+                account: args.account,
+                owner: args.owner,
+            },
+        );
+    }
+
+    let mut slots = HashMap::new();
+    if args.slots {
+        slots.insert(
+            "client".to_owned(),
+            SubscribeRequestFilterSlots { any: true },
+        );
+    }
+
+    let mut transactions = HashMap::new();
+    if args.transactions {
+        transactions.insert(
+            "client".to_string(),
+            SubscribeRequestFilterTransactions {
+                any: true,
+                vote: args.vote,
+                failed: args.failed,
+            },
+        );
+    }
+
     let mut client = GeyserClient::connect(args.endpoint).await?;
     let request = Request::new(SubscribeRequest {
-        slots: Some(SubscribeRequestSlots {
-            enabled: args.slots,
-        }),
-        accounts: vec![SubscribeRequestAccounts {
-            filter: "client".to_owned(),
-            account: args.account,
-            owner: args.owner,
-        }],
+        slots,
+        accounts,
+        transactions,
     });
     let response = client.subscribe(request).await?;
     let mut stream = response.into_inner();

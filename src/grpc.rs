@@ -2,19 +2,21 @@ use {
     crate::{
         config::ConfigGrpc,
         filters::Filter,
-        grpc::proto::{
+        prom::CONNECTIONS_TOTAL,
+        proto::{
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
+            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo,
         },
-        prom::CONNECTIONS_TOTAL,
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoVersions, SlotStatus,
+        ReplicaAccountInfoVersions, ReplicaTransactionInfoVersions, SlotStatus,
     },
-    solana_sdk::{pubkey::Pubkey, signature::Signature},
+    solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::VersionedTransaction},
+    solana_transaction_status::TransactionStatusMeta,
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
@@ -29,12 +31,8 @@ use {
     },
 };
 
-pub mod proto {
-    tonic::include_proto!("geyser");
-}
-
 #[derive(Debug)]
-pub struct UpdateAccountMessageAccount {
+pub struct MessageAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
     pub owner: Pubkey,
@@ -42,21 +40,21 @@ pub struct UpdateAccountMessageAccount {
     pub rent_epoch: u64,
     pub data: Vec<u8>,
     pub write_version: u64,
-    pub txn_signature: Option<Signature>,
+    // pub txn_signature: Signature,
 }
 
 #[derive(Debug)]
-pub struct UpdateAccountMessage {
-    pub account: UpdateAccountMessageAccount,
+pub struct MessageAccount {
+    pub account: MessageAccountInfo,
     pub slot: u64,
     pub is_startup: bool,
 }
 
-impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for UpdateAccountMessage {
+impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for MessageAccount {
     fn from((account, slot, is_startup): (ReplicaAccountInfoVersions<'a>, u64, bool)) -> Self {
         Self {
             account: match account {
-                ReplicaAccountInfoVersions::V0_0_1(info) => UpdateAccountMessageAccount {
+                ReplicaAccountInfoVersions::V0_0_1(info) => MessageAccountInfo {
                     pubkey: Pubkey::new(info.pubkey),
                     lamports: info.lamports,
                     owner: Pubkey::new(info.owner),
@@ -64,7 +62,7 @@ impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for UpdateAccountMess
                     rent_epoch: info.rent_epoch,
                     data: info.data.into(),
                     write_version: info.write_version,
-                    txn_signature: None,
+                    // txn_signature: info.txn_signature,
                 },
             },
             slot,
@@ -73,36 +71,14 @@ impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for UpdateAccountMess
     }
 }
 
-impl UpdateAccountMessage {
-    fn with_filters(&self, filters: Vec<String>) -> SubscribeUpdate {
-        SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(SubscribeUpdateAccountInfo {
-                    pubkey: self.account.pubkey.as_ref().into(),
-                    lamports: self.account.lamports,
-                    owner: self.account.owner.as_ref().into(),
-                    executable: self.account.executable,
-                    rent_epoch: self.account.rent_epoch,
-                    data: self.account.data.clone(),
-                    write_version: self.account.write_version,
-                    txn_signature: self.account.txn_signature.map(|sig| sig.as_ref().into()),
-                }),
-                slot: self.slot,
-                is_startup: self.is_startup,
-                filters,
-            })),
-        }
-    }
-}
-
 #[derive(Debug)]
-pub struct UpdateSlotMessage {
-    slot: u64,
-    parent: Option<u64>,
-    status: SubscribeUpdateSlotStatus,
+pub struct MessageSlot {
+    pub slot: u64,
+    pub parent: Option<u64>,
+    pub status: SubscribeUpdateSlotStatus,
 }
 
-impl From<(u64, Option<u64>, SlotStatus)> for UpdateSlotMessage {
+impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
     fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
         Self {
             slot,
@@ -116,22 +92,78 @@ impl From<(u64, Option<u64>, SlotStatus)> for UpdateSlotMessage {
     }
 }
 
-impl From<&UpdateSlotMessage> for SubscribeUpdate {
-    fn from(msg: &UpdateSlotMessage) -> Self {
+#[derive(Debug)]
+pub struct MessageTransactionInfo {
+    pub signature: Signature,
+    pub is_vote: bool,
+    pub transaction: VersionedTransaction,
+    pub meta: TransactionStatusMeta,
+    // pub index: usize,
+}
+
+#[derive(Debug)]
+pub struct MessageTransaction {
+    pub transaction: MessageTransactionInfo,
+    pub slot: u64,
+}
+
+impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction {
+    fn from((transaction, slot): (ReplicaTransactionInfoVersions<'a>, u64)) -> Self {
         Self {
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: msg.slot,
-                parent: msg.parent,
-                status: msg.status as i32,
-            })),
+            transaction: match transaction {
+                ReplicaTransactionInfoVersions::V0_0_1(info) => MessageTransactionInfo {
+                    signature: *info.signature,
+                    is_vote: info.is_vote,
+                    transaction: info.transaction.to_versioned_transaction(),
+                    meta: info.transaction_status_meta.clone(),
+                    // index: info.index,
+                },
+            },
+            slot,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum Message {
-    UpdateAccount(UpdateAccountMessage),
-    UpdateSlot(UpdateSlotMessage),
+    Slot(MessageSlot),
+    Account(MessageAccount),
+    Transaction(MessageTransaction),
+}
+
+impl From<&Message> for UpdateOneof {
+    fn from(message: &Message) -> Self {
+        match message {
+            Message::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: message.slot,
+                parent: message.parent,
+                status: message.status as i32,
+            }),
+            Message::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(SubscribeUpdateAccountInfo {
+                    pubkey: message.account.pubkey.as_ref().into(),
+                    lamports: message.account.lamports,
+                    owner: message.account.owner.as_ref().into(),
+                    executable: message.account.executable,
+                    rent_epoch: message.account.rent_epoch,
+                    data: message.account.data.clone(),
+                    write_version: message.account.write_version,
+                    // txn_signature: self.account.txn_signature.as_ref().into(),
+                }),
+                slot: message.slot,
+                is_startup: message.is_startup,
+            }),
+            Message::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                transaction: Some(SubscribeUpdateTransactionInfo {
+                    signature: message.transaction.signature.as_ref().into(),
+                    is_vote: message.transaction.is_vote,
+                    transaction: Some((&message.transaction.transaction).into()),
+                    meta: Some((&message.transaction.meta).into()),
+                }),
+                slot: message.slot,
+            }),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -203,28 +235,12 @@ impl GrpcService {
                     let mut ids_closed = vec![];
 
                     for client in clients.values() {
-                        if let Some(message) = match &message {
-                            Message::UpdateAccount(message) => {
-                                let mut filter = client.filter.create_accounts_match();
-                                filter.match_account(&message.account.pubkey);
-                                filter.match_owner(&message.account.owner);
-
-                                let filters = filter.get_filters();
-                                if !filters.is_empty() {
-                                    Some(message.with_filters(filters))
-                                } else {
-                                    None
-                                }
-                            }
-                            Message::UpdateSlot(message) => {
-                                if client.filter.is_slots_enabled() {
-                                    Some(message.into())
-                                } else {
-                                    None
-                                }
-                            }
-                        } {
-                            match client.stream_tx.try_send(Ok(message)) {
+                        let filters = client.filter.get_filters(&message);
+                        if !filters.is_empty() {
+                            match client.stream_tx.try_send(Ok(SubscribeUpdate {
+                                filters,
+                                update_oneof: Some((&message).into()),
+                            })) {
                                 Ok(()) => {},
                                 Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(client.id),
                                 Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(client.id),
