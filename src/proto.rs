@@ -16,6 +16,7 @@ pub use solana::storage::confirmed_block::*;
 mod convert {
     use {
         solana_sdk::{
+            clock::UnixTimestamp,
             instruction::CompiledInstruction,
             message::{
                 legacy::Message as LegacyMessage, v0::MessageAddressTableLookup, MessageHeader,
@@ -223,6 +224,26 @@ mod convert {
                 } as i32,
                 commission: reward.commission.map(|c| c.to_string()).unwrap_or_default(),
             }
+        }
+    }
+
+    impl From<&[Reward]> for super::Rewards {
+        fn from(rewards: &[Reward]) -> Self {
+            Self {
+                rewards: rewards.iter().map(|v| v.into()).collect(),
+            }
+        }
+    }
+
+    impl From<u64> for super::BlockHeight {
+        fn from(block_height: u64) -> Self {
+            Self { block_height }
+        }
+    }
+
+    impl From<UnixTimestamp> for super::UnixTimestamp {
+        fn from(timestamp: UnixTimestamp) -> Self {
+            Self { timestamp }
         }
     }
 }

@@ -7,16 +7,20 @@ use {
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
-            SubscribeUpdateTransactionInfo,
+            SubscribeUpdateBlock, SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoVersions, ReplicaTransactionInfoVersions, SlotStatus,
+        ReplicaAccountInfoVersions, ReplicaBlockInfoVersions, ReplicaTransactionInfoVersions,
+        SlotStatus,
     },
-    solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::VersionedTransaction},
-    solana_transaction_status::TransactionStatusMeta,
+    solana_sdk::{
+        clock::UnixTimestamp, pubkey::Pubkey, signature::Signature,
+        transaction::VersionedTransaction,
+    },
+    solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
@@ -125,10 +129,34 @@ impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction 
 }
 
 #[derive(Debug)]
+pub struct MessageBlock {
+    pub slot: u64,
+    pub blockhash: String,
+    pub rewards: Vec<Reward>,
+    pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<u64>,
+}
+
+impl<'a> From<ReplicaBlockInfoVersions<'a>> for MessageBlock {
+    fn from(blockinfo: ReplicaBlockInfoVersions<'a>) -> Self {
+        match blockinfo {
+            ReplicaBlockInfoVersions::V0_0_1(info) => Self {
+                slot: info.slot,
+                blockhash: info.blockhash.to_string(),
+                rewards: info.rewards.into(),
+                block_time: info.block_time,
+                block_height: info.block_height,
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
+    Block(MessageBlock),
 }
 
 impl From<&Message> for UpdateOneof {
@@ -161,6 +189,13 @@ impl From<&Message> for UpdateOneof {
                     meta: Some((&message.transaction.meta).into()),
                 }),
                 slot: message.slot,
+            }),
+            Message::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
+                slot: message.slot,
+                blockhash: message.blockhash.clone(),
+                rewards: Some(message.rewards.as_slice().into()),
+                block_time: message.block_time.map(|v| v.into()),
+                block_height: message.block_height.map(|v| v.into()),
             }),
         }
     }

@@ -44,3 +44,7 @@ All fields in filter are optional but at least 1 is required. Fields works as lo
    - `any` — stream all transactions
    - `vote` — enable/disable broadcast `vote` transactions
    - `failed` — enable/disable broadcast `failed` transactions
+
+#### Blocks
+
+   - `any` — stream all blocks

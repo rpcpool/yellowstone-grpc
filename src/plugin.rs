@@ -5,7 +5,7 @@ use {
         prom::{PrometheusService, SLOT_STATUS},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions,
+        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     std::time::Duration,
@@ -109,6 +109,17 @@ impl GeyserPlugin for Plugin {
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
         let message = Message::Transaction((transaction, slot).into());
+        let _ = inner.grpc_channel.send(message);
+
+        Ok(())
+    }
+
+    fn notify_block_metadata(
+        &mut self,
+        blockinfo: ReplicaBlockInfoVersions<'_>,
+    ) -> PluginResult<()> {
+        let inner = self.inner.as_ref().expect("initialized");
+        let message = Message::Block(blockinfo.into());
         let _ = inner.grpc_channel.send(message);
 
         Ok(())
