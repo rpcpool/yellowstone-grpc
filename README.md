@@ -27,7 +27,7 @@ See [proto/geyser.proto](proto/geyser.proto).
 
 #### Slots
 
-   - `any` — broadcast all slots
+Currently all slots are broadcasted.
 
 #### Account
 
@@ -49,4 +49,4 @@ If all fields are empty then all transactions are broadcasted. Otherwise fields 
 
 #### Blocks
 
-   - `any` — stream all blocks
+Currently all blocks are broadcasted.

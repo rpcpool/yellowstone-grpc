@@ -203,15 +203,8 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterSlots>> for FilterSlots {
         Ok(FilterSlots {
             filters: configs
                 .iter()
-                .filter_map(
-                    |(name, filter)| {
-                        if filter.any {
-                            Some(name.clone())
-                        } else {
-                            None
-                        }
-                    },
-                )
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
                 .collect(),
         })
     }
@@ -328,15 +321,8 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterBlocks>> for FilterBlocks {
         Ok(FilterBlocks {
             filters: configs
                 .iter()
-                .filter_map(
-                    |(name, filter)| {
-                        if filter.any {
-                            Some(name.clone())
-                        } else {
-                            None
-                        }
-                    },
-                )
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
                 .collect(),
         })
     }

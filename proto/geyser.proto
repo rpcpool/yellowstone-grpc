@@ -20,9 +20,7 @@ message SubscribeRequestFilterAccounts {
   repeated string owner = 3;
 }
 
-message SubscribeRequestFilterSlots {
-  bool any = 1;
-}
+message SubscribeRequestFilterSlots {}
 
 message SubscribeRequestFilterTransactions {
   optional bool vote = 1;
@@ -31,9 +29,7 @@ message SubscribeRequestFilterTransactions {
   repeated string accounts_exclude = 4;
 }
 
-message SubscribeRequestFilterBlocks {
-  bool any = 1;
-}
+message SubscribeRequestFilterBlocks {}
 
 message SubscribeUpdate {
   repeated string filters = 1;

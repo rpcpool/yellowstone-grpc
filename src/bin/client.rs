@@ -67,10 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut slots = HashMap::new();
     if args.slots {
-        slots.insert(
-            "client".to_owned(),
-            SubscribeRequestFilterSlots { any: true },
-        );
+        slots.insert("client".to_owned(), SubscribeRequestFilterSlots {});
     }
 
     let mut transactions = HashMap::new();
@@ -88,10 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut blocks = HashMap::new();
     if args.blocks {
-        blocks.insert(
-            "client".to_owned(),
-            SubscribeRequestFilterBlocks { any: true },
-        );
+        blocks.insert("client".to_owned(), SubscribeRequestFilterBlocks {});
     }
 
     let mut client = GeyserClient::connect(args.endpoint).await?;
