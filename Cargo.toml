@@ -19,10 +19,10 @@ prometheus = "0.13"
 prost = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-solana-geyser-plugin-interface = "=1.10.40"
-solana-logger = "=1.10.40"
-solana-sdk = "=1.10.40"
-solana-transaction-status = "=1.10.40"
+solana-geyser-plugin-interface = "=1.13.3"
+solana-logger = "=1.13.3"
+solana-sdk = "=1.13.3"
+solana-transaction-status = "=1.13.3"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1"
 tonic = { version = "0.8", features = ["gzip"] }
