@@ -16,7 +16,6 @@ message SubscribeRequest {
 }
 
 message SubscribeRequestFilterAccounts {
-  bool any = 1;
   repeated string account = 2;
   repeated string owner = 3;
 }

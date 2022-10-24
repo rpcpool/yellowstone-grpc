@@ -59,7 +59,6 @@ async fn main() -> anyhow::Result<()> {
         accounts.insert(
             "client".to_owned(),
             SubscribeRequestFilterAccounts {
-                any: args.account.is_empty() && args.owner.is_empty(),
                 account: args.account,
                 owner: args.owner,
             },

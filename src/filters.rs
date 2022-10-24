@@ -47,22 +47,9 @@ impl Filter {
     }
 }
 
-#[derive(Debug)]
-struct FilterAccountsExistence {
-    any: bool,
-    account: bool,
-    owner: bool,
-}
-
-impl FilterAccountsExistence {
-    fn is_empty(&self) -> bool {
-        !(self.account || self.owner)
-    }
-}
-
 #[derive(Debug, Default)]
 struct FilterAccounts {
-    filters: HashMap<String, FilterAccountsExistence>,
+    filters: Vec<String>,
     account: HashMap<Pubkey, HashSet<String>>,
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
@@ -77,38 +64,31 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterAccounts>> for FilterAccount
     ) -> Result<Self, Self::Error> {
         let mut this = Self::default();
         for (name, filter) in configs {
-            anyhow::ensure!(
-                !filter.any || filter.account.is_empty() && filter.owner.is_empty(),
-                "`any` does not allow non-empty `accout` and `owner`"
+            Self::set(
+                &mut this.account,
+                &mut this.account_required,
+                name,
+                filter
+                    .account
+                    .iter()
+                    .map(|v| Pubkey::from_str(v))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter(),
             );
 
-            let existence = FilterAccountsExistence {
-                any: filter.any,
-                account: Self::set(
-                    &mut this.account,
-                    &mut this.account_required,
-                    name,
-                    filter
-                        .account
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter(),
-                ),
-                owner: Self::set(
-                    &mut this.owner,
-                    &mut this.owner_required,
-                    name,
-                    filter
-                        .owner
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter(),
-                ),
-            };
+            Self::set(
+                &mut this.owner,
+                &mut this.owner_required,
+                name,
+                filter
+                    .owner
+                    .iter()
+                    .map(|v| Pubkey::from_str(v))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter(),
+            );
 
-            this.filters.insert(name.clone(), existence);
+            this.filters.push(name.clone());
         }
         Ok(this)
     }
@@ -191,15 +171,7 @@ impl<'a> FilterAccountsMatch<'a> {
         self.filter
             .filters
             .iter()
-            .filter_map(|(name, existence)| {
-                if existence.any {
-                    return Some(name.clone());
-                }
-
-                if existence.is_empty() {
-                    return None;
-                }
-
+            .filter_map(|name| {
                 let name = name.as_str();
                 let af = &self.filter;
 
