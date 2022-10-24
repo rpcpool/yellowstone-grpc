@@ -27,24 +27,26 @@ See [proto/geyser.proto](proto/geyser.proto).
 
 #### Slots
 
-   - `enabled` — broadcast slots updates
+Currently all slots are broadcasted.
 
 #### Account
 
 Accounts can be filtered by:
 
-   - `any` — stream all accounts, if active all other filters should be disabled
    - `account` — acount Pubkey, match to any Pubkey from the array
    - `owner` — account owner Pubkey, match to any Pubkey from the array
 
-All fields in filter are optional but at least 1 is required. Fields works as logical `AND`. Values in the arrays works as logical `OR`.
+If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
 #### Transactions
 
-   - `any` — stream all transactions
    - `vote` — enable/disable broadcast `vote` transactions
    - `failed` — enable/disable broadcast `failed` transactions
+   - `accounts_include` — filter transactions which use any account
+   - `accounts_exclude` — filter transactions which do not use any account
+
+If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
 #### Blocks
 
-   - `any` — stream all blocks
+Currently all blocks are broadcasted.

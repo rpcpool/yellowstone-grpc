@@ -39,11 +39,11 @@ struct Args {
 
     #[clap(short, long)]
     /// Filter vote transactions
-    vote: bool,
+    vote: Option<bool>,
 
     #[clap(short, long)]
     /// Filter failed transactions
-    failed: bool,
+    failed: Option<bool>,
 
     #[clap(long)]
     /// Subscribe on block updates
@@ -59,7 +59,6 @@ async fn main() -> anyhow::Result<()> {
         accounts.insert(
             "client".to_owned(),
             SubscribeRequestFilterAccounts {
-                any: args.account.is_empty() && args.owner.is_empty(),
                 account: args.account,
                 owner: args.owner,
             },
@@ -68,10 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut slots = HashMap::new();
     if args.slots {
-        slots.insert(
-            "client".to_owned(),
-            SubscribeRequestFilterSlots { any: true },
-        );
+        slots.insert("client".to_owned(), SubscribeRequestFilterSlots {});
     }
 
     let mut transactions = HashMap::new();
@@ -79,19 +75,17 @@ async fn main() -> anyhow::Result<()> {
         transactions.insert(
             "client".to_string(),
             SubscribeRequestFilterTransactions {
-                any: true,
                 vote: args.vote,
                 failed: args.failed,
+                accounts_include: vec![],
+                accounts_exclude: vec![],
             },
         );
     }
 
     let mut blocks = HashMap::new();
     if args.blocks {
-        blocks.insert(
-            "client".to_owned(),
-            SubscribeRequestFilterBlocks { any: true },
-        );
+        blocks.insert("client".to_owned(), SubscribeRequestFilterBlocks {});
     }
 
     let mut client = GeyserClient::connect(args.endpoint).await?;

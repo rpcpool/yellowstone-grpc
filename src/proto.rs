@@ -19,27 +19,28 @@ mod convert {
             clock::UnixTimestamp,
             instruction::CompiledInstruction,
             message::{
-                legacy::Message as LegacyMessage, v0::MessageAddressTableLookup, MessageHeader,
-                VersionedMessage,
+                legacy::Message as LegacyMessage,
+                v0::{LoadedMessage, MessageAddressTableLookup},
+                MessageHeader, SanitizedMessage,
             },
             pubkey::Pubkey,
             signature::Signature,
-            transaction::VersionedTransaction,
+            transaction::SanitizedTransaction,
         },
         solana_transaction_status::{
             InnerInstructions, Reward, RewardType, TransactionStatusMeta, TransactionTokenBalance,
         },
     };
 
-    impl From<&VersionedTransaction> for super::Transaction {
-        fn from(value: &VersionedTransaction) -> Self {
+    impl From<&SanitizedTransaction> for super::Transaction {
+        fn from(value: &SanitizedTransaction) -> Self {
             Self {
                 signatures: value
-                    .signatures
+                    .signatures()
                     .iter()
                     .map(|signature| <Signature as AsRef<[u8]>>::as_ref(signature).into())
                     .collect(),
-                message: Some((&value.message).into()),
+                message: Some(value.message().into()),
             }
         }
     }
@@ -61,11 +62,11 @@ mod convert {
         }
     }
 
-    impl From<&VersionedMessage> for super::Message {
-        fn from(message: &VersionedMessage) -> Self {
+    impl From<&SanitizedMessage> for super::Message {
+        fn from(message: &SanitizedMessage) -> Self {
             match message {
-                VersionedMessage::Legacy(message) => Self::from(message),
-                VersionedMessage::V0(message) => Self {
+                SanitizedMessage::Legacy(message) => Self::from(message),
+                SanitizedMessage::V0(LoadedMessage { message, .. }) => Self {
                     header: Some((&message.header).into()),
                     account_keys: message
                         .account_keys

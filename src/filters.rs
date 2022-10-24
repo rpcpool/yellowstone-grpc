@@ -47,22 +47,9 @@ impl Filter {
     }
 }
 
-#[derive(Debug)]
-struct FilterAccountsExistence {
-    any: bool,
-    account: bool,
-    owner: bool,
-}
-
-impl FilterAccountsExistence {
-    fn is_empty(&self) -> bool {
-        !(self.account || self.owner)
-    }
-}
-
 #[derive(Debug, Default)]
 struct FilterAccounts {
-    filters: HashMap<String, FilterAccountsExistence>,
+    filters: Vec<String>,
     account: HashMap<Pubkey, HashSet<String>>,
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
@@ -77,38 +64,31 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterAccounts>> for FilterAccount
     ) -> Result<Self, Self::Error> {
         let mut this = Self::default();
         for (name, filter) in configs {
-            anyhow::ensure!(
-                !filter.any || filter.account.is_empty() && filter.owner.is_empty(),
-                "`any` does not allow non-empty `accout` and `owner`"
+            Self::set(
+                &mut this.account,
+                &mut this.account_required,
+                name,
+                filter
+                    .account
+                    .iter()
+                    .map(|v| Pubkey::from_str(v))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter(),
             );
 
-            let existence = FilterAccountsExistence {
-                any: filter.any,
-                account: Self::set(
-                    &mut this.account,
-                    &mut this.account_required,
-                    name,
-                    filter
-                        .account
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter(),
-                ),
-                owner: Self::set(
-                    &mut this.owner,
-                    &mut this.owner_required,
-                    name,
-                    filter
-                        .owner
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter(),
-                ),
-            };
+            Self::set(
+                &mut this.owner,
+                &mut this.owner_required,
+                name,
+                filter
+                    .owner
+                    .iter()
+                    .map(|v| Pubkey::from_str(v))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter(),
+            );
 
-            this.filters.insert(name.clone(), existence);
+            this.filters.push(name.clone());
         }
         Ok(this)
     }
@@ -191,15 +171,7 @@ impl<'a> FilterAccountsMatch<'a> {
         self.filter
             .filters
             .iter()
-            .filter_map(|(name, existence)| {
-                if existence.any {
-                    return Some(name.clone());
-                }
-
-                if existence.is_empty() {
-                    return None;
-                }
-
+            .filter_map(|name| {
                 let name = name.as_str();
                 let af = &self.filter;
 
@@ -231,15 +203,8 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterSlots>> for FilterSlots {
         Ok(FilterSlots {
             filters: configs
                 .iter()
-                .filter_map(
-                    |(name, filter)| {
-                        if filter.any {
-                            Some(name.clone())
-                        } else {
-                            None
-                        }
-                    },
-                )
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
                 .collect(),
         })
     }
@@ -253,9 +218,10 @@ impl FilterSlots {
 
 #[derive(Debug)]
 pub struct FilterTransactionsInner {
-    any: bool,
-    vote: bool,
-    failed: bool,
+    vote: Option<bool>,
+    failed: Option<bool>,
+    accounts_include: HashSet<Pubkey>,
+    accounts_exclude: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Default)]
@@ -274,9 +240,18 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterTransactions>> for FilterTra
             this.filters.insert(
                 name.clone(),
                 FilterTransactionsInner {
-                    any: filter.any,
                     vote: filter.vote,
                     failed: filter.failed,
+                    accounts_include: filter
+                        .accounts_include
+                        .iter()
+                        .map(|v| Pubkey::from_str(v))
+                        .collect::<Result<_, _>>()?,
+                    accounts_exclude: filter
+                        .accounts_exclude
+                        .iter()
+                        .map(|v| Pubkey::from_str(v))
+                        .collect::<Result<_, _>>()?,
                 },
             );
         }
@@ -285,30 +260,48 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterTransactions>> for FilterTra
 }
 
 impl FilterTransactions {
-    pub fn get_filters(&self, message: &MessageTransaction) -> Vec<String> {
+    pub fn get_filters(
+        &self,
+        MessageTransaction { transaction, .. }: &MessageTransaction,
+    ) -> Vec<String> {
         self.filters
             .iter()
             .filter_map(|(name, inner)| {
-                let is_vote = message.transaction.is_vote;
-                let is_failed = message.transaction.meta.status.is_err();
-
-                if inner.any {
-                    if is_vote && !inner.vote {
+                if let Some(is_vote) = inner.vote {
+                    if is_vote != transaction.is_vote {
                         return None;
                     }
-
-                    if is_failed && !inner.failed {
-                        return None;
-                    }
-
-                    Some(name.clone())
-                } else {
-                    if is_vote == inner.vote && is_failed == inner.failed {
-                        return Some(name.clone());
-                    }
-
-                    None
                 }
+
+                if let Some(is_failed) = inner.failed {
+                    if is_failed != transaction.meta.status.is_err() {
+                        return None;
+                    }
+                }
+
+                if !inner.accounts_include.is_empty()
+                    && transaction
+                        .transaction
+                        .message()
+                        .account_keys()
+                        .iter()
+                        .all(|pubkey| !inner.accounts_include.contains(pubkey))
+                {
+                    return None;
+                }
+
+                if !inner.accounts_exclude.is_empty()
+                    && transaction
+                        .transaction
+                        .message()
+                        .account_keys()
+                        .iter()
+                        .any(|pubkey| inner.accounts_exclude.contains(pubkey))
+                {
+                    return None;
+                }
+
+                Some(name.clone())
             })
             .collect()
     }
@@ -328,15 +321,8 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterBlocks>> for FilterBlocks {
         Ok(FilterBlocks {
             filters: configs
                 .iter()
-                .filter_map(
-                    |(name, filter)| {
-                        if filter.any {
-                            Some(name.clone())
-                        } else {
-                            None
-                        }
-                    },
-                )
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
                 .collect(),
         })
     }

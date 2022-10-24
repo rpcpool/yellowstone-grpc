@@ -18,7 +18,7 @@ use {
     },
     solana_sdk::{
         clock::UnixTimestamp, pubkey::Pubkey, signature::Signature,
-        transaction::VersionedTransaction,
+        transaction::SanitizedTransaction,
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
@@ -100,7 +100,7 @@ impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
 pub struct MessageTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
-    pub transaction: VersionedTransaction,
+    pub transaction: SanitizedTransaction,
     pub meta: TransactionStatusMeta,
     // pub index: usize,
 }
@@ -118,7 +118,7 @@ impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction 
                 ReplicaTransactionInfoVersions::V0_0_1(info) => MessageTransactionInfo {
                     signature: *info.signature,
                     is_vote: info.is_vote,
-                    transaction: info.transaction.to_versioned_transaction(),
+                    transaction: info.transaction.clone(),
                     meta: info.transaction_status_meta.clone(),
                     // index: info.index,
                 },
