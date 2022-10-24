@@ -253,9 +253,10 @@ impl FilterSlots {
 
 #[derive(Debug)]
 pub struct FilterTransactionsInner {
-    any: bool,
-    vote: bool,
-    failed: bool,
+    vote: Option<bool>,
+    failed: Option<bool>,
+    accounts_include: HashSet<Pubkey>,
+    accounts_exclude: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Default)]
@@ -274,9 +275,18 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterTransactions>> for FilterTra
             this.filters.insert(
                 name.clone(),
                 FilterTransactionsInner {
-                    any: filter.any,
                     vote: filter.vote,
                     failed: filter.failed,
+                    accounts_include: filter
+                        .accounts_include
+                        .iter()
+                        .map(|v| Pubkey::from_str(v))
+                        .collect::<Result<_, _>>()?,
+                    accounts_exclude: filter
+                        .accounts_exclude
+                        .iter()
+                        .map(|v| Pubkey::from_str(v))
+                        .collect::<Result<_, _>>()?,
                 },
             );
         }
@@ -285,30 +295,48 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterTransactions>> for FilterTra
 }
 
 impl FilterTransactions {
-    pub fn get_filters(&self, message: &MessageTransaction) -> Vec<String> {
+    pub fn get_filters(
+        &self,
+        MessageTransaction { transaction, .. }: &MessageTransaction,
+    ) -> Vec<String> {
         self.filters
             .iter()
             .filter_map(|(name, inner)| {
-                let is_vote = message.transaction.is_vote;
-                let is_failed = message.transaction.meta.status.is_err();
-
-                if inner.any {
-                    if is_vote && !inner.vote {
+                if let Some(is_vote) = inner.vote {
+                    if is_vote != transaction.is_vote {
                         return None;
                     }
-
-                    if is_failed && !inner.failed {
-                        return None;
-                    }
-
-                    Some(name.clone())
-                } else {
-                    if is_vote == inner.vote && is_failed == inner.failed {
-                        return Some(name.clone());
-                    }
-
-                    None
                 }
+
+                if let Some(is_failed) = inner.failed {
+                    if is_failed != transaction.meta.status.is_err() {
+                        return None;
+                    }
+                }
+
+                if !inner.accounts_include.is_empty()
+                    && transaction
+                        .transaction
+                        .message()
+                        .account_keys()
+                        .iter()
+                        .all(|pubkey| !inner.accounts_include.contains(pubkey))
+                {
+                    return None;
+                }
+
+                if !inner.accounts_exclude.is_empty()
+                    && transaction
+                        .transaction
+                        .message()
+                        .account_keys()
+                        .iter()
+                        .any(|pubkey| inner.accounts_exclude.contains(pubkey))
+                {
+                    return None;
+                }
+
+                Some(name.clone())
             })
             .collect()
     }

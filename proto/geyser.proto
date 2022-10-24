@@ -26,9 +26,10 @@ message SubscribeRequestFilterSlots {
 }
 
 message SubscribeRequestFilterTransactions {
-  bool any = 1;
-  bool vote = 2;
-  bool failed = 3;
+  optional bool vote = 1;
+  optional bool failed = 2;
+  repeated string accounts_include = 3;
+  repeated string accounts_exclude = 4;
 }
 
 message SubscribeRequestFilterBlocks {

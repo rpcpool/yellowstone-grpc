@@ -39,11 +39,11 @@ struct Args {
 
     #[clap(short, long)]
     /// Filter vote transactions
-    vote: bool,
+    vote: Option<bool>,
 
     #[clap(short, long)]
     /// Filter failed transactions
-    failed: bool,
+    failed: Option<bool>,
 
     #[clap(long)]
     /// Subscribe on block updates
@@ -79,9 +79,10 @@ async fn main() -> anyhow::Result<()> {
         transactions.insert(
             "client".to_string(),
             SubscribeRequestFilterTransactions {
-                any: true,
                 vote: args.vote,
                 failed: args.failed,
+                accounts_include: vec![],
+                accounts_exclude: vec![],
             },
         );
     }

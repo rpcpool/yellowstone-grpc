@@ -41,9 +41,12 @@ All fields in filter are optional but at least 1 is required. Fields works as lo
 
 #### Transactions
 
-   - `any` — stream all transactions
    - `vote` — enable/disable broadcast `vote` transactions
    - `failed` — enable/disable broadcast `failed` transactions
+   - `accounts_include` — filter transactions which use any account
+   - `accounts_exclude` — filter transactions which do not use any account
+
+If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
 #### Blocks
 
