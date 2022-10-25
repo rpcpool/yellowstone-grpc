@@ -77,8 +77,8 @@ async fn main() -> anyhow::Result<()> {
             SubscribeRequestFilterTransactions {
                 vote: args.vote,
                 failed: args.failed,
-                accounts_include: vec![],
-                accounts_exclude: vec![],
+                account_include: vec![],
+                account_exclude: vec![],
             },
         );
     }

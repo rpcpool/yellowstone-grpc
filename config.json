@@ -5,7 +5,30 @@
     },
     "grpc": {
         "address": "0.0.0.0:10000",
-        "channel_capacity": "100_000"
+        "channel_capacity": "100_000",
+        "filters": {
+            "accounts": {
+                "max": 1,
+                "any": false,
+                "account_max": 10,
+                "account_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "owner_max": 10,
+                "owner_reject": ["11111111111111111111111111111111"]
+            },
+            "slots": {
+                "max": 1
+            },
+            "transactions": {
+                "max": 1,
+                "any": false,
+                "account_include_max": 10,
+                "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "account_exclude_max": 10
+            },
+            "blocks": {
+                "max": 1
+            }
+        }
     },
     "prometheus": {
         "address": "0.0.0.0:8999"
