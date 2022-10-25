@@ -1,5 +1,9 @@
 use {
     crate::{
+        config::{
+            ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
+            ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
+        },
         grpc::{Message, MessageAccount, MessageBlock, MessageSlot, MessageTransaction},
         proto::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
@@ -9,8 +13,8 @@ use {
     solana_sdk::pubkey::Pubkey,
     std::{
         collections::{HashMap, HashSet},
-        convert::TryFrom,
         hash::Hash,
+        iter::FromIterator,
         str::FromStr,
     },
 };
@@ -23,20 +27,40 @@ pub struct Filter {
     blocks: FilterBlocks,
 }
 
-impl TryFrom<&SubscribeRequest> for Filter {
-    type Error = anyhow::Error;
-
-    fn try_from(config: &SubscribeRequest) -> Result<Self, Self::Error> {
+impl Filter {
+    pub fn new(
+        config: &SubscribeRequest,
+        limit: Option<&ConfigGrpcFilters>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            accounts: FilterAccounts::try_from(&config.accounts)?,
-            slots: FilterSlots::try_from(&config.slots)?,
-            transactions: FilterTransactions::try_from(&config.transactions)?,
-            blocks: FilterBlocks::try_from(&config.blocks)?,
+            accounts: FilterAccounts::new(&config.accounts, limit.map(|v| &v.accounts))?,
+            slots: FilterSlots::new(&config.slots, limit.map(|v| &v.slots))?,
+            transactions: FilterTransactions::new(
+                &config.transactions,
+                limit.map(|v| &v.transactions),
+            )?,
+            blocks: FilterBlocks::new(&config.blocks, limit.map(|v| &v.blocks))?,
         })
     }
-}
 
-impl Filter {
+    fn decode_pubkeys<T: FromIterator<Pubkey>>(
+        pubkeys: &[String],
+        limit: Option<&HashSet<Pubkey>>,
+    ) -> anyhow::Result<T> {
+        pubkeys
+            .iter()
+            .map(|value| match Pubkey::from_str(value) {
+                Ok(pubkey) => {
+                    if let Some(limit) = limit {
+                        ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
+                    }
+                    Ok(pubkey)
+                }
+                Err(error) => Err(error.into()),
+            })
+            .collect::<_>()
+    }
+
     pub fn get_filters(&self, message: &Message) -> Vec<String> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
@@ -56,57 +80,53 @@ struct FilterAccounts {
     owner_required: HashSet<String>,
 }
 
-impl TryFrom<&HashMap<String, SubscribeRequestFilterAccounts>> for FilterAccounts {
-    type Error = anyhow::Error;
-
-    fn try_from(
+impl FilterAccounts {
+    fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
-    ) -> Result<Self, Self::Error> {
+        limit: Option<&ConfigGrpcFiltersAccounts>,
+    ) -> anyhow::Result<Self> {
+        if let Some(limit) = limit {
+            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+        }
+
         let mut this = Self::default();
         for (name, filter) in configs {
+            if let Some(limit) = limit {
+                ConfigGrpcFilters::check_any(
+                    filter.account.is_empty() && filter.owner.is_empty(),
+                    limit.any,
+                )?;
+                ConfigGrpcFilters::check_pubkey_max(filter.account.len(), limit.account_max)?;
+                ConfigGrpcFilters::check_pubkey_max(filter.owner.len(), limit.owner_max)?;
+            }
+
             Self::set(
                 &mut this.account,
                 &mut this.account_required,
                 name,
-                filter
-                    .account
-                    .iter()
-                    .map(|v| Pubkey::from_str(v))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter(),
+                Filter::decode_pubkeys(&filter.account, limit.map(|v| &v.account_reject))?,
             );
 
             Self::set(
                 &mut this.owner,
                 &mut this.owner_required,
                 name,
-                filter
-                    .owner
-                    .iter()
-                    .map(|v| Pubkey::from_str(v))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter(),
+                Filter::decode_pubkeys(&filter.owner, limit.map(|v| &v.owner_reject))?,
             );
 
             this.filters.push(name.clone());
         }
         Ok(this)
     }
-}
 
-impl FilterAccounts {
-    fn set<Q, I>(
-        map: &mut HashMap<Q, HashSet<String>>,
+    fn set(
+        map: &mut HashMap<Pubkey, HashSet<String>>,
         map_required: &mut HashSet<String>,
         name: &str,
-        keys: I,
-    ) -> bool
-    where
-        Q: Hash + Eq + Clone,
-        I: Iterator<Item = Q>,
-    {
+        keys: Vec<Pubkey>,
+    ) -> bool {
         let mut required = false;
-        for key in keys {
+        for key in keys.into_iter() {
             if map.entry(key).or_default().insert(name.to_string()) {
                 required = true;
             }
@@ -194,12 +214,15 @@ struct FilterSlots {
     filters: Vec<String>,
 }
 
-impl TryFrom<&HashMap<String, SubscribeRequestFilterSlots>> for FilterSlots {
-    type Error = anyhow::Error;
-
-    fn try_from(
+impl FilterSlots {
+    fn new(
         configs: &HashMap<String, SubscribeRequestFilterSlots>,
-    ) -> Result<Self, Self::Error> {
+        limit: Option<&ConfigGrpcFiltersSlots>,
+    ) -> anyhow::Result<Self> {
+        if let Some(limit) = limit {
+            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+        }
+
         Ok(FilterSlots {
             filters: configs
                 .iter()
@@ -208,9 +231,7 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterSlots>> for FilterSlots {
                 .collect(),
         })
     }
-}
 
-impl FilterSlots {
     fn get_filters(&self, _message: &MessageSlot) -> Vec<String> {
         self.filters.clone()
     }
@@ -220,8 +241,8 @@ impl FilterSlots {
 pub struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
-    accounts_include: HashSet<Pubkey>,
-    accounts_exclude: HashSet<Pubkey>,
+    account_include: HashSet<Pubkey>,
+    account_exclude: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Default)]
@@ -229,37 +250,51 @@ pub struct FilterTransactions {
     filters: HashMap<String, FilterTransactionsInner>,
 }
 
-impl TryFrom<&HashMap<String, SubscribeRequestFilterTransactions>> for FilterTransactions {
-    type Error = anyhow::Error;
-
-    fn try_from(
+impl FilterTransactions {
+    fn new(
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
-    ) -> Result<Self, Self::Error> {
+        limit: Option<&ConfigGrpcFiltersTransactions>,
+    ) -> anyhow::Result<Self> {
+        if let Some(limit) = limit {
+            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+        }
+
         let mut this = Self::default();
         for (name, filter) in configs {
+            if let Some(limit) = limit {
+                ConfigGrpcFilters::check_any(
+                    filter.vote.is_none()
+                        && filter.failed.is_none()
+                        && filter.account_include.is_empty()
+                        && filter.account_exclude.is_empty(),
+                    limit.any,
+                )?;
+                ConfigGrpcFilters::check_pubkey_max(
+                    filter.account_include.len(),
+                    limit.account_include_max,
+                )?;
+                ConfigGrpcFilters::check_pubkey_max(
+                    filter.account_exclude.len(),
+                    limit.account_exclude_max,
+                )?;
+            }
+
             this.filters.insert(
                 name.clone(),
                 FilterTransactionsInner {
                     vote: filter.vote,
                     failed: filter.failed,
-                    accounts_include: filter
-                        .accounts_include
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<_, _>>()?,
-                    accounts_exclude: filter
-                        .accounts_exclude
-                        .iter()
-                        .map(|v| Pubkey::from_str(v))
-                        .collect::<Result<_, _>>()?,
+                    account_include: Filter::decode_pubkeys(
+                        &filter.account_include,
+                        limit.map(|v| &v.account_include_reject),
+                    )?,
+                    account_exclude: Filter::decode_pubkeys(&filter.account_exclude, None)?,
                 },
             );
         }
         Ok(this)
     }
-}
 
-impl FilterTransactions {
     pub fn get_filters(
         &self,
         MessageTransaction { transaction, .. }: &MessageTransaction,
@@ -279,24 +314,24 @@ impl FilterTransactions {
                     }
                 }
 
-                if !inner.accounts_include.is_empty()
+                if !inner.account_include.is_empty()
                     && transaction
                         .transaction
                         .message()
                         .account_keys()
                         .iter()
-                        .all(|pubkey| !inner.accounts_include.contains(pubkey))
+                        .all(|pubkey| !inner.account_include.contains(pubkey))
                 {
                     return None;
                 }
 
-                if !inner.accounts_exclude.is_empty()
+                if !inner.account_exclude.is_empty()
                     && transaction
                         .transaction
                         .message()
                         .account_keys()
                         .iter()
-                        .any(|pubkey| inner.accounts_exclude.contains(pubkey))
+                        .any(|pubkey| inner.account_exclude.contains(pubkey))
                 {
                     return None;
                 }
@@ -312,12 +347,15 @@ struct FilterBlocks {
     filters: Vec<String>,
 }
 
-impl TryFrom<&HashMap<String, SubscribeRequestFilterBlocks>> for FilterBlocks {
-    type Error = anyhow::Error;
-
-    fn try_from(
+impl FilterBlocks {
+    fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocks>,
-    ) -> Result<Self, Self::Error> {
+        limit: Option<&ConfigGrpcFiltersBlocks>,
+    ) -> anyhow::Result<Self> {
+        if let Some(limit) = limit {
+            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+        }
+
         Ok(FilterBlocks {
             filters: configs
                 .iter()
@@ -326,9 +364,7 @@ impl TryFrom<&HashMap<String, SubscribeRequestFilterBlocks>> for FilterBlocks {
                 .collect(),
         })
     }
-}
 
-impl FilterBlocks {
     fn get_filters(&self, _message: &MessageBlock) -> Vec<String> {
         self.filters.clone()
     }

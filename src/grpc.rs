@@ -321,7 +321,7 @@ impl Geyser for GrpcService {
         let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
         info!("{}, new subscriber", id);
 
-        let filter = match Filter::try_from(request.get_ref()) {
+        let filter = match Filter::new(request.get_ref(), self.config.filters.as_ref()) {
             Ok(filter) => filter,
             Err(error) => {
                 let message = format!("failed to create filter: {:?}", error);
