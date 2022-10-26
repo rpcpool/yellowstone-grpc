@@ -14,9 +14,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-
       - name: Set rust version
         run: |
           source ci/rust-version.sh

@@ -31,5 +31,6 @@ tonic = { version = "0.8", features = ["gzip"] }
 anyhow = "1"
 cargo-lock = "8"
 git-version = "0.3"
+protobuf-src = "1.1.0"
 tonic-build = "0.8"
 vergen = "=7.2.1"
