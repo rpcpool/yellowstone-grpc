@@ -90,7 +90,7 @@ impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
             status: match status {
                 SlotStatus::Processed => SubscribeUpdateSlotStatus::Processed,
                 SlotStatus::Confirmed => SubscribeUpdateSlotStatus::Confirmed,
-                SlotStatus::Rooted => SubscribeUpdateSlotStatus::Rooted,
+                SlotStatus::Rooted => SubscribeUpdateSlotStatus::Finalized,
             },
         }
     }

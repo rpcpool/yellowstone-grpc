@@ -66,8 +66,8 @@ message SubscribeUpdateSlot {
 
 enum SubscribeUpdateSlotStatus {
   PROCESSED = 0;
-  ROOTED = 1;
-  CONFIRMED = 2;
+  CONFIRMED = 1;
+  FINALIZED = 2;
 }
 
 message SubscribeUpdateTransaction {
