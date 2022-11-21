@@ -24,13 +24,13 @@ struct Args {
     /// Subscribe on accounts updates
     accounts: bool,
 
-    #[clap(short, long)]
+    #[clap(long)]
     /// Filter by Account Pubkey
-    account: Vec<String>,
+    accounts_account: Vec<String>,
 
-    #[clap(short, long)]
+    #[clap(long)]
     /// Filter by Owner Pubkey
-    owner: Vec<String>,
+    accounts_owner: Vec<String>,
 
     #[clap(long)]
     /// Subscribe on slots updates
@@ -40,13 +40,21 @@ struct Args {
     /// Subscribe on transactions updates
     transactions: bool,
 
-    #[clap(short, long)]
+    #[clap(long)]
     /// Filter vote transactions
-    vote: Option<bool>,
+    transactions_vote: Option<bool>,
 
-    #[clap(short, long)]
+    #[clap(long)]
     /// Filter failed transactions
-    failed: Option<bool>,
+    transactions_failed: Option<bool>,
+
+    #[clap(long)]
+    /// Filter included account in transactions
+    transactions_account_include: Vec<String>,
+
+    #[clap(long)]
+    /// Filter excluded account in transactions
+    transactions_account_exclude: Vec<String>,
 
     #[clap(long)]
     /// Subscribe on block updates
@@ -62,8 +70,8 @@ async fn main() -> anyhow::Result<()> {
         accounts.insert(
             "client".to_owned(),
             SubscribeRequestFilterAccounts {
-                account: args.account,
-                owner: args.owner,
+                account: args.accounts_account,
+                owner: args.accounts_owner,
             },
         );
     }
@@ -78,10 +86,10 @@ async fn main() -> anyhow::Result<()> {
         transactions.insert(
             "client".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: args.vote,
-                failed: args.failed,
-                account_include: vec![],
-                account_exclude: vec![],
+                vote: args.transactions_vote,
+                failed: args.transactions_failed,
+                account_include: args.transactions_account_include,
+                account_exclude: args.transactions_account_exclude,
             },
         );
     }
