@@ -7,7 +7,10 @@ use {
         SubscribeRequestFilterTransactions,
     },
     std::collections::HashMap,
-    tonic::Request,
+    tonic::{
+        transport::{channel::ClientTlsConfig, Endpoint, Uri},
+        Request,
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -88,13 +91,22 @@ async fn main() -> anyhow::Result<()> {
         blocks.insert("client".to_owned(), SubscribeRequestFilterBlocks {});
     }
 
-    let mut client = GeyserClient::connect(args.endpoint).await?;
-    let request = Request::new(SubscribeRequest {
+    let mut endpoint = Endpoint::from_shared(args.endpoint.clone())?;
+    let uri: Uri = args.endpoint.parse()?;
+    if uri.scheme_str() == Some("https") {
+        endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
+    }
+    let mut client = GeyserClient::connect(endpoint).await?;
+
+    let request = SubscribeRequest {
         slots,
         accounts,
         transactions,
         blocks,
-    });
+    };
+    println!("Going to send request: {:?}", request);
+
+    let request = Request::new(request);
     let response = client.subscribe(request).await?;
     let mut stream = response.into_inner();
 

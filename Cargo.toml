@@ -25,7 +25,7 @@ solana-sdk = "=1.13.4"
 solana-transaction-status = "=1.13.4"
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1.11"
-tonic = { version = "0.8.2", features = ["gzip"] }
+tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
 
 [build-dependencies]
 anyhow = "1.0.62"
