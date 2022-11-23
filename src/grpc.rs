@@ -31,7 +31,7 @@ use {
     tonic::{
         codec::CompressionEncoding,
         transport::server::{Server, TcpIncoming},
-        Request, Response, Result as TonicResult, Status,
+        Request, Response, Result as TonicResult, Status, Streaming,
     },
 };
 
@@ -202,8 +202,20 @@ impl From<&Message> for UpdateOneof {
 }
 
 #[derive(Debug)]
+enum ClientMessage {
+    New {
+        id: usize,
+        filter: Filter,
+        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+    },
+    Update {
+        id: usize,
+        filter: Filter,
+    },
+}
+
+#[derive(Debug)]
 struct ClientConnection {
-    id: usize,
     filter: Filter,
     stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
 }
@@ -212,7 +224,7 @@ struct ClientConnection {
 pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
-    new_clients_tx: mpsc::UnboundedSender<ClientConnection>,
+    new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
 }
 
 impl GrpcService {
@@ -260,7 +272,7 @@ impl GrpcService {
 
     async fn send_loop(
         mut update_channel_rx: mpsc::UnboundedReceiver<Message>,
-        mut new_clients_rx: mpsc::UnboundedReceiver<ClientConnection>,
+        mut new_clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
     ) {
         let mut clients: HashMap<usize, ClientConnection> = HashMap::new();
         loop {
@@ -269,7 +281,7 @@ impl GrpcService {
                     let mut ids_full = vec![];
                     let mut ids_closed = vec![];
 
-                    for client in clients.values() {
+                    for (id, client) in clients.iter() {
                         let filters = client.filter.get_filters(&message);
                         if !filters.is_empty() {
                             match client.stream_tx.try_send(Ok(SubscribeUpdate {
@@ -277,8 +289,8 @@ impl GrpcService {
                                 update_oneof: Some((&message).into()),
                             })) {
                                 Ok(()) => {},
-                                Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(client.id),
-                                Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(client.id),
+                                Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
+                                Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
                             }
                         }
                     }
@@ -287,22 +299,32 @@ impl GrpcService {
                         if let Some(client) = clients.remove(&id) {
                             tokio::spawn(async move {
                                 CONNECTIONS_TOTAL.dec();
-                                error!("{}, lagged, close stream", client.id);
+                                error!("{}, lagged, close stream", id);
                                 let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
                             });
                         }
                     }
                     for id in ids_closed {
-                        if let Some(client) = clients.remove(&id) {
+                        if let Some(_client) = clients.remove(&id) {
                             CONNECTIONS_TOTAL.dec();
-                            error!("{}, client closed stream", client.id);
+                            error!("{}, client closed stream", id);
                         }
                     }
                 },
-                Some(client) = new_clients_rx.recv() => {
-                    info!("{}, add client to receivers", client.id);
-                    clients.insert(client.id, client);
-                    CONNECTIONS_TOTAL.inc();
+                Some(msg) = new_clients_rx.recv() => {
+                    match msg {
+                        ClientMessage::New { id, filter, stream_tx } => {
+                            info!("{}, add client to receivers", id);
+                            clients.insert(id, ClientConnection{filter,stream_tx});
+                            CONNECTIONS_TOTAL.inc();
+                        }
+                        ClientMessage::Update {id,filter} => {
+                            if let Some(client) = clients.get_mut(&id) {
+                                info!("{}, update client", id);
+                                client.filter = filter;
+                            }
+                        }
+                    }
                 }
                 else => break,
             };
@@ -316,28 +338,62 @@ impl Geyser for GrpcService {
 
     async fn subscribe(
         &self,
-        request: Request<SubscribeRequest>,
+        mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
         info!("{}, new subscriber", id);
 
-        let filter = match Filter::new(request.get_ref(), self.config.filters.as_ref()) {
-            Ok(filter) => filter,
-            Err(error) => {
-                let message = format!("failed to create filter: {:?}", error);
-                error!("{}, {}", id, message);
-                return Err(Status::invalid_argument(message));
-            }
-        };
+        let filter = Filter::new(
+            &SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: HashMap::new(),
+                blocks: HashMap::new(),
+            },
+            self.config.filters.as_ref(),
+        )
+        .expect("empty filter");
 
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
-        if let Err(_error) = self.new_clients_tx.send(ClientConnection {
+        if let Err(_error) = self.new_clients_tx.send(ClientMessage::New {
             id,
             filter,
-            stream_tx,
+            stream_tx: stream_tx.clone(),
         }) {
-            return Err(Status::internal(""));
+            return Err(Status::internal("failed to add client"));
         }
+
+        let config_filters_limit = self.config.filters.clone();
+        let new_clients_tx = self.new_clients_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match request.get_mut().message().await {
+                    Ok(Some(request)) => {
+                        if let Err(error) =
+                            match Filter::new(&request, config_filters_limit.as_ref()) {
+                                Ok(filter) => {
+                                    match new_clients_tx.send(ClientMessage::Update { id, filter })
+                                    {
+                                        Ok(()) => Ok(()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
+                                }
+                                Err(error) => Err(error.to_string()),
+                            }
+                        {
+                            let _ = stream_tx
+                                .send(Err(Status::invalid_argument(format!(
+                                    "failed to create filter: {}",
+                                    error
+                                ))))
+                                .await;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_error) => break,
+                }
+            }
+        });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
     }

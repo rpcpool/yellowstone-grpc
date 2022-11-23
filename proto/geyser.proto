@@ -5,7 +5,7 @@ import public "solana-storage-v1.10.40.proto";
 package geyser;
 
 service Geyser {
-  rpc Subscribe(SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
 }
 
 message SubscribeRequest {

@@ -1,16 +1,13 @@
 use {
     clap::Parser,
-    futures::stream::StreamExt,
+    futures::stream::{once, StreamExt},
     solana_geyser_grpc::proto::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions,
     },
     std::collections::HashMap,
-    tonic::{
-        transport::{channel::ClientTlsConfig, Endpoint, Uri},
-        Request,
-    },
+    tonic::transport::{channel::ClientTlsConfig, Endpoint, Uri},
 };
 
 #[derive(Debug, Parser)]
@@ -114,8 +111,7 @@ async fn main() -> anyhow::Result<()> {
     };
     println!("Going to send request: {:?}", request);
 
-    let request = Request::new(request);
-    let response = client.subscribe(request).await?;
+    let response = client.subscribe(once(async move { request })).await?;
     let mut stream = response.into_inner();
 
     println!("stream opened");
