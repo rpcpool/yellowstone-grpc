@@ -27,8 +27,8 @@ jobs:
 
       - if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
+          apt-get update
+          apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
 
       - uses: actions-rs/toolchain@v1
         with:
