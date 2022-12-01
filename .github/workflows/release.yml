@@ -13,7 +13,7 @@ jobs:
   release:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Set rust version
         run: |
@@ -25,11 +25,6 @@ jobs:
           source ci/env.sh
           echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
           echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
-
-      - if: runner.os == 'Linux'
-        run: |
-          apt-get update
-          apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -60,4 +55,3 @@ jobs:
             rust ${{ env.RUST_STABLE }}
           files: |
             ${{ env.GEYSER_PLUGIN_NAME }}-release-*
-
