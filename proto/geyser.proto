@@ -38,6 +38,7 @@ message SubscribeUpdate {
     SubscribeUpdateSlot slot = 3;
     SubscribeUpdateTransaction transaction = 4;
     SubscribeUpdateBlock block = 5;
+    SubscribeUpdatePing ping = 6;
   }
 }
 
@@ -90,3 +91,5 @@ message SubscribeUpdateBlock {
   solana.storage.ConfirmedBlock.UnixTimestamp block_time = 4;
   solana.storage.ConfirmedBlock.BlockHeight block_height = 5;
 }
+
+message SubscribeUpdatePing {}

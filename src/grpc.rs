@@ -7,8 +7,8 @@ use {
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateBlock, SubscribeUpdatePing, SubscribeUpdateSlot,
+            SubscribeUpdateSlotStatus, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
     },
     log::*,
@@ -26,7 +26,10 @@ use {
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     },
-    tokio::sync::{mpsc, oneshot},
+    tokio::{
+        sync::{mpsc, oneshot},
+        time::sleep,
+    },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
@@ -237,8 +240,8 @@ impl GrpcService {
         // Bind service address
         let incoming = TcpIncoming::new(
             config.address,
-            true, // tcp_nodelay
-            None, // tcp_keepalive
+            true,                          // tcp_nodelay
+            Some(Duration::from_secs(20)), // tcp_keepalive
         )?;
 
         // Create Server
@@ -315,7 +318,7 @@ impl GrpcService {
                     match msg {
                         ClientMessage::New { id, filter, stream_tx } => {
                             info!("{}, add client to receivers", id);
-                            clients.insert(id, ClientConnection{filter,stream_tx});
+                            clients.insert(id, ClientConnection { filter, stream_tx });
                             CONNECTIONS_TOTAL.inc();
                         }
                         ClientMessage::Update {id,filter} => {
@@ -362,6 +365,21 @@ impl Geyser for GrpcService {
         }) {
             return Err(Status::internal("failed to add client"));
         }
+
+        let ping_stream_tx = stream_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_secs(10)).await;
+                match ping_stream_tx.try_send(Ok(SubscribeUpdate {
+                    filters: vec![],
+                    update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+                })) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                }
+            }
+        });
 
         let config_filters_limit = self.config.filters.clone();
         let new_clients_tx = self.new_clients_tx.clone();
