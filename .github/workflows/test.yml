@@ -25,11 +25,6 @@ jobs:
           echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
           echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
 
-      - if: runner.os == 'Linux'
-        run: |
-          apt-get update
-          apt-get install -y libudev-dev libssl-dev libsasl2-dev libzstd-dev
-
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ env.RUST_STABLE }}
