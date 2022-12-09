@@ -240,8 +240,8 @@ impl GrpcService {
         // Bind service address
         let incoming = TcpIncoming::new(
             config.address,
-            true, // tcp_nodelay
-            None, // tcp_keepalive
+            true,                          // tcp_nodelay
+            Some(Duration::from_secs(20)), // tcp_keepalive
         )?;
 
         // Create Server
