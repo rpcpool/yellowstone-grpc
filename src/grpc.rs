@@ -47,7 +47,7 @@ pub struct MessageAccountInfo {
     pub rent_epoch: u64,
     pub data: Vec<u8>,
     pub write_version: u64,
-    // pub txn_signature: Signature,
+    pub txn_signature: Option<Signature>,
 }
 
 #[derive(Debug)]
@@ -69,7 +69,17 @@ impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for MessageAccount {
                     rent_epoch: info.rent_epoch,
                     data: info.data.into(),
                     write_version: info.write_version,
-                    // txn_signature: info.txn_signature,
+                    txn_signature: None,
+                },
+                ReplicaAccountInfoVersions::V0_0_2(info) => MessageAccountInfo {
+                    pubkey: Pubkey::new(info.pubkey),
+                    lamports: info.lamports,
+                    owner: Pubkey::new(info.owner),
+                    executable: info.executable,
+                    rent_epoch: info.rent_epoch,
+                    data: info.data.into(),
+                    write_version: info.write_version,
+                    txn_signature: info.txn_signature.map(|a| (*a).into()),
                 },
             },
             slot,
@@ -105,7 +115,7 @@ pub struct MessageTransactionInfo {
     pub is_vote: bool,
     pub transaction: SanitizedTransaction,
     pub meta: TransactionStatusMeta,
-    // pub index: usize,
+    pub index: usize,
 }
 
 #[derive(Debug)]
@@ -123,7 +133,14 @@ impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction 
                     is_vote: info.is_vote,
                     transaction: info.transaction.clone(),
                     meta: info.transaction_status_meta.clone(),
-                    // index: info.index,
+                    index: 0,
+                },
+                ReplicaTransactionInfoVersions::V0_0_2(info) => MessageTransactionInfo {
+                    signature: *info.signature,
+                    is_vote: info.is_vote,
+                    transaction: info.transaction.clone(),
+                    meta: info.transaction_status_meta.clone(),
+                    index: info.index,
                 },
             },
             slot,

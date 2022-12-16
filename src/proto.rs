@@ -129,6 +129,8 @@ mod convert {
                 post_token_balances,
                 rewards,
                 loaded_addresses,
+                return_data: _,
+                compute_units_consumed: _,
             } = value;
             let err = match status {
                 Ok(()) => None,
