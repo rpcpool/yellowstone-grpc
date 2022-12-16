@@ -129,8 +129,8 @@ mod convert {
                 post_token_balances,
                 rewards,
                 loaded_addresses,
-                return_data: _,
-                compute_units_consumed: _,
+                return_data,
+                compute_units_consumed,
             } = value;
             let err = match status {
                 Ok(()) => None,
@@ -182,6 +182,8 @@ mod convert {
                 rewards,
                 loaded_writable_addresses,
                 loaded_readonly_addresses,
+                return_data: return_data.clone(),
+                compute_units_consumed.into(),
             }
         }
     }
