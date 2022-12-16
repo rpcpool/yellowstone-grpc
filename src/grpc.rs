@@ -47,7 +47,7 @@ pub struct MessageAccountInfo {
     pub rent_epoch: u64,
     pub data: Vec<u8>,
     pub write_version: u64,
-    // pub txn_signature: Signature,
+    pub txn_signature: Option<Signature>,
 }
 
 #[derive(Debug)]
@@ -61,7 +61,10 @@ impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for MessageAccount {
     fn from((account, slot, is_startup): (ReplicaAccountInfoVersions<'a>, u64, bool)) -> Self {
         Self {
             account: match account {
-                ReplicaAccountInfoVersions::V0_0_1(info) => MessageAccountInfo {
+                ReplicaAccountInfoVersions::V0_0_1(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaAccountInfoVersions::V0_0_2(info) => MessageAccountInfo {
                     pubkey: Pubkey::new(info.pubkey),
                     lamports: info.lamports,
                     owner: Pubkey::new(info.owner),
@@ -69,7 +72,7 @@ impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for MessageAccount {
                     rent_epoch: info.rent_epoch,
                     data: info.data.into(),
                     write_version: info.write_version,
-                    // txn_signature: info.txn_signature,
+                    txn_signature: info.txn_signature.cloned(),
                 },
             },
             slot,
@@ -105,7 +108,7 @@ pub struct MessageTransactionInfo {
     pub is_vote: bool,
     pub transaction: SanitizedTransaction,
     pub meta: TransactionStatusMeta,
-    // pub index: usize,
+    pub index: usize,
 }
 
 #[derive(Debug)]
@@ -118,12 +121,15 @@ impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction 
     fn from((transaction, slot): (ReplicaTransactionInfoVersions<'a>, u64)) -> Self {
         Self {
             transaction: match transaction {
-                ReplicaTransactionInfoVersions::V0_0_1(info) => MessageTransactionInfo {
+                ReplicaTransactionInfoVersions::V0_0_1(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaTransactionInfoVersions::V0_0_2(info) => MessageTransactionInfo {
                     signature: *info.signature,
                     is_vote: info.is_vote,
                     transaction: info.transaction.clone(),
                     meta: info.transaction_status_meta.clone(),
-                    // index: info.index,
+                    index: info.index,
                 },
             },
             slot,
@@ -179,7 +185,7 @@ impl From<&Message> for UpdateOneof {
                     rent_epoch: message.account.rent_epoch,
                     data: message.account.data.clone(),
                     write_version: message.account.write_version,
-                    // txn_signature: self.account.txn_signature.as_ref().into(),
+                    txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
                 }),
                 slot: message.slot,
                 is_startup: message.is_startup,
@@ -190,6 +196,7 @@ impl From<&Message> for UpdateOneof {
                     is_vote: message.transaction.is_vote,
                     transaction: Some((&message.transaction.transaction).into()),
                     meta: Some((&message.transaction.meta).into()),
+                    index: message.transaction.index as u64,
                 }),
                 slot: message.slot,
             }),

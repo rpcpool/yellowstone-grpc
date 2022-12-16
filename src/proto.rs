@@ -26,6 +26,7 @@ mod convert {
             pubkey::Pubkey,
             signature::Signature,
             transaction::SanitizedTransaction,
+            transaction_context::TransactionReturnData,
         },
         solana_transaction_status::{
             InnerInstructions, Reward, RewardType, TransactionStatusMeta, TransactionTokenBalance,
@@ -129,6 +130,8 @@ mod convert {
                 post_token_balances,
                 rewards,
                 loaded_addresses,
+                return_data,
+                compute_units_consumed,
             } = value;
             let err = match status {
                 Ok(()) => None,
@@ -180,6 +183,9 @@ mod convert {
                 rewards,
                 loaded_writable_addresses,
                 loaded_readonly_addresses,
+                return_data: return_data.as_ref().map(|d| d.into()),
+                return_data_none: return_data.is_none(),
+                compute_units_consumed: *compute_units_consumed,
             }
         }
     }
@@ -224,6 +230,15 @@ mod convert {
                     Some(RewardType::Voting) => super::RewardType::Voting,
                 } as i32,
                 commission: reward.commission.map(|c| c.to_string()).unwrap_or_default(),
+            }
+        }
+    }
+
+    impl From<&TransactionReturnData> for super::ReturnData {
+        fn from(return_data: &TransactionReturnData) -> Self {
+            Self {
+                program_id: return_data.program_id.to_bytes().into(),
+                data: return_data.data.clone(),
             }
         }
     }
