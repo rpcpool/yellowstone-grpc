@@ -6,6 +6,12 @@
 $ solana-validator --geyser-plugin-config ./config.json
 ```
 
+### Plugin config check
+
+```
+cargo-fmt && cargo run --bin config-check -- --config config.json
+```
+
 ### Client
 
 - Always broadcast new slots
