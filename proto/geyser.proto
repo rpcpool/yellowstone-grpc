@@ -90,6 +90,7 @@ message SubscribeUpdateBlock {
   solana.storage.ConfirmedBlock.Rewards rewards = 3;
   solana.storage.ConfirmedBlock.UnixTimestamp block_time = 4;
   solana.storage.ConfirmedBlock.BlockHeight block_height = 5;
+  repeated SubscribeUpdateTransactionInfo transactions = 6;
 }
 
 message SubscribeUpdatePing {}

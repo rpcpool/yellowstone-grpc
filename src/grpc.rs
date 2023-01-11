@@ -102,13 +102,25 @@ impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
     pub transaction: SanitizedTransaction,
     pub meta: TransactionStatusMeta,
     pub index: usize,
+}
+
+impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
+    fn from(tx: &MessageTransactionInfo) -> Self {
+        Self {
+            signature: tx.signature.as_ref().into(),
+            is_vote: tx.is_vote,
+            transaction: Some((&tx.transaction).into()),
+            meta: Some((&tx.meta).into()),
+            index: tx.index as u64,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -144,10 +156,13 @@ pub struct MessageBlock {
     pub rewards: Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
+    pub transactions: Vec<MessageTransactionInfo>,
 }
 
-impl<'a> From<ReplicaBlockInfoVersions<'a>> for MessageBlock {
-    fn from(blockinfo: ReplicaBlockInfoVersions<'a>) -> Self {
+impl<'a> From<(ReplicaBlockInfoVersions<'a>, Vec<MessageTransactionInfo>)> for MessageBlock {
+    fn from(
+        (blockinfo, transactions): (ReplicaBlockInfoVersions<'a>, Vec<MessageTransactionInfo>),
+    ) -> Self {
         match blockinfo {
             ReplicaBlockInfoVersions::V0_0_1(info) => Self {
                 slot: info.slot,
@@ -155,6 +170,7 @@ impl<'a> From<ReplicaBlockInfoVersions<'a>> for MessageBlock {
                 rewards: info.rewards.into(),
                 block_time: info.block_time,
                 block_height: info.block_height,
+                transactions,
             },
         }
     }
@@ -191,13 +207,7 @@ impl From<&Message> for UpdateOneof {
                 is_startup: message.is_startup,
             }),
             Message::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(SubscribeUpdateTransactionInfo {
-                    signature: message.transaction.signature.as_ref().into(),
-                    is_vote: message.transaction.is_vote,
-                    transaction: Some((&message.transaction.transaction).into()),
-                    meta: Some((&message.transaction.meta).into()),
-                    index: message.transaction.index as u64,
-                }),
+                transaction: Some((&message.transaction).into()),
                 slot: message.slot,
             }),
             Message::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
@@ -206,6 +216,7 @@ impl From<&Message> for UpdateOneof {
                 rewards: Some(message.rewards.as_slice().into()),
                 block_time: message.block_time.map(|v| v.into()),
                 block_height: message.block_height.map(|v| v.into()),
+                transactions: message.transactions.iter().map(Into::into).collect(),
             }),
         }
     }
