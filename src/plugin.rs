@@ -144,16 +144,17 @@ impl GeyserPlugin for Plugin {
         let transactions = match inner.transactions.take() {
             Some((slot, transactions)) if slot == block.slot => transactions,
             Some((slot, _)) => {
-                log::error!(
+                let msg = format!(
                     "invalid transactions for block {}, found {}",
-                    block.slot,
-                    slot
+                    block.slot, slot
                 );
-                vec![]
+                log::error!("{}", msg);
+                return Err(GeyserPluginError::Custom(msg.into()));
             }
             None => {
-                log::error!("no transactions for block {}", block.slot);
-                vec![]
+                let msg = format!("no transactions for block {}", block.slot);
+                log::error!("{}", msg);
+                return Err(GeyserPluginError::Custom(msg.into()));
             }
         };
 
