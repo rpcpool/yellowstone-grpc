@@ -7,7 +7,11 @@ use {
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
     std::collections::HashMap,
-    tonic::transport::{channel::ClientTlsConfig, Endpoint, Uri},
+    tonic::{
+        metadata::MetadataValue,
+        transport::{channel::ClientTlsConfig, Endpoint, Uri},
+        Request,
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -16,6 +20,9 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("http://127.0.0.1:10000"))]
     /// Service endpoint
     endpoint: String,
+
+    #[clap(long)]
+    x_token: Option<String>,
 
     #[clap(long)]
     /// Subscribe on accounts updates
@@ -110,7 +117,15 @@ async fn main() -> anyhow::Result<()> {
     if uri.scheme_str() == Some("https") {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
     }
-    let mut client = GeyserClient::connect(endpoint).await?;
+    // let mut client = GeyserClient::connect(endpoint).await?;
+    let token: Option<MetadataValue<_>> = args.x_token.map(|token| token.parse()).transpose()?;
+    let conn = endpoint.connect().await?;
+    let mut client = GeyserClient::with_interceptor(conn, move |mut req: Request<()>| {
+        if let Some(token) = token.clone() {
+            req.metadata_mut().insert("x-token", token);
+        }
+        Ok(req)
+    });
 
     let request = SubscribeRequest {
         slots,
