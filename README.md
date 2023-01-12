@@ -57,6 +57,10 @@ If all fields are empty then all transactions are broadcasted. Otherwise fields 
 
 Currently all blocks are broadcasted.
 
+#### Blocks meta
+
+Same as `Blocks` but without `transactions`.
+
 ### Limit filters
 
 It's possible to add limits for filters in config. If `filters` field is omitted then filters doesn't have any limits.

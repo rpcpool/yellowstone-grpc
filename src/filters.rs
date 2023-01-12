@@ -2,12 +2,16 @@ use {
     crate::{
         config::{
             ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-            ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
+            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
         },
-        grpc::{Message, MessageAccount, MessageBlock, MessageSlot, MessageTransaction},
+        grpc::{
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageSlot,
+            MessageTransaction,
+        },
         proto::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions,
         },
     },
     solana_sdk::pubkey::Pubkey,
@@ -25,6 +29,7 @@ pub struct Filter {
     slots: FilterSlots,
     transactions: FilterTransactions,
     blocks: FilterBlocks,
+    blocks_meta: FilterBlocksMeta,
 }
 
 impl Filter {
@@ -40,6 +45,7 @@ impl Filter {
                 limit.map(|v| &v.transactions),
             )?,
             blocks: FilterBlocks::new(&config.blocks, limit.map(|v| &v.blocks))?,
+            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, limit.map(|v| &v.blocks_meta))?,
         })
     }
 
@@ -67,6 +73,7 @@ impl Filter {
             Message::Slot(message) => self.slots.get_filters(message),
             Message::Transaction(message) => self.transactions.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
+            Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 }
@@ -223,7 +230,7 @@ impl FilterSlots {
             ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
         }
 
-        Ok(FilterSlots {
+        Ok(Self {
             filters: configs
                 .iter()
                 // .filter_map(|(name, _filter)| Some(name.clone()))
@@ -356,7 +363,7 @@ impl FilterBlocks {
             ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
         }
 
-        Ok(FilterBlocks {
+        Ok(Self {
             filters: configs
                 .iter()
                 // .filter_map(|(name, _filter)| Some(name.clone()))
@@ -366,6 +373,34 @@ impl FilterBlocks {
     }
 
     fn get_filters(&self, _message: &MessageBlock) -> Vec<String> {
+        self.filters.clone()
+    }
+}
+
+#[derive(Debug, Default)]
+struct FilterBlocksMeta {
+    filters: Vec<String>,
+}
+
+impl FilterBlocksMeta {
+    fn new(
+        configs: &HashMap<String, SubscribeRequestFilterBlocksMeta>,
+        limit: Option<&ConfigGrpcFiltersBlocksMeta>,
+    ) -> anyhow::Result<Self> {
+        if let Some(limit) = limit {
+            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+        }
+
+        Ok(Self {
+            filters: configs
+                .iter()
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
+                .collect(),
+        })
+    }
+
+    fn get_filters(&self, _message: &MessageBlockMeta) -> Vec<String> {
         self.filters.clone()
     }
 }

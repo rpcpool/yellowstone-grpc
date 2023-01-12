@@ -1,7 +1,7 @@
 use {
     crate::{
         config::Config,
-        grpc::{GrpcService, Message},
+        grpc::{GrpcService, Message, MessageTransaction, MessageTransactionInfo},
         prom::{PrometheusService, SLOT_STATUS},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -21,6 +21,7 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
+    transactions: Option<(u64, Vec<MessageTransactionInfo>)>,
 }
 
 #[derive(Debug, Default)]
@@ -54,6 +55,7 @@ impl GeyserPlugin for Plugin {
             grpc_channel,
             grpc_shutdown_tx,
             prometheus,
+            transactions: None,
         });
 
         Ok(())
@@ -107,8 +109,26 @@ impl GeyserPlugin for Plugin {
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: u64,
     ) -> PluginResult<()> {
-        let inner = self.inner.as_ref().expect("initialized");
-        let message = Message::Transaction((transaction, slot).into());
+        let inner = self.inner.as_mut().expect("initialized");
+
+        let msg_tx: MessageTransaction = (transaction, slot).into();
+        match &mut inner.transactions {
+            Some((current_slot, transactions)) if *current_slot == slot => {
+                transactions.push(msg_tx.transaction.clone());
+            }
+            Some((current_slot, _)) => {
+                log::error!(
+                    "got tx from block {}, while current block is {}",
+                    slot,
+                    current_slot
+                );
+            }
+            None => {
+                inner.transactions = Some((slot, vec![msg_tx.transaction.clone()]));
+            }
+        }
+
+        let message = Message::Transaction(msg_tx);
         let _ = inner.grpc_channel.send(message);
 
         Ok(())
@@ -118,8 +138,29 @@ impl GeyserPlugin for Plugin {
         &mut self,
         blockinfo: ReplicaBlockInfoVersions<'_>,
     ) -> PluginResult<()> {
-        let inner = self.inner.as_ref().expect("initialized");
-        let message = Message::Block(blockinfo.into());
+        let inner = self.inner.as_mut().expect("initialized");
+
+        let ReplicaBlockInfoVersions::V0_0_1(block) = &blockinfo;
+        let transactions = match inner.transactions.take() {
+            Some((slot, transactions)) if slot == block.slot => transactions,
+            Some((slot, _)) => {
+                let msg = format!(
+                    "invalid transactions for block {}, found {}",
+                    block.slot, slot
+                );
+                log::error!("{}", msg);
+                return Err(GeyserPluginError::Custom(msg.into()));
+            }
+            None => {
+                let msg = format!("no transactions for block {}", block.slot);
+                log::error!("{}", msg);
+                return Err(GeyserPluginError::Custom(msg.into()));
+            }
+        };
+
+        let message = Message::Block((&blockinfo, transactions).into());
+        let _ = inner.grpc_channel.send(message);
+        let message = Message::BlockMeta((&blockinfo).into());
         let _ = inner.grpc_channel.send(message);
 
         Ok(())
