@@ -158,9 +158,9 @@ impl GeyserPlugin for Plugin {
             }
         };
 
-        let message = Message::Block((&blockinfo).into());
+        let message = Message::Block((&blockinfo, transactions).into());
         let _ = inner.grpc_channel.send(message);
-        let message = Message::BlockFull((&blockinfo, transactions).into());
+        let message = Message::BlockMeta((&blockinfo).into());
         let _ = inner.grpc_channel.send(message);
 
         Ok(())

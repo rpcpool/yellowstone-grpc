@@ -3,7 +3,7 @@ use {
     futures::stream::{once, StreamExt},
     solana_geyser_grpc::proto::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksFull,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
     std::collections::HashMap,
@@ -58,8 +58,8 @@ struct Args {
     blocks: bool,
 
     #[clap(long)]
-    /// Subscribe on block updates (with transactions)
-    blocks_full: bool,
+    /// Subscribe on block meta updates (without transactions)
+    blocks_meta: bool,
 }
 
 #[tokio::main]
@@ -100,9 +100,9 @@ async fn main() -> anyhow::Result<()> {
         blocks.insert("client".to_owned(), SubscribeRequestFilterBlocks {});
     }
 
-    let mut blocks_full = HashMap::new();
-    if args.blocks_full {
-        blocks_full.insert("client".to_owned(), SubscribeRequestFilterBlocksFull {});
+    let mut blocks_meta = HashMap::new();
+    if args.blocks_meta {
+        blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
     }
 
     let mut endpoint = Endpoint::from_shared(args.endpoint.clone())?;
@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         accounts,
         transactions,
         blocks,
-        blocks_full,
+        blocks_meta,
     };
     println!("Going to send request: {:?}", request);
 

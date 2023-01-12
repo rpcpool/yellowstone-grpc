@@ -2,15 +2,15 @@ use {
     crate::{
         config::{
             ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-            ConfigGrpcFiltersBlocksFull, ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
+            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
         },
         grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockFull, MessageSlot,
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageSlot,
             MessageTransaction,
         },
         proto::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksFull, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
             SubscribeRequestFilterTransactions,
         },
     },
@@ -29,7 +29,7 @@ pub struct Filter {
     slots: FilterSlots,
     transactions: FilterTransactions,
     blocks: FilterBlocks,
-    blocks_full: FilterBlocksFull,
+    blocks_meta: FilterBlocksMeta,
 }
 
 impl Filter {
@@ -45,7 +45,7 @@ impl Filter {
                 limit.map(|v| &v.transactions),
             )?,
             blocks: FilterBlocks::new(&config.blocks, limit.map(|v| &v.blocks))?,
-            blocks_full: FilterBlocksFull::new(&config.blocks_full, limit.map(|v| &v.blocks_full))?,
+            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, limit.map(|v| &v.blocks_meta))?,
         })
     }
 
@@ -73,7 +73,7 @@ impl Filter {
             Message::Slot(message) => self.slots.get_filters(message),
             Message::Transaction(message) => self.transactions.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
-            Message::BlockFull(message) => self.blocks_full.get_filters(message),
+            Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 }
@@ -378,14 +378,14 @@ impl FilterBlocks {
 }
 
 #[derive(Debug, Default)]
-struct FilterBlocksFull {
+struct FilterBlocksMeta {
     filters: Vec<String>,
 }
 
-impl FilterBlocksFull {
+impl FilterBlocksMeta {
     fn new(
-        configs: &HashMap<String, SubscribeRequestFilterBlocksFull>,
-        limit: Option<&ConfigGrpcFiltersBlocksFull>,
+        configs: &HashMap<String, SubscribeRequestFilterBlocksMeta>,
+        limit: Option<&ConfigGrpcFiltersBlocksMeta>,
     ) -> anyhow::Result<Self> {
         if let Some(limit) = limit {
             ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
@@ -400,7 +400,7 @@ impl FilterBlocksFull {
         })
     }
 
-    fn get_filters(&self, _message: &MessageBlockFull) -> Vec<String> {
+    fn get_filters(&self, _message: &MessageBlockMeta) -> Vec<String> {
         self.filters.clone()
     }
 }

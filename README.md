@@ -57,9 +57,9 @@ If all fields are empty then all transactions are broadcasted. Otherwise fields 
 
 Currently all blocks are broadcasted.
 
-#### Blocks full
+#### Blocks meta
 
-Same as `Blocks` but includes all `transactions`.
+Same as `Blocks` but without `transactions`.
 
 ### Limit filters
 

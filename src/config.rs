@@ -82,7 +82,7 @@ pub struct ConfigGrpcFilters {
     pub slots: ConfigGrpcFiltersSlots,
     pub transactions: ConfigGrpcFiltersTransactions,
     pub blocks: ConfigGrpcFiltersBlocks,
-    pub blocks_full: ConfigGrpcFiltersBlocksFull,
+    pub blocks_meta: ConfigGrpcFiltersBlocksMeta,
 }
 
 impl ConfigGrpcFilters {
@@ -160,7 +160,7 @@ pub struct ConfigGrpcFiltersBlocks {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigGrpcFiltersBlocksFull {
+pub struct ConfigGrpcFiltersBlocksMeta {
     pub max: usize,
 }
 

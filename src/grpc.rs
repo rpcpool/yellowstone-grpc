@@ -7,7 +7,7 @@ use {
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockFull, SubscribeUpdatePing,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
             SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
             SubscribeUpdateTransactionInfo,
         },
@@ -157,29 +157,6 @@ pub struct MessageBlock {
     pub rewards: Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
-}
-
-impl<'a> From<&'a ReplicaBlockInfoVersions<'a>> for MessageBlock {
-    fn from(blockinfo: &'a ReplicaBlockInfoVersions<'a>) -> Self {
-        match blockinfo {
-            ReplicaBlockInfoVersions::V0_0_1(info) => Self {
-                slot: info.slot,
-                blockhash: info.blockhash.to_string(),
-                rewards: info.rewards.into(),
-                block_time: info.block_time,
-                block_height: info.block_height,
-            },
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct MessageBlockFull {
-    pub slot: u64,
-    pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
     pub transactions: Vec<MessageTransactionInfo>,
 }
 
@@ -187,7 +164,7 @@ impl<'a>
     From<(
         &'a ReplicaBlockInfoVersions<'a>,
         Vec<MessageTransactionInfo>,
-    )> for MessageBlockFull
+    )> for MessageBlock
 {
     fn from(
         (blockinfo, transactions): (
@@ -209,12 +186,35 @@ impl<'a>
 }
 
 #[derive(Debug)]
+pub struct MessageBlockMeta {
+    pub slot: u64,
+    pub blockhash: String,
+    pub rewards: Vec<Reward>,
+    pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<u64>,
+}
+
+impl<'a> From<&'a ReplicaBlockInfoVersions<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoVersions<'a>) -> Self {
+        match blockinfo {
+            ReplicaBlockInfoVersions::V0_0_1(info) => Self {
+                slot: info.slot,
+                blockhash: info.blockhash.to_string(),
+                rewards: info.rewards.into(),
+                block_time: info.block_time,
+                block_height: info.block_height,
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
     Block(MessageBlock),
-    BlockFull(MessageBlockFull),
+    BlockMeta(MessageBlockMeta),
 }
 
 impl From<&Message> for UpdateOneof {
@@ -249,14 +249,14 @@ impl From<&Message> for UpdateOneof {
                 rewards: Some(message.rewards.as_slice().into()),
                 block_time: message.block_time.map(|v| v.into()),
                 block_height: message.block_height.map(|v| v.into()),
+                transactions: message.transactions.iter().map(Into::into).collect(),
             }),
-            Message::BlockFull(message) => UpdateOneof::BlockFull(SubscribeUpdateBlockFull {
+            Message::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
                 rewards: Some(message.rewards.as_slice().into()),
                 block_time: message.block_time.map(|v| v.into()),
                 block_height: message.block_height.map(|v| v.into()),
-                transactions: message.transactions.iter().map(Into::into).collect(),
             }),
         }
     }
@@ -410,7 +410,7 @@ impl Geyser for GrpcService {
                 slots: HashMap::new(),
                 transactions: HashMap::new(),
                 blocks: HashMap::new(),
-                blocks_full: HashMap::new(),
+                blocks_meta: HashMap::new(),
             },
             self.config.filters.as_ref(),
         )
