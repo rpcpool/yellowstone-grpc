@@ -1,5 +1,3 @@
-use prometheus::IntGauge;
-
 use {
     crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
     futures::future::FutureExt,
@@ -9,7 +7,8 @@ use {
         Body, Request, Response, Server, StatusCode,
     },
     log::*,
-    prometheus::{IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    solana_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
     std::sync::Once,
     tokio::sync::oneshot,
 };
@@ -29,6 +28,11 @@ lazy_static::lazy_static! {
 
     pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
         "connections_total", "Total number of connections to GRPC service"
+    ).unwrap();
+
+    pub static ref BLOCK_TRANSACTIONS: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("block_transactions", "Invalid transactions for block metadata"),
+        &["topic"]
     ).unwrap();
 }
 
@@ -51,6 +55,7 @@ impl PrometheusService {
             register!(VERSION);
             register!(SLOT_STATUS);
             register!(CONNECTIONS_TOTAL);
+            register!(BLOCK_TRANSACTIONS);
 
             VERSION
                 .with_label_values(&[
@@ -60,7 +65,9 @@ impl PrometheusService {
                     VERSION_INFO.solana,
                     VERSION_INFO.version,
                 ])
-                .inc()
+                .inc();
+
+            block_transactions::install();
         });
 
         let (shutdown_signal, shutdown) = oneshot::channel();
@@ -106,4 +113,31 @@ fn not_found_handler() -> Response<Body> {
         .status(StatusCode::NOT_FOUND)
         .body(Body::empty())
         .unwrap()
+}
+
+pub fn update_slot_status(slot: u64, status: SlotStatus) {
+    SLOT_STATUS
+        .with_label_values(&[match status {
+            SlotStatus::Processed => "processed",
+            SlotStatus::Confirmed => "confirmed",
+            SlotStatus::Rooted => "rooted",
+        }])
+        .set(slot as i64);
+}
+
+pub mod block_transactions {
+    use super::BLOCK_TRANSACTIONS;
+
+    pub(super) fn install() {
+        BLOCK_TRANSACTIONS.with_label_values(&["block"]).set(0);
+        BLOCK_TRANSACTIONS.with_label_values(&["tx"]).set(0);
+    }
+
+    pub fn inc_block() {
+        BLOCK_TRANSACTIONS.with_label_values(&["block"]).inc();
+    }
+
+    pub fn inc_tx() {
+        BLOCK_TRANSACTIONS.with_label_values(&["tx"]).inc();
+    }
 }

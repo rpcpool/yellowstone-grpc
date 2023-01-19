@@ -2,7 +2,7 @@ use {
     crate::{
         config::Config,
         grpc::{GrpcService, Message, MessageTransaction, MessageTransactionInfo},
-        prom::{PrometheusService, SLOT_STATUS},
+        prom::{self, PrometheusService},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -93,13 +93,7 @@ impl GeyserPlugin for Plugin {
         let message = Message::Slot((slot, parent, status).into());
         let _ = inner.grpc_channel.send(message);
 
-        SLOT_STATUS
-            .with_label_values(&[match status {
-                SlotStatus::Processed => "processed",
-                SlotStatus::Confirmed => "confirmed",
-                SlotStatus::Rooted => "rooted",
-            }])
-            .set(slot as i64);
+        prom::update_slot_status(slot, status);
 
         Ok(())
     }
@@ -117,11 +111,13 @@ impl GeyserPlugin for Plugin {
                 transactions.push(msg_tx.transaction.clone());
             }
             Some((current_slot, _)) => {
-                log::error!(
+                prom::block_transactions::inc_tx();
+                let msg = format!(
                     "got tx from block {}, while current block is {}",
-                    slot,
-                    current_slot
+                    slot, current_slot
                 );
+                log::error!("{}", msg);
+                return Err(GeyserPluginError::Custom(msg.into()));
             }
             None => {
                 inner.transactions = Some((slot, vec![msg_tx.transaction.clone()]));
@@ -144,6 +140,7 @@ impl GeyserPlugin for Plugin {
         let transactions = match inner.transactions.take() {
             Some((slot, transactions)) if slot == block.slot => transactions,
             Some((slot, _)) => {
+                prom::block_transactions::inc_block();
                 let msg = format!(
                     "invalid transactions for block {}, found {}",
                     block.slot, slot
@@ -152,6 +149,7 @@ impl GeyserPlugin for Plugin {
                 return Err(GeyserPluginError::Custom(msg.into()));
             }
             None => {
+                prom::block_transactions::inc_block();
                 let msg = format!("no transactions for block {}", block.slot);
                 log::error!("{}", msg);
                 return Err(GeyserPluginError::Custom(msg.into()));
