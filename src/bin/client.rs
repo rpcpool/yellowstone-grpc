@@ -24,48 +24,52 @@ struct Args {
     #[clap(long)]
     x_token: Option<String>,
 
-    #[clap(long)]
     /// Subscribe on accounts updates
+    #[clap(long)]
     accounts: bool,
 
-    #[clap(long)]
     /// Filter by Account Pubkey
+    #[clap(long)]
     accounts_account: Vec<String>,
 
-    #[clap(long)]
     /// Filter by Owner Pubkey
+    #[clap(long)]
     accounts_owner: Vec<String>,
 
-    #[clap(long)]
     /// Subscribe on slots updates
+    #[clap(long)]
     slots: bool,
 
-    #[clap(long)]
     /// Subscribe on transactions updates
+    #[clap(long)]
     transactions: bool,
 
-    #[clap(long)]
     /// Filter vote transactions
+    #[clap(long)]
     transactions_vote: Option<bool>,
 
-    #[clap(long)]
     /// Filter failed transactions
+    #[clap(long)]
     transactions_failed: Option<bool>,
 
+    /// Filter by transaction signature
     #[clap(long)]
+    transactions_signature: Option<String>,
+
     /// Filter included account in transactions
+    #[clap(long)]
     transactions_account_include: Vec<String>,
 
-    #[clap(long)]
     /// Filter excluded account in transactions
+    #[clap(long)]
     transactions_account_exclude: Vec<String>,
 
-    #[clap(long)]
     /// Subscribe on block updates
+    #[clap(long)]
     blocks: bool,
 
-    #[clap(long)]
     /// Subscribe on block meta updates (without transactions)
+    #[clap(long)]
     blocks_meta: bool,
 }
 
@@ -96,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
             SubscribeRequestFilterTransactions {
                 vote: args.transactions_vote,
                 failed: args.transactions_failed,
+                signature: args.transactions_signature,
                 account_include: args.transactions_account_include,
                 account_exclude: args.transactions_account_exclude,
             },

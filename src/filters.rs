@@ -14,7 +14,7 @@ use {
             SubscribeRequestFilterTransactions,
         },
     },
-    solana_sdk::pubkey::Pubkey,
+    solana_sdk::{pubkey::Pubkey, signature::Signature},
     std::{
         collections::{HashMap, HashSet},
         hash::Hash,
@@ -248,6 +248,7 @@ impl FilterSlots {
 pub struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
+    signature: Option<Signature>,
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
 }
@@ -291,6 +292,15 @@ impl FilterTransactions {
                 FilterTransactionsInner {
                     vote: filter.vote,
                     failed: filter.failed,
+                    signature: filter
+                        .signature
+                        .as_ref()
+                        .map(|signature_str| {
+                            signature_str
+                                .parse()
+                                .map_err(|error| anyhow::anyhow!("invalid signature: {error}"))
+                        })
+                        .transpose()?,
                     account_include: Filter::decode_pubkeys(
                         &filter.account_include,
                         limit.map(|v| &v.account_include_reject),
@@ -317,6 +327,12 @@ impl FilterTransactions {
 
                 if let Some(is_failed) = inner.failed {
                     if is_failed != transaction.meta.status.is_err() {
+                        return None;
+                    }
+                }
+
+                if let Some(signature) = &inner.signature {
+                    if signature != transaction.transaction.signature() {
                         return None;
                     }
                 }
