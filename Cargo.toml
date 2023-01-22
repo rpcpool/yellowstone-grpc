@@ -34,3 +34,8 @@ git-version = "0.3.5"
 protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 vergen = "=7.2.1"
+
+[profile.release]
+debug = true
+lto = true
+codegen-units = 1
