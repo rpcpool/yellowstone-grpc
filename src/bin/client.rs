@@ -117,9 +117,9 @@ async fn main() -> anyhow::Result<()> {
         blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
     }
 
+    let is_https = args.endpoint.parse::<Uri>()?.scheme_str() == Some("https");
     let mut endpoint = Endpoint::from_shared(args.endpoint.clone())?;
-    let uri: Uri = args.endpoint.parse()?;
-    if uri.scheme_str() == Some("https") {
+    if is_https {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
     }
     // let mut client = GeyserClient::connect(endpoint).await?;
