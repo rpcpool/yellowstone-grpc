@@ -1,0 +1,17 @@
+{
+  "name": "solana-geyser-grpc-client",
+  "version": "1.0.0",
+  "license": "ISC",
+  "scripts": {
+    "fmt:check": "npx prettier --check .",
+    "fmt:fix": "npx prettier --write ."
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.8.0",
+    "@grpc/proto-loader": "^0.7.4",
+    "yargs": "^17.6.2"
+  },
+  "devDependencies": {
+    "prettier": "2.8.3"
+  }
+}
