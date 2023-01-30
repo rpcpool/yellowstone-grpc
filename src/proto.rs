@@ -19,9 +19,8 @@ mod convert {
             clock::UnixTimestamp,
             instruction::CompiledInstruction,
             message::{
-                legacy::Message as LegacyMessage,
                 v0::{LoadedMessage, MessageAddressTableLookup},
-                MessageHeader, SanitizedMessage,
+                LegacyMessage, MessageHeader, SanitizedMessage,
             },
             pubkey::Pubkey,
             signature::Signature,
@@ -46,27 +45,21 @@ mod convert {
         }
     }
 
-    impl From<&LegacyMessage> for super::Message {
-        fn from(message: &LegacyMessage) -> Self {
-            Self {
-                header: Some((&message.header).into()),
-                account_keys: message
-                    .account_keys
-                    .iter()
-                    .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
-                    .collect(),
-                recent_blockhash: message.recent_blockhash.to_bytes().into(),
-                instructions: message.instructions.iter().map(|ix| ix.into()).collect(),
-                versioned: false,
-                address_table_lookups: vec![],
-            }
-        }
-    }
-
     impl From<&SanitizedMessage> for super::Message {
         fn from(message: &SanitizedMessage) -> Self {
             match message {
-                SanitizedMessage::Legacy(message) => Self::from(message),
+                SanitizedMessage::Legacy(LegacyMessage { message, .. }) => Self {
+                    header: Some((&message.header).into()),
+                    account_keys: message
+                        .account_keys
+                        .iter()
+                        .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
+                        .collect(),
+                    recent_blockhash: message.recent_blockhash.to_bytes().into(),
+                    instructions: message.instructions.iter().map(|ix| ix.into()).collect(),
+                    versioned: false,
+                    address_table_lookups: vec![],
+                },
                 SanitizedMessage::V0(LoadedMessage { message, .. }) => Self {
                     header: Some((&message.header).into()),
                     account_keys: message
