@@ -2,6 +2,7 @@
 # https://github.com/solana-labs/solana-accountsdb-plugin-postgres/blob/master/.github/workflows/test.yml
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
 
@@ -10,7 +11,7 @@ env:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Ubuntu-20.04]
     steps:
       - uses: actions/checkout@v3
 
