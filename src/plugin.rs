@@ -103,6 +103,13 @@ impl GeyserPlugin for Plugin {
         is_startup: bool,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
+            let account = match account {
+                ReplicaAccountInfoVersions::V0_0_1(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaAccountInfoVersions::V0_0_2(info) => info,
+            };
+
             let message = Message::Account((account, slot, is_startup).into());
             let _ = inner.grpc_channel.send(message);
             Ok(())
@@ -137,6 +144,13 @@ impl GeyserPlugin for Plugin {
         slot: u64,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
+            let transaction = match transaction {
+                ReplicaTransactionInfoVersions::V0_0_1(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaTransactionInfoVersions::V0_0_2(info) => info,
+            };
+
             let msg_tx: MessageTransaction = (transaction, slot).into();
             match &mut inner.transactions {
                 Some((current_slot, transactions)) if *current_slot == slot => {
@@ -168,21 +182,38 @@ impl GeyserPlugin for Plugin {
         blockinfo: ReplicaBlockInfoVersions<'_>,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let ReplicaBlockInfoVersions::V0_0_1(block) = &blockinfo;
+            let blockinfo = match blockinfo {
+                ReplicaBlockInfoVersions::V0_0_1(_info) => {
+                    unreachable!("ReplicaBlockInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaBlockInfoVersions::V0_0_2(info) => info,
+            };
+
             let transactions = match inner.transactions.take() {
-                Some((slot, transactions)) if slot == block.slot => Ok(transactions),
-                Some((slot, _)) => Err(format!(
-                    "invalid transactions for block {}, found {}",
-                    block.slot, slot
+                Some((slot, _transactions)) if slot != blockinfo.slot => Err(format!(
+                    "invalid transactions for block {}, expected block {}",
+                    blockinfo.slot, slot
                 )),
-                None => Err(format!("no transactions for block {}", block.slot)),
+                Some((_slot, transactions))
+                    if transactions.len() != blockinfo.executed_transaction_count as usize =>
+                {
+                    Err(format!(
+                        "invalid count of transactions for block {}, collected {}, expected {}",
+                        blockinfo.slot,
+                        transactions.len(),
+                        blockinfo.executed_transaction_count
+                    ))
+                }
+                Some((_slot, transactions)) => Ok(transactions),
+                None if blockinfo.executed_transaction_count == 0 => Ok(vec![]),
+                None => Err(format!("no transactions for block {}", blockinfo.slot)),
             };
 
             match transactions {
                 Ok(transactions) => {
-                    let message = Message::Block((&blockinfo, transactions).into());
+                    let message = Message::Block((blockinfo, transactions).into());
                     let _ = inner.grpc_channel.send(message);
-                    let message = Message::BlockMeta((&blockinfo).into());
+                    let message = Message::BlockMeta((blockinfo).into());
                     let _ = inner.grpc_channel.send(message);
                     Ok(())
                 }

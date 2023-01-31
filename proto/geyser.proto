@@ -96,6 +96,8 @@ message SubscribeUpdateBlock {
   solana.storage.ConfirmedBlock.UnixTimestamp block_time = 4;
   solana.storage.ConfirmedBlock.BlockHeight block_height = 5;
   repeated SubscribeUpdateTransactionInfo transactions = 6;
+  uint64 parent_slot = 7;
+  string parent_blockhash = 8;
 }
 
 message SubscribeUpdateBlockMeta {
@@ -104,6 +106,9 @@ message SubscribeUpdateBlockMeta {
   solana.storage.ConfirmedBlock.Rewards rewards = 3;
   solana.storage.ConfirmedBlock.UnixTimestamp block_time = 4;
   solana.storage.ConfirmedBlock.BlockHeight block_height = 5;
+  uint64 parent_slot = 6;
+  string parent_blockhash = 7;
+  uint64 executed_transaction_count = 8;
 }
 
 message SubscribeUpdatePing {}

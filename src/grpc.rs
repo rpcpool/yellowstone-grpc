@@ -14,8 +14,7 @@ use {
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoVersions, ReplicaBlockInfoVersions, ReplicaTransactionInfoVersions,
-        SlotStatus,
+        ReplicaAccountInfoV2, ReplicaBlockInfoV2, ReplicaTransactionInfoV2, SlotStatus,
     },
     solana_sdk::{
         clock::UnixTimestamp, pubkey::Pubkey, signature::Signature,
@@ -58,23 +57,18 @@ pub struct MessageAccount {
     pub is_startup: bool,
 }
 
-impl<'a> From<(ReplicaAccountInfoVersions<'a>, u64, bool)> for MessageAccount {
-    fn from((account, slot, is_startup): (ReplicaAccountInfoVersions<'a>, u64, bool)) -> Self {
+impl<'a> From<(&'a ReplicaAccountInfoV2<'a>, u64, bool)> for MessageAccount {
+    fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV2<'a>, u64, bool)) -> Self {
         Self {
-            account: match account {
-                ReplicaAccountInfoVersions::V0_0_1(_info) => {
-                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
-                }
-                ReplicaAccountInfoVersions::V0_0_2(info) => MessageAccountInfo {
-                    pubkey: Pubkey::new(info.pubkey),
-                    lamports: info.lamports,
-                    owner: Pubkey::new(info.owner),
-                    executable: info.executable,
-                    rent_epoch: info.rent_epoch,
-                    data: info.data.into(),
-                    write_version: info.write_version,
-                    txn_signature: info.txn_signature.cloned(),
-                },
+            account: MessageAccountInfo {
+                pubkey: Pubkey::new(account.pubkey),
+                lamports: account.lamports,
+                owner: Pubkey::new(account.owner),
+                executable: account.executable,
+                rent_epoch: account.rent_epoch,
+                data: account.data.into(),
+                write_version: account.write_version,
+                txn_signature: account.txn_signature.cloned(),
             },
             slot,
             is_startup,
@@ -130,20 +124,15 @@ pub struct MessageTransaction {
     pub slot: u64,
 }
 
-impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction {
-    fn from((transaction, slot): (ReplicaTransactionInfoVersions<'a>, u64)) -> Self {
+impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
+    fn from((transaction, slot): (&'a ReplicaTransactionInfoV2<'a>, u64)) -> Self {
         Self {
-            transaction: match transaction {
-                ReplicaTransactionInfoVersions::V0_0_1(_info) => {
-                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
-                }
-                ReplicaTransactionInfoVersions::V0_0_2(info) => MessageTransactionInfo {
-                    signature: *info.signature,
-                    is_vote: info.is_vote,
-                    transaction: info.transaction.clone(),
-                    meta: info.transaction_status_meta.clone(),
-                    index: info.index,
-                },
+            transaction: MessageTransactionInfo {
+                signature: *transaction.signature,
+                is_vote: transaction.is_vote,
+                transaction: transaction.transaction.clone(),
+                meta: transaction.transaction_status_meta.clone(),
+                index: transaction.index,
             },
             slot,
         }
@@ -152,7 +141,9 @@ impl<'a> From<(ReplicaTransactionInfoVersions<'a>, u64)> for MessageTransaction 
 
 #[derive(Debug)]
 pub struct MessageBlock {
+    pub parent_slot: u64,
     pub slot: u64,
+    pub parent_blockhash: String,
     pub blockhash: String,
     pub rewards: Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
@@ -160,50 +151,46 @@ pub struct MessageBlock {
     pub transactions: Vec<MessageTransactionInfo>,
 }
 
-impl<'a>
-    From<(
-        &'a ReplicaBlockInfoVersions<'a>,
-        Vec<MessageTransactionInfo>,
-    )> for MessageBlock
-{
+impl<'a> From<(&'a ReplicaBlockInfoV2<'a>, Vec<MessageTransactionInfo>)> for MessageBlock {
     fn from(
-        (blockinfo, transactions): (
-            &'a ReplicaBlockInfoVersions<'a>,
-            Vec<MessageTransactionInfo>,
-        ),
+        (blockinfo, transactions): (&'a ReplicaBlockInfoV2<'a>, Vec<MessageTransactionInfo>),
     ) -> Self {
-        match blockinfo {
-            ReplicaBlockInfoVersions::V0_0_1(info) => Self {
-                slot: info.slot,
-                blockhash: info.blockhash.to_string(),
-                rewards: info.rewards.into(),
-                block_time: info.block_time,
-                block_height: info.block_height,
-                transactions,
-            },
+        Self {
+            parent_slot: blockinfo.parent_slot,
+            slot: blockinfo.slot,
+            blockhash: blockinfo.blockhash.to_string(),
+            parent_blockhash: blockinfo.parent_blockhash.to_string(),
+            rewards: blockinfo.rewards.into(),
+            block_time: blockinfo.block_time,
+            block_height: blockinfo.block_height,
+            transactions,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct MessageBlockMeta {
+    pub parent_slot: u64,
     pub slot: u64,
+    pub parent_blockhash: String,
     pub blockhash: String,
     pub rewards: Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
+    pub executed_transaction_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoVersions<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoVersions<'a>) -> Self {
-        match blockinfo {
-            ReplicaBlockInfoVersions::V0_0_1(info) => Self {
-                slot: info.slot,
-                blockhash: info.blockhash.to_string(),
-                rewards: info.rewards.into(),
-                block_time: info.block_time,
-                block_height: info.block_height,
-            },
+impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV2<'a>) -> Self {
+        Self {
+            parent_slot: blockinfo.parent_slot,
+            slot: blockinfo.slot,
+            parent_blockhash: blockinfo.parent_blockhash.to_string(),
+            blockhash: blockinfo.blockhash.to_string(),
+            rewards: blockinfo.rewards.into(),
+            block_time: blockinfo.block_time,
+            block_height: blockinfo.block_height,
+            executed_transaction_count: blockinfo.executed_transaction_count,
         }
     }
 }
@@ -250,6 +237,8 @@ impl From<&Message> for UpdateOneof {
                 block_time: message.block_time.map(|v| v.into()),
                 block_height: message.block_height.map(|v| v.into()),
                 transactions: message.transactions.iter().map(Into::into).collect(),
+                parent_slot: message.parent_slot,
+                parent_blockhash: message.parent_blockhash.clone(),
             }),
             Message::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
@@ -257,6 +246,9 @@ impl From<&Message> for UpdateOneof {
                 rewards: Some(message.rewards.as_slice().into()),
                 block_time: message.block_time.map(|v| v.into()),
                 block_height: message.block_height.map(|v| v.into()),
+                parent_slot: message.parent_slot,
+                parent_blockhash: message.parent_blockhash.clone(),
+                executed_transaction_count: message.executed_transaction_count,
             }),
         }
     }
