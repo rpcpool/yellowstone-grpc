@@ -1,6 +1,6 @@
 [package]
 name = "solana-geyser-grpc"
-version = "0.4.1+solana.1.14.13"
+version = "0.5.0+solana.1.14.13"
 authors = ["Triton One"]
 edition = "2021"
 
@@ -34,6 +34,12 @@ git-version = "0.3.5"
 protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 vergen = "=7.2.1"
+
+[patch.crates-io]
+solana-geyser-plugin-interface = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
+solana-logger = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
+solana-sdk = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
+solana-transaction-status = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
 
 [profile.release]
 debug = true
