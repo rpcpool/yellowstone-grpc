@@ -30,9 +30,8 @@ lazy_static::lazy_static! {
         "connections_total", "Total number of connections to GRPC service"
     ).unwrap();
 
-    pub static ref BLOCK_TRANSACTIONS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("block_transactions", "Invalid transactions for block metadata"),
-        &["topic"]
+    pub static ref INVALID_FULL_BLOCKS: IntGauge = IntGauge::new(
+        "invalid_full_blocks_total", "Total number of fails on constructin full blocks"
     ).unwrap();
 }
 
@@ -55,7 +54,7 @@ impl PrometheusService {
             register!(VERSION);
             register!(SLOT_STATUS);
             register!(CONNECTIONS_TOTAL);
-            register!(BLOCK_TRANSACTIONS);
+            register!(INVALID_FULL_BLOCKS);
 
             VERSION
                 .with_label_values(&[
@@ -66,8 +65,6 @@ impl PrometheusService {
                     VERSION_INFO.version,
                 ])
                 .inc();
-
-            block_transactions::install();
         });
 
         let (shutdown_signal, shutdown) = oneshot::channel();
@@ -120,24 +117,7 @@ pub fn update_slot_status(slot: u64, status: SlotStatus) {
         .with_label_values(&[match status {
             SlotStatus::Processed => "processed",
             SlotStatus::Confirmed => "confirmed",
-            SlotStatus::Rooted => "rooted",
+            SlotStatus::Rooted => "finalized",
         }])
         .set(slot as i64);
-}
-
-pub mod block_transactions {
-    use super::BLOCK_TRANSACTIONS;
-
-    pub(super) fn install() {
-        BLOCK_TRANSACTIONS.with_label_values(&["block"]).set(0);
-        BLOCK_TRANSACTIONS.with_label_values(&["tx"]).set(0);
-    }
-
-    pub fn inc_block() {
-        BLOCK_TRANSACTIONS.with_label_values(&["block"]).inc();
-    }
-
-    pub fn inc_tx() {
-        BLOCK_TRANSACTIONS.with_label_values(&["tx"]).inc();
-    }
 }

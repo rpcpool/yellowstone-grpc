@@ -151,16 +151,14 @@ pub struct MessageBlock {
     pub transactions: Vec<MessageTransactionInfo>,
 }
 
-impl<'a> From<(&'a ReplicaBlockInfoV2<'a>, Vec<MessageTransactionInfo>)> for MessageBlock {
-    fn from(
-        (blockinfo, transactions): (&'a ReplicaBlockInfoV2<'a>, Vec<MessageTransactionInfo>),
-    ) -> Self {
+impl<'a> From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
+    fn from((blockinfo, transactions): (MessageBlockMeta, Vec<MessageTransactionInfo>)) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
-            blockhash: blockinfo.blockhash.to_string(),
-            parent_blockhash: blockinfo.parent_blockhash.to_string(),
-            rewards: blockinfo.rewards.into(),
+            blockhash: blockinfo.blockhash,
+            parent_blockhash: blockinfo.parent_blockhash,
+            rewards: blockinfo.rewards,
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             transactions,
@@ -168,7 +166,7 @@ impl<'a> From<(&'a ReplicaBlockInfoV2<'a>, Vec<MessageTransactionInfo>)> for Mes
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageBlockMeta {
     pub parent_slot: u64,
     pub slot: u64,
