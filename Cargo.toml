@@ -1,6 +1,6 @@
 [package]
 name = "solana-geyser-grpc"
-version = "0.5.1+solana.1.14.13"
+version = "0.5.2+solana.1.14.13"
 authors = ["Triton One"]
 edition = "2021"
 
