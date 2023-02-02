@@ -35,7 +35,8 @@ impl PluginInner {
             self.transactions.get(&slot),
             Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
         ) {
-            let (block_meta, transactions) = self.transactions.remove(&slot).expect("checked");
+            let (block_meta, mut transactions) = self.transactions.remove(&slot).expect("checked");
+            transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
             let message = Message::Block((block_meta.expect("checked"), transactions).into());
             let _ = self.grpc_channel.send(message);
         }
