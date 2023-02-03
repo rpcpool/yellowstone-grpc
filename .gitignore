@@ -3,3 +3,4 @@
 /test-ledger
 
 config-test.json
+*.sw?
