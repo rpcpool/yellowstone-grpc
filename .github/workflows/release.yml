@@ -37,12 +37,14 @@ jobs:
       - name: Check Solana version
         run: |
           echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
-          echo "BUILD_NAME=grpc-$CI_TAG-$SOLANA_VERSION" >> "$GITHUB_ENV"
           echo "CI_OS_NAME=linux" >> "$GITHUB_ENV"
 
           SOLANA_VERSION="$(./ci/solana-version.sh)"
-          SOLANA_VERSION="v${SOLANA_VERSION#=}"
           echo "SOLANA_VERSION=$SOLANA_VERSION" >> "$GITHUB_ENV"
+
+      - name: Create build name
+        run: |
+          echo "BUILD_NAME=grpc-$CI_TAG-$SOLANA_VERSION" >> "$GITHUB_ENV"
 
       - name: Build release tarball
         run: ./ci/create-tarball.sh
@@ -58,4 +60,4 @@ jobs:
           files: |
             ${{ env.GEYSER_PLUGIN_NAME }}-release-*
             proto/geyser.proto
-            proto/solana-storage.v1.14.13.proto
+            proto/solana-storage-v1.14.13.proto
