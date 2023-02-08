@@ -1,0 +1,19 @@
+{
+    "name": "solana-geyser-grpc-client-ts",
+    "version": "1.0.0",
+    "license": "ISC",
+    "scripts": {
+        "build": "npm run grpc-generate && tsc -p .",
+        "grpc-generate": "protoc -I../proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
+    },
+    "main": "dist/client.js",
+    "dependencies": {
+        "@grpc/grpc-js": "^1.8.0",
+        "yargs": "^17.6.2"
+    },
+    "devDependencies": {
+        "prettier": "2.8.3",
+        "ts-proto": "^1.139.0",
+        "typescript": "^4.9.5"
+    }
+}
