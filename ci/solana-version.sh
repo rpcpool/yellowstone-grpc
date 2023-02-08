@@ -4,6 +4,4 @@
 
 set -e
 
-cd "$(dirname "$0")/.."
-
-grep solana-geyser-plugin-interface crates/plugin/Cargo.toml | cut -d ' ' -f3 | sed  's/\"/ /g;s/=//;s/ //'
+grep solana-program Cargo.lock | head -n1 | awk '{print $2}'

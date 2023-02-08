@@ -36,7 +36,8 @@ jobs:
 
       - name: Check Solana version
         run: |
-          echo "CI_TAG=${GITHUB_REF#refs/*/}" >> "$GITHUB_ENV"
+          echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
+          echo "BUILD_NAME=$GEYSER_PLUGIN_NAME-$CI_TAG-$SOLANA_VERSION" >> "$GITHUB_ENV"
           echo "CI_OS_NAME=linux" >> "$GITHUB_ENV"
 
           SOLANA_VERSION="$(./ci/solana-version.sh)"
@@ -49,6 +50,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.BUILD_NAME }}
           body: |
             ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
             solana ${{ env.SOLANA_VERSION }}
