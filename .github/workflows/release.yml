@@ -56,3 +56,5 @@ jobs:
             rust ${{ env.RUST_STABLE }}
           files: |
             ${{ env.GEYSER_PLUGIN_NAME }}-release-*
+            proto/geyser.proto
+            proto/solana-storafe.v1.14.13.proto
