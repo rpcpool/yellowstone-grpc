@@ -5,13 +5,9 @@ async function main() {
   const args = require("yargs")(process.argv.slice(2))
     .options({
       endpoint: {
-        default: "localhost:10000",
+        default: "http://localhost:10000",
         describe: "gRPC endpoint",
         type: "string",
-      },
-      ssl: {
-        default: false,
-        describe: "use ssl on connection",
       },
       "x-token": {
         describe: "token for auth, can be used only with ssl",
@@ -82,8 +78,10 @@ async function main() {
   const pkg = grpc.loadPackageDefinition(defs);
 
   // Open connection
+  const endpointURL = new URL(args.endpoint);
+
   let creds;
-  if (args.ssl) {
+  if (endpointURL.protocol === "https") {
     creds = grpc.credentials.combineChannelCredentials(
       grpc.credentials.createSsl(),
       grpc.credentials.createFromMetadataGenerator((_params, callback) => {
@@ -97,7 +95,7 @@ async function main() {
   } else {
     creds = grpc.credentials.createInsecure();
   }
-  const client = new pkg.geyser.Geyser(args.endpoint, creds);
+  const client = new pkg.geyser.Geyser(endpointURL.host, creds);
   const stream = await client.subscribe();
 
   // Create `error` / `end` handler

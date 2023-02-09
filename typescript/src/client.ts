@@ -8,13 +8,9 @@ async function main() {
   const args = yargs(process.argv.slice(2))
     .options({
       endpoint: {
-        default: "localhost:10000",
+        default: "http://localhost:10000",
         describe: "gRPC endpoint",
         type: "string",
-      },
-      ssl: {
-        default: false,
-        describe: "use ssl on connection",
       },
       "x-token": {
         describe: "token for auth, can be used only with ssl",
@@ -80,9 +76,11 @@ async function main() {
     })
     .help().argv;
 
+  const endpointURL = new URL(args.endpoint);
+
   // Open connection
   let creds: ChannelCredentials;
-  if (args.ssl) {
+  if (endpointURL.protocol === "https") {
     creds = credentials.combineChannelCredentials(
       credentials.createSsl(),
       credentials.createFromMetadataGenerator((_params, callback) => {
@@ -97,7 +95,8 @@ async function main() {
     creds = ChannelCredentials.createInsecure();
   }
 
-  const client = new GeyserClient(args.endpoint, creds);
+  // Create the client
+  const client = new GeyserClient(endpointURL.host, creds);
   const stream = await client.subscribe();
 
   // Create `error` / `end` handler
