@@ -1,6 +1,6 @@
 [package]
 name = "solana-geyser-grpc"
-version = "0.5.2+solana.1.14.13"
+version = "0.5.2+solana.1.14.15"
 authors = ["Triton One"]
 edition = "2021"
 
@@ -19,10 +19,10 @@ prometheus = "0.13.2"
 prost = "0.11.0"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
-solana-geyser-plugin-interface = "=1.14.13"
-solana-logger = "=1.14.13"
-solana-sdk = "=1.14.13"
-solana-transaction-status = "=1.14.13"
+solana-geyser-plugin-interface = "=1.14.15"
+solana-logger = "=1.14.15"
+solana-sdk = "=1.14.15"
+solana-transaction-status = "=1.14.15"
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1.11"
 tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
@@ -36,10 +36,10 @@ tonic-build = "0.8.2"
 vergen = "=7.2.1"
 
 [patch.crates-io]
-solana-geyser-plugin-interface = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
-solana-logger = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
-solana-sdk = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
-solana-transaction-status = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.13-geyser-block-v2" }
+solana-geyser-plugin-interface = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.15-geyser-block-v2" }
+solana-logger = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.15-geyser-block-v2" }
+solana-sdk = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.15-geyser-block-v2" }
+solana-transaction-status = { git = "https://github.com/fanatid/solana.git", tag = "v1.14.15-geyser-block-v2" }
 
 [profile.release]
 debug = true
