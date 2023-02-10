@@ -44,7 +44,7 @@ jobs:
 
       - name: Create build name
         run: |
-          echo "BUILD_NAME=grpc-$CI_TAG-$SOLANA_VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NAME=$CI_TAG" >> "$GITHUB_ENV"
 
       - name: Build release tarball
         run: ./ci/create-tarball.sh
