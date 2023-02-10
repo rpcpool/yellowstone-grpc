@@ -61,9 +61,9 @@ impl<'a> From<(&'a ReplicaAccountInfoV2<'a>, u64, bool)> for MessageAccount {
     fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV2<'a>, u64, bool)) -> Self {
         Self {
             account: MessageAccountInfo {
-                pubkey: Pubkey::new(account.pubkey),
+                pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
                 lamports: account.lamports,
-                owner: Pubkey::new(account.owner),
+                owner: Pubkey::try_from(account.owner).expect("valid Pubkey"),
                 executable: account.executable,
                 rent_epoch: account.rent_epoch,
                 data: account.data.into(),
