@@ -2656,6 +2656,7 @@ dependencies = [
  "solana-logger",
  "solana-sdk",
  "solana-transaction-status",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",

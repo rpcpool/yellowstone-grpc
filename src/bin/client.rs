@@ -1,3 +1,4 @@
+use tonic::transport::Endpoint;
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
@@ -8,11 +9,12 @@ use {
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
     std::collections::HashMap,
+    thiserror::Error,
     tonic::{
         codec::Streaming,
         metadata::{Ascii, MetadataValue},
         service::interceptor::InterceptedService,
-        transport::{channel::ClientTlsConfig, Channel, Uri},
+        transport::{channel::ClientTlsConfig, Channel},
         Request, Response, Status,
     },
 };
@@ -76,6 +78,21 @@ struct Args {
     blocks_meta: bool,
 }
 
+const XTOKEN_LENGTH: usize = 28;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("XToken: {0}")]
+    XToken(String),
+
+    #[error("Invalid URI {0}")]
+    InvalidUri(String),
+
+    #[error("RetrySubscribe")]
+    RetrySubscribe(anyhow::Error),
+}
+
+#[derive(Debug)]
 struct RetryChannel {
     x_token: Option<MetadataValue<Ascii>>,
     channel: Channel,
@@ -84,19 +101,46 @@ struct RetryChannel {
 impl RetryChannel {
     /// Establish a channel to tonic endpoint
     /// The channel does not attempt to connect to the endpoint until first use
-    pub fn new(endpoint: String, is_https: bool, x_token: Option<String>) -> anyhow::Result<Self> {
-        let mut endpoint = Channel::from_shared(endpoint)?;
-        if is_https {
-            endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
+    pub fn new(endpoint_str: String, x_token_str: Option<String>) -> Result<Self, Error> {
+        let endpoint: Endpoint;
+        let x_token: Option<MetadataValue<Ascii>>;
+
+        // the client should fail immediately if the x-token is invalid
+        match x_token_str {
+            // x-token length is 28
+            Some(token_str) if token_str.len() == XTOKEN_LENGTH => {
+                match token_str.parse::<MetadataValue<Ascii>>() {
+                    Ok(metadata) => x_token = Some(metadata),
+                    Err(_) => return Err(Error::XToken(token_str)),
+                }
+            }
+            Some(token_str) => return Err(Error::XToken(token_str)),
+            None => return Err(Error::XToken("".to_owned())),
+        }
+
+        let res = Channel::from_shared(endpoint_str.clone());
+        match res {
+            Err(e) => {
+                println!("{}", e);
+                return Err(Error::InvalidUri(endpoint_str));
+            }
+            Ok(_endpoint) => {
+                if _endpoint.uri().scheme_str() == Some("https") {
+                    match _endpoint.tls_config(ClientTlsConfig::new()) {
+                        Err(e) => {
+                            println!("{}", e);
+                            return Err(Error::InvalidUri(endpoint_str));
+                        }
+                        Ok(e) => endpoint = e,
+                    }
+                } else {
+                    endpoint = _endpoint;
+                }
+            }
         }
         let channel = endpoint.connect_lazy();
-        let x_token_inner: Option<MetadataValue<_>> =
-            x_token.map(|token| token.parse()).transpose()?;
 
-        Ok(Self {
-            x_token: x_token_inner,
-            channel,
-        })
+        Ok(Self { x_token, channel })
     }
 
     /// Create a new GeyserClient client with Auth interceptor
@@ -185,7 +229,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> RetryClient<F> {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Error> {
     let args = Args::parse();
 
     let mut accounts = HashMap::new();
@@ -228,14 +272,83 @@ async fn main() -> anyhow::Result<()> {
         blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
     }
 
-    let is_https = args.endpoint.parse::<Uri>()?.scheme_str() == Some("https");
-
     // Client with retry policy
-    let retry_channel: RetryChannel =
-        RetryChannel::new(args.endpoint.clone(), is_https, args.x_token.clone())?;
-    retry_channel
+    let res: Result<RetryChannel, Error> =
+        RetryChannel::new(args.endpoint.clone(), args.x_token.clone());
+    if let Err(e) = res {
+        println!("Error: {}", e);
+        return Err(e);
+    }
+
+    let res: anyhow::Result<()> = res
+        .unwrap()
         .subscribe_retry(&slots, &accounts, &transactions, &blocks, &blocks_meta)
-        .await?;
+        .await;
+    if let Err(e) = res {
+        println!("Error: {}", e);
+        return Err(Error::RetrySubscribe(e));
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, RetryChannel};
+
+    #[tokio::test]
+    async fn test_channel_https_success() {
+        let endpoint = "https://ams17.rpcpool.com:443".to_owned();
+        let x_token = "1000000000000000000000000007".to_owned();
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
+        assert!(res.is_ok())
+    }
+
+    #[tokio::test]
+    async fn test_channel_http_success() {
+        let endpoint = "http://127.0.0.1:10000".to_owned();
+        let x_token = "1234567891012141618202224268".to_owned();
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
+        assert!(res.is_ok())
+    }
+
+    #[tokio::test]
+    async fn test_channel_invalid_token_some() {
+        let endpoint = "http://127.0.0.1:10000".to_owned();
+        let x_token = "123".to_owned();
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token.clone()));
+        assert!(res.is_err());
+
+        if let Err(Error::XToken(_)) = res {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_channel_invalid_token_none() {
+        let endpoint = "http://127.0.0.1:10000".to_owned();
+        let x_token = None;
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, x_token);
+
+        if let Err(Error::XToken(_)) = res {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_channel_invalid_uri() {
+        let endpoint = "sites/files/images/picture.png".to_owned();
+        let x_token = "1234567891012141618202224268".to_owned();
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
+        if let Err(Error::InvalidUri(_)) = res {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
+        dbg!(&res);
+    }
 }
