@@ -1,4 +1,3 @@
-use tonic::transport::Endpoint;
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
@@ -14,7 +13,7 @@ use {
         codec::Streaming,
         metadata::{Ascii, MetadataValue},
         service::interceptor::InterceptedService,
-        transport::{channel::ClientTlsConfig, Channel},
+        transport::{channel::ClientTlsConfig, Channel, Endpoint},
         Request, Response, Status,
     },
 };
