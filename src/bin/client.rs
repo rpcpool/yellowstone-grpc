@@ -329,14 +329,19 @@ mod tests {
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000".to_owned();
         let x_token = None;
-        assert!(matches!(RetryChannel::new(endpoint, x_token), Err(Error::XToken(_))));
+        assert!(matches!(
+            RetryChannel::new(endpoint, x_token),
+            Err(Error::XToken(_))
+        ));
     }
 
     #[tokio::test]
     async fn test_channel_invalid_uri() {
         let endpoint = "sites/files/images/picture.png".to_owned();
         let x_token = "1234567891012141618202224268".to_owned();
-        assert!(matches!(RetryChannel::new(endpoint, Some(x_token)), Err(Error::InvalidUri(_))));
-        dbg!(&res);
+        assert!(matches!(
+            RetryChannel::new(endpoint, Some(x_token)),
+            Err(Error::InvalidUri(_))
+        ));
     }
 }
