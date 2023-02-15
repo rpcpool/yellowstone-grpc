@@ -336,12 +336,7 @@ mod tests {
     async fn test_channel_invalid_uri() {
         let endpoint = "sites/files/images/picture.png".to_owned();
         let x_token = "1234567891012141618202224268".to_owned();
-        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
-        if let Err(Error::InvalidUri(_)) = res {
-            assert!(true);
-        } else {
-            assert!(false);
-        }
+        assert!(matches!(RetryChannel::new(endpoint, Some(x_token)), Err(Error::InvalidUri(_))));
         dbg!(&res);
     }
 }
