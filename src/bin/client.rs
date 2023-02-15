@@ -275,7 +275,7 @@ async fn main() -> Result<(), Error> {
     let res: Result<RetryChannel, Error> =
         RetryChannel::new(args.endpoint.clone(), args.x_token.clone());
     if let Err(e) = res {
-        println!("Error: {}", e);
+        eprintln!("Error: {}", e);
         return Err(e);
     }
 
