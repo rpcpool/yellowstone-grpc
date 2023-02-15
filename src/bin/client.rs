@@ -329,13 +329,7 @@ mod tests {
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000".to_owned();
         let x_token = None;
-        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, x_token);
-
-        if let Err(Error::XToken(_)) = res {
-            assert!(true);
-        } else {
-            assert!(false);
-        }
+        assert!(matches!(RetryChannel::new(endpoint, x_token), Err(Error::XToken(_))));
     }
 
     #[tokio::test]
