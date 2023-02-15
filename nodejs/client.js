@@ -106,7 +106,6 @@ async function main() {
     });
     stream.on("end", () => {
       resolve();
-      stream.end();
     });
     stream.on("close", () => {
       resolve();
@@ -158,6 +157,7 @@ async function main() {
   // Send subscribe request
   await new Promise((resolve, reject) => {
     stream.write(request, (err) => {
+      stream.end();
       if (err === null) {
         resolve();
       } else {
