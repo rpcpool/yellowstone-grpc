@@ -80,7 +80,7 @@ async function main() {
 
   // Open connection
   let creds: ChannelCredentials;
-  if (endpointURL.protocol === "https") {
+  if (endpointURL.protocol === "https:") {
     creds = credentials.combineChannelCredentials(
       credentials.createSsl(),
       credentials.createFromMetadataGenerator((_params, callback) => {

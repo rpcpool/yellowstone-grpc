@@ -81,7 +81,7 @@ async function main() {
   const endpointURL = new URL(args.endpoint);
 
   let creds;
-  if (endpointURL.protocol === "https") {
+  if (endpointURL.protocol === "https:") {
     creds = grpc.credentials.combineChannelCredentials(
       grpc.credentials.createSsl(),
       grpc.credentials.createFromMetadataGenerator((_params, callback) => {
