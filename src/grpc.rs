@@ -36,6 +36,7 @@ use {
         transport::server::{Server, TcpIncoming},
         Request, Response, Result as TonicResult, Status, Streaming,
     },
+    tonic_health::server::health_reporter,
 };
 
 #[derive(Debug)]
@@ -306,11 +307,16 @@ impl GrpcService {
         let (update_channel_tx, update_channel_rx) = mpsc::unbounded_channel();
         tokio::spawn(async move { Self::send_loop(update_channel_rx, new_clients_rx).await });
 
+        // gRPC Health check service
+        let (mut health_reporter, health_service) = health_reporter();
+        tokio::spawn(async move { health_reporter.set_serving::<GeyserServer<Self>>().await });
+
         // Run Server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
             Server::builder()
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
+                .add_service(health_service)
                 .add_service(service)
                 .serve_with_incoming_shutdown(incoming, async move {
                     let _ = shutdown_rx.await;
