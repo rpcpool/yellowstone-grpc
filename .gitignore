@@ -4,3 +4,4 @@
 
 config-test.json
 *.sw?
+.idea/
