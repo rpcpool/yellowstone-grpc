@@ -1,8 +1,11 @@
-const protoLoader = require("@grpc/proto-loader");
-const grpc = require("@grpc/grpc-js");
+// Import generated gRPC client and types.
+import { GeyserClient, SubscribeRequest } from "./grpc/geyser";
+
+import { ChannelCredentials, credentials, Metadata } from "@grpc/grpc-js";
+import yargs from 'yargs';
 
 async function main() {
-  const args = require("yargs")(process.argv.slice(2))
+  const args = yargs(process.argv.slice(2))
     .options({
       endpoint: {
         default: "http://localhost:10000",
@@ -73,19 +76,15 @@ async function main() {
     })
     .help().argv;
 
-  // Load proto
-  const defs = await protoLoader.load("../proto/geyser.proto");
-  const pkg = grpc.loadPackageDefinition(defs);
-
-  // Open connection
   const endpointURL = new URL(args.endpoint);
 
-  let creds;
+  // Open connection
+  let creds: ChannelCredentials;
   if (endpointURL.protocol === "https:") {
-    creds = grpc.credentials.combineChannelCredentials(
-      grpc.credentials.createSsl(),
-      grpc.credentials.createFromMetadataGenerator((_params, callback) => {
-        const metadata = new grpc.Metadata();
+    creds = credentials.combineChannelCredentials(
+      credentials.createSsl(),
+      credentials.createFromMetadataGenerator((_params, callback) => {
+        const metadata = new Metadata();
         if (args.xToken !== undefined) {
           metadata.add(`x-token`, args.xToken);
         }
@@ -93,13 +92,15 @@ async function main() {
       })
     );
   } else {
-    creds = grpc.credentials.createInsecure();
+    creds = ChannelCredentials.createInsecure();
   }
-  const client = new pkg.geyser.Geyser(endpointURL.host, creds);
+
+  // Create the client
+  const client = new GeyserClient(endpointURL.host, creds);
   const stream = await client.subscribe();
 
   // Create `error` / `end` handler
-  const stream_closed = new Promise((resolve, reject) => {
+  const stream_closed = new Promise<void>((resolve, reject) => {
     stream.on("error", (error) => {
       reject(error);
       stream.end();
@@ -118,7 +119,7 @@ async function main() {
   });
 
   // Create subscribe request
-  const request = {
+  const request: SubscribeRequest = {
     accounts: {},
     slots: {},
     transactions: {},
@@ -136,13 +137,9 @@ async function main() {
   }
   if (args.transactions) {
     request.transactions.client = {
-      vote: args.transactionsVote === undefined ? null : args.transactionsVote,
-      failed:
-        args.transactionsFailed === undefined ? null : args.transactionsFailed,
-      signature:
-        args.transactionsSignature === undefined
-          ? null
-          : args.transactionsSignature,
+      vote: args.transactionsVote,
+      failed: args.transactionsFailed,
+      signature: args.transactionsSignature,
       accountInclude: args.transactionsAccountInclude,
       accountExclude: args.transactionsAccountExclude,
     };
@@ -155,7 +152,7 @@ async function main() {
   }
 
   // Send subscribe request
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     stream.write(request, (err) => {
       stream.end();
       if (err === null) {
