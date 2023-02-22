@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "config-check"
-path = "bin/config-check.rs"
+path = "src/bin/config-check.rs"
 
 [dependencies]
 anyhow = "1.0.62"
