@@ -67,6 +67,8 @@ func grpc_client() {
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 
+	opts = append(opts, grpc.WithKeepaliveParams(kacp))
+
 	log.Println("Starting grpc client")
 	conn, err := grpc.Dial(*grpcAddr, opts...)
 	if err != nil {
