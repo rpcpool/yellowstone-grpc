@@ -158,12 +158,15 @@ async function main() {
   await new Promise((resolve, reject) => {
     stream.write(request, (err) => {
       stream.end();
-      if (err === null) {
+      if (err === null || err === undefined) {
         resolve();
       } else {
         reject(err);
       }
     });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
   });
 
   await stream_closed;
