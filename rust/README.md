@@ -2,7 +2,7 @@
 
 This is a sample client for Solana geyser gRPC.
 
-This can be used 
+This can be used in the following way:
 
 ```
 $ cargo run --bin client -- --endpoint https://api.rpcpool.com --x-token <token> --accounts --account SysvarC1ock11111111111111111111111111111111
