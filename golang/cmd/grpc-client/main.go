@@ -7,6 +7,7 @@ import (
 	"flag"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 )
 
 var (
-	grpcAddr           = flag.String("endpoint", "", "Solana gRPC address")
+	grpcAddr           = flag.String("endpoint", "", "Solana gRPC address, in URI format e.g. https://api.rpcpool.com")
 	token              = flag.String("x-token", "", "Token for authenticating")
 	jsonInput          = flag.String("json", "", "JSON for subscription request, prefix with @ to read json from file")
 	insecureConnection = flag.Bool("insecure", false, "Connect without TLS")
@@ -28,7 +29,7 @@ var (
 	block_meta         = flag.Bool("blocks-meta", false, "Subscribe to block metadata update")
 	signature          = flag.String("signature", "", "Subscribe to a specific transaction signature")
 
-  accounts = flag.Bool("accounts", false, "Subscribe to accounts")
+	accounts = flag.Bool("accounts", false, "Subscribe to accounts")
 
 	transactions       = flag.Bool("transactions", false, "Subscribe to transactions, required for tx_account_include/tx_account_exclude and vote/failed.")
 	voteTransactions   = flag.Bool("transactions-vote", false, "Include vote transactions")
@@ -56,16 +57,44 @@ func main() {
 
 	flag.Parse()
 
-  if *grpcAddr == "" {
-    log.Fatalf("GRPC address is required. Please provide --endpoint parameter.")
-  }
+	if *grpcAddr == "" {
+		log.Fatalf("GRPC address is required. Please provide --endpoint parameter.")
+	}
 
-	grpc_client()
+	u, err := url.Parse(*grpcAddr)
+	if err != nil {
+		log.Fatalf("Invalid GRPC address provided: %v", err)
+	}
+
+	// Infer insecure connection if http is given
+	if u.Scheme == "http" {
+		*insecureConnection = true
+	}
+
+	port := u.Port()
+	if port == "" {
+		if *insecureConnection {
+			port = "80"
+		} else {
+			port = "443"
+		}
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		log.Fatalf("Please provide URL format endpoint e.g. http(s)://<endpoint>:<port>")
+	}
+
+	address := hostname + ":" + port
+
+	conn := grpc_connect(address, *insecureConnection)
+	defer conn.Close()
+
+	grpc_subscribe(conn)
 }
 
-func grpc_client() {
+func grpc_connect(address string, plaintext bool) *grpc.ClientConn {
 	var opts []grpc.DialOption
-	if *insecureConnection {
+	if plaintext {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	} else {
 		pool, _ := x509.SystemCertPool()
@@ -75,13 +104,17 @@ func grpc_client() {
 
 	opts = append(opts, grpc.WithKeepaliveParams(kacp))
 
-	log.Println("Starting grpc client")
-	conn, err := grpc.Dial(*grpcAddr, opts...)
+	log.Println("Starting grpc client, connecting to", address)
+	conn, err := grpc.Dial(address, opts...)
 	if err != nil {
 		log.Fatalf("fail to dial: %v", err)
 	}
-	defer conn.Close()
 
+	return conn
+}
+
+func grpc_subscribe(conn *grpc.ClientConn) {
+	var err error
 	client := pb.NewGeyserClient(conn)
 
 	var subscription pb.SubscribeRequest
@@ -89,6 +122,7 @@ func grpc_client() {
 	// Read json input or JSON file prefixed with @
 	if *jsonInput != "" {
 		var jsonData []byte
+
 		if (*jsonInput)[0] == '@' {
 			jsonData, err = os.ReadFile((*jsonInput)[1:])
 			if err != nil {
@@ -107,50 +141,50 @@ func grpc_client() {
 	}
 
 	// We append to the JSON provided maps. If JSON provides a map item
-  // with the exact same ID, then this will override that sub.
+	// with the exact same ID, then this will override that sub.
 	if *slots {
-    if subscription.Slots == nil {
-      subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
-    }
+		if subscription.Slots == nil {
+			subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
+		}
 
 		subscription.Slots["slots"] = &pb.SubscribeRequestFilterSlots{}
 
 	}
 
 	if *blocks {
-    if subscription.Blocks == nil {
-      subscription.Blocks = make(map[string]*pb.SubscribeRequestFilterBlocks)
-    }
+		if subscription.Blocks == nil {
+			subscription.Blocks = make(map[string]*pb.SubscribeRequestFilterBlocks)
+		}
 		subscription.Blocks["blocks"] = &pb.SubscribeRequestFilterBlocks{}
 	}
 
 	if *block_meta {
-    if subscription.BlocksMeta == nil {
-      subscription.BlocksMeta = make(map[string]*pb.SubscribeRequestFilterBlocksMeta)
-    }
+		if subscription.BlocksMeta == nil {
+			subscription.BlocksMeta = make(map[string]*pb.SubscribeRequestFilterBlocksMeta)
+		}
 		subscription.BlocksMeta["block_meta"] = &pb.SubscribeRequestFilterBlocksMeta{}
 	}
 
-	if (len(accountsFilter) + len(accountOwnersFilter)) > 0 || (*accounts) {
-    if subscription.Accounts == nil {
-      subscription.Accounts = make(map[string]*pb.SubscribeRequestFilterAccounts)
-    }
+	if (len(accountsFilter)+len(accountOwnersFilter)) > 0 || (*accounts) {
+		if subscription.Accounts == nil {
+			subscription.Accounts = make(map[string]*pb.SubscribeRequestFilterAccounts)
+		}
 
 		subscription.Accounts["account_sub"] = &pb.SubscribeRequestFilterAccounts{}
 
-    if len(accountsFilter) > 0 {
+		if len(accountsFilter) > 0 {
 			subscription.Accounts["account_sub"].Account = accountsFilter
 		}
 
-    if len(accountOwnersFilter) > 0{
+		if len(accountOwnersFilter) > 0 {
 			subscription.Accounts["account_sub"].Owner = accountOwnersFilter
-    }
+		}
 	}
 
 	// Set up the transactions subscription
-  if subscription.Transactions == nil {
-    subscription.Transactions = make(map[string]*pb.SubscribeRequestFilterTransactions)
-  }
+	if subscription.Transactions == nil {
+		subscription.Transactions = make(map[string]*pb.SubscribeRequestFilterTransactions)
+	}
 
 	// Subscribe to a specific signature
 	if *signature != "" {
