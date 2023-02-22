@@ -1,4 +1,10 @@
-# Public GRPC interface to Geyser
+# Solana GRPC interface
+
+This repo contains a fully functional gRPC interface for Solana. It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
+
+For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
+
+It is built around a Geyser plugin for the Solana interface.
 
 ### Validator
 
