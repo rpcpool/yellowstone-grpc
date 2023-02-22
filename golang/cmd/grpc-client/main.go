@@ -19,18 +19,20 @@ import (
 )
 
 var (
-	grpcAddr           = flag.String("grpc", "", "Solana gRPC address")
-	token              = flag.String("token", "", "set token")
+	grpcAddr           = flag.String("endpoint", "", "Solana gRPC address")
+	token              = flag.String("x-token", "", "Token for authenticating")
 	jsonInput          = flag.String("json", "", "JSON for subscription request, prefix with @ to read json from file")
 	insecureConnection = flag.Bool("insecure", false, "Connect without TLS")
 	slots              = flag.Bool("slots", false, "Subscribe to slots update")
 	blocks             = flag.Bool("blocks", false, "Subscribe to block update")
-	block_meta         = flag.Bool("block_meta", false, "Subscribe to block metadata update")
+	block_meta         = flag.Bool("blocks-meta", false, "Subscribe to block metadata update")
 	signature          = flag.String("signature", "", "Subscribe to a specific transaction signature")
 
+  accounts = flag.Bool("accounts", false, "Subscribe to accounts")
+
 	transactions       = flag.Bool("transactions", false, "Subscribe to transactions, required for tx_account_include/tx_account_exclude and vote/failed.")
-	voteTransactions   = flag.Bool("vote", false, "Include vote transactions")
-	failedTransactions = flag.Bool("failed", false, "Include failed transactions")
+	voteTransactions   = flag.Bool("transactions-vote", false, "Include vote transactions")
+	failedTransactions = flag.Bool("transactions-failed", false, "Include failed transactions")
 
 	accountsFilter              arrayFlags
 	accountOwnersFilter         arrayFlags
@@ -47,12 +49,16 @@ var kacp = keepalive.ClientParameters{
 func main() {
 	log.SetFlags(0)
 
-	flag.Var(&accountsFilter, "account", "Subscribe to an account, may be specified multiple times to subscribe to multiple accounts.")
-	flag.Var(&accountOwnersFilter, "owner", "Subscribe to an account owner, may be specified multiple times to subscribe to multiple account owners.")
-	flag.Var(&transactionsAccountsInclude, "tx_account_include", "Subscribe to transactions mentioning an account, may be specified multiple times to subscribe to multiple accounts.")
-	flag.Var(&transactionsAccountsExclude, "tx_account_exclude", "Subscribe to transactions not mentioning an account, may be specified multiple times to exclude multiple accounts.")
+	flag.Var(&accountsFilter, "accounts-account", "Subscribe to an account, may be specified multiple times to subscribe to multiple accounts.")
+	flag.Var(&accountOwnersFilter, "accounts-owner", "Subscribe to an account owner, may be specified multiple times to subscribe to multiple account owners.")
+	flag.Var(&transactionsAccountsInclude, "transactions-account-include", "Subscribe to transactions mentioning an account, may be specified multiple times to subscribe to multiple accounts.")
+	flag.Var(&transactionsAccountsExclude, "transactions-account-exclude", "Subscribe to transactions not mentioning an account, may be specified multiple times to exclude multiple accounts.")
 
 	flag.Parse()
+
+  if *grpcAddr == "" {
+    log.Fatalf("GRPC address is required. Please provide --endpoint parameter.")
+  }
 
 	grpc_client()
 }
@@ -100,33 +106,51 @@ func grpc_client() {
 		subscription = pb.SubscribeRequest{}
 	}
 
-	// We overwrite the json provided if command line arguments are specified
+	// We append to the JSON provided maps. If JSON provides a map item
+  // with the exact same ID, then this will override that sub.
 	if *slots {
-		subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
+    if subscription.Slots == nil {
+      subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
+    }
+
 		subscription.Slots["slots"] = &pb.SubscribeRequestFilterSlots{}
 
 	}
 
 	if *blocks {
-		subscription.Blocks = make(map[string]*pb.SubscribeRequestFilterBlocks)
+    if subscription.Blocks == nil {
+      subscription.Blocks = make(map[string]*pb.SubscribeRequestFilterBlocks)
+    }
 		subscription.Blocks["blocks"] = &pb.SubscribeRequestFilterBlocks{}
 	}
 
 	if *block_meta {
-		subscription.BlocksMeta = make(map[string]*pb.SubscribeRequestFilterBlocksMeta)
+    if subscription.BlocksMeta == nil {
+      subscription.BlocksMeta = make(map[string]*pb.SubscribeRequestFilterBlocksMeta)
+    }
 		subscription.BlocksMeta["block_meta"] = &pb.SubscribeRequestFilterBlocksMeta{}
 	}
 
-	if (len(accountsFilter) + len(accountOwnersFilter)) > 0 {
-		subscription.Accounts = make(map[string]*pb.SubscribeRequestFilterAccounts)
-		subscription.Accounts["account_sub"] = &pb.SubscribeRequestFilterAccounts{
-			Account: accountsFilter,
-			Owner:   accountOwnersFilter,
+	if (len(accountsFilter) + len(accountOwnersFilter)) > 0 || (*accounts) {
+    if subscription.Accounts == nil {
+      subscription.Accounts = make(map[string]*pb.SubscribeRequestFilterAccounts)
+    }
+
+		subscription.Accounts["account_sub"] = &pb.SubscribeRequestFilterAccounts{}
+
+    if len(accountsFilter) > 0 {
+			subscription.Accounts["account_sub"].Account = accountsFilter
 		}
+
+    if len(accountOwnersFilter) > 0{
+			subscription.Accounts["account_sub"].Owner = accountOwnersFilter
+    }
 	}
 
 	// Set up the transactions subscription
-	subscription.Transactions = make(map[string]*pb.SubscribeRequestFilterTransactions)
+  if subscription.Transactions == nil {
+    subscription.Transactions = make(map[string]*pb.SubscribeRequestFilterTransactions)
+  }
 
 	// Subscribe to a specific signature
 	if *signature != "" {
