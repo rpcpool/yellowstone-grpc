@@ -1,0 +1,33 @@
+[package]
+name = "solana-geyser-grpc-client"
+version = "0.5.2+solana.1.14.15"
+authors = ["Triton One"]
+edition = "2021"
+
+[[bin]]
+name = "client"
+path = "client/client.rs"
+
+[dependencies]
+anyhow = "1.0.62"
+clap = { version = "3.2.22", features = ["cargo", "derive"] }
+futures = "0.3.24"
+hyper = { version = "0.14.20", features = ["server"] }
+lazy_static = "1.4.0"
+log = "0.4.17"
+prost = "0.11.0"
+tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
+tokio-stream = "0.1.11"
+tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
+backoff = { version = "0.4.0", features = ["tokio"] }
+thiserror = "1.0"
+solana-geyser-grpc = { path = "../solana-geyser-grpc" }
+
+[build-dependencies]
+anyhow = "1.0.62"
+cargo-lock = "8.0.2"
+git-version = "0.3.5"
+protobuf-src = "1.1.0"
+tonic-build = "0.8.2"
+vergen = "=7.2.1"
+
