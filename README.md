@@ -35,6 +35,7 @@ If all fields are empty then all accounts are broadcasted. Otherwise fields work
    - `failed` — enable/disable broadcast `failed` transactions
    - `account_include` — filter transactions which use any account
    - `account_exclude` — filter transactions which do not use any account
+   - `signature` - transaction signature to subscribe to
 
 If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
