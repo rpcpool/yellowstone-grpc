@@ -7,13 +7,13 @@ Requires golang 1.17
 Sample usage:
 
 ```
-go1.17 run ./cmd/grpc-client/ -grpc api.rpcpool.com:443 -token <token> -slots
+go1.17 run ./cmd/grpc-client/ -endpoint https://api.rpcpool.com:443 -x-token <token> -slots
 ```
 
 You can also make non SSL connections:
 
 ```
-go1.17 run ./cmd/grpc-client/ -insecure -grpc api.rpcpool.com:80 -token <token> -blocks
+go1.17 run ./cmd/grpc-client/ -insecure -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
 ````
 
 ## Updating protofiles
