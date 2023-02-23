@@ -103,7 +103,6 @@ async function main() {
   const stream_closed = new Promise<void>((resolve, reject) => {
     stream.on("error", (error) => {
       reject(error);
-      stream.end();
     });
     stream.on("end", () => {
       resolve();
