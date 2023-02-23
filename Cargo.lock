@@ -2638,7 +2638,6 @@ name = "solana-geyser-grpc"
 version = "0.5.2+solana.1.14.15"
 dependencies = [
  "anyhow",
- "backoff",
  "bincode",
  "cargo-lock",
  "clap",
@@ -2656,7 +2655,6 @@ dependencies = [
  "solana-logger",
  "solana-sdk",
  "solana-transaction-status",
- "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -2670,22 +2668,12 @@ version = "0.5.2+solana.1.14.15"
 dependencies = [
  "anyhow",
  "backoff",
- "cargo-lock",
  "clap",
  "futures",
- "git-version",
- "hyper",
- "lazy_static",
- "log",
- "prost",
- "protobuf-src",
  "solana-geyser-grpc",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tonic",
- "tonic-build",
- "vergen",
 ]
 
 [[package]]

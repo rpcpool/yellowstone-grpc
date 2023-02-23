@@ -2,7 +2,7 @@
 /target
 /test-ledger
 
-config-test.json
+solana-geyser-grpc/config-test.json
 *.sw?
 .idea/
 .vscode
