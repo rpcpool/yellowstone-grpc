@@ -13,7 +13,7 @@ go1.17 run ./cmd/grpc-client/ -endpoint https://api.rpcpool.com:443 -x-token <to
 You can also make non SSL connections:
 
 ```
-go1.17 run ./cmd/grpc-client/ -insecure -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
+go1.17 run ./cmd/grpc-client/ -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
 ````
 
 ## Updating protofiles
