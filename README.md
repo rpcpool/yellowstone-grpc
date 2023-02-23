@@ -1,30 +1,21 @@
-# Public GRPC interface to Geyser
+# Solana GRPC interface
+
+This repo contains a fully functional gRPC interface for Solana. It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
+
+For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
+
+It is built around a Geyser plugin for the Solana interface.
 
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config ./config.json
+$ solana-validator --geyser-plugin-config solana-geyser-grpc/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config config.json
-```
-
-### Client
-
-- Always broadcast new slots
-- Accounts can be filtered by `pubkey` and `owner` fields, also all accounts can be broadcasted with `*`
-
-```
-$ cargo run --bin client -- --accounts --account SysvarC1ock11111111111111111111111111111111
-    Finished dev [unoptimized + debuginfo] target(s) in 0.69s
-     Running `target/debug/client --accounts --account SysvarC1ock11111111111111111111111111111111`
-stream opened
-new message: SubscribeUpdate { filters: ["client"], update_oneof: Some(Account(SubscribeUpdateAccount { account: Some(SubscribeUpdateAccountInfo { pubkey: [6, 167, 213, 23, 24, 199, 116, 201, 40, 86, 99, 152, 105, 29, 94, 182, 139, 94, 184, 163, 155, 75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0], lamports: 1169280, owner: [6, 167, 213, 23, 24, 117, 247, 41, 199, 61, 147, 64, 143, 33, 97, 32, 6, 126, 216, 140, 118, 224, 140, 40, 127, 193, 148, 96, 0, 0, 0, 0], executable: false, rent_epoch: 0, data: [57, 29, 0, 0, 0, 0, 0, 0, 165, 160, 80, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 221, 189, 80, 99, 0, 0, 0, 0], write_version: 53718 }), slot: 7481, is_startup: false })) }
-new message: SubscribeUpdate { filters: ["client"], update_oneof: Some(Account(SubscribeUpdateAccount { account: Some(SubscribeUpdateAccountInfo { pubkey: [6, 167, 213, 23, 24, 199, 116, 201, 40, 86, 99, 152, 105, 29, 94, 182, 139, 94, 184, 163, 155, 75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0], lamports: 1169280, owner: [6, 167, 213, 23, 24, 117, 247, 41, 199, 61, 147, 64, 143, 33, 97, 32, 6, 126, 216, 140, 118, 224, 140, 40, 127, 193, 148, 96, 0, 0, 0, 0], executable: false, rent_epoch: 0, data: [58, 29, 0, 0, 0, 0, 0, 0, 165, 160, 80, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 222, 189, 80, 99, 0, 0, 0, 0], write_version: 53725 }), slot: 7482, is_startup: false })) }
-^C
+cargo-fmt && cargo run --bin config-check -- --config solana-geyser-grpc/config.json
 ```
 
 ### Filters
@@ -92,3 +83,21 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    }
 }
 ```
+
+### License
+
+This project and all source code in this repository is licensed as follows:
+
+   Copyright 2023 Triton One Limited
+   
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.

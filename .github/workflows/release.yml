@@ -60,3 +60,5 @@ jobs:
           files: |
             ${{ env.GEYSER_PLUGIN_NAME }}-release-*
             proto/*.proto
+            target/release/client
+            target/release/config-check
