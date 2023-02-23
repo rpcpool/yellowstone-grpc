@@ -1,4 +1,4 @@
-# Golang client for Solana gRPC interface
+# Rust client for Solana gRPC interface
 
 This is a sample client for Solana geyser gRPC written in Rust.
 
