@@ -22,5 +22,5 @@ npm run build
 Run it:
 
 ```
-node . --help
+node . --endpoint https://api.rpcpool.com --x-token <token> --slots
 ```
