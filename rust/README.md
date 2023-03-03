@@ -1,6 +1,6 @@
-# Sample rust client
+# Rust client for Solana gRPC interface
 
-This is a sample client for Solana geyser gRPC.
+This is a sample client for Solana geyser gRPC written in Rust.
 
 This can be used in the following way:
 
