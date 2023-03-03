@@ -1,7 +1,9 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
+    env_logger,
     futures::stream::{once, StreamExt},
+    log::{error, info, warn},
     solana_geyser_grpc::proto::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
@@ -16,8 +18,6 @@ use {
         transport::{channel::ClientTlsConfig, Channel, Endpoint},
         Request, Response, Status,
     },
-    log::{info, warn, error},
-    env_logger,
 };
 
 #[derive(Debug, Parser)]
@@ -116,7 +116,7 @@ impl RetryChannel {
                 }
             }
             Some(token_str) => return Err(Error::XToken(token_str)),
-            None =>  {
+            None => {
                 x_token = None;
                 warn!("x_token is None");
             }
