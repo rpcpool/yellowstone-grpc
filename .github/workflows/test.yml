@@ -40,6 +40,12 @@ jobs:
             ~/.cargo/git
           key: cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_STABLE}}
 
+      - name: cargo tree
+        run: |
+          cargo tree
+          git checkout Cargo.lock
+          cargo tree --frozen
+
       - name: cargo fmt
         uses: actions-rs/cargo@v1
         with:
