@@ -1,7 +1,7 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
-    futures::stream::{once, StreamExt},
+    futures::{channel::mpsc, stream::StreamExt},
     log::{error, info, warn},
     solana_geyser_grpc::proto::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
@@ -215,15 +215,32 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> RetryClient<F> {
         };
         info!("Going to send request: {:?}", request);
 
+        let (subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        subscribe_tx.unbounded_send(request)?;
+
         let response: Response<Streaming<SubscribeUpdate>> =
-            self.client.subscribe(once(async move { request })).await?;
+            self.client.subscribe(subscribe_rx).await?;
         let mut stream: Streaming<SubscribeUpdate> = response.into_inner();
 
         info!("stream opened");
+        let mut counter = 0;
         while let Some(message) = stream.next().await {
             match message {
                 Ok(message) => info!("new message: {:?}", message),
                 Err(error) => error!("error: {:?}", error),
+            }
+
+            counter += 1;
+            if counter == 10 {
+                #[allow(unused_variables)]
+                let request = SubscribeRequest {
+                    slots: slots.clone(),
+                    accounts: HashMap::default(),
+                    transactions: HashMap::default(),
+                    blocks: HashMap::default(),
+                    blocks_meta: HashMap::default(),
+                };
+                // subscribe_tx.unbounded_send(request)?;
             }
         }
         info!("stream closed");
