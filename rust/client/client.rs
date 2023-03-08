@@ -279,23 +279,21 @@ async fn main() -> Result<(), Error> {
     }
 
     // Client with retry policy
-    let res: Result<RetryChannel, Error> =
-        RetryChannel::new(args.endpoint.clone(), args.x_token.clone());
-    if let Err(e) = res {
-        error!("Error: {}", e);
-        return Err(e);
-    }
+    let channel = match RetryChannel::new(args.endpoint, args.x_token) {
+        Ok(channel) => channel,
+        Err(error) => {
+            error!("Error: {}", error);
+            return Err(error);
+        }
+    };
 
-    let res: anyhow::Result<()> = res
-        .unwrap()
+    channel
         .subscribe_retry(&slots, &accounts, &transactions, &blocks, &blocks_meta)
-        .await;
-    if let Err(e) = res {
-        error!("Error: {}", e);
-        return Err(Error::RetrySubscribe(e));
-    }
-
-    Ok(())
+        .await
+        .map_err(|error| {
+            error!("Error: {}", error);
+            Error::RetrySubscribe(error)
+        })
 }
 
 #[cfg(test)]
