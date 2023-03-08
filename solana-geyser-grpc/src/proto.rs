@@ -28,7 +28,8 @@ mod convert {
             transaction_context::TransactionReturnData,
         },
         solana_transaction_status::{
-            InnerInstructions, Reward, RewardType, TransactionStatusMeta, TransactionTokenBalance,
+            InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
+            TransactionTokenBalance,
         },
     };
 
@@ -188,6 +189,17 @@ mod convert {
             Self {
                 index: value.index as u32,
                 instructions: value.instructions.iter().map(|i| i.into()).collect(),
+            }
+        }
+    }
+
+    impl From<&InnerInstruction> for super::InnerInstruction {
+        fn from(value: &InnerInstruction) -> Self {
+            Self {
+                program_id_index: value.instruction.program_id_index as u32,
+                accounts: value.instruction.accounts.clone(),
+                data: value.instruction.data.clone(),
+                stack_height: value.stack_height,
             }
         }
     }

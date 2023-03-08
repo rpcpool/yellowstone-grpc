@@ -1,7 +1,6 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
-    env_logger,
     futures::stream::{once, StreamExt},
     log::{error, info, warn},
     solana_geyser_grpc::proto::{
@@ -323,14 +322,9 @@ mod tests {
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000".to_owned();
         let x_token = "123".to_owned();
-        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token.clone()));
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
         assert!(res.is_err());
-
-        if let Err(Error::XToken(_)) = res {
-            assert!(true);
-        } else {
-            assert!(false);
-        }
+        assert!(matches!(res, Err(Error::XToken(_))));
     }
 
     #[tokio::test]
