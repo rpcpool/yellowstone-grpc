@@ -2965,7 +2965,7 @@ dependencies = [
 
 [[package]]
 name = "solana-geyser-grpc"
-version = "0.5.2+solana.1.14.15"
+version = "0.5.2+solana.1.15.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2995,7 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "solana-geyser-grpc-client"
-version = "0.5.2+solana.1.14.15"
+version = "0.5.2+solana.1.15.2"
 dependencies = [
  "anyhow",
  "backoff",
