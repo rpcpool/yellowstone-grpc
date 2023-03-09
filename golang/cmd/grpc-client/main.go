@@ -232,9 +232,18 @@ func grpc_subscribe(conn *grpc.ClientConn) {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	stream.CloseSend()
 
+  i := 0
 	for {
+    i += 1
+
+    if i == 10 {
+      subscription = pb.SubscribeRequest{}
+      subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
+      subscription.Slots["slots"] = &pb.SubscribeRequestFilterSlots{}
+      stream.Send(&subscription)
+    }
+
 		resp, err := stream.Recv()
 		timestamp := time.Now().UnixNano()
 
