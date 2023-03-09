@@ -154,7 +154,6 @@ async function main() {
   // Send subscribe request
   await new Promise<void>((resolve, reject) => {
     stream.write(request, (err) => {
-      stream.end();
       if (err === null || err === undefined) {
         resolve();
       } else {
