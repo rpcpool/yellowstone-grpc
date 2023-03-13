@@ -28,6 +28,7 @@ var (
 	blocks             = flag.Bool("blocks", false, "Subscribe to block update")
 	block_meta         = flag.Bool("blocks-meta", false, "Subscribe to block metadata update")
 	signature          = flag.String("signature", "", "Subscribe to a specific transaction signature")
+	resub              = flag.Uint("resub", 0, "Resubscribe to only slots after x updates, 0 disables this")
 
 	accounts = flag.Bool("accounts", false, "Subscribe to accounts")
 
@@ -233,16 +234,16 @@ func grpc_subscribe(conn *grpc.ClientConn) {
 		log.Fatalf("%v", err)
 	}
 
-  i := 0
+	var i uint = 0
 	for {
-    i += 1
-
-    if i == 10 {
-      subscription = pb.SubscribeRequest{}
-      subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
-      subscription.Slots["slots"] = &pb.SubscribeRequestFilterSlots{}
-      stream.Send(&subscription)
-    }
+		i += 1
+		// Example of how to resubscribe/update request
+		if i == *resub {
+			subscription = pb.SubscribeRequest{}
+			subscription.Slots = make(map[string]*pb.SubscribeRequestFilterSlots)
+			subscription.Slots["slots"] = &pb.SubscribeRequestFilterSlots{}
+			stream.Send(&subscription)
+		}
 
 		resp, err := stream.Recv()
 		timestamp := time.Now().UnixNano()
