@@ -1,7 +1,8 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
-    futures::stream::{once, StreamExt},
+    futures::{channel::mpsc, stream::StreamExt},
+    log::{error, info, warn},
     solana_geyser_grpc::proto::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
@@ -75,6 +76,10 @@ struct Args {
     /// Subscribe on block meta updates (without transactions)
     #[clap(long)]
     blocks_meta: bool,
+
+    // Resubscribe (only to slots) after
+    #[clap(long)]
+    resub: Option<u16>,
 }
 
 const XTOKEN_LENGTH: usize = 28;
@@ -114,20 +119,23 @@ impl RetryChannel {
                 }
             }
             Some(token_str) => return Err(Error::XToken(token_str)),
-            None => return Err(Error::XToken("".to_owned())),
+            None => {
+                x_token = None;
+                warn!("x_token is None");
+            }
         }
 
         let res = Channel::from_shared(endpoint_str.clone());
         match res {
             Err(e) => {
-                println!("{}", e);
+                error!("{}", e);
                 return Err(Error::InvalidUri(endpoint_str));
             }
             Ok(_endpoint) => {
                 if _endpoint.uri().scheme_str() == Some("https") {
                     match _endpoint.tls_config(ClientTlsConfig::new()) {
                         Err(e) => {
-                            println!("{}", e);
+                            error!("{}", e);
                             return Err(Error::InvalidUri(endpoint_str));
                         }
                         Ok(e) => endpoint = e,
@@ -165,15 +173,16 @@ impl RetryChannel {
         transactions: &TransactionsFilterMap,
         blocks: &BlocksFilterMap,
         blocks_meta: &BlocksMetaFilterMap,
+        resub: &u16,
     ) -> anyhow::Result<()> {
         // The default exponential backoff strategy intervals:
         // [500ms, 750ms, 1.125s, 1.6875s, 2.53125s, 3.796875s, 5.6953125s,
         // 8.5s, 12.8s, 19.2s, 28.8s, 43.2s, 64.8s, 97s, ... ]
         retry(ExponentialBackoff::default(), move || async {
-            println!("Retry to connect to the server");
+            info!("Retry to connect to the server");
             let mut client = self.client();
             client
-                .subscribe(slots, accounts, transactions, blocks, blocks_meta)
+                .subscribe(slots, accounts, transactions, blocks, blocks_meta, resub)
                 .await?;
             Ok(())
         })
@@ -201,6 +210,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> RetryClient<F> {
         transactions: &TransactionsFilterMap,
         blocks: &BlocksFilterMap,
         blocks_meta: &BlocksMetaFilterMap,
+        resub: &u16,
     ) -> anyhow::Result<()> {
         let request = SubscribeRequest {
             slots: slots.clone(),
@@ -209,26 +219,49 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> RetryClient<F> {
             blocks: blocks.clone(),
             blocks_meta: blocks_meta.clone(),
         };
-        println!("Going to send request: {:?}", request);
+        info!("Going to send request: {:?}", request);
+
+        let (subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        subscribe_tx.unbounded_send(request)?;
 
         let response: Response<Streaming<SubscribeUpdate>> =
-            self.client.subscribe(once(async move { request })).await?;
+            self.client.subscribe(subscribe_rx).await?;
         let mut stream: Streaming<SubscribeUpdate> = response.into_inner();
 
-        println!("stream opened");
+        info!("stream opened");
+        let mut counter = 0;
         while let Some(message) = stream.next().await {
             match message {
-                Ok(message) => println!("new message: {:?}", message),
-                Err(error) => eprintln!("error: {:?}", error),
+                Ok(message) => info!("new message: {:?}", message),
+                Err(error) => error!("error: {:?}", error),
+            }
+
+            // Example to illustrate how to resubscribe/update the subscription
+            counter += 1;
+            if counter == *resub {
+                let mut new_slots: SlotsFilterMap = HashMap::new();
+                new_slots.insert("client".to_owned(), SubscribeRequestFilterSlots {});
+
+                let request = SubscribeRequest {
+                    slots: new_slots.clone(),
+                    accounts: HashMap::default(),
+                    transactions: HashMap::default(),
+                    blocks: HashMap::default(),
+                    blocks_meta: HashMap::default(),
+                };
+                subscribe_tx.unbounded_send(request)?;
             }
         }
-        println!("stream closed");
+        info!("stream closed");
         Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    ::std::env::set_var("RUST_LOG", "info");
+    env_logger::init();
+
     let args = Args::parse();
 
     let mut accounts = HashMap::new();
@@ -272,23 +305,28 @@ async fn main() -> Result<(), Error> {
     }
 
     // Client with retry policy
-    let res: Result<RetryChannel, Error> =
-        RetryChannel::new(args.endpoint.clone(), args.x_token.clone());
-    if let Err(e) = res {
-        eprintln!("Error: {}", e);
-        return Err(e);
-    }
+    let channel = match RetryChannel::new(args.endpoint, args.x_token) {
+        Ok(channel) => channel,
+        Err(error) => {
+            error!("Error: {}", error);
+            return Err(error);
+        }
+    };
 
-    let res: anyhow::Result<()> = res
-        .unwrap()
-        .subscribe_retry(&slots, &accounts, &transactions, &blocks, &blocks_meta)
-        .await;
-    if let Err(e) = res {
-        println!("Error: {}", e);
-        return Err(Error::RetrySubscribe(e));
-    }
-
-    Ok(())
+    channel
+        .subscribe_retry(
+            &slots,
+            &accounts,
+            &transactions,
+            &blocks,
+            &blocks_meta,
+            &args.resub.unwrap_or(0),
+        )
+        .await
+        .map_err(|error| {
+            error!("Error: {}", error);
+            Error::RetrySubscribe(error)
+        })
 }
 
 #[cfg(test)]
@@ -315,24 +353,18 @@ mod tests {
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000".to_owned();
         let x_token = "123".to_owned();
-        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token.clone()));
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, Some(x_token));
         assert!(res.is_err());
-
-        if let Err(Error::XToken(_)) = res {
-            assert!(true);
-        } else {
-            assert!(false);
-        }
+        assert!(matches!(res, Err(Error::XToken(_))));
     }
 
     #[tokio::test]
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000".to_owned();
         let x_token = None;
-        assert!(matches!(
-            RetryChannel::new(endpoint, x_token),
-            Err(Error::XToken(_))
-        ));
+        // only show warning in log
+        let res: Result<RetryChannel, Error> = RetryChannel::new(endpoint, x_token);
+        assert!(res.is_ok());
     }
 
     #[tokio::test]
