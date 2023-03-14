@@ -12,7 +12,9 @@ path = "client/client.rs"
 anyhow = "1.0.62"
 backoff = { version = "0.4.0", features = ["tokio"] }
 clap = { version = "3.2.22", features = ["cargo", "derive"] }
+env_logger = { version = "0.10.0" }
 futures = "0.3.24"
+log = { version = "0.4.14", features = ["std"] }
 solana-geyser-grpc = { path = "../solana-geyser-grpc" }
 thiserror = "1.0"
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
