@@ -26,7 +26,7 @@ fn generate_env() -> anyhow::Result<()> {
     );
 
     // Extract Solana version
-    let lockfile = Lockfile::load("Cargo.lock")?;
+    let lockfile = Lockfile::load("../Cargo.lock")?;
     println!(
         "cargo:rustc-env=SOLANA_SDK_VERSION={}",
         lockfile

@@ -152,7 +152,7 @@ pub struct MessageBlock {
     pub transactions: Vec<MessageTransactionInfo>,
 }
 
-impl<'a> From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
+impl From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
     fn from((blockinfo, transactions): (MessageBlockMeta, Vec<MessageTransactionInfo>)) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
