@@ -2,6 +2,7 @@
 members = [
     "solana-geyser-grpc",
     "rust",
+    "rust-client",
 ]
 
 [profile.release]

@@ -2995,7 +2995,20 @@ dependencies = [
 
 [[package]]
 name = "solana-geyser-grpc-client"
-version = "0.5.2+solana.1.15.2"
+version = "0.5.3+solana.1.15.2"
+dependencies = [
+ "bytes",
+ "futures",
+ "http",
+ "solana-geyser-grpc",
+ "thiserror",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
+name = "solana-geyser-grpc-client-simple"
+version = "0.5.3+solana.1.15.2"
 dependencies = [
  "anyhow",
  "backoff",
@@ -3004,9 +3017,8 @@ dependencies = [
  "futures",
  "log",
  "solana-geyser-grpc",
- "thiserror",
+ "solana-geyser-grpc-client",
  "tokio",
- "tonic",
 ]
 
 [[package]]
