@@ -27,6 +27,9 @@
             },
             "blocks": {
                 "max": 1
+            },
+            "blocks_meta": {
+                "max": 1
             }
         }
     },
