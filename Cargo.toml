@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "solana-geyser-grpc",
+    "examples/rust",
     "rust",
-    "rust-client",
+    "solana-geyser-grpc",
 ]
 
 [profile.release]
