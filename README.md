@@ -9,13 +9,13 @@ It is built around a Geyser plugin for the Solana interface.
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config solana-geyser-grpc/config.json
+$ solana-validator --geyser-plugin-config triton-grpc-geyser/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config solana-geyser-grpc/config.json
+cargo-fmt && cargo run --bin config-check -- --config triton-grpc-geyser/config.json
 ```
 
 ### Filters

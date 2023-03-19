@@ -1,8 +1,11 @@
 [package]
 name = "triton-grpc-client-simple"
-version = "0.5.3+solana.1.15.2"
+version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+
+[[bin]]
+name = "client"
 
 [dependencies]
 anyhow = "1.0.62"
@@ -14,6 +17,3 @@ log = { version = "0.4.14", features = ["std"] }
 triton-grpc-proto = { path = "../../triton-grpc-proto" }
 triton-grpc-client = { path = "../../triton-grpc-client" }
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
-
-[[bin]]
-name = "client"

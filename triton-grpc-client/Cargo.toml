@@ -1,6 +1,6 @@
 [package]
 name = "triton-grpc-client"
-version = "0.5.3+solana.1.15.2"
+version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
 

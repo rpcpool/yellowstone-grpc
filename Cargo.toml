@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "examples/rust",
-    "triton-grpc-client",
-    "triton-grpc-geyser",
-    "triton-grpc-geyser-config-check",
-    "triton-grpc-proto",
+    "examples/rust", # 1.0.0+solana.1.15.2
+    "triton-grpc-client", # 1.0.0+solana.1.15.2
+    "triton-grpc-geyser", # 0.5.3+solana.1.15.2
+    "triton-grpc-geyser-config-check", # 0.5.3+solana.1.15.2
+    "triton-grpc-proto", # 1.0.0+solana.1.15.2
 ]
 
 [profile.release]
