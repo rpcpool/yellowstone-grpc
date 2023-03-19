@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "examples/rust",
-    "rust",
+    "triton-grpc-client",
     "triton-grpc-geyser",
     "triton-grpc-proto",
 ]

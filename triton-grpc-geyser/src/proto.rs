@@ -1,5 +1,4 @@
-pub use triton_grpc_proto::geyser::*;
-pub use triton_grpc_proto::solana::storage::confirmed_block::*;
+pub use triton_grpc_proto::prelude::*;
 
 pub mod convert {
     use {

@@ -1,5 +1,5 @@
 [package]
-name = "solana-geyser-grpc-client"
+name = "triton-grpc-client"
 version = "0.5.3+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
@@ -8,7 +8,7 @@ edition = "2021"
 bytes = "1.3.0"
 futures = "0.3.24"
 http = "0.2.8"
-solana-geyser-grpc = { path = "../triton-grpc-geyser" }
+triton-grpc-proto = { path = "../triton-grpc-proto" }
 thiserror = "1.0"
 tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
 

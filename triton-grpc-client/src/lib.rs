@@ -6,11 +6,6 @@ use {
         stream::Stream,
     },
     http::uri::InvalidUri,
-    solana_geyser_grpc::proto::{
-        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
-    },
     std::collections::HashMap,
     tonic::{
         codec::Streaming,
@@ -18,6 +13,11 @@ use {
         service::{interceptor::InterceptedService, Interceptor},
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
+    },
+    triton_grpc_proto::prelude::{
+        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
