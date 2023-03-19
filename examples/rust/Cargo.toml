@@ -1,8 +1,11 @@
 [package]
-name = "solana-geyser-grpc-client-simple"
-version = "0.5.3+solana.1.15.2"
+name = "triton-grpc-client-simple"
+version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+
+[[bin]]
+name = "client"
 
 [dependencies]
 anyhow = "1.0.62"
@@ -11,9 +14,6 @@ clap = { version = "3.2.22", features = ["cargo", "derive"] }
 env_logger = "0.10.0"
 futures = "0.3.24"
 log = { version = "0.4.14", features = ["std"] }
-solana-geyser-grpc = { path = "../solana-geyser-grpc" }
-solana-geyser-grpc-client = { path = "../rust" }
+triton-grpc-proto = { path = "../../triton-grpc-proto" }
+triton-grpc-client = { path = "../../triton-grpc-client" }
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
-
-[[bin]]
-name = "client"

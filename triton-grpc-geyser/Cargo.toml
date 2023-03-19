@@ -1,5 +1,5 @@
 [package]
-name = "solana-geyser-grpc"
+name = "triton-grpc-geyser"
 version = "0.5.3+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
@@ -7,20 +7,14 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "config-check"
-path = "src/bin/config-check.rs"
-
 [dependencies]
 anyhow = "1.0.62"
 bincode = "1.3.3"
-clap = { version = "3.2.22", features = ["cargo", "derive"] }
 futures = "0.3.24"
 hyper = { version = "0.14.20", features = ["server"] }
 lazy_static = "1.4.0"
 log = "0.4.17"
 prometheus = "0.13.2"
-prost = "0.11.0"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 solana-geyser-plugin-interface = "=1.15.2"
@@ -31,11 +25,10 @@ tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1.11"
 tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
 tonic-health = "0.8.0"
+triton-grpc-proto = { path = "../triton-grpc-proto" }
 
 [build-dependencies]
 anyhow = "1.0.62"
 cargo-lock = "8.0.2"
 git-version = "0.3.5"
-protobuf-src = "1.1.0"
-tonic-build = "0.8.2"
 vergen = "=7.2.1"

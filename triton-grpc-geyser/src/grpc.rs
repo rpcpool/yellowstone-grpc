@@ -4,6 +4,7 @@ use {
         filters::Filter,
         prom::CONNECTIONS_TOTAL,
         proto::{
+            self,
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
@@ -112,8 +113,8 @@ impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
         Self {
             signature: tx.signature.as_ref().into(),
             is_vote: tx.is_vote,
-            transaction: Some((&tx.transaction).into()),
-            meta: Some((&tx.meta).into()),
+            transaction: Some(proto::convert::create_transaction(&tx.transaction)),
+            meta: Some(proto::convert::create_transaction_meta(&tx.meta)),
             index: tx.index as u64,
         }
     }
@@ -232,9 +233,11 @@ impl From<&Message> for UpdateOneof {
             Message::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(message.rewards.as_slice().into()),
-                block_time: message.block_time.map(|v| v.into()),
-                block_height: message.block_height.map(|v| v.into()),
+                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(proto::convert::create_timestamp),
+                block_height: message
+                    .block_height
+                    .map(proto::convert::create_block_height),
                 transactions: message.transactions.iter().map(Into::into).collect(),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
@@ -242,9 +245,11 @@ impl From<&Message> for UpdateOneof {
             Message::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(message.rewards.as_slice().into()),
-                block_time: message.block_time.map(|v| v.into()),
-                block_height: message.block_height.map(|v| v.into()),
+                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(proto::convert::create_timestamp),
+                block_height: message
+                    .block_height
+                    .map(proto::convert::create_block_height),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,

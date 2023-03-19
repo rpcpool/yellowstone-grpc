@@ -4,7 +4,7 @@
     "license": "ISC",
     "scripts": {
         "build": "npm run grpc-generate && tsc -p .",
-        "grpc-generate": "protoc -I../proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
+        "grpc-generate": "protoc -I../../proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
     },
     "main": "dist/client.js",
     "dependencies": {

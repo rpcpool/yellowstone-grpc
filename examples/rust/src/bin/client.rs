@@ -3,13 +3,13 @@ use {
     clap::Parser,
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
-    solana_geyser_grpc::proto::{
+    std::collections::HashMap,
+    triton_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
+    triton_grpc_proto::prelude::{
         SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
         SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions,
     },
-    solana_geyser_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
-    std::collections::HashMap,
 };
 
 #[derive(Debug, Parser)]

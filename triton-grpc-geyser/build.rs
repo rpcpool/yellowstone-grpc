@@ -5,18 +5,6 @@ use {
 };
 
 fn main() -> anyhow::Result<()> {
-    compile_protos()?;
-    generate_env()?;
-    Ok(())
-}
-
-fn compile_protos() -> anyhow::Result<()> {
-    std::env::set_var("PROTOC", protobuf_src::protoc());
-    tonic_build::compile_protos("../proto/geyser.proto")?;
-    Ok(())
-}
-
-fn generate_env() -> anyhow::Result<()> {
     vergen(Config::default())?;
 
     // vergen git version does not looks cool
