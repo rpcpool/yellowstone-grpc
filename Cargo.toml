@@ -2,7 +2,8 @@
 members = [
     "examples/rust",
     "rust",
-    "solana-geyser-grpc",
+    "triton-grpc-geyser",
+    "triton-grpc-proto",
 ]
 
 [profile.release]

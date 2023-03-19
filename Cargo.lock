@@ -2977,8 +2977,6 @@ dependencies = [
  "lazy_static",
  "log",
  "prometheus",
- "prost",
- "protobuf-src",
  "serde",
  "serde_json",
  "solana-geyser-plugin-interface",
@@ -2988,8 +2986,8 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
- "tonic-build",
  "tonic-health",
+ "triton-grpc-proto",
  "vergen",
 ]
 
@@ -3788,6 +3786,17 @@ checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
  "pin-project",
  "tracing",
+]
+
+[[package]]
+name = "triton-grpc-proto"
+version = "1.0.0+solana.1.15.2"
+dependencies = [
+ "anyhow",
+ "prost",
+ "protobuf-src",
+ "tonic",
+ "tonic-build",
 ]
 
 [[package]]
