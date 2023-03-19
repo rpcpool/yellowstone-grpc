@@ -2965,6 +2965,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-geyser-grpc-config-check"
+version = "0.5.3+solana.1.15.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "triton-grpc-geyser",
+]
+
+[[package]]
 name = "solana-geyser-plugin-interface"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3768,7 +3777,6 @@ dependencies = [
  "anyhow",
  "bincode",
  "cargo-lock",
- "clap",
  "futures",
  "git-version",
  "hyper",

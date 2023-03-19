@@ -3,6 +3,7 @@ members = [
     "examples/rust",
     "triton-grpc-client",
     "triton-grpc-geyser",
+    "triton-grpc-geyser-config-check",
     "triton-grpc-proto",
 ]
 
