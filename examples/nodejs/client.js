@@ -74,7 +74,7 @@ async function main() {
     .help().argv;
 
   // Load proto
-  const defs = await protoLoader.load("../proto/geyser.proto");
+  const defs = await protoLoader.load("../../yellowstone-grpc-proto/proto/geyser.proto");
   const pkg = grpc.loadPackageDefinition(defs);
 
   // Open connection

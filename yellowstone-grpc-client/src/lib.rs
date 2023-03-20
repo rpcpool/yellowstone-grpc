@@ -14,7 +14,7 @@ use {
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
     },
-    triton_grpc_proto::prelude::{
+    yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,

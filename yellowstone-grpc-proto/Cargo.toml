@@ -1,8 +1,12 @@
 [package]
-name = "triton-grpc-proto"
+name = "yellowstone-grpc-proto"
 version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+homepage = "https://triton.one"
+repository = "https://github.com/rpcpool/yellowstone-grpc"
+license = "Apache-2.0"
+keywords = ["solana"]
 
 [dependencies]
 prost = "0.11.0"

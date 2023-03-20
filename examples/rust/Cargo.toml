@@ -1,8 +1,9 @@
 [package]
-name = "triton-grpc-client-simple"
+name = "yellowstone-grpc-client-simple"
 version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+publish = false
 
 [[bin]]
 name = "client"
@@ -14,6 +15,6 @@ clap = { version = "3.2.22", features = ["cargo", "derive"] }
 env_logger = "0.10.0"
 futures = "0.3.24"
 log = { version = "0.4.14", features = ["std"] }
-triton-grpc-proto = { path = "../../triton-grpc-proto" }
-triton-grpc-client = { path = "../../triton-grpc-client" }
+yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto" }
+yellowstone-grpc-client = { path = "../../yellowstone-grpc-client" }
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }

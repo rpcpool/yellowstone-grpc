@@ -2965,15 +2965,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-geyser-grpc-config-check"
-version = "0.5.3+solana.1.15.2"
-dependencies = [
- "anyhow",
- "clap",
- "triton-grpc-geyser",
-]
-
-[[package]]
 name = "solana-geyser-plugin-interface"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3743,72 +3734,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "triton-grpc-client"
-version = "1.0.0+solana.1.15.2"
-dependencies = [
- "bytes",
- "futures",
- "http",
- "thiserror",
- "tokio",
- "tonic",
- "triton-grpc-proto",
-]
-
-[[package]]
-name = "triton-grpc-client-simple"
-version = "1.0.0+solana.1.15.2"
-dependencies = [
- "anyhow",
- "backoff",
- "clap",
- "env_logger 0.10.0",
- "futures",
- "log",
- "tokio",
- "triton-grpc-client",
- "triton-grpc-proto",
-]
-
-[[package]]
-name = "triton-grpc-geyser"
-version = "0.5.3+solana.1.15.2"
-dependencies = [
- "anyhow",
- "bincode",
- "cargo-lock",
- "futures",
- "git-version",
- "hyper",
- "lazy_static",
- "log",
- "prometheus",
- "serde",
- "serde_json",
- "solana-geyser-plugin-interface",
- "solana-logger",
- "solana-sdk",
- "solana-transaction-status",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-health",
- "triton-grpc-proto",
- "vergen",
-]
-
-[[package]]
-name = "triton-grpc-proto"
-version = "1.0.0+solana.1.15.2"
-dependencies = [
- "anyhow",
- "prost",
- "protobuf-src",
- "tonic",
- "tonic-build",
-]
-
-[[package]]
 name = "try-lock"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4194,6 +4119,73 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "yellowstone-grpc-client"
+version = "1.0.0+solana.1.15.2"
+dependencies = [
+ "bytes",
+ "futures",
+ "http",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-client-simple"
+version = "1.0.0+solana.1.15.2"
+dependencies = [
+ "anyhow",
+ "backoff",
+ "clap",
+ "env_logger 0.10.0",
+ "futures",
+ "log",
+ "tokio",
+ "yellowstone-grpc-client",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-geyser"
+version = "0.5.3+solana.1.15.2"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "cargo-lock",
+ "clap",
+ "futures",
+ "git-version",
+ "hyper",
+ "lazy_static",
+ "log",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "solana-geyser-plugin-interface",
+ "solana-logger",
+ "solana-sdk",
+ "solana-transaction-status",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "vergen",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-proto"
+version = "1.0.0+solana.1.15.2"
+dependencies = [
+ "anyhow",
+ "prost",
+ "protobuf-src",
+ "tonic",
+ "tonic-build",
 ]
 
 [[package]]
