@@ -1,4 +1,4 @@
-pub use triton_grpc_proto::prelude::*;
+pub use yellowstone_grpc_proto::prelude::*;
 
 pub mod convert {
     use {

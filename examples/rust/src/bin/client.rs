@@ -4,8 +4,8 @@ use {
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
     std::collections::HashMap,
-    triton_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
-    triton_grpc_proto::prelude::{
+    yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
+    yellowstone_grpc_proto::prelude::{
         SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
         SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions,

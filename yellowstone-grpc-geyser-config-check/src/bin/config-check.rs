@@ -1,4 +1,4 @@
-use {clap::Parser, triton_grpc_geyser::config::Config};
+use {clap::Parser, yellowstone_grpc_geyser::config::Config};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about)]

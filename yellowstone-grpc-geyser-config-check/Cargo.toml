@@ -1,5 +1,5 @@
 [package]
-name = "solana-geyser-grpc-config-check"
+name = "yellowstone-geyser-grpc-config-check"
 version = "0.5.3+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
@@ -10,4 +10,4 @@ name = "config-check"
 [dependencies]
 anyhow = "1.0.62"
 clap = { version = "3.2.22", features = ["cargo", "derive"] }
-triton-grpc-geyser = { path = "../triton-grpc-geyser" }
+yellowstone-grpc-geyser = { path = "../yellowstone-grpc-geyser" }
