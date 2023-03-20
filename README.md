@@ -1,10 +1,10 @@
-# Solana GRPC interface
+# Yellowstone gRPC - a Geyser based gRPC interface for Solana
 
-This repo contains a fully functional gRPC interface for Solana. It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
+This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo we have the plugin as well as sample clients for multiple languages.
+
+It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
 
 For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
-
-It is built around a Geyser plugin for the Solana interface.
 
 ### Validator
 
