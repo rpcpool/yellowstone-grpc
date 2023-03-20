@@ -7,7 +7,6 @@ homepage = "https://triton.one"
 repository = "https://github.com/rpcpool/yellowstone-grpc"
 license = "Apache-2.0"
 keywords = ["solana"]
-publish = true
 
 [dependencies]
 prost = "0.11.0"
