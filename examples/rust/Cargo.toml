@@ -3,6 +3,7 @@ name = "yellowstone-grpc-client-simple"
 version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+publish = false
 
 [[bin]]
 name = "client"

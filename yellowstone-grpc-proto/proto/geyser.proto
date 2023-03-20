@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-import public "solana-storage-v1.15.2.proto";
+import public "solana-storage.proto";
 
 option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
 
