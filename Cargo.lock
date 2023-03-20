@@ -4122,15 +4122,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "yellowstone-geyser-grpc-config-check"
-version = "0.5.3+solana.1.15.2"
-dependencies = [
- "anyhow",
- "clap",
- "yellowstone-grpc-geyser",
-]
-
-[[package]]
 name = "yellowstone-grpc-client"
 version = "1.0.0+solana.1.15.2"
 dependencies = [
@@ -4165,6 +4156,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "cargo-lock",
+ "clap",
  "futures",
  "git-version",
  "hyper",
