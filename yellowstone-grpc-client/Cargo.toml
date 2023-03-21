@@ -3,6 +3,7 @@ name = "yellowstone-grpc-client"
 version = "1.0.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
+description = "Yellowstone gRPC Geyser Simple Client"
 homepage = "https://triton.one"
 repository = "https://github.com/rpcpool/yellowstone-grpc"
 license = "Apache-2.0"
