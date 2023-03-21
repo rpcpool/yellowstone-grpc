@@ -12,7 +12,7 @@ use {
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
         service::{interceptor::InterceptedService, Interceptor},
         transport::channel::{Channel, ClientTlsConfig},
-        Request, Response, Status,
+        Request, Response, Status, 
     },
     yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
@@ -49,13 +49,17 @@ impl GeyserGrpcClient<()> {
     pub fn connect<E, T>(
         endpoint: E,
         x_token: Option<T>,
+        tls_config: Option<ClientTlsConfig>,
     ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
     where
         E: Into<Bytes>,
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
     {
         let mut endpoint = Channel::from_shared(endpoint)?;
-        if endpoint.uri().scheme_str() == Some("https") {
+
+        if let Some(tls_config) = tls_config {
+            endpoint = endpoint.tls_config(tls_config)?;
+        } else if endpoint.uri().scheme_str() == Some("https") {
             endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
         }
         let channel = endpoint.connect_lazy();
