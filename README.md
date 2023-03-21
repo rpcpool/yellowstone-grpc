@@ -9,18 +9,18 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config triton-grpc-geyser/config.json
+$ solana-validator --geyser-plugin-config yellowstone-grpc-proto/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config triton-grpc-geyser/config.json
+cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-proto/config.json
 ```
 
 ### Filters
 
-See [proto/geyser.proto](proto/geyser.proto).
+See [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto).
 
 #### Slots
 
