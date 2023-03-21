@@ -49,13 +49,17 @@ impl GeyserGrpcClient<()> {
     pub fn connect<E, T>(
         endpoint: E,
         x_token: Option<T>,
+        tls_config: Option<ClientTlsConfig>,
     ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
     where
         E: Into<Bytes>,
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
     {
         let mut endpoint = Channel::from_shared(endpoint)?;
-        if endpoint.uri().scheme_str() == Some("https") {
+
+        if let Some(tls_config) = tls_config {
+            endpoint = endpoint.tls_config(tls_config)?;
+        } else if endpoint.uri().scheme_str() == Some("https") {
             endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
         }
         let channel = endpoint.connect_lazy();
@@ -125,7 +129,7 @@ mod tests {
     async fn test_channel_https_success() {
         let endpoint = "https://ams17.rpcpool.com:443";
         let x_token = "1000000000000000000000000007";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(res.is_ok())
     }
 
@@ -133,7 +137,7 @@ mod tests {
     async fn test_channel_http_success() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(res.is_ok())
     }
 
@@ -141,7 +145,7 @@ mod tests {
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "123";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(matches!(
             res,
             Err(GeyserGrpcClientError::InvalidXTokenLength(_))
@@ -151,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000";
-        let res = GeyserGrpcClient::connect::<_, String>(endpoint, None);
+        let res = GeyserGrpcClient::connect::<_, String>(endpoint, None, None);
         assert!(res.is_ok());
     }
 
@@ -159,7 +163,7 @@ mod tests {
     async fn test_channel_invalid_uri() {
         let endpoint = "sites/files/images/picture.png";
         let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(matches!(res, Err(GeyserGrpcClientError::InvalidUri(_))));
     }
 }

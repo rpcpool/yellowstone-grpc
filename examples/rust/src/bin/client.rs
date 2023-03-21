@@ -145,10 +145,7 @@ async fn main() -> anyhow::Result<()> {
 
         async move {
             info!("Retry to connect to the server");
-            if let Err(err) = GeyserGrpcClient::connect(endpoint.clone(), x_token.clone()) {
-                error!("{:?}", err);
-            }
-            let mut client = GeyserGrpcClient::connect(endpoint, x_token)?;
+            let mut client = GeyserGrpcClient::connect(endpoint, x_token, None)?;
             let (mut subscribe_tx, mut stream) = client.subscribe().await?;
             subscribe_tx
                 .send(SubscribeRequest {

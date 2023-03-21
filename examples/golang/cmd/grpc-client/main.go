@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	pb "github.com/rpcpool/solana-geyser-grpc/golang/proto"
+	pb "github.com/rpcpool/yellowstone-grpc/examples/golang/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
