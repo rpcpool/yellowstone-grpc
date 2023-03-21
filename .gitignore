@@ -1,7 +1,7 @@
 /target
 /test-ledger
 
-solana-geyser-grpc/config-test.json
+yellowstone-grpc-geyser/config-test.json
 *.sw?
 .idea/
 .vscode
