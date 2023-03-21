@@ -15,4 +15,5 @@ pub mod solana {
 pub mod prelude {
     pub use super::geyser::*;
     pub use super::solana::storage::confirmed_block::*;
+    pub use tonic::*;
 }
