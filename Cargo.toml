@@ -5,10 +5,10 @@ members = [
 ]
 
 [patch.crates-io]
-solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.15-geyser-block-v2" }
-solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.15-geyser-block-v2" }
-solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.15-geyser-block-v2" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.15-geyser-block-v2" }
+solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2-2" }
+solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2-2" }
+solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2-2" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2-2" }
 
 [profile.release]
 debug = true

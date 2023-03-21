@@ -196,6 +196,7 @@ impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
 
 #[derive(Debug)]
 pub enum Message {
+    EndOfStartup,
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
@@ -206,6 +207,7 @@ pub enum Message {
 impl From<&Message> for UpdateOneof {
     fn from(message: &Message) -> Self {
         match message {
+            Message::EndOfStartup => unreachable!(),
             Message::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
                 parent: message.parent,

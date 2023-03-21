@@ -2,9 +2,11 @@ use {
     crate::{
         config::Config,
         grpc::{
-            GrpcService, Message, MessageBlockMeta, MessageTransaction, MessageTransactionInfo,
+            GrpcService, Message, MessageBlockMeta, MessageSlot, MessageTransaction,
+            MessageTransactionInfo,
         },
         prom::{self, PrometheusService},
+        proto::SubscribeUpdateSlotStatus,
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -21,24 +23,129 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    startup_received: bool,
-    startup_processed_received: bool,
-    grpc_channel: mpsc::UnboundedSender<Message>,
+    inner_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
-    transactions: BTreeMap<u64, (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>)>,
 }
 
 impl PluginInner {
-    fn try_send_full_block(&mut self, slot: u64) {
-        if matches!(
-            self.transactions.get(&slot),
-            Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
-        ) {
-            let (block_meta, mut transactions) = self.transactions.remove(&slot).expect("checked");
-            transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
-            let message = Message::Block((block_meta.expect("checked"), transactions).into());
-            let _ = self.grpc_channel.send(message);
+    fn new(
+        runtime: Runtime,
+        grpc_channel: mpsc::UnboundedSender<Message>,
+        grpc_shutdown_tx: oneshot::Sender<()>,
+        prometheus: PrometheusService,
+    ) -> Self {
+        let (inner_channel_tx, inner_channel_rx) = mpsc::unbounded_channel();
+        runtime.spawn(async move {
+            Self::start_channel(inner_channel_rx, grpc_channel).await;
+        });
+
+        Self {
+            runtime,
+            inner_channel: inner_channel_tx,
+            grpc_shutdown_tx,
+            prometheus,
+        }
+    }
+
+    async fn start_channel(
+        mut inner_channel: mpsc::UnboundedReceiver<Message>,
+        grpc_channel: mpsc::UnboundedSender<Message>,
+    ) {
+        let mut startup_received = false;
+        let mut startup_processed_received = false;
+        let mut transactions: BTreeMap<
+            u64,
+            (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>),
+        > = BTreeMap::new();
+
+        loop {
+            while let Some(message) = inner_channel.recv().await {
+                if matches!(message, Message::EndOfStartup) {
+                    startup_received = true;
+                    continue;
+                }
+
+                if startup_received
+                    && !startup_processed_received
+                    && matches!(
+                        message,
+                        Message::Slot(MessageSlot {
+                            status: SubscribeUpdateSlotStatus::Processed,
+                            ..
+                        })
+                    )
+                {
+                    startup_processed_received = true;
+                    continue;
+                }
+
+                // Before processed slot after end of startup message we will fail to construct full block
+                if !(startup_received && startup_processed_received) {
+                    continue;
+                }
+
+                // Collect info for building full block
+                let mut try_send_full_block_slot = None;
+                match &message {
+                    Message::EndOfStartup => unreachable!(),
+                    Message::Slot(msg_slot) => {
+                        // Remove outdated records
+                        if msg_slot.status == SubscribeUpdateSlotStatus::Finalized {
+                            loop {
+                                match transactions.keys().next().cloned() {
+                                    // Block was dropped, not in chain
+                                    Some(kslot) if kslot < msg_slot.slot => {
+                                        transactions.remove(&kslot);
+                                    }
+                                    // Maybe log error
+                                    Some(kslot) if kslot == msg_slot.slot => {
+                                        if let Some((Some(_), vec)) = transactions.remove(&kslot) {
+                                            prom::INVALID_FULL_BLOCKS.inc();
+                                            error!(
+                                                "{} transactions left for block {kslot}",
+                                                vec.len()
+                                            );
+                                        }
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    Message::Account(_) => {}
+                    Message::Transaction(msg_tx) => {
+                        // Collect Transactions for full block message
+                        let tx = msg_tx.transaction.clone();
+                        transactions.entry(msg_tx.slot).or_default().1.push(tx);
+                        try_send_full_block_slot = Some(msg_tx.slot);
+                    }
+                    Message::Block(_) => {}
+                    Message::BlockMeta(msg_block) => {
+                        // Save block meta for full block message
+                        transactions.entry(msg_block.slot).or_default().0 = Some(msg_block.clone());
+                        try_send_full_block_slot = Some(msg_block.slot);
+                    }
+                };
+
+                // Re-send message to gRPC
+                let _ = grpc_channel.send(message);
+
+                // Try build full block message and send to gRPC
+                if let Some(slot) = try_send_full_block_slot {
+                    if matches!(
+                        transactions.get(&slot),
+                        Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
+                    ) {
+                        let (block_meta, mut transactions) =
+                            transactions.remove(&slot).expect("checked");
+                        transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
+                        let message =
+                            Message::Block((block_meta.expect("checked"), transactions).into());
+                        let _ = grpc_channel.send(message);
+                    }
+                }
+            }
         }
     }
 }
@@ -49,17 +156,11 @@ pub struct Plugin {
 }
 
 impl Plugin {
-    fn with_inner<F>(&mut self, f: F) -> PluginResult<()>
+    fn with_inner<F>(&self, f: F) -> PluginResult<()>
     where
-        F: FnOnce(&mut PluginInner) -> PluginResult<()>,
+        F: FnOnce(&PluginInner) -> PluginResult<()>,
     {
-        // Before processed slot after end of startup message we will fail to construct full block
-        let inner = self.inner.as_mut().expect("initialized");
-        if inner.startup_received && inner.startup_processed_received {
-            f(inner)
-        } else {
-            Ok(())
-        }
+        f(self.inner.as_ref().expect("initialized"))
     }
 }
 
@@ -84,36 +185,34 @@ impl GeyserPlugin for Plugin {
             Ok::<_, GeyserPluginError>((grpc_channel, grpc_shutdown_tx, prometheus))
         })?;
 
-        self.inner = Some(PluginInner {
+        self.inner = Some(PluginInner::new(
             runtime,
-            startup_received: false,
-            startup_processed_received: false,
             grpc_channel,
             grpc_shutdown_tx,
             prometheus,
-            transactions: BTreeMap::new(),
-        });
+        ));
 
         Ok(())
     }
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
+            drop(inner.inner_channel);
             let _ = inner.grpc_shutdown_tx.send(());
-            drop(inner.grpc_channel);
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
         }
     }
 
-    fn notify_end_of_startup(&mut self) -> PluginResult<()> {
-        let inner = self.inner.as_mut().expect("initialized");
-        inner.startup_received = true;
-        Ok(())
+    fn notify_end_of_startup(&self) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let _ = inner.inner_channel.send(Message::EndOfStartup);
+            Ok(())
+        })
     }
 
     fn update_account(
-        &mut self,
+        &self,
         account: ReplicaAccountInfoVersions,
         slot: u64,
         is_startup: bool,
@@ -127,48 +226,20 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = Message::Account((account, slot, is_startup).into());
-            let _ = inner.grpc_channel.send(message);
+            let _ = inner.inner_channel.send(message);
             Ok(())
         })
     }
 
     fn update_slot_status(
-        &mut self,
+        &self,
         slot: u64,
         parent: Option<u64>,
         status: SlotStatus,
     ) -> PluginResult<()> {
-        let inner = self.inner.as_mut().expect("initialized");
-        if inner.startup_received
-            && !inner.startup_processed_received
-            && status == SlotStatus::Processed
-        {
-            inner.startup_processed_received = true;
-        }
-
         self.with_inner(|inner| {
-            // Remove outdated records
-            if status == SlotStatus::Rooted {
-                loop {
-                    match inner.transactions.keys().next().cloned() {
-                        // Block was dropped, not in chain
-                        Some(kslot) if kslot < slot => {
-                            inner.transactions.remove(&kslot);
-                        }
-                        // Maybe log error
-                        Some(kslot) if kslot == slot => {
-                            if let Some((Some(_), vec)) = inner.transactions.remove(&kslot) {
-                                prom::INVALID_FULL_BLOCKS.inc();
-                                error!("{} transactions left for block {kslot}", vec.len());
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-            }
-
             let message = Message::Slot((slot, parent, status).into());
-            let _ = inner.grpc_channel.send(message);
+            let _ = inner.inner_channel.send(message);
             prom::update_slot_status(slot, status);
 
             Ok(())
@@ -176,7 +247,7 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_transaction(
-        &mut self,
+        &self,
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: u64,
     ) -> PluginResult<()> {
@@ -189,23 +260,14 @@ impl GeyserPlugin for Plugin {
             };
 
             let msg_tx: MessageTransaction = (transaction, slot).into();
-
-            // Collect Transactions for full block message
-            let tx = msg_tx.transaction.clone();
-            inner.transactions.entry(slot).or_default().1.push(tx);
-            inner.try_send_full_block(slot);
-
             let message = Message::Transaction(msg_tx);
-            let _ = inner.grpc_channel.send(message);
+            let _ = inner.inner_channel.send(message);
 
             Ok(())
         })
     }
 
-    fn notify_block_metadata(
-        &mut self,
-        blockinfo: ReplicaBlockInfoVersions<'_>,
-    ) -> PluginResult<()> {
+    fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
         self.with_inner(|inner| {
             let blockinfo = match blockinfo {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
@@ -215,13 +277,8 @@ impl GeyserPlugin for Plugin {
             };
 
             let block_meta: MessageBlockMeta = (blockinfo).into();
-
-            // Save block meta for full block message
-            inner.transactions.entry(block_meta.slot).or_default().0 = Some(block_meta.clone());
-            inner.try_send_full_block(block_meta.slot);
-
             let message = Message::BlockMeta(block_meta);
-            let _ = inner.grpc_channel.send(message);
+            let _ = inner.inner_channel.send(message);
 
             Ok(())
         })
