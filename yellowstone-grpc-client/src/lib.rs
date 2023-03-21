@@ -12,7 +12,7 @@ use {
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
         service::{interceptor::InterceptedService, Interceptor},
         transport::channel::{Channel, ClientTlsConfig},
-        Request, Response, Status, 
+        Request, Response, Status,
     },
     yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
