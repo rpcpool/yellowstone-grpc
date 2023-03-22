@@ -21,6 +21,23 @@ message SubscribeRequest {
 message SubscribeRequestFilterAccounts {
   repeated string account = 2;
   repeated string owner = 3;
+  repeated SubscribeRequestFilterAccountsFilter filters = 4;
+}
+
+message SubscribeRequestFilterAccountsFilter {
+  oneof filter {
+    SubscribeRequestFilterAccountsFilterMemcmp memcmp = 1;
+    uint64 datasize = 2;
+  }
+}
+
+message SubscribeRequestFilterAccountsFilterMemcmp {
+  uint64 offset = 1;
+  oneof data {
+    bytes bytes = 2;
+    string base58 = 3;
+    string base64 = 4;
+  }
 }
 
 message SubscribeRequestFilterSlots {}

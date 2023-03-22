@@ -6,7 +6,10 @@ use {
     std::collections::HashMap,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::prelude::{
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+        SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
         SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions,
     },
@@ -33,6 +36,14 @@ struct Args {
     /// Filter by Owner Pubkey
     #[clap(long)]
     accounts_owner: Vec<String>,
+
+    /// Filter by Offset and Data, format: `offset,data in base58`
+    #[clap(long)]
+    accounts_memcmp: Vec<String>,
+
+    /// Filter by Data size
+    #[clap(long)]
+    accounts_datasize: Option<u64>,
 
     /// Subscribe on slots updates
     #[clap(long)]
@@ -90,11 +101,38 @@ async fn main() -> anyhow::Result<()> {
 
     let mut accounts: AccountFilterMap = HashMap::new();
     if args.accounts {
+        let mut filters = vec![];
+        for filter in args.accounts_memcmp {
+            match filter.split_once(',') {
+                Some((offset, data)) => {
+                    filters.push(SubscribeRequestFilterAccountsFilter {
+                        filter: Some(AccountsFilterDataOneof::Memcmp(
+                            SubscribeRequestFilterAccountsFilterMemcmp {
+                                offset: offset
+                                    .parse()
+                                    .map_err(|_| anyhow::anyhow!("invalid offset"))?,
+                                data: Some(AccountsFilterMemcmpOneof::Base58(
+                                    data.trim().to_string(),
+                                )),
+                            },
+                        )),
+                    });
+                }
+                _ => anyhow::bail!("invalid memcmp"),
+            }
+        }
+        if let Some(datasize) = args.accounts_datasize {
+            filters.push(SubscribeRequestFilterAccountsFilter {
+                filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
+            });
+        }
+
         accounts.insert(
             "client".to_owned(),
             SubscribeRequestFilterAccounts {
                 account: args.accounts_account,
                 owner: args.accounts_owner,
+                filters,
             },
         );
     }
