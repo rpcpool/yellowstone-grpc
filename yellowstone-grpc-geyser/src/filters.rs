@@ -221,6 +221,9 @@ impl FilterAccountsData {
             return false;
         }
         for (offset, bytes) in self.memcmp.iter() {
+            if data.len() < *offset + bytes.len() {
+                return false;
+            }
             let data = &data[*offset..*offset + bytes.len()];
             if data != bytes {
                 return false;
