@@ -236,9 +236,9 @@ impl FilterAccountsData {
 #[derive(Debug)]
 pub struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
-    account: HashSet<String>,
-    owner: HashSet<String>,
-    data: HashSet<String>,
+    account: HashSet<&'a str>,
+    owner: HashSet<&'a str>,
+    data: HashSet<&'a str>,
 }
 
 impl<'a> FilterAccountsMatch<'a> {
@@ -251,11 +251,11 @@ impl<'a> FilterAccountsMatch<'a> {
         }
     }
 
-    fn extend(set: &mut HashSet<String>, map: &HashMap<Pubkey, HashSet<String>>, key: &Pubkey) {
+    fn extend(set: &mut HashSet<&'a str>, map: &'a HashMap<Pubkey, HashSet<String>>, key: &Pubkey) {
         if let Some(names) = map.get(key) {
             for name in names {
-                if !set.contains(name) {
-                    set.insert(name.clone());
+                if !set.contains(name.as_str()) {
+                    set.insert(name);
                 }
             }
         }
@@ -272,7 +272,7 @@ impl<'a> FilterAccountsMatch<'a> {
     pub fn match_data(&mut self, data: &[u8]) {
         for (name, filter) in self.filter.filters.iter() {
             if filter.is_match(data) {
-                self.data.insert(name.clone());
+                self.data.insert(name);
             }
         }
     }
