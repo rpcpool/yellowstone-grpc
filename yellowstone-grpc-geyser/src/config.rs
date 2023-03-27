@@ -66,7 +66,7 @@ pub struct ConfigGrpc {
     pub channel_capacity: usize,
     /// Limits for possible filters
     #[serde(default)]
-    pub filters: Option<ConfigGrpcFilters>,
+    pub filters: ConfigGrpcFilters,
 }
 
 impl ConfigGrpc {

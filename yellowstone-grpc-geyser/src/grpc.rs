@@ -413,7 +413,7 @@ impl Geyser for GrpcService {
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
             },
-            self.config.filters.as_ref(),
+            &self.config.filters,
         )
         .expect("empty filter");
 
@@ -447,18 +447,15 @@ impl Geyser for GrpcService {
             loop {
                 match request.get_mut().message().await {
                     Ok(Some(request)) => {
-                        if let Err(error) =
-                            match Filter::new(&request, config_filters_limit.as_ref()) {
-                                Ok(filter) => {
-                                    match new_clients_tx.send(ClientMessage::Update { id, filter })
-                                    {
-                                        Ok(()) => Ok(()),
-                                        Err(error) => Err(error.to_string()),
-                                    }
+                        if let Err(error) = match Filter::new(&request, &config_filters_limit) {
+                            Ok(filter) => {
+                                match new_clients_tx.send(ClientMessage::Update { id, filter }) {
+                                    Ok(()) => Ok(()),
+                                    Err(error) => Err(error.to_string()),
                                 }
-                                Err(error) => Err(error.to_string()),
                             }
-                        {
+                            Err(error) => Err(error.to_string()),
+                        } {
                             let _ = stream_tx
                                 .send(Err(Status::invalid_argument(format!(
                                     "failed to create filter: {}",
