@@ -1404,6 +1404,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "hmac"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4123,7 +4129,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.0.1+solana.1.15.2"
+version = "1.1.0+solana.1.15.2"
 dependencies = [
  "bytes",
  "futures",
@@ -4136,14 +4142,17 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.0.0+solana.1.15.2"
+version = "1.1.0+solana.1.15.2"
 dependencies = [
  "anyhow",
  "backoff",
+ "bs58",
  "clap",
  "env_logger 0.10.0",
  "futures",
+ "hex",
  "log",
+ "solana-sdk",
  "tokio",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
@@ -4151,10 +4160,12 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "0.5.3+solana.1.15.2"
+version = "0.6.0+solana.1.15.2"
 dependencies = [
  "anyhow",
+ "base64 0.21.0",
  "bincode",
+ "bs58",
  "cargo-lock",
  "clap",
  "futures",
@@ -4179,7 +4190,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.0.1+solana.1.15.2"
+version = "1.1.0+solana.1.15.2"
 dependencies = [
  "anyhow",
  "prost",

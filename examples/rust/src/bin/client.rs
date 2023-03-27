@@ -3,12 +3,16 @@ use {
     clap::Parser,
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
+    solana_sdk::pubkey::Pubkey,
     std::collections::HashMap,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::prelude::{
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions,
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
     },
 };
 
@@ -33,6 +37,14 @@ struct Args {
     /// Filter by Owner Pubkey
     #[clap(long)]
     accounts_owner: Vec<String>,
+
+    /// Filter by Offset and Data, format: `offset,data in base58`
+    #[clap(long)]
+    accounts_memcmp: Vec<String>,
+
+    /// Filter by Data size
+    #[clap(long)]
+    accounts_datasize: Option<u64>,
 
     /// Subscribe on slots updates
     #[clap(long)]
@@ -81,6 +93,45 @@ type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
 
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct AccountPretty {
+    is_startup: bool,
+    slot: u64,
+    pubkey: Pubkey,
+    lamports: u64,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: u64,
+    data: String,
+    write_version: u64,
+    txn_signature: String,
+}
+
+impl From<SubscribeUpdateAccount> for AccountPretty {
+    fn from(
+        SubscribeUpdateAccount {
+            is_startup,
+            slot,
+            account,
+        }: SubscribeUpdateAccount,
+    ) -> Self {
+        let account = account.expect("should be defined");
+        Self {
+            is_startup,
+            slot,
+            pubkey: Pubkey::try_from(account.pubkey).expect("valid pubkey"),
+            lamports: account.lamports,
+            owner: Pubkey::try_from(account.owner).expect("valid pubkey"),
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: hex::encode(account.data),
+            write_version: account.write_version,
+            txn_signature: bs58::encode(account.txn_signature.unwrap_or_default()).into_string(),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     std::env::set_var("RUST_LOG", "info");
@@ -90,11 +141,38 @@ async fn main() -> anyhow::Result<()> {
 
     let mut accounts: AccountFilterMap = HashMap::new();
     if args.accounts {
+        let mut filters = vec![];
+        for filter in args.accounts_memcmp {
+            match filter.split_once(',') {
+                Some((offset, data)) => {
+                    filters.push(SubscribeRequestFilterAccountsFilter {
+                        filter: Some(AccountsFilterDataOneof::Memcmp(
+                            SubscribeRequestFilterAccountsFilterMemcmp {
+                                offset: offset
+                                    .parse()
+                                    .map_err(|_| anyhow::anyhow!("invalid offset"))?,
+                                data: Some(AccountsFilterMemcmpOneof::Base58(
+                                    data.trim().to_string(),
+                                )),
+                            },
+                        )),
+                    });
+                }
+                _ => anyhow::bail!("invalid memcmp"),
+            }
+        }
+        if let Some(datasize) = args.accounts_datasize {
+            filters.push(SubscribeRequestFilterAccountsFilter {
+                filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
+            });
+        }
+
         accounts.insert(
             "client".to_owned(),
             SubscribeRequestFilterAccounts {
                 account: args.accounts_account,
                 owner: args.accounts_owner,
+                filters,
             },
         );
     }
@@ -162,7 +240,21 @@ async fn main() -> anyhow::Result<()> {
             let mut counter = 0;
             while let Some(message) = stream.next().await {
                 match message {
-                    Ok(message) => info!("new message: {:?}", message),
+                    Ok(msg) => {
+                        #[allow(clippy::single_match)]
+                        match msg.update_oneof {
+                            Some(UpdateOneof::Account(account)) => {
+                                let account: AccountPretty = account.into();
+                                info!(
+                                    "new account update: filters {:?}, account: {:#?}",
+                                    msg.filters, account
+                                );
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        info!("new message: {:?}", msg)
+                    }
                     Err(error) => error!("error: {:?}", error),
                 }
 

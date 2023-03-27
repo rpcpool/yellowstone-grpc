@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "0.5.3+solana.1.15.2"
+version = "0.6.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Geyser Plugin"
@@ -14,7 +14,9 @@ name = "config-check"
 
 [dependencies]
 anyhow = "1.0.62"
+base64 = "0.21.0"
 bincode = "1.3.3"
+bs58 = "0.4.0"
 clap = { version = "3.2.22", features = ["cargo", "derive"] }
 futures = "0.3.24"
 hyper = { version = "0.14.20", features = ["server"] }
