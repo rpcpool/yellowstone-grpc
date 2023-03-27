@@ -61,7 +61,7 @@ pub struct ConfigGrpc {
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
-        deserialize_with = "UsizeStr::deserialize_usize"
+        deserialize_with = "deserialize_usize_str"
     )]
     pub channel_capacity: usize,
     /// Limits for possible filters
@@ -171,40 +171,23 @@ pub struct ConfigPrometheus {
     pub address: SocketAddr,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Hash)]
-struct UsizeStr {
-    value: usize,
-}
-
-impl<'de> Deserialize<'de> for UsizeStr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Value {
-            Integer(usize),
-            String(String),
-        }
-
-        match Value::deserialize(deserializer)? {
-            Value::Integer(value) => Ok(UsizeStr { value }),
-            Value::String(value) => value
-                .replace('_', "")
-                .parse::<usize>()
-                .map_err(de::Error::custom)
-                .map(|value| UsizeStr { value }),
-        }
+fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Integer(usize),
+        String(String),
     }
-}
 
-impl UsizeStr {
-    fn deserialize_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self::deserialize(deserializer)?.value)
+    match Value::deserialize(deserializer)? {
+        Value::Integer(value) => Ok(value),
+        Value::String(value) => value
+            .replace('_', "")
+            .parse::<usize>()
+            .map_err(de::Error::custom),
     }
 }
 
