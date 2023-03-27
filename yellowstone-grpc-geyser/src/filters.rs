@@ -35,33 +35,25 @@ pub struct Filter {
 }
 
 impl Filter {
-    pub fn new(
-        config: &SubscribeRequest,
-        limit: Option<&ConfigGrpcFilters>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
         Ok(Self {
-            accounts: FilterAccounts::new(&config.accounts, limit.map(|v| &v.accounts))?,
-            slots: FilterSlots::new(&config.slots, limit.map(|v| &v.slots))?,
-            transactions: FilterTransactions::new(
-                &config.transactions,
-                limit.map(|v| &v.transactions),
-            )?,
-            blocks: FilterBlocks::new(&config.blocks, limit.map(|v| &v.blocks))?,
-            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, limit.map(|v| &v.blocks_meta))?,
+            accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
+            slots: FilterSlots::new(&config.slots, &limit.slots)?,
+            transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
+            blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
+            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
         })
     }
 
     fn decode_pubkeys<T: FromIterator<Pubkey>>(
         pubkeys: &[String],
-        limit: Option<&HashSet<Pubkey>>,
+        limit: &HashSet<Pubkey>,
     ) -> anyhow::Result<T> {
         pubkeys
             .iter()
             .map(|value| match Pubkey::from_str(value) {
                 Ok(pubkey) => {
-                    if let Some(limit) = limit {
-                        ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
-                    }
+                    ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
                     Ok(pubkey)
                 }
                 Err(error) => Err(error.into()),
@@ -92,35 +84,31 @@ struct FilterAccounts {
 impl FilterAccounts {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
-        limit: Option<&ConfigGrpcFiltersAccounts>,
+        limit: &ConfigGrpcFiltersAccounts,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         let mut this = Self::default();
         for (name, filter) in configs {
-            if let Some(limit) = limit {
-                ConfigGrpcFilters::check_any(
-                    filter.account.is_empty() && filter.owner.is_empty(),
-                    limit.any,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(filter.account.len(), limit.account_max)?;
-                ConfigGrpcFilters::check_pubkey_max(filter.owner.len(), limit.owner_max)?;
-            }
+            ConfigGrpcFilters::check_any(
+                filter.account.is_empty() && filter.owner.is_empty(),
+                limit.any,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(filter.account.len(), limit.account_max)?;
+            ConfigGrpcFilters::check_pubkey_max(filter.owner.len(), limit.owner_max)?;
 
             Self::set(
                 &mut this.account,
                 &mut this.account_required,
                 name,
-                Filter::decode_pubkeys(&filter.account, limit.map(|v| &v.account_reject))?,
+                Filter::decode_pubkeys(&filter.account, &limit.account_reject)?,
             );
 
             Self::set(
                 &mut this.owner,
                 &mut this.owner_required,
                 name,
-                Filter::decode_pubkeys(&filter.owner, limit.map(|v| &v.owner_reject))?,
+                Filter::decode_pubkeys(&filter.owner, &limit.owner_reject)?,
             );
 
             this.filters
@@ -310,11 +298,9 @@ struct FilterSlots {
 impl FilterSlots {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterSlots>,
-        limit: Option<&ConfigGrpcFiltersSlots>,
+        limit: &ConfigGrpcFiltersSlots,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
@@ -347,31 +333,27 @@ pub struct FilterTransactions {
 impl FilterTransactions {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
-        limit: Option<&ConfigGrpcFiltersTransactions>,
+        limit: &ConfigGrpcFiltersTransactions,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         let mut this = Self::default();
         for (name, filter) in configs {
-            if let Some(limit) = limit {
-                ConfigGrpcFilters::check_any(
-                    filter.vote.is_none()
-                        && filter.failed.is_none()
-                        && filter.account_include.is_empty()
-                        && filter.account_exclude.is_empty(),
-                    limit.any,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(
-                    filter.account_include.len(),
-                    limit.account_include_max,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(
-                    filter.account_exclude.len(),
-                    limit.account_exclude_max,
-                )?;
-            }
+            ConfigGrpcFilters::check_any(
+                filter.vote.is_none()
+                    && filter.failed.is_none()
+                    && filter.account_include.is_empty()
+                    && filter.account_exclude.is_empty(),
+                limit.any,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_include.len(),
+                limit.account_include_max,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_exclude.len(),
+                limit.account_exclude_max,
+            )?;
 
             this.filters.insert(
                 name.clone(),
@@ -389,9 +371,12 @@ impl FilterTransactions {
                         .transpose()?,
                     account_include: Filter::decode_pubkeys(
                         &filter.account_include,
-                        limit.map(|v| &v.account_include_reject),
+                        &limit.account_include_reject,
                     )?,
-                    account_exclude: Filter::decode_pubkeys(&filter.account_exclude, None)?,
+                    account_exclude: Filter::decode_pubkeys(
+                        &filter.account_exclude,
+                        &HashSet::new(),
+                    )?,
                 },
             );
         }
@@ -459,11 +444,9 @@ struct FilterBlocks {
 impl FilterBlocks {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocks>,
-        limit: Option<&ConfigGrpcFiltersBlocks>,
+        limit: &ConfigGrpcFiltersBlocks,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
@@ -487,11 +470,9 @@ struct FilterBlocksMeta {
 impl FilterBlocksMeta {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocksMeta>,
-        limit: Option<&ConfigGrpcFiltersBlocksMeta>,
+        limit: &ConfigGrpcFiltersBlocksMeta,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs

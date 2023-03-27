@@ -61,12 +61,12 @@ pub struct ConfigGrpc {
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
-        deserialize_with = "UsizeStr::deserialize_usize"
+        deserialize_with = "deserialize_usize_str"
     )]
     pub channel_capacity: usize,
     /// Limits for possible filters
     #[serde(default)]
-    pub filters: Option<ConfigGrpcFilters>,
+    pub filters: ConfigGrpcFilters,
 }
 
 impl ConfigGrpc {
@@ -75,7 +75,7 @@ impl ConfigGrpc {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpcFilters {
     pub accounts: ConfigGrpcFiltersAccounts,
@@ -135,33 +135,82 @@ pub struct ConfigGrpcFiltersAccounts {
     pub owner_reject: HashSet<Pubkey>,
 }
 
+impl Default for ConfigGrpcFiltersAccounts {
+    fn default() -> Self {
+        Self {
+            max: usize::MAX,
+            any: true,
+            account_max: usize::MAX,
+            account_reject: HashSet::new(),
+            owner_max: usize::MAX,
+            owner_reject: HashSet::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpcFiltersSlots {
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
+}
+
+impl Default for ConfigGrpcFiltersSlots {
+    fn default() -> Self {
+        Self { max: usize::MAX }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpcFiltersTransactions {
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
     pub any: bool,
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_include_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
     pub account_include_reject: HashSet<Pubkey>,
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_exclude_max: usize,
+}
+
+impl Default for ConfigGrpcFiltersTransactions {
+    fn default() -> Self {
+        Self {
+            max: usize::MAX,
+            any: true,
+            account_include_max: usize::MAX,
+            account_include_reject: HashSet::new(),
+            account_exclude_max: usize::MAX,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpcFiltersBlocks {
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
+}
+
+impl Default for ConfigGrpcFiltersBlocks {
+    fn default() -> Self {
+        Self { max: usize::MAX }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpcFiltersBlocksMeta {
+    #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
+}
+
+impl Default for ConfigGrpcFiltersBlocksMeta {
+    fn default() -> Self {
+        Self { max: usize::MAX }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -171,40 +220,23 @@ pub struct ConfigPrometheus {
     pub address: SocketAddr,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Hash)]
-struct UsizeStr {
-    value: usize,
-}
-
-impl<'de> Deserialize<'de> for UsizeStr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Value {
-            Integer(usize),
-            String(String),
-        }
-
-        match Value::deserialize(deserializer)? {
-            Value::Integer(value) => Ok(UsizeStr { value }),
-            Value::String(value) => value
-                .replace('_', "")
-                .parse::<usize>()
-                .map_err(de::Error::custom)
-                .map(|value| UsizeStr { value }),
-        }
+fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Integer(usize),
+        String(String),
     }
-}
 
-impl UsizeStr {
-    fn deserialize_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self::deserialize(deserializer)?.value)
+    match Value::deserialize(deserializer)? {
+        Value::Integer(value) => Ok(value),
+        Value::String(value) => value
+            .replace('_', "")
+            .parse::<usize>()
+            .map_err(de::Error::custom),
     }
 }
 
