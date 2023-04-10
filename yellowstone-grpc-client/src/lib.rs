@@ -67,7 +67,7 @@ impl GeyserGrpcClient<()> {
             None => None,
         };
         match x_token {
-            Some(token) if token.len() > 0 => {
+            Some(token) if token.len() < 1 => {
                 return Err(GeyserGrpcClientError::InvalidXTokenLength(token.len()));
             }
             _ => {}
@@ -127,7 +127,7 @@ mod tests {
     async fn test_channel_https_success() {
         let endpoint = "https://ams17.rpcpool.com:443";
         let x_token = "1000000000000000000000000007";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(res.is_ok())
     }
 
@@ -135,15 +135,15 @@ mod tests {
     async fn test_channel_http_success() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(res.is_ok())
     }
 
     #[tokio::test]
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000";
-        let x_token = "123";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let x_token = "";
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(matches!(
             res,
             Err(GeyserGrpcClientError::InvalidXTokenLength(_))
@@ -153,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000";
-        let res = GeyserGrpcClient::connect::<_, String>(endpoint, None);
+        let res = GeyserGrpcClient::connect::<_, String>(endpoint, None, None);
         assert!(res.is_ok());
     }
 
@@ -161,7 +161,7 @@ mod tests {
     async fn test_channel_invalid_uri() {
         let endpoint = "sites/files/images/picture.png";
         let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token));
+        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(matches!(res, Err(GeyserGrpcClientError::InvalidUri(_))));
     }
 }
