@@ -21,8 +21,6 @@ use {
     },
 };
 
-pub const XTOKEN_LENGTH: usize = 28;
-
 #[derive(Debug, thiserror::Error)]
 pub enum GeyserGrpcClientError {
     #[error("Invalid URI: {0}")]
@@ -69,7 +67,7 @@ impl GeyserGrpcClient<()> {
             None => None,
         };
         match x_token {
-            Some(token) if token.len() != XTOKEN_LENGTH => {
+            Some(token) if token.len() < 1 => {
                 return Err(GeyserGrpcClientError::InvalidXTokenLength(token.len()));
             }
             _ => {}
@@ -144,7 +142,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000";
-        let x_token = "123";
+        let x_token = "";
         let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
         assert!(matches!(
             res,
