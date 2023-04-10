@@ -67,7 +67,7 @@ impl GeyserGrpcClient<()> {
             None => None,
         };
         match x_token {
-            Some(token) if token.len() < 1 => {
+            Some(token) if token.is_empty() => {
                 return Err(GeyserGrpcClientError::InvalidXTokenLength(token.len()));
             }
             _ => {}
