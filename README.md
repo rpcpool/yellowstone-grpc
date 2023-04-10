@@ -1,4 +1,4 @@
-# Yellowstone gRPC - a Geyser based gRPC interface for Solana
+# Yellowstone Dragon's Mouth - a Geyser based gRPC interface for Solana
 
 This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo we have the plugin as well as sample clients for multiple languages.
 
