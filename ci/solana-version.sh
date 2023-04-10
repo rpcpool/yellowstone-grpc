@@ -3,4 +3,4 @@
 # Prints the Solana version.
 
 set -e
-grep solana-geyser-plugin-interface Cargo.toml | head -n1 | awk '{print $3}' | tr -d \" | tr -d =
+cargo metadata --format-version 1 | jq -r '.packages[] | select(.name=="solana-geyser-plugin-interface") | .version'

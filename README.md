@@ -9,18 +9,18 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config triton-grpc-geyser/config.json
+$ solana-validator --geyser-plugin-config yellowstone-grpc-proto/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config triton-grpc-geyser/config.json
+cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-proto/config.json
 ```
 
 ### Filters
 
-See [proto/geyser.proto](proto/geyser.proto).
+See [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto).
 
 #### Slots
 
@@ -32,8 +32,9 @@ Accounts can be filtered by:
 
    - `account` — acount Pubkey, match to any Pubkey from the array
    - `owner` — account owner Pubkey, match to any Pubkey from the array
+   - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
-If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
+If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR` (except values in `filters` which works as logical `AND`).
 
 #### Transactions
 
@@ -83,6 +84,13 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    }
 }
 ```
+
+### Examples
+
+   - [Go](examples/golang)
+   - [Node.js](examples/nodejs)
+   - [Rust](examples/rust)
+   - [TypeScript](examples/typescript)
 
 ### License
 

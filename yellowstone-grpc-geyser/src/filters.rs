@@ -9,15 +9,17 @@ use {
             MessageTransaction,
         },
         proto::{
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
         },
     },
+    base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     std::{
         collections::{HashMap, HashSet},
-        hash::Hash,
         iter::FromIterator,
         str::FromStr,
     },
@@ -33,33 +35,25 @@ pub struct Filter {
 }
 
 impl Filter {
-    pub fn new(
-        config: &SubscribeRequest,
-        limit: Option<&ConfigGrpcFilters>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
         Ok(Self {
-            accounts: FilterAccounts::new(&config.accounts, limit.map(|v| &v.accounts))?,
-            slots: FilterSlots::new(&config.slots, limit.map(|v| &v.slots))?,
-            transactions: FilterTransactions::new(
-                &config.transactions,
-                limit.map(|v| &v.transactions),
-            )?,
-            blocks: FilterBlocks::new(&config.blocks, limit.map(|v| &v.blocks))?,
-            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, limit.map(|v| &v.blocks_meta))?,
+            accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
+            slots: FilterSlots::new(&config.slots, &limit.slots)?,
+            transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
+            blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
+            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
         })
     }
 
     fn decode_pubkeys<T: FromIterator<Pubkey>>(
         pubkeys: &[String],
-        limit: Option<&HashSet<Pubkey>>,
+        limit: &HashSet<Pubkey>,
     ) -> anyhow::Result<T> {
         pubkeys
             .iter()
             .map(|value| match Pubkey::from_str(value) {
                 Ok(pubkey) => {
-                    if let Some(limit) = limit {
-                        ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
-                    }
+                    ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
                     Ok(pubkey)
                 }
                 Err(error) => Err(error.into()),
@@ -80,7 +74,7 @@ impl Filter {
 
 #[derive(Debug, Default)]
 struct FilterAccounts {
-    filters: Vec<String>,
+    filters: Vec<(String, FilterAccountsData)>,
     account: HashMap<Pubkey, HashSet<String>>,
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
@@ -90,38 +84,35 @@ struct FilterAccounts {
 impl FilterAccounts {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
-        limit: Option<&ConfigGrpcFiltersAccounts>,
+        limit: &ConfigGrpcFiltersAccounts,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         let mut this = Self::default();
         for (name, filter) in configs {
-            if let Some(limit) = limit {
-                ConfigGrpcFilters::check_any(
-                    filter.account.is_empty() && filter.owner.is_empty(),
-                    limit.any,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(filter.account.len(), limit.account_max)?;
-                ConfigGrpcFilters::check_pubkey_max(filter.owner.len(), limit.owner_max)?;
-            }
+            ConfigGrpcFilters::check_any(
+                filter.account.is_empty() && filter.owner.is_empty(),
+                limit.any,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(filter.account.len(), limit.account_max)?;
+            ConfigGrpcFilters::check_pubkey_max(filter.owner.len(), limit.owner_max)?;
 
             Self::set(
                 &mut this.account,
                 &mut this.account_required,
                 name,
-                Filter::decode_pubkeys(&filter.account, limit.map(|v| &v.account_reject))?,
+                Filter::decode_pubkeys(&filter.account, &limit.account_reject)?,
             );
 
             Self::set(
                 &mut this.owner,
                 &mut this.owner_required,
                 name,
-                Filter::decode_pubkeys(&filter.owner, limit.map(|v| &v.owner_reject))?,
+                Filter::decode_pubkeys(&filter.owner, &limit.owner_reject)?,
             );
 
-            this.filters.push(name.clone());
+            this.filters
+                .push((name.clone(), FilterAccountsData::new(&filter.filters)?));
         }
         Ok(this)
     }
@@ -149,15 +140,93 @@ impl FilterAccounts {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
+        filter.match_data(&message.account.data);
         filter.get_filters()
+    }
+}
+
+#[derive(Debug, Default)]
+struct FilterAccountsData {
+    memcmp: Vec<(usize, Vec<u8>)>,
+    datasize: Option<usize>,
+}
+
+impl FilterAccountsData {
+    fn new(filters: &[SubscribeRequestFilterAccountsFilter]) -> anyhow::Result<Self> {
+        const MAX_FILTERS: usize = 4;
+        const MAX_DATA_SIZE: usize = 128;
+        const MAX_DATA_BASE58_SIZE: usize = 175;
+        const MAX_DATA_BASE64_SIZE: usize = 172;
+
+        anyhow::ensure!(
+            filters.len() <= MAX_FILTERS,
+            "Too many filters provided; max {MAX_FILTERS}"
+        );
+
+        let mut this = Self::default();
+        for filter in filters {
+            match &filter.filter {
+                Some(AccountsFilterDataOneof::Memcmp(memcmp)) => {
+                    let data = match &memcmp.data {
+                        Some(AccountsFilterMemcmpOneof::Bytes(data)) => data.clone(),
+                        Some(AccountsFilterMemcmpOneof::Base58(data)) => {
+                            anyhow::ensure!(data.len() <= MAX_DATA_BASE58_SIZE, "data too large");
+                            bs58::decode(data)
+                                .into_vec()
+                                .map_err(|_| anyhow::anyhow!("invalid base58"))?
+                        }
+                        Some(AccountsFilterMemcmpOneof::Base64(data)) => {
+                            anyhow::ensure!(data.len() <= MAX_DATA_BASE64_SIZE, "data too large");
+                            base64_engine
+                                .decode(data)
+                                .map_err(|_| anyhow::anyhow!("invalid base64"))?
+                        }
+                        None => anyhow::bail!("data for memcmp should be defined"),
+                    };
+                    anyhow::ensure!(data.len() <= MAX_DATA_SIZE, "data too large");
+                    this.memcmp.push((memcmp.offset as usize, data));
+                }
+                Some(AccountsFilterDataOneof::Datasize(datasize)) => {
+                    anyhow::ensure!(
+                        this.datasize.replace(*datasize as usize).is_none(),
+                        "datasize used more than once",
+                    );
+                }
+                None => {
+                    anyhow::bail!("filter should be defined");
+                }
+            }
+        }
+        Ok(this)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.memcmp.is_empty() && self.datasize.is_none()
+    }
+
+    fn is_match(&self, data: &[u8]) -> bool {
+        if matches!(self.datasize, Some(datasize) if data.len() != datasize) {
+            return false;
+        }
+        for (offset, bytes) in self.memcmp.iter() {
+            if data.len() < *offset + bytes.len() {
+                return false;
+            }
+            let data = &data[*offset..*offset + bytes.len()];
+            if data != bytes {
+                return false;
+            }
+        }
+        true
     }
 }
 
 #[derive(Debug)]
 pub struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
-    account: HashSet<String>,
-    owner: HashSet<String>,
+    account: HashSet<&'a str>,
+    owner: HashSet<&'a str>,
+    data: HashSet<&'a str>,
 }
 
 impl<'a> FilterAccountsMatch<'a> {
@@ -166,39 +235,41 @@ impl<'a> FilterAccountsMatch<'a> {
             filter,
             account: Default::default(),
             owner: Default::default(),
+            data: Default::default(),
         }
     }
 
-    fn extend<Q: Hash + Eq>(
-        set: &mut HashSet<String>,
-        map: &HashMap<Q, HashSet<String>>,
-        key: &Q,
-    ) -> bool {
+    fn extend(set: &mut HashSet<&'a str>, map: &'a HashMap<Pubkey, HashSet<String>>, key: &Pubkey) {
         if let Some(names) = map.get(key) {
             for name in names {
-                if !set.contains(name) {
-                    set.insert(name.clone());
+                if !set.contains(name.as_str()) {
+                    set.insert(name);
                 }
             }
-            true
-        } else {
-            false
         }
     }
 
-    pub fn match_account(&mut self, pubkey: &Pubkey) -> bool {
+    pub fn match_account(&mut self, pubkey: &Pubkey) {
         Self::extend(&mut self.account, &self.filter.account, pubkey)
     }
 
-    pub fn match_owner(&mut self, pubkey: &Pubkey) -> bool {
+    pub fn match_owner(&mut self, pubkey: &Pubkey) {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
+    }
+
+    pub fn match_data(&mut self, data: &[u8]) {
+        for (name, filter) in self.filter.filters.iter() {
+            if filter.is_match(data) {
+                self.data.insert(name);
+            }
+        }
     }
 
     pub fn get_filters(&self) -> Vec<String> {
         self.filter
             .filters
             .iter()
-            .filter_map(|name| {
+            .filter_map(|(name, filter)| {
                 let name = name.as_str();
                 let af = &self.filter;
 
@@ -207,6 +278,9 @@ impl<'a> FilterAccountsMatch<'a> {
                     return None;
                 }
                 if af.owner_required.contains(name) && !self.owner.contains(name) {
+                    return None;
+                }
+                if !filter.is_empty() && !self.data.contains(name) {
                     return None;
                 }
 
@@ -224,11 +298,9 @@ struct FilterSlots {
 impl FilterSlots {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterSlots>,
-        limit: Option<&ConfigGrpcFiltersSlots>,
+        limit: &ConfigGrpcFiltersSlots,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
@@ -261,31 +333,27 @@ pub struct FilterTransactions {
 impl FilterTransactions {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
-        limit: Option<&ConfigGrpcFiltersTransactions>,
+        limit: &ConfigGrpcFiltersTransactions,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         let mut this = Self::default();
         for (name, filter) in configs {
-            if let Some(limit) = limit {
-                ConfigGrpcFilters::check_any(
-                    filter.vote.is_none()
-                        && filter.failed.is_none()
-                        && filter.account_include.is_empty()
-                        && filter.account_exclude.is_empty(),
-                    limit.any,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(
-                    filter.account_include.len(),
-                    limit.account_include_max,
-                )?;
-                ConfigGrpcFilters::check_pubkey_max(
-                    filter.account_exclude.len(),
-                    limit.account_exclude_max,
-                )?;
-            }
+            ConfigGrpcFilters::check_any(
+                filter.vote.is_none()
+                    && filter.failed.is_none()
+                    && filter.account_include.is_empty()
+                    && filter.account_exclude.is_empty(),
+                limit.any,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_include.len(),
+                limit.account_include_max,
+            )?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_exclude.len(),
+                limit.account_exclude_max,
+            )?;
 
             this.filters.insert(
                 name.clone(),
@@ -303,9 +371,12 @@ impl FilterTransactions {
                         .transpose()?,
                     account_include: Filter::decode_pubkeys(
                         &filter.account_include,
-                        limit.map(|v| &v.account_include_reject),
+                        &limit.account_include_reject,
                     )?,
-                    account_exclude: Filter::decode_pubkeys(&filter.account_exclude, None)?,
+                    account_exclude: Filter::decode_pubkeys(
+                        &filter.account_exclude,
+                        &HashSet::new(),
+                    )?,
                 },
             );
         }
@@ -373,11 +444,9 @@ struct FilterBlocks {
 impl FilterBlocks {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocks>,
-        limit: Option<&ConfigGrpcFiltersBlocks>,
+        limit: &ConfigGrpcFiltersBlocks,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
@@ -401,11 +470,9 @@ struct FilterBlocksMeta {
 impl FilterBlocksMeta {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocksMeta>,
-        limit: Option<&ConfigGrpcFiltersBlocksMeta>,
+        limit: &ConfigGrpcFiltersBlocksMeta,
     ) -> anyhow::Result<Self> {
-        if let Some(limit) = limit {
-            ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
-        }
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs

@@ -16,3 +16,6 @@ pub mod prelude {
     pub use super::geyser::*;
     pub use super::solana::storage::confirmed_block::*;
 }
+
+pub use prost;
+pub use tonic;
