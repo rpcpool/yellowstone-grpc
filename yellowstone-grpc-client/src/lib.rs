@@ -21,8 +21,6 @@ use {
     },
 };
 
-pub const XTOKEN_LENGTH: usize = 28;
-
 #[derive(Debug, thiserror::Error)]
 pub enum GeyserGrpcClientError {
     #[error("Invalid URI: {0}")]
@@ -69,7 +67,7 @@ impl GeyserGrpcClient<()> {
             None => None,
         };
         match x_token {
-            Some(token) if token.len() != XTOKEN_LENGTH => {
+            Some(token) if token.len() > 0 => {
                 return Err(GeyserGrpcClientError::InvalidXTokenLength(token.len()));
             }
             _ => {}
