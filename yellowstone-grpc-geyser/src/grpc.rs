@@ -458,8 +458,7 @@ impl Geyser for GrpcService {
                         } {
                             let _ = stream_tx
                                 .send(Err(Status::invalid_argument(format!(
-                                    "failed to create filter: {}",
-                                    error
+                                    "failed to create filter: {error}"
                                 ))))
                                 .await;
                         }
