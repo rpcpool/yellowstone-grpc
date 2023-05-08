@@ -9,6 +9,7 @@ package geyser;
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
+  rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
 }
 
 message SubscribeRequest {
@@ -133,10 +134,23 @@ message SubscribeUpdateBlockMeta {
 
 message SubscribeUpdatePing {}
 
+// non-streaming methods
+
+// for testing purposes
+// Ping is used to check if the server is up and to measure the response time.
 message PingRequest {
   int32 count = 1;
 }
 
 message PongResponse {
   int32 count = 1;
+}
+
+message GetLatestBlockhashRequest {}
+
+message GetLatestBlockhashResponse {
+  // The latest blockhash
+  uint64 slot = 1;
+  string blockhash = 2;
+  uint64 lastValidBlockHeight = 3;
 }

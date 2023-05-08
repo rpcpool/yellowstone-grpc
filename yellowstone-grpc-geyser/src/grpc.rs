@@ -7,11 +7,12 @@ use {
             self,
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
-            PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
+            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo,
         },
+        proto::{GetLatestBlockhashRequest, GetLatestBlockhashResponse, PingRequest, PongResponse},
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -25,6 +26,7 @@ use {
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
+        sync::{Arc, RwLock},
         time::Duration,
     },
     tokio::{
@@ -282,11 +284,13 @@ pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
     new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
+    latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
 }
 
 impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
+        latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
     ) -> Result<
         (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -304,6 +308,7 @@ impl GrpcService {
             config,
             subscribe_id: AtomicUsize::new(0),
             new_clients_tx,
+            latest_block_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
@@ -479,5 +484,24 @@ impl Geyser for GrpcService {
 
         let response = PongResponse { count: count + 1 };
         Ok(Response::new(response))
+    }
+
+    async fn get_latest_blockhash(
+        &self,
+        _request: Request<GetLatestBlockhashRequest>,
+    ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
+        if let Ok(message_block_meta) = self.latest_block_meta.read() {
+            let v = message_block_meta.as_ref();
+            if let Some(v) = v {
+                let response = GetLatestBlockhashResponse {
+                    slot: v.slot,
+                    blockhash: v.blockhash.clone(),
+                    last_valid_block_height: v.block_height.unwrap(),
+                };
+                return Ok(Response::new(response));
+            }
+        }
+
+        Err(Status::internal("latest_block_meta is None"))
     }
 }

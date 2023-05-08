@@ -11,7 +11,11 @@ use {
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
-    std::{collections::BTreeMap, time::Duration},
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, RwLock},
+        time::Duration,
+    },
     tokio::{
         runtime::Runtime,
         sync::{mpsc, oneshot},
@@ -27,6 +31,7 @@ pub struct PluginInner {
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
     transactions: BTreeMap<u64, (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>)>,
+    latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
 }
 
 impl PluginInner {
@@ -72,13 +77,20 @@ impl GeyserPlugin for Plugin {
         let config = Config::load_from_file(config_file)?;
 
         // Setup logger
-        solana_logger::setup_with_default(&config.log.level);
+        // solana_logger::setup_with_default(&config.log.level);
+        solana_logger::setup_with_default("trace");
+        // std::env::set_var("RUST_LOG", "info");
+        info!("GeyserPlugin loaded");
 
         // Create inner
         let runtime = Runtime::new().map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+
+        let latest_block_meta = Arc::new(RwLock::new(None));
+        let latest_block_meta_clone = latest_block_meta.clone();
         let (grpc_channel, grpc_shutdown_tx, prometheus) = runtime.block_on(async move {
-            let (grpc_channel, grpc_shutdown_tx) = GrpcService::create(config.grpc)
-                .map_err(|error| GeyserPluginError::Custom(error))?;
+            let (grpc_channel, grpc_shutdown_tx) =
+                GrpcService::create(config.grpc, latest_block_meta_clone)
+                    .map_err(|error| GeyserPluginError::Custom(error))?;
             let prometheus = PrometheusService::new(config.prometheus)
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
             Ok::<_, GeyserPluginError>((grpc_channel, grpc_shutdown_tx, prometheus))
@@ -92,6 +104,7 @@ impl GeyserPlugin for Plugin {
             grpc_shutdown_tx,
             prometheus,
             transactions: BTreeMap::new(),
+            latest_block_meta,
         });
 
         Ok(())
@@ -220,6 +233,10 @@ impl GeyserPlugin for Plugin {
             inner.transactions.entry(block_meta.slot).or_default().0 = Some(block_meta.clone());
             inner.try_send_full_block(block_meta.slot);
 
+            // Save newest block meta
+            if let Ok(mut latest_block_meta_write_guard) = inner.latest_block_meta.write() {
+                *latest_block_meta_write_guard = Some(block_meta.clone());
+            }
             let message = Message::BlockMeta(block_meta);
             let _ = inner.grpc_channel.send(message);
 
