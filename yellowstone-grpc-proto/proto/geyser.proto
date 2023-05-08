@@ -8,6 +8,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc Ping(PingRequest) returns (PongResponse) {}
 }
 
 message SubscribeRequest {
@@ -131,3 +132,11 @@ message SubscribeUpdateBlockMeta {
 }
 
 message SubscribeUpdatePing {}
+
+message PingRequest {
+  int32 count = 1;
+}
+
+message PongResponse {
+  int32 count = 1;
+}

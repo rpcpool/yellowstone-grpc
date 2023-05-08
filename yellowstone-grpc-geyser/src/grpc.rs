@@ -7,10 +7,10 @@ use {
             self,
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
-            SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
-            SubscribeUpdateTransactionInfo,
+            PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateSlotStatus,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
     },
     log::*,
@@ -471,5 +471,14 @@ impl Geyser for GrpcService {
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
+    }
+
+    async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
+        info!("Got a request from {:?}", request.remote_addr());
+
+        let count = request.get_ref().count;
+
+        let response = PongResponse { count: count + 1 };
+        Ok(Response::new(response))
     }
 }
