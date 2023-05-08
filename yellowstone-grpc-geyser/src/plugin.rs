@@ -11,14 +11,10 @@ use {
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
-    std::{
-        collections::BTreeMap,
-        sync::{Arc, RwLock},
-        time::Duration,
-    },
+    std::{collections::BTreeMap, sync::Arc, time::Duration},
     tokio::{
         runtime::Runtime,
-        sync::{mpsc, oneshot},
+        sync::{mpsc, oneshot, RwLock},
     },
 };
 
@@ -77,10 +73,7 @@ impl GeyserPlugin for Plugin {
         let config = Config::load_from_file(config_file)?;
 
         // Setup logger
-        // solana_logger::setup_with_default(&config.log.level);
-        solana_logger::setup_with_default("trace");
-        // std::env::set_var("RUST_LOG", "info");
-        info!("GeyserPlugin loaded");
+        solana_logger::setup_with_default(&config.log.level);
 
         // Create inner
         let runtime = Runtime::new().map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
@@ -234,7 +227,7 @@ impl GeyserPlugin for Plugin {
             inner.try_send_full_block(block_meta.slot);
 
             // Save newest block meta
-            if let Ok(mut latest_block_meta_write_guard) = inner.latest_block_meta.write() {
+            if let Ok(mut latest_block_meta_write_guard) = inner.latest_block_meta.try_write() {
                 *latest_block_meta_write_guard = Some(block_meta.clone());
             }
             let message = Message::BlockMeta(block_meta);

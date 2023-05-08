@@ -26,11 +26,11 @@ use {
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
-        sync::{Arc, RwLock},
+        sync::Arc,
         time::Duration,
     },
     tokio::{
-        sync::{mpsc, oneshot},
+        sync::{mpsc, oneshot, RwLock},
         time::sleep,
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -490,9 +490,8 @@ impl Geyser for GrpcService {
         &self,
         _request: Request<GetLatestBlockhashRequest>,
     ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
-        if let Ok(message_block_meta) = self.latest_block_meta.read() {
-            let v = message_block_meta.as_ref();
-            if let Some(v) = v {
+        if let Ok(opt_v) = self.latest_block_meta.try_read() {
+            if let Some(v) = opt_v.as_ref() {
                 let response = GetLatestBlockhashResponse {
                     slot: v.slot,
                     blockhash: v.blockhash.clone(),
