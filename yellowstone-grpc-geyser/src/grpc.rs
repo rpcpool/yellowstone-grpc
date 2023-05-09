@@ -12,7 +12,10 @@ use {
             SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
             SubscribeUpdateTransactionInfo,
         },
-        proto::{GetLatestBlockhashRequest, GetLatestBlockhashResponse, PingRequest, PongResponse},
+        proto::{
+            GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
+            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, PingRequest, PongResponse,
+        },
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -497,6 +500,36 @@ impl Geyser for GrpcService {
                     blockhash: v.blockhash.clone(),
                     last_valid_block_height: v.block_height.unwrap(),
                 };
+                return Ok(Response::new(response));
+            }
+        }
+
+        Err(Status::internal("latest_block_meta is None"))
+    }
+
+    async fn get_block_height(
+        &self,
+        _request: Request<GetBlockHeightRequest>,
+    ) -> Result<Response<GetBlockHeightResponse>, Status> {
+        if let Ok(opt_v) = self.latest_block_meta.try_read() {
+            if let Some(v) = opt_v.as_ref() {
+                let response = GetBlockHeightResponse {
+                    block_height: v.block_height.unwrap(),
+                };
+                return Ok(Response::new(response));
+            }
+        }
+
+        Err(Status::internal("latest_block_meta is None"))
+    }
+
+    async fn get_slot(
+        &self,
+        _request: Request<GetSlotRequest>,
+    ) -> Result<Response<GetSlotResponse>, Status> {
+        if let Ok(opt_v) = self.latest_block_meta.try_read() {
+            if let Some(v) = opt_v.as_ref() {
+                let response = GetSlotResponse { slot: v.slot };
                 return Ok(Response::new(response));
             }
         }

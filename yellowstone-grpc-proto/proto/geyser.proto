@@ -10,6 +10,8 @@ service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
+  rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
+  rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
 }
 
 message SubscribeRequest {
@@ -147,10 +149,20 @@ message PongResponse {
 }
 
 message GetLatestBlockhashRequest {}
-
 message GetLatestBlockhashResponse {
   // The latest blockhash
   uint64 slot = 1;
   string blockhash = 2;
   uint64 lastValidBlockHeight = 3;
 }
+
+message GetBlockHeightRequest {}
+message GetBlockHeightResponse {
+  uint64 BlockHeight = 1;
+}
+
+message GetSlotRequest {}
+message GetSlotResponse {
+  uint64 slot = 1;
+}
+
