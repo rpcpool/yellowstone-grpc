@@ -173,6 +173,8 @@ pub struct ConfigGrpcFiltersTransactions {
     pub account_include_reject: HashSet<Pubkey>,
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_exclude_max: usize,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub account_required_max: usize,
 }
 
 impl Default for ConfigGrpcFiltersTransactions {
@@ -183,6 +185,7 @@ impl Default for ConfigGrpcFiltersTransactions {
             account_include_max: usize::MAX,
             account_include_reject: HashSet::new(),
             account_exclude_max: usize::MAX,
+            account_required_max: usize::MAX,
         }
     }
 }
