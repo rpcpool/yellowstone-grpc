@@ -12,6 +12,10 @@ use {
             SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
             SubscribeUpdateTransactionInfo,
         },
+        proto::{
+            GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
+            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, PingRequest, PongResponse,
+        },
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -25,10 +29,11 @@ use {
     std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
+        sync::Arc,
         time::Duration,
     },
     tokio::{
-        sync::{mpsc, oneshot},
+        sync::{mpsc, oneshot, RwLock},
         time::sleep,
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -282,11 +287,13 @@ pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
     new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
+    latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
 }
 
 impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
+        latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
     ) -> Result<
         (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -304,6 +311,7 @@ impl GrpcService {
             config,
             subscribe_id: AtomicUsize::new(0),
             new_clients_tx,
+            latest_block_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
@@ -458,8 +466,7 @@ impl Geyser for GrpcService {
                         } {
                             let _ = stream_tx
                                 .send(Err(Status::invalid_argument(format!(
-                                    "failed to create filter: {}",
-                                    error
+                                    "failed to create filter: {error}"
                                 ))))
                                 .await;
                         }
@@ -471,5 +478,52 @@ impl Geyser for GrpcService {
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
+    }
+
+    async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
+        info!("Got a request from {:?}", request.remote_addr());
+
+        let count = request.get_ref().count;
+
+        let response = PongResponse { count: count + 1 };
+        Ok(Response::new(response))
+    }
+
+    async fn get_latest_blockhash(
+        &self,
+        _request: Request<GetLatestBlockhashRequest>,
+    ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
+        match self.latest_block_meta.read().await.as_ref() {
+            Some(block_meta) => Ok(Response::new(GetLatestBlockhashResponse {
+                slot: block_meta.slot,
+                blockhash: block_meta.blockhash.clone(),
+                last_valid_block_height: block_meta.block_height.unwrap(),
+            })),
+            None => Err(Status::internal("block_meta is not available yet")),
+        }
+    }
+
+    async fn get_block_height(
+        &self,
+        _request: Request<GetBlockHeightRequest>,
+    ) -> Result<Response<GetBlockHeightResponse>, Status> {
+        match self.latest_block_meta.read().await.as_ref() {
+            Some(block_meta) => Ok(Response::new(GetBlockHeightResponse {
+                block_height: block_meta.block_height.unwrap(),
+            })),
+            None => Err(Status::internal("block_meta is not available yet")),
+        }
+    }
+
+    async fn get_slot(
+        &self,
+        _request: Request<GetSlotRequest>,
+    ) -> Result<Response<GetSlotResponse>, Status> {
+        match self.latest_block_meta.read().await.as_ref() {
+            Some(block_meta) => Ok(Response::new(GetSlotResponse {
+                slot: block_meta.slot,
+            })),
+            None => Err(Status::internal("block_meta is not available yet")),
+        }
     }
 }

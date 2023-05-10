@@ -247,9 +247,9 @@ where
     Vec::<&str>::deserialize(deserializer)?
         .into_iter()
         .map(|value| {
-            value.parse().map_err(|error| {
-                de::Error::custom(format!("Invalid pubkey: {} ({:?})", value, error))
-            })
+            value
+                .parse()
+                .map_err(|error| de::Error::custom(format!("Invalid pubkey: {value} ({error:?})")))
         })
         .collect::<Result<_, _>>()
 }
