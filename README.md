@@ -1,26 +1,26 @@
-# Solana GRPC interface
+# Yellowstone Dragon's Mouth - a Geyser based gRPC interface for Solana
 
-This repo contains a fully functional gRPC interface for Solana. It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
+This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo we have the plugin as well as sample clients for multiple languages.
+
+It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
 
 For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
-
-It is built around a Geyser plugin for the Solana interface.
 
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config solana-geyser-grpc/config.json
+$ solana-validator --geyser-plugin-config yellowstone-grpc-proto/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config solana-geyser-grpc/config.json
+cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-proto/config.json
 ```
 
 ### Filters
 
-See [proto/geyser.proto](proto/geyser.proto).
+See [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto).
 
 #### Slots
 
@@ -32,8 +32,9 @@ Accounts can be filtered by:
 
    - `account` — acount Pubkey, match to any Pubkey from the array
    - `owner` — account owner Pubkey, match to any Pubkey from the array
+   - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
-If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
+If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR` (except values in `filters` which works as logical `AND`).
 
 #### Transactions
 
@@ -83,6 +84,13 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    }
 }
 ```
+
+### Examples
+
+   - [Go](examples/golang)
+   - [Node.js](examples/nodejs)
+   - [Rust](examples/rust)
+   - [TypeScript](examples/typescript)
 
 ### License
 

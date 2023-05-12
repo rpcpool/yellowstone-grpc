@@ -1228,6 +1228,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "hmac"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,10 +1438,11 @@ dependencies = [
 
 [[package]]
 name = "io-lifetimes"
-version = "1.0.6"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfa919a82ea574332e2de6e74b4c36e74d41982b335080fa59d4ef31be20fdf3"
+checksum = "0dd6da19f25979c7270e70fa95ab371ec3b701cd0eefc47667a09785b3c59155"
 dependencies = [
+ "hermit-abi 0.3.1",
  "libc",
  "windows-sys 0.45.0",
 ]
@@ -1448,9 +1455,9 @@ checksum = "30e22bd8629359895450b59ea7a776c850561b96a3b1d31321c1949d9e6c9146"
 
 [[package]]
 name = "is-terminal"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b6b32576413a8e69b90e952e4a026476040d81017b80445deda5f2d3921857"
+checksum = "8687c819457e979cc940d09cb16e42a1bf70aa6b60a549de6d3a62a0ee90c69e"
 dependencies = [
  "hermit-abi 0.3.1",
  "io-lifetimes",
@@ -2309,9 +2316,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.36.9"
+version = "0.36.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd5c6ff11fecd55b40746d1995a02f2eb375bf8c00d192d521ee09f42bef37bc"
+checksum = "2fe885c3a125aa45213b68cc1472a49880cb5923dc23f522ad2791b882228778"
 dependencies = [
  "bitflags",
  "errno",
@@ -2713,52 +2720,6 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn",
-]
-
-[[package]]
-name = "solana-geyser-grpc"
-version = "0.5.3+solana.1.14.16"
-dependencies = [
- "anyhow",
- "bincode",
- "cargo-lock",
- "clap",
- "futures",
- "git-version",
- "hyper",
- "lazy_static",
- "log",
- "prometheus",
- "prost",
- "protobuf-src",
- "serde",
- "serde_json",
- "solana-geyser-plugin-interface",
- "solana-logger",
- "solana-sdk",
- "solana-transaction-status",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "tonic-health",
- "vergen",
-]
-
-[[package]]
-name = "solana-geyser-grpc-client"
-version = "0.5.3+solana.1.14.15"
-dependencies = [
- "anyhow",
- "backoff",
- "clap",
- "env_logger 0.10.0",
- "futures",
- "log",
- "solana-geyser-grpc",
- "thiserror",
- "tokio",
- "tonic",
 ]
 
 [[package]]
@@ -3944,6 +3905,78 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "yellowstone-grpc-client"
+version = "1.1.1+solana.1.14.16"
+dependencies = [
+ "bytes",
+ "futures",
+ "http",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-client-simple"
+version = "1.1.0+solana.1.14.16"
+dependencies = [
+ "anyhow",
+ "backoff",
+ "bs58",
+ "clap",
+ "env_logger 0.10.0",
+ "futures",
+ "hex",
+ "log",
+ "solana-sdk",
+ "tokio",
+ "yellowstone-grpc-client",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-geyser"
+version = "0.6.1+solana.1.14.16"
+dependencies = [
+ "anyhow",
+ "base64 0.21.0",
+ "bincode",
+ "bs58",
+ "cargo-lock",
+ "clap",
+ "futures",
+ "git-version",
+ "hyper",
+ "lazy_static",
+ "log",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "solana-geyser-plugin-interface",
+ "solana-logger",
+ "solana-sdk",
+ "solana-transaction-status",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "vergen",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-proto"
+version = "1.1.0+solana.1.14.16"
+dependencies = [
+ "anyhow",
+ "prost",
+ "protobuf-src",
+ "tonic",
+ "tonic-build",
 ]
 
 [[package]]
