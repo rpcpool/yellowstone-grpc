@@ -14,9 +14,9 @@ pub mod convert {
             transaction::SanitizedTransaction,
             transaction_context::TransactionReturnData,
         },
+        // solana_transaction_status::InnerInstruction,
         solana_transaction_status::{
-            InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
-            TransactionTokenBalance,
+            InnerInstructions, Reward, RewardType, TransactionStatusMeta, TransactionTokenBalance,
         },
     };
 
@@ -178,12 +178,13 @@ pub mod convert {
         }
     }
 
-    pub fn create_inner_instruction(instruction: &InnerInstruction) -> super::InnerInstruction {
+    pub fn create_inner_instruction(instruction: &CompiledInstruction) -> super::InnerInstruction {
         super::InnerInstruction {
-            program_id_index: instruction.instruction.program_id_index as u32,
-            accounts: instruction.instruction.accounts.clone(),
-            data: instruction.instruction.data.clone(),
-            stack_height: instruction.stack_height,
+            program_id_index: instruction.program_id_index as u32,
+            accounts: instruction.accounts.clone(),
+            data: instruction.data.clone(),
+            // stack_height: instruction.stack_height,
+            stack_height: None,
         }
     }
 
