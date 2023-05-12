@@ -1,0 +1,19 @@
+[package]
+name = "yellowstone-grpc-proto"
+version = "1.1.0+solana.1.15.2"
+authors = ["Triton One"]
+edition = "2021"
+description = "Yellowstone gRPC Geyser Protobuf Definitions"
+homepage = "https://triton.one"
+repository = "https://github.com/rpcpool/yellowstone-grpc"
+license = "Apache-2.0"
+keywords = ["solana"]
+
+[dependencies]
+prost = "0.11.0"
+tonic = "0.8.0"
+
+[build-dependencies]
+anyhow = "1.0.62"
+protobuf-src = "1.1.0"
+tonic-build = "0.8.2"
