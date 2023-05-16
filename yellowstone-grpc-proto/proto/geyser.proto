@@ -52,6 +52,7 @@ message SubscribeRequestFilterTransactions {
   optional string signature = 5;
   repeated string account_include = 3;
   repeated string account_exclude = 4;
+  repeated string account_required = 6;
 }
 
 message SubscribeRequestFilterBlocks {}

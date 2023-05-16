@@ -74,6 +74,10 @@ struct Args {
     #[clap(long)]
     transactions_account_exclude: Vec<String>,
 
+    /// Filter required account in transactions
+    #[clap(long)]
+    transactions_account_required: Vec<String>,
+
     /// Subscribe on block updates
     #[clap(long)]
     blocks: bool,
@@ -192,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
                 signature: args.transactions_signature,
                 account_include: args.transactions_account_include,
                 account_exclude: args.transactions_account_exclude,
+                account_required: args.transactions_account_required,
             },
         );
     }
