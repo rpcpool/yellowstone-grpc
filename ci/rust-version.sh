@@ -28,7 +28,7 @@ else
   # pacify shellcheck: cannot follow dynamic path
   # shellcheck disable=SC1090,SC1091
   source "$base/../ci/read-cargo-variable.sh"
-  stable_version=$(readCargoVariable channel "$base/../rust-toolchain.toml")
+  stable_version=$(readCargoVariable channel "$base/../yellowstone-grpc-geyser/rust-toolchain.toml")
 fi
 
 if [[ -n $RUST_NIGHTLY_VERSION ]]; then
