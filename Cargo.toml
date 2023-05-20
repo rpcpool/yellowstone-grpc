@@ -1,16 +1,16 @@
 [workspace]
 members = [
-    "examples/rust", # 1.1.0+solana.1.14.16
-    "yellowstone-grpc-client", # 1.1.1+solana.1.14.16
-    "yellowstone-grpc-geyser", # 0.6.1+solana.1.14.16
-    "yellowstone-grpc-proto", # 1.1.0+solana.1.14.16
+    "examples/rust", # 1.1.0+solana.1.14.17
+    "yellowstone-grpc-client", # 1.1.1+solana.1.14.17
+    "yellowstone-grpc-geyser", # 0.6.1+solana.1.14.17
+    "yellowstone-grpc-proto", # 1.1.0+solana.1.14.17
 ]
 
 [patch.crates-io]
-solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2" }
-solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2" }
-solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.16-geyser-block-v2" }
+solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.17-geyser-block-v2" }
+solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.17-geyser-block-v2" }
+solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.17-geyser-block-v2" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.14.17-geyser-block-v2" }
 
 [profile.release]
 debug = true
