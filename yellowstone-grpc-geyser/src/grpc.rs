@@ -201,6 +201,7 @@ impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
