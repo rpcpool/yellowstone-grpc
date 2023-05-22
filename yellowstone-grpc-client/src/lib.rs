@@ -1,3 +1,5 @@
+use yellowstone_grpc_proto::geyser::{GetSlotResponse, PongResponse};
+use yellowstone_grpc_proto::prelude::{GetBlockHeightResponse, GetLatestBlockhashResponse};
 use {
     bytes::Bytes,
     futures::{
@@ -15,7 +17,8 @@ use {
         Request, Response, Status,
     },
     yellowstone_grpc_proto::prelude::{
-        geyser_client::GeyserClient, SubscribeRequest, SubscribeRequestFilterAccounts,
+        geyser_client::GeyserClient, GetBlockHeightRequest, GetLatestBlockhashRequest,
+        GetSlotRequest, PingRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
@@ -116,6 +119,33 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             })
             .await?;
         Ok(response)
+    }
+
+    pub async fn ping(&mut self, count: i32) -> GeyserGrpcClientResult<PongResponse> {
+        let message = PingRequest { count };
+        let request = tonic::Request::new(message);
+        let response = self.client.ping(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn get_latest_blockhash(
+        &mut self,
+    ) -> GeyserGrpcClientResult<GetLatestBlockhashResponse> {
+        let request = tonic::Request::new(GetLatestBlockhashRequest {});
+        let response = self.client.get_latest_blockhash(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn get_block_height(&mut self) -> GeyserGrpcClientResult<GetBlockHeightResponse> {
+        let request = tonic::Request::new(GetBlockHeightRequest {});
+        let response = self.client.get_block_height(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn get_slot(&mut self) -> GeyserGrpcClientResult<GetSlotResponse> {
+        let request = tonic::Request::new(GetSlotRequest {});
+        let response = self.client.get_slot(request).await?;
+        Ok(response.into_inner())
     }
 }
 

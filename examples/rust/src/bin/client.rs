@@ -9,10 +9,17 @@ use {
     yellowstone_grpc_proto::prelude::{
         subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
         subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
+        subscribe_update::UpdateOneof,
+        SubscribeRequest,
+        SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter,
+        SubscribeRequestFilterAccountsFilterMemcmp,
+        SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions,
+        SubscribeUpdateAccount,
+        // PingRequest,
     },
 };
 
@@ -288,3 +295,17 @@ async fn main() -> anyhow::Result<()> {
     .await
     .map_err(Into::into)
 }
+
+// unary method
+// #[tokio::main]
+// async fn main() -> anyhow::Result<()> {
+//     std::env::set_var("RUST_LOG", "info");
+//     env_logger::init();
+//
+//     let args = Args::parse();
+//     let (endpoint, x_token) = (args.endpoint.clone(), args.x_token.clone());
+//     let mut client = GeyserGrpcClient::connect(endpoint, x_token, None)?;
+//     let response = client.ping(200).await;
+//     dbg!(&response);
+//     Ok(())
+// }
