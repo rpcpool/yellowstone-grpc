@@ -1,5 +1,3 @@
-use yellowstone_grpc_proto::geyser::{GetSlotResponse, PongResponse};
-use yellowstone_grpc_proto::prelude::{GetBlockHeightResponse, GetLatestBlockhashResponse};
 use {
     bytes::Bytes,
     futures::{
@@ -16,11 +14,15 @@ use {
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
     },
-    yellowstone_grpc_proto::prelude::{
-        geyser_client::GeyserClient, GetBlockHeightRequest, GetLatestBlockhashRequest,
-        GetSlotRequest, PingRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+    yellowstone_grpc_proto::{
+        geyser::{GetSlotResponse, PongResponse},
+        prelude::{
+            geyser_client::GeyserClient, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, PingRequest,
+            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdate,
+        },
     },
 };
 
