@@ -166,4 +166,3 @@ message GetSlotRequest {}
 message GetSlotResponse {
   uint64 slot = 1;
 }
-
