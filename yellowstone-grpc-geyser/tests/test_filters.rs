@@ -53,7 +53,7 @@ mod tests {
         let sig = sanitized_transaction.signature();
         MessageTransaction {
             transaction: MessageTransactionInfo {
-                signature: sig.clone(),
+                signature: *sig,
                 is_vote: true,
                 transaction: sanitized_transaction,
                 meta,
