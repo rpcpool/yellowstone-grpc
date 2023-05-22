@@ -12,7 +12,7 @@ name = "client"
 anyhow = "1.0.62"
 backoff = { version = "0.4.0", features = ["tokio"] }
 bs58 = "0.4.0"
-clap = { version = "3.2.22", features = ["cargo", "derive"] }
+clap = { version = "4.3.0", features = ["cargo", "derive"] }
 env_logger = "0.10.0"
 futures = "0.3.24"
 hex = "0.4.3"
