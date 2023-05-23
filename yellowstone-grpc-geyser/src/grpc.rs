@@ -275,6 +275,9 @@ enum ClientMessage {
         id: usize,
         filter: Filter,
     },
+    Drop {
+        id: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -389,10 +392,15 @@ impl GrpcService {
                             clients.insert(id, ClientConnection { filter, stream_tx });
                             CONNECTIONS_TOTAL.inc();
                         }
-                        ClientMessage::Update {id,filter} => {
+                        ClientMessage::Update { id, filter } => {
                             if let Some(client) = clients.get_mut(&id) {
                                 info!("{}, update client", id);
                                 client.filter = filter;
+                            }
+                        }
+                        ClientMessage::Drop { id } => {
+                            if clients.remove(&id).is_some() {
+                                CONNECTIONS_TOTAL.dec();
                             }
                         }
                     }
@@ -436,6 +444,7 @@ impl Geyser for GrpcService {
         }
 
         let ping_stream_tx = stream_tx.clone();
+        let new_clients_tx = self.new_clients_tx.clone();
         tokio::spawn(async move {
             loop {
                 sleep(Duration::from_secs(10)).await;
@@ -448,6 +457,7 @@ impl Geyser for GrpcService {
                     Err(mpsc::error::TrySendError::Closed(_)) => break,
                 }
             }
+            let _ = new_clients_tx.send(ClientMessage::Drop { id });
         });
 
         let config_filters_limit = self.config.filters.clone();
@@ -476,6 +486,7 @@ impl Geyser for GrpcService {
                     Err(_error) => break,
                 }
             }
+            let _ = new_clients_tx.send(ClientMessage::Drop { id });
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
