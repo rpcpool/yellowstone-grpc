@@ -26,6 +26,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterTransactions> transactions = 3;
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
+  optional CommitmentLevel commitment = 6;
 }
 
 message SubscribeRequestFilterAccounts {

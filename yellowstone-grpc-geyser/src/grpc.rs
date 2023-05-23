@@ -25,7 +25,7 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
-        collections::HashMap,
+        collections::{BTreeMap, HashMap},
         sync::atomic::{AtomicUsize, Ordering},
         sync::Arc,
         time::Duration,
@@ -81,7 +81,7 @@ impl<'a> From<(&'a ReplicaAccountInfoV2<'a>, u64, bool)> for MessageAccount {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MessageSlot {
     pub slot: u64,
     pub parent: Option<u64>,
@@ -262,6 +262,18 @@ impl From<&Message> for UpdateOneof {
     }
 }
 
+impl Message {
+    pub fn get_slot(&self) -> u64 {
+        match self {
+            Self::Slot(msg) => msg.slot,
+            Self::Account(msg) => msg.slot,
+            Self::Transaction(msg) => msg.slot,
+            Self::Block(msg) => msg.slot,
+            Self::BlockMeta(msg) => msg.slot,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ClientMessage {
     New {
@@ -346,40 +358,63 @@ impl GrpcService {
         mut update_channel_rx: mpsc::UnboundedReceiver<Message>,
         mut new_clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
     ) {
+        // Number of slots hold in memory after finalized
+        const KEEP_SLOTS: u64 = 3;
+
         let mut clients: HashMap<usize, ClientConnection> = HashMap::new();
+        let mut messages: BTreeMap<u64, Vec<Message>> = BTreeMap::new();
         loop {
             tokio::select! {
                 Some(message) = update_channel_rx.recv() => {
-                    let mut ids_full = vec![];
-                    let mut ids_closed = vec![];
+                    let slot = if let Message::Slot(slot) = message {
+                        slot
+                    } else {
+                        messages.entry(message.get_slot()).or_default().push(message);
+                        continue;
+                    };
 
-                    for (id, client) in clients.iter() {
-                        let filters = client.filter.get_filters(&message);
-                        if !filters.is_empty() {
-                            match client.stream_tx.try_send(Ok(SubscribeUpdate {
-                                filters,
-                                update_oneof: Some((&message).into()),
-                            })) {
-                                Ok(()) => {},
-                                Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
-                                Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
+                    let slot_messages = messages.get(&slot.slot).map(|x| x.as_slice()).unwrap_or_default();
+                    for message in slot_messages.iter().chain(std::iter::once(&message)) {
+                        let mut ids_full = vec![];
+                        let mut ids_closed = vec![];
+
+                        for (id, client) in clients.iter() {
+                            if client.filter.commitment == slot.status || matches!(message, Message::Slot(_)) {
+                                if let Some(msg) = client.filter.get_update(message) {
+                                    match client.stream_tx.try_send(Ok(msg)) {
+                                        Ok(()) => {}
+                                        Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
+                                        Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
+                                    }
+                                }
+                            }
+                        }
+
+                        for id in ids_full {
+                            if let Some(client) = clients.remove(&id) {
+                                tokio::spawn(async move {
+                                    CONNECTIONS_TOTAL.dec();
+                                    error!("{}, lagged, close stream", id);
+                                    let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
+                                });
+                            }
+                        }
+                        for id in ids_closed {
+                            if let Some(_client) = clients.remove(&id) {
+                                CONNECTIONS_TOTAL.dec();
+                                error!("{}, client closed stream", id);
                             }
                         }
                     }
 
-                    for id in ids_full {
-                        if let Some(client) = clients.remove(&id) {
-                            tokio::spawn(async move {
-                                CONNECTIONS_TOTAL.dec();
-                                error!("{}, lagged, close stream", id);
-                                let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
-                            });
-                        }
-                    }
-                    for id in ids_closed {
-                        if let Some(_client) = clients.remove(&id) {
-                            CONNECTIONS_TOTAL.dec();
-                            error!("{}, client closed stream", id);
+                    if slot.status == CommitmentLevel::Finalized {
+                        let keep_slot = slot.slot - KEEP_SLOTS;
+                        while let Some(slot) = messages.keys().next().cloned() {
+                            if slot < keep_slot {
+                                messages.remove(&slot);
+                            } else {
+                                break;
+                            }
                         }
                     }
                 },
@@ -427,6 +462,7 @@ impl Geyser for GrpcService {
                 transactions: HashMap::new(),
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
+                commitment: None,
             },
             &self.config.filters,
         )

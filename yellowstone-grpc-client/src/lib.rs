@@ -15,11 +15,12 @@ use {
         Request, Response, Status,
     },
     yellowstone_grpc_proto::prelude::{
-        geyser_client::GeyserClient, GetBlockHeightRequest, GetBlockHeightResponse,
-        GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-        PingRequest, PongResponse, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
+        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+        GetSlotRequest, GetSlotResponse, PingRequest, PongResponse, SubscribeRequest,
+        SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -106,6 +107,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         transactions: HashMap<String, SubscribeRequestFilterTransactions>,
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
+        commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
         subscribe_tx
@@ -115,6 +117,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 transactions,
                 blocks,
                 blocks_meta,
+                commitment: commitment.map(|value| value as i32),
             })
             .await?;
         Ok(response)

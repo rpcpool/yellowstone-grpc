@@ -1,6 +1,6 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
-    clap::{Parser, Subcommand},
+    clap::{Parser, Subcommand, ValueEnum},
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
     solana_sdk::pubkey::Pubkey,
@@ -10,11 +10,11 @@ use {
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            SubscribeUpdateAccount,
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
         },
         tonic::service::Interceptor,
     },
@@ -114,9 +114,32 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
+    /// Commitment level: processed, confirmed or finalized
+    #[clap(long)]
+    commitment: Option<ActionSubscribeCommitment>,
+
     // Resubscribe (only to slots) after
     #[clap(long)]
     resub: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum ActionSubscribeCommitment {
+    Processed,
+    Confirmed,
+    #[default]
+    Finalized,
+}
+
+impl From<ActionSubscribeCommitment> for i32 {
+    fn from(commitment: ActionSubscribeCommitment) -> Self {
+        let commitment = match commitment {
+            ActionSubscribeCommitment::Processed => CommitmentLevel::Processed,
+            ActionSubscribeCommitment::Confirmed => CommitmentLevel::Confirmed,
+            ActionSubscribeCommitment::Finalized => CommitmentLevel::Finalized,
+        };
+        commitment as i32
+    }
 }
 
 impl Action {
@@ -198,6 +221,7 @@ impl Action {
                         transactions,
                         blocks,
                         blocks_meta,
+                        commitment: Some(args.commitment.unwrap_or_default().into()),
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -353,6 +377,7 @@ async fn geyser_subscribe(
                     transactions: HashMap::default(),
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),
+                    commitment: None,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;
