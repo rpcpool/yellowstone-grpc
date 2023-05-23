@@ -154,12 +154,12 @@ message GetLatestBlockhashResponse {
   // The latest blockhash
   uint64 slot = 1;
   string blockhash = 2;
-  uint64 lastValidBlockHeight = 3;
+  uint64 last_valid_block_height = 3;
 }
 
 message GetBlockHeightRequest {}
 message GetBlockHeightResponse {
-  uint64 BlockHeight = 1;
+  uint64 block_height = 1;
 }
 
 message GetSlotRequest {}
