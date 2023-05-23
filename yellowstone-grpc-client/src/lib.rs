@@ -14,15 +14,12 @@ use {
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
     },
-    yellowstone_grpc_proto::{
-        geyser::{GetSlotResponse, PongResponse},
-        prelude::{
-            geyser_client::GeyserClient, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, PingRequest,
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate,
-        },
+    yellowstone_grpc_proto::prelude::{
+        geyser_client::GeyserClient, GetBlockHeightRequest, GetBlockHeightResponse,
+        GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+        PingRequest, PongResponse, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 

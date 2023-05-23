@@ -14,6 +14,12 @@ service Geyser {
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
 }
 
+enum CommitmentLevel {
+  PROCESSED = 0;
+  CONFIRMED = 1;
+  FINALIZED = 2;
+}
+
 message SubscribeRequest {
   map<string, SubscribeRequestFilterAccounts> accounts = 1;
   map<string, SubscribeRequestFilterSlots> slots = 2;
@@ -91,13 +97,7 @@ message SubscribeUpdateAccountInfo {
 message SubscribeUpdateSlot {
   uint64 slot = 1;
   optional uint64 parent = 2;
-  SubscribeUpdateSlotStatus status = 3;
-}
-
-enum SubscribeUpdateSlotStatus {
-  PROCESSED = 0;
-  CONFIRMED = 1;
-  FINALIZED = 2;
+  CommitmentLevel status = 3;
 }
 
 message SubscribeUpdateTransaction {

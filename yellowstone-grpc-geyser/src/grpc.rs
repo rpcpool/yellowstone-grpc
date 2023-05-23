@@ -7,14 +7,12 @@ use {
             self,
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
-            SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
+            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateTransaction,
             SubscribeUpdateTransactionInfo,
-        },
-        proto::{
-            GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
-            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, PingRequest, PongResponse,
         },
     },
     log::*,
@@ -87,7 +85,7 @@ impl<'a> From<(&'a ReplicaAccountInfoV2<'a>, u64, bool)> for MessageAccount {
 pub struct MessageSlot {
     pub slot: u64,
     pub parent: Option<u64>,
-    pub status: SubscribeUpdateSlotStatus,
+    pub status: CommitmentLevel,
 }
 
 impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
@@ -96,9 +94,9 @@ impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
             slot,
             parent,
             status: match status {
-                SlotStatus::Processed => SubscribeUpdateSlotStatus::Processed,
-                SlotStatus::Confirmed => SubscribeUpdateSlotStatus::Confirmed,
-                SlotStatus::Rooted => SubscribeUpdateSlotStatus::Finalized,
+                SlotStatus::Processed => CommitmentLevel::Processed,
+                SlotStatus::Confirmed => CommitmentLevel::Confirmed,
+                SlotStatus::Rooted => CommitmentLevel::Finalized,
             },
         }
     }
