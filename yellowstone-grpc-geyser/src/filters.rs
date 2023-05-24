@@ -33,7 +33,7 @@ pub struct Filter {
     transactions: FilterTransactions,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
-    pub commitment: CommitmentLevel,
+    commitment: CommitmentLevel,
 }
 
 impl Filter {
@@ -80,15 +80,23 @@ impl Filter {
         }
     }
 
-    pub fn get_update(&self, message: &Message) -> Option<SubscribeUpdate> {
-        let filters = self.get_filters(message);
-        if filters.is_empty() {
-            None
+    pub fn get_update(
+        &self,
+        message: &Message,
+        commitment: CommitmentLevel,
+    ) -> Option<SubscribeUpdate> {
+        if commitment == self.commitment || matches!(message, Message::Slot(_)) {
+            let filters = self.get_filters(message);
+            if filters.is_empty() {
+                None
+            } else {
+                Some(SubscribeUpdate {
+                    filters,
+                    update_oneof: Some(message.into()),
+                })
+            }
         } else {
-            Some(SubscribeUpdate {
-                filters,
-                update_oneof: Some(message.into()),
-            })
+            None
         }
     }
 }

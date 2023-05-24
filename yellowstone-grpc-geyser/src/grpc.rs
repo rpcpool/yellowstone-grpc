@@ -479,13 +479,11 @@ impl GrpcService {
                         let mut ids_closed = vec![];
 
                         for (id, client) in clients.iter() {
-                            if client.filter.commitment == slot.status || matches!(message, Message::Slot(_)) {
-                                if let Some(msg) = client.filter.get_update(message) {
-                                    match client.stream_tx.try_send(Ok(msg)) {
-                                        Ok(()) => {}
-                                        Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
-                                        Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
-                                    }
+                            if let Some(msg) = client.filter.get_update(message, slot.status) {
+                                match client.stream_tx.try_send(Ok(msg)) {
+                                    Ok(()) => {}
+                                    Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
+                                    Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
                                 }
                             }
                         }
