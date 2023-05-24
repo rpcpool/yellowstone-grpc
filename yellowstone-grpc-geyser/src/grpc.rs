@@ -1,5 +1,6 @@
 use {
     crate::{
+        blockhash_queue::BlockhashQueue,
         config::ConfigGrpc,
         filters::Filter,
         prom::CONNECTIONS_TOTAL,
@@ -14,7 +15,8 @@ use {
         },
         proto::{
             GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
-            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, PingRequest, PongResponse,
+            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse,
         },
     },
     log::*,
@@ -22,7 +24,7 @@ use {
         ReplicaAccountInfoV2, ReplicaBlockInfoV2, ReplicaTransactionInfoV2, SlotStatus,
     },
     solana_sdk::{
-        clock::UnixTimestamp, pubkey::Pubkey, signature::Signature,
+        clock::UnixTimestamp, hash::Hash, pubkey::Pubkey, signature::Signature,
         transaction::SanitizedTransaction,
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
@@ -288,12 +290,14 @@ pub struct GrpcService {
     subscribe_id: AtomicUsize,
     new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
     latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
+    blockhash_queue: Arc<RwLock<BlockhashQueue>>,
 }
 
 impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
         latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
+        blockhash_queue: Arc<RwLock<BlockhashQueue>>,
     ) -> Result<
         (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -312,6 +316,7 @@ impl GrpcService {
             subscribe_id: AtomicUsize::new(0),
             new_clients_tx,
             latest_block_meta,
+            blockhash_queue,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
@@ -524,6 +529,37 @@ impl Geyser for GrpcService {
                 slot: block_meta.slot,
             })),
             None => Err(Status::internal("block_meta is not available yet")),
+        }
+    }
+
+    async fn is_blockhash_valid(
+        &self,
+        request: Request<IsBlockhashValidRequest>,
+    ) -> Result<Response<IsBlockhashValidResponse>, Status> {
+        // if someone requests isBlockhashValid when we have less < 300 blockhashes in the queue
+        // then we can just answer “unknown”
+
+        let slot = match self.latest_block_meta.read().await.as_ref() {
+            Some(block_meta) => block_meta.slot,
+            None => return Err(Status::internal("block_meta is not available yet")),
+        };
+
+        match request.get_ref().blockhash.parse::<Hash>() {
+            Ok(v) => {
+                let lock = self.blockhash_queue.read().await;
+                if !lock.is_full() {
+                    Err(Status::internal(
+                        "we have less < 300 blockhashes in the queue",
+                    ))
+                } else {
+                    let is_valid = lock.is_hash_valid(&v);
+                    Ok(Response::new(IsBlockhashValidResponse {
+                        slot,
+                        valid: is_valid,
+                    }))
+                }
+            }
+            Err(_) => Err(Status::internal("blockhash is malformat")),
         }
     }
 }

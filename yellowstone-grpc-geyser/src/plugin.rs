@@ -1,5 +1,6 @@
 use {
     crate::{
+        blockhash_queue::BlockhashQueue,
         config::Config,
         grpc::{
             GrpcService, Message, MessageBlockMeta, MessageTransaction, MessageTransactionInfo,
@@ -11,6 +12,7 @@ use {
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
+    solana_sdk::hash::Hash,
     std::{collections::BTreeMap, sync::Arc, time::Duration},
     tokio::{
         runtime::Runtime,
@@ -78,20 +80,35 @@ impl GeyserPlugin for Plugin {
         // Create inner
         let runtime = Runtime::new().map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (latest_block_meta_tx, mut latest_block_meta_rx) = mpsc::unbounded_channel();
+        let (latest_block_meta_tx, mut latest_block_meta_rx) =
+            mpsc::unbounded_channel::<MessageBlockMeta>();
         let latest_block_meta = Arc::new(RwLock::new(None));
 
         let latest_block_meta2 = latest_block_meta.clone();
+
+        let blockhash_queue = Arc::new(RwLock::new(BlockhashQueue::default()));
+        let blockhash_queue_cloned = blockhash_queue.clone();
+
         runtime.spawn(async move {
             while let Some(block_meta) = latest_block_meta_rx.recv().await {
+                let block_meta_clone: MessageBlockMeta = block_meta.clone();
+
+                // Update recent block meta
                 let mut locked = latest_block_meta2.write().await;
                 *locked = Some(block_meta);
+
+                // Update block hash queue
+                let parsed_hash = block_meta_clone.blockhash.parse::<Hash>();
+                if let Ok(parsed_hash) = parsed_hash {
+                    let mut blockhash_queue_guard = blockhash_queue_cloned.write().await;
+                    blockhash_queue_guard.register_hash(&parsed_hash);
+                }
             }
         });
 
         let (grpc_channel, grpc_shutdown_tx, prometheus) = runtime.block_on(async move {
             let (grpc_channel, grpc_shutdown_tx) =
-                GrpcService::create(config.grpc, latest_block_meta)
+                GrpcService::create(config.grpc, latest_block_meta, blockhash_queue)
                     .map_err(|error| GeyserPluginError::Custom(error))?;
             let prometheus = PrometheusService::new(config.prometheus)
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;

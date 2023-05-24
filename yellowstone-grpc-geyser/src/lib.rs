@@ -1,5 +1,6 @@
 #![allow(clippy::large_enum_variant)]
 
+pub mod blockhash_queue;
 pub mod config;
 pub mod filters;
 pub mod grpc;
