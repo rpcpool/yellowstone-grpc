@@ -168,6 +168,10 @@ message GetSlotResponse {
   uint64 slot = 1;
 }
 
+message IsBlockhashValidRequest {
+  string blockhash = 1;
+}
+
 message IsBlockhashValidResponse {
   uint64 slot = 1;
   bool valid = 2;
