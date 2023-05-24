@@ -150,7 +150,10 @@ message PongResponse {
   int32 count = 1;
 }
 
-message GetLatestBlockhashRequest {}
+message GetLatestBlockhashRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetLatestBlockhashResponse {
   // The latest blockhash
   uint64 slot = 1;
@@ -158,12 +161,18 @@ message GetLatestBlockhashResponse {
   uint64 last_valid_block_height = 3;
 }
 
-message GetBlockHeightRequest {}
+message GetBlockHeightRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetBlockHeightResponse {
   uint64 block_height = 1;
 }
 
-message GetSlotRequest {}
+message GetSlotRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetSlotResponse {
   uint64 slot = 1;
 }

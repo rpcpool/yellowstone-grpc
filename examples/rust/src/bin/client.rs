@@ -36,8 +36,36 @@ struct Args {
     #[clap(long)]
     x_token: Option<String>,
 
+    /// Commitment level: processed, confirmed or finalized
+    #[clap(long)]
+    commitment: Option<ArgsCommitment>,
+
     #[command(subcommand)]
     action: Action,
+}
+
+impl Args {
+    fn get_commitment(&self) -> Option<CommitmentLevel> {
+        Some(self.commitment.unwrap_or_default().into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum ArgsCommitment {
+    Processed,
+    Confirmed,
+    #[default]
+    Finalized,
+}
+
+impl From<ArgsCommitment> for CommitmentLevel {
+    fn from(commitment: ArgsCommitment) -> Self {
+        match commitment {
+            ArgsCommitment::Processed => CommitmentLevel::Processed,
+            ArgsCommitment::Confirmed => CommitmentLevel::Confirmed,
+            ArgsCommitment::Finalized => CommitmentLevel::Finalized,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -114,36 +142,16 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
-    /// Commitment level: processed, confirmed or finalized
-    #[clap(long)]
-    commitment: Option<ActionSubscribeCommitment>,
-
     // Resubscribe (only to slots) after
     #[clap(long)]
     resub: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
-enum ActionSubscribeCommitment {
-    Processed,
-    Confirmed,
-    #[default]
-    Finalized,
-}
-
-impl From<ActionSubscribeCommitment> for i32 {
-    fn from(commitment: ActionSubscribeCommitment) -> Self {
-        let commitment = match commitment {
-            ActionSubscribeCommitment::Processed => CommitmentLevel::Processed,
-            ActionSubscribeCommitment::Confirmed => CommitmentLevel::Confirmed,
-            ActionSubscribeCommitment::Finalized => CommitmentLevel::Finalized,
-        };
-        commitment as i32
-    }
-}
-
 impl Action {
-    fn get_subscribe_request(&self) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
+    fn get_subscribe_request(
+        &self,
+        commitment: Option<i32>,
+    ) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
         Ok(match self {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
@@ -221,7 +229,7 @@ impl Action {
                         transactions,
                         blocks,
                         blocks_meta,
-                        commitment: Some(args.commitment.unwrap_or_default().into()),
+                        commitment,
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -288,6 +296,8 @@ async fn main() -> anyhow::Result<()> {
 
         async move {
             info!("Retry to connect to the server");
+
+            let commitment = args.get_commitment();
             let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)
                 .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
 
@@ -295,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
                 Action::Subscribe(_) => {
                     let (request, resub) = args
                         .action
-                        .get_subscribe_request()
+                        .get_subscribe_request(commitment.map(|x| x as i32))
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
@@ -307,17 +317,17 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetLatestBlockhash => client
-                    .get_latest_blockhash()
+                    .get_latest_blockhash(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetBlockHeight => client
-                    .get_block_height()
+                    .get_block_height(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetSlot => client
-                    .get_slot()
+                    .get_slot(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),

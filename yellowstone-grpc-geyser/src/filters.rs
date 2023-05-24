@@ -44,13 +44,14 @@ impl Filter {
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
-            commitment: Self::decode_commitment(config.commitment),
+            commitment: Self::decode_commitment(config.commitment)?,
         })
     }
 
-    fn decode_commitment(commitment: Option<i32>) -> CommitmentLevel {
+    fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
-        CommitmentLevel::from_i32(commitment).expect("valid commitment")
+        CommitmentLevel::from_i32(commitment)
+            .ok_or_else(|| anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}"))
     }
 
     fn decode_pubkeys<T: FromIterator<Pubkey>>(
