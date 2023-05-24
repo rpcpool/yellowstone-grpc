@@ -150,7 +150,7 @@ struct ActionSubscribe {
 impl Action {
     fn get_subscribe_request(
         &self,
-        commitment: Option<i32>,
+        commitment: Option<CommitmentLevel>,
     ) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
         Ok(match self {
             Self::Subscribe(args) => {
@@ -229,7 +229,7 @@ impl Action {
                         transactions,
                         blocks,
                         blocks_meta,
-                        commitment,
+                        commitment: commitment.map(|x| x as i32),
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
                 Action::Subscribe(_) => {
                     let (request, resub) = args
                         .action
-                        .get_subscribe_request(commitment.map(|x| x as i32))
+                        .get_subscribe_request(commitment)
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
