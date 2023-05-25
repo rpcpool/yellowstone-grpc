@@ -72,6 +72,7 @@ mod tests {
             transactions: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit);
@@ -97,6 +98,7 @@ mod tests {
             transactions: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
@@ -127,6 +129,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -156,6 +159,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -191,6 +195,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -229,6 +234,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -267,6 +273,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -311,6 +318,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -357,6 +365,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            commitment: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();

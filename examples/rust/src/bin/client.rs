@@ -1,6 +1,6 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
-    clap::{Parser, Subcommand},
+    clap::{Parser, Subcommand, ValueEnum},
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
     solana_sdk::pubkey::Pubkey,
@@ -10,11 +10,11 @@ use {
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            SubscribeUpdateAccount,
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
         },
         tonic::service::Interceptor,
     },
@@ -36,8 +36,36 @@ struct Args {
     #[clap(long)]
     x_token: Option<String>,
 
+    /// Commitment level: processed, confirmed or finalized
+    #[clap(long)]
+    commitment: Option<ArgsCommitment>,
+
     #[command(subcommand)]
     action: Action,
+}
+
+impl Args {
+    fn get_commitment(&self) -> Option<CommitmentLevel> {
+        Some(self.commitment.unwrap_or_default().into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum ArgsCommitment {
+    Processed,
+    Confirmed,
+    #[default]
+    Finalized,
+}
+
+impl From<ArgsCommitment> for CommitmentLevel {
+    fn from(commitment: ArgsCommitment) -> Self {
+        match commitment {
+            ArgsCommitment::Processed => CommitmentLevel::Processed,
+            ArgsCommitment::Confirmed => CommitmentLevel::Confirmed,
+            ArgsCommitment::Finalized => CommitmentLevel::Finalized,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -120,7 +148,10 @@ struct ActionSubscribe {
 }
 
 impl Action {
-    fn get_subscribe_request(&self) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
+    fn get_subscribe_request(
+        &self,
+        commitment: Option<CommitmentLevel>,
+    ) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
         Ok(match self {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
@@ -198,6 +229,7 @@ impl Action {
                         transactions,
                         blocks,
                         blocks_meta,
+                        commitment: commitment.map(|x| x as i32),
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -264,6 +296,8 @@ async fn main() -> anyhow::Result<()> {
 
         async move {
             info!("Retry to connect to the server");
+
+            let commitment = args.get_commitment();
             let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)
                 .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
 
@@ -271,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
                 Action::Subscribe(_) => {
                     let (request, resub) = args
                         .action
-                        .get_subscribe_request()
+                        .get_subscribe_request(commitment)
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
@@ -283,17 +317,17 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetLatestBlockhash => client
-                    .get_latest_blockhash()
+                    .get_latest_blockhash(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetBlockHeight => client
-                    .get_block_height()
+                    .get_block_height(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetSlot => client
-                    .get_slot()
+                    .get_slot(commitment)
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),
@@ -353,6 +387,7 @@ async fn geyser_subscribe(
                     transactions: HashMap::default(),
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),
+                    commitment: None,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;

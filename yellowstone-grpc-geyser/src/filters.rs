@@ -11,9 +11,10 @@ use {
         proto::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
+            CommitmentLevel, SubscribeRequest, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdate,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -32,6 +33,7 @@ pub struct Filter {
     transactions: FilterTransactions,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
+    commitment: CommitmentLevel,
 }
 
 impl Filter {
@@ -42,7 +44,14 @@ impl Filter {
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
+            commitment: Self::decode_commitment(config.commitment)?,
         })
+    }
+
+    fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
+        let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
+        CommitmentLevel::from_i32(commitment)
+            .ok_or_else(|| anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}"))
     }
 
     fn decode_pubkeys<T: FromIterator<Pubkey>>(
@@ -68,6 +77,26 @@ impl Filter {
             Message::Transaction(message) => self.transactions.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
+        }
+    }
+
+    pub fn get_update(
+        &self,
+        message: &Message,
+        commitment: CommitmentLevel,
+    ) -> Option<SubscribeUpdate> {
+        if commitment == self.commitment || matches!(message, Message::Slot(_)) {
+            let filters = self.get_filters(message);
+            if filters.is_empty() {
+                None
+            } else {
+                Some(SubscribeUpdate {
+                    filters,
+                    update_oneof: Some(message.into()),
+                })
+            }
+        } else {
+            None
         }
     }
 }
