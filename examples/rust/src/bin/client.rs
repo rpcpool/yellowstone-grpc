@@ -78,6 +78,10 @@ enum Action {
     GetLatestBlockhash,
     GetBlockHeight,
     GetSlot,
+    IsBlockhashValid {
+        #[clap(long, short)]
+        blockhash: String,
+    },
     GetVersion,
 }
 
@@ -316,27 +320,32 @@ async fn main() -> anyhow::Result<()> {
                     .ping(*count)
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {:?}", response)),
+                    .map(|response| info!("response: {response:?}")),
                 Action::GetLatestBlockhash => client
                     .get_latest_blockhash(commitment)
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {:?}", response)),
+                    .map(|response| info!("response: {response:?}")),
                 Action::GetBlockHeight => client
                     .get_block_height(commitment)
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {:?}", response)),
+                    .map(|response| info!("response: {response:?}")),
                 Action::GetSlot => client
                     .get_slot(commitment)
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {:?}", response)),
+                    .map(|response| info!("response: {response:?}")),
+                Action::IsBlockhashValid { blockhash } => client
+                    .is_blockhash_valid(blockhash.clone(), commitment)
+                    .await
+                    .map_err(anyhow::Error::new)
+                    .map(|response| info!("response: {response:?}")),
                 Action::GetVersion => client
                     .get_version()
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {:?}", response)),
+                    .map(|response| info!("response: {response:?}")),
             }
             .map_err(backoff::Error::transient)?;
 
