@@ -18,7 +18,7 @@ lazy_static::lazy_static! {
 
     static ref VERSION: IntCounterVec = IntCounterVec::new(
         Opts::new("version", "Plugin version info"),
-        &["buildts", "git", "rustc", "solana", "version"]
+        &["buildts", "git", "proto", "rustc", "solana", "version"]
     ).unwrap();
 
     pub static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
@@ -60,6 +60,7 @@ impl PrometheusService {
                 .with_label_values(&[
                     VERSION_INFO.buildts,
                     VERSION_INFO.git,
+                    VERSION_INFO.proto,
                     VERSION_INFO.rustc,
                     VERSION_INFO.solana,
                     VERSION_INFO.version,
