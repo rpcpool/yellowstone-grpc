@@ -13,20 +13,28 @@ fn main() -> anyhow::Result<()> {
         git_version::git_version!()
     );
 
-    // Extract Solana version
+    // Extract packages version
     let lockfile = Lockfile::load("../Cargo.lock")?;
     println!(
         "cargo:rustc-env=SOLANA_SDK_VERSION={}",
-        lockfile
-            .packages
-            .iter()
-            .filter(|pkg| pkg.name.as_str() == "solana-sdk")
-            .map(|pkg| pkg.version.to_string())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(",")
+        get_pkg_version(&lockfile, "solana-sdk")
+    );
+    println!(
+        "cargo:rustc-env=YELLOWSTONE_GRPC_PROTO_VERSION={}",
+        get_pkg_version(&lockfile, "yellowstone-grpc-proto")
     );
 
     Ok(())
+}
+
+fn get_pkg_version(lockfile: &Lockfile, pkg_name: &str) -> String {
+    lockfile
+        .packages
+        .iter()
+        .filter(|pkg| pkg.name.as_str() == pkg_name)
+        .map(|pkg| pkg.version.to_string())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",")
 }

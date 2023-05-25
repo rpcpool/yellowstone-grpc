@@ -9,13 +9,13 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config yellowstone-grpc-proto/config.json
+$ solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 ```
 
 ### Plugin config check
 
 ```
-cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-proto/config.json
+cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-geyser/config.json
 ```
 
 ### Filters
