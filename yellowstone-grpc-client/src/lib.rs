@@ -14,15 +14,13 @@ use {
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
     },
-    yellowstone_grpc_proto::{
-        geyser::{GetSlotResponse, PongResponse},
-        prelude::{
-            geyser_client::GeyserClient, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, PingRequest,
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate,
-        },
+    yellowstone_grpc_proto::prelude::{
+        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
+        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+        GetSlotRequest, GetSlotResponse, PingRequest, PongResponse, SubscribeRequest,
+        SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -109,6 +107,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         transactions: HashMap<String, SubscribeRequestFilterTransactions>,
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
+        commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
         subscribe_tx
@@ -118,6 +117,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 transactions,
                 blocks,
                 blocks_meta,
+                commitment: commitment.map(|value| value as i32),
             })
             .await?;
         Ok(response)
@@ -132,20 +132,33 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
 
     pub async fn get_latest_blockhash(
         &mut self,
+        commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<GetLatestBlockhashResponse> {
-        let request = tonic::Request::new(GetLatestBlockhashRequest {});
+        let request = tonic::Request::new(GetLatestBlockhashRequest {
+            commitment: commitment.map(|value| value as i32),
+        });
         let response = self.client.get_latest_blockhash(request).await?;
         Ok(response.into_inner())
     }
 
-    pub async fn get_block_height(&mut self) -> GeyserGrpcClientResult<GetBlockHeightResponse> {
-        let request = tonic::Request::new(GetBlockHeightRequest {});
+    pub async fn get_block_height(
+        &mut self,
+        commitment: Option<CommitmentLevel>,
+    ) -> GeyserGrpcClientResult<GetBlockHeightResponse> {
+        let request = tonic::Request::new(GetBlockHeightRequest {
+            commitment: commitment.map(|value| value as i32),
+        });
         let response = self.client.get_block_height(request).await?;
         Ok(response.into_inner())
     }
 
-    pub async fn get_slot(&mut self) -> GeyserGrpcClientResult<GetSlotResponse> {
-        let request = tonic::Request::new(GetSlotRequest {});
+    pub async fn get_slot(
+        &mut self,
+        commitment: Option<CommitmentLevel>,
+    ) -> GeyserGrpcClientResult<GetSlotResponse> {
+        let request = tonic::Request::new(GetSlotRequest {
+            commitment: commitment.map(|value| value as i32),
+        });
         let response = self.client.get_slot(request).await?;
         Ok(response.into_inner())
     }

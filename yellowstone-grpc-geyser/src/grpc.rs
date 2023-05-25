@@ -7,14 +7,12 @@ use {
             self,
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
-            SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateSlotStatus, SubscribeUpdateTransaction,
+            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateTransaction,
             SubscribeUpdateTransactionInfo,
-        },
-        proto::{
-            GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
-            GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, PingRequest, PongResponse,
         },
     },
     log::*,
@@ -27,7 +25,7 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
-        collections::HashMap,
+        collections::{BTreeMap, HashMap},
         sync::atomic::{AtomicUsize, Ordering},
         sync::Arc,
         time::Duration,
@@ -45,7 +43,7 @@ use {
     tonic_health::server::health_reporter,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
@@ -57,7 +55,7 @@ pub struct MessageAccountInfo {
     pub txn_signature: Option<Signature>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageAccount {
     pub account: MessageAccountInfo,
     pub slot: u64,
@@ -83,11 +81,11 @@ impl<'a> From<(&'a ReplicaAccountInfoV2<'a>, u64, bool)> for MessageAccount {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MessageSlot {
     pub slot: u64,
     pub parent: Option<u64>,
-    pub status: SubscribeUpdateSlotStatus,
+    pub status: CommitmentLevel,
 }
 
 impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
@@ -96,9 +94,9 @@ impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
             slot,
             parent,
             status: match status {
-                SlotStatus::Processed => SubscribeUpdateSlotStatus::Processed,
-                SlotStatus::Confirmed => SubscribeUpdateSlotStatus::Confirmed,
-                SlotStatus::Rooted => SubscribeUpdateSlotStatus::Finalized,
+                SlotStatus::Processed => CommitmentLevel::Processed,
+                SlotStatus::Confirmed => CommitmentLevel::Confirmed,
+                SlotStatus::Rooted => CommitmentLevel::Finalized,
             },
         }
     }
@@ -125,7 +123,7 @@ impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageTransaction {
     pub transaction: MessageTransactionInfo,
     pub slot: u64,
@@ -146,7 +144,7 @@ impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageBlock {
     pub parent_slot: u64,
     pub slot: u64,
@@ -200,7 +198,7 @@ impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Message {
     Slot(MessageSlot),
@@ -264,6 +262,18 @@ impl From<&Message> for UpdateOneof {
     }
 }
 
+impl Message {
+    pub fn get_slot(&self) -> u64 {
+        match self {
+            Self::Slot(msg) => msg.slot,
+            Self::Account(msg) => msg.slot,
+            Self::Transaction(msg) => msg.slot,
+            Self::Block(msg) => msg.slot,
+            Self::BlockMeta(msg) => msg.slot,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ClientMessage {
     New {
@@ -286,18 +296,108 @@ struct ClientConnection {
     stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
 }
 
+#[derive(Debug, Default)]
+struct BlockMetaStorageInner {
+    blocks: BTreeMap<u64, MessageBlockMeta>,
+    processed: Option<u64>,
+    confirmed: Option<u64>,
+    finalized: Option<u64>,
+}
+
+#[derive(Debug)]
+struct BlockMetaStorage {
+    inner: Arc<RwLock<BlockMetaStorageInner>>,
+}
+
+impl BlockMetaStorage {
+    fn new() -> (Self, mpsc::UnboundedSender<Message>) {
+        let inner = Arc::new(RwLock::new(BlockMetaStorageInner::default()));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        let storage = Arc::clone(&inner);
+        tokio::spawn(async move {
+            const KEEP_SLOTS: u64 = 3;
+
+            while let Some(message) = rx.recv().await {
+                let mut storage = storage.write().await;
+                match message {
+                    Message::Slot(msg) => {
+                        match msg.status {
+                            CommitmentLevel::Processed => &mut storage.processed,
+                            CommitmentLevel::Confirmed => &mut storage.confirmed,
+                            CommitmentLevel::Finalized => &mut storage.finalized,
+                        }
+                        .replace(msg.slot);
+
+                        if msg.status == CommitmentLevel::Finalized {
+                            clean_btree_slots(&mut storage.blocks, msg.slot - KEEP_SLOTS);
+                        }
+                    }
+                    Message::BlockMeta(msg) => {
+                        storage.blocks.insert(msg.slot, msg);
+                    }
+                    msg => {
+                        error!("invalid message in BlockMetaStorage: {msg:?}");
+                    }
+                }
+            }
+        });
+
+        (Self { inner }, tx)
+    }
+
+    async fn get_block<F, T>(
+        &self,
+        handler: F,
+        commitment: Option<i32>,
+    ) -> Result<Response<T>, Status>
+    where
+        F: FnOnce(&MessageBlockMeta) -> Option<T>,
+    {
+        let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
+        let commitment = CommitmentLevel::from_i32(commitment).ok_or_else(|| {
+            let msg = format!("failed to create CommitmentLevel from {commitment:?}");
+            Status::unknown(msg)
+        })?;
+
+        let storage = self.inner.read().await;
+
+        let slot = match commitment {
+            CommitmentLevel::Processed => storage.processed,
+            CommitmentLevel::Confirmed => storage.confirmed,
+            CommitmentLevel::Finalized => storage.finalized,
+        };
+        match slot.and_then(|slot| storage.blocks.get(&slot)) {
+            Some(block) => match handler(block) {
+                Some(resp) => Ok(Response::new(resp)),
+                None => Err(Status::internal("failed to build response")),
+            },
+            None => Err(Status::internal("block is not available yet")),
+        }
+    }
+}
+
+fn clean_btree_slots<T>(storage: &mut BTreeMap<u64, T>, keep_slot: u64) {
+    while let Some(slot) = storage.keys().next().cloned() {
+        if slot < keep_slot {
+            storage.remove(&slot);
+        } else {
+            break;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
     new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
-    latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
+    blocks_meta: BlockMetaStorage,
 }
 
 impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
-        latest_block_meta: Arc<RwLock<Option<MessageBlockMeta>>>,
     ) -> Result<
         (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -309,20 +409,25 @@ impl GrpcService {
             Some(Duration::from_secs(20)), // tcp_keepalive
         )?;
 
+        // Blocks meta storage
+        let (blocks_meta, update_blocks_meta_tx) = BlockMetaStorage::new();
+
         // Create Server
         let (new_clients_tx, new_clients_rx) = mpsc::unbounded_channel();
         let service = GeyserServer::new(Self {
             config,
             subscribe_id: AtomicUsize::new(0),
             new_clients_tx,
-            latest_block_meta,
+            blocks_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
 
         // Run filter and send loop
         let (update_channel_tx, update_channel_rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move { Self::send_loop(update_channel_rx, new_clients_rx).await });
+        tokio::spawn(async move {
+            Self::send_loop(update_channel_rx, new_clients_rx, update_blocks_meta_tx).await
+        });
 
         // gRPC Health check service
         let (mut health_reporter, health_service) = health_reporter();
@@ -347,42 +452,61 @@ impl GrpcService {
     async fn send_loop(
         mut update_channel_rx: mpsc::UnboundedReceiver<Message>,
         mut new_clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
+        update_blocks_meta_tx: mpsc::UnboundedSender<Message>,
     ) {
+        // Number of slots hold in memory after finalized
+        const KEEP_SLOTS: u64 = 3;
+
         let mut clients: HashMap<usize, ClientConnection> = HashMap::new();
+        let mut messages: BTreeMap<u64, Vec<Message>> = BTreeMap::new();
         loop {
             tokio::select! {
                 Some(message) = update_channel_rx.recv() => {
-                    let mut ids_full = vec![];
-                    let mut ids_closed = vec![];
+                    if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
+                        let _ = update_blocks_meta_tx.send(message.clone());
+                    }
 
-                    for (id, client) in clients.iter() {
-                        let filters = client.filter.get_filters(&message);
-                        if !filters.is_empty() {
-                            match client.stream_tx.try_send(Ok(SubscribeUpdate {
-                                filters,
-                                update_oneof: Some((&message).into()),
-                            })) {
-                                Ok(()) => {},
-                                Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
-                                Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
+                    let slot = if let Message::Slot(slot) = message {
+                        slot
+                    } else {
+                        messages.entry(message.get_slot()).or_default().push(message);
+                        continue;
+                    };
+
+                    let slot_messages = messages.get(&slot.slot).map(|x| x.as_slice()).unwrap_or_default();
+                    for message in slot_messages.iter().chain(std::iter::once(&message)) {
+                        let mut ids_full = vec![];
+                        let mut ids_closed = vec![];
+
+                        for (id, client) in clients.iter() {
+                            if let Some(msg) = client.filter.get_update(message, slot.status) {
+                                match client.stream_tx.try_send(Ok(msg)) {
+                                    Ok(()) => {}
+                                    Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
+                                    Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
+                                }
+                            }
+                        }
+
+                        for id in ids_full {
+                            if let Some(client) = clients.remove(&id) {
+                                tokio::spawn(async move {
+                                    CONNECTIONS_TOTAL.dec();
+                                    error!("{}, lagged, close stream", id);
+                                    let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
+                                });
+                            }
+                        }
+                        for id in ids_closed {
+                            if let Some(_client) = clients.remove(&id) {
+                                CONNECTIONS_TOTAL.dec();
+                                error!("{}, client closed stream", id);
                             }
                         }
                     }
 
-                    for id in ids_full {
-                        if let Some(client) = clients.remove(&id) {
-                            tokio::spawn(async move {
-                                CONNECTIONS_TOTAL.dec();
-                                error!("{}, lagged, close stream", id);
-                                let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
-                            });
-                        }
-                    }
-                    for id in ids_closed {
-                        if let Some(_client) = clients.remove(&id) {
-                            CONNECTIONS_TOTAL.dec();
-                            error!("{}, client closed stream", id);
-                        }
+                    if slot.status == CommitmentLevel::Finalized {
+                        clean_btree_slots(&mut messages, slot.slot - KEEP_SLOTS);
                     }
                 },
                 Some(msg) = new_clients_rx.recv() => {
@@ -429,6 +553,7 @@ impl Geyser for GrpcService {
                 transactions: HashMap::new(),
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
+                commitment: None,
             },
             &self.config.filters,
         )
@@ -493,49 +618,56 @@ impl Geyser for GrpcService {
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
-        info!("Got a request from {:?}", request.remote_addr());
-
         let count = request.get_ref().count;
-
         let response = PongResponse { count: count + 1 };
         Ok(Response::new(response))
     }
 
     async fn get_latest_blockhash(
         &self,
-        _request: Request<GetLatestBlockhashRequest>,
+        request: Request<GetLatestBlockhashRequest>,
     ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
-        match self.latest_block_meta.read().await.as_ref() {
-            Some(block_meta) => Ok(Response::new(GetLatestBlockhashResponse {
-                slot: block_meta.slot,
-                blockhash: block_meta.blockhash.clone(),
-                last_valid_block_height: block_meta.block_height.unwrap(),
-            })),
-            None => Err(Status::internal("block_meta is not available yet")),
-        }
+        self.blocks_meta
+            .get_block(
+                |block| {
+                    block
+                        .block_height
+                        .map(|last_valid_block_height| GetLatestBlockhashResponse {
+                            slot: block.slot,
+                            blockhash: block.blockhash.clone(),
+                            last_valid_block_height,
+                        })
+                },
+                request.get_ref().commitment,
+            )
+            .await
     }
 
     async fn get_block_height(
         &self,
-        _request: Request<GetBlockHeightRequest>,
+        request: Request<GetBlockHeightRequest>,
     ) -> Result<Response<GetBlockHeightResponse>, Status> {
-        match self.latest_block_meta.read().await.as_ref() {
-            Some(block_meta) => Ok(Response::new(GetBlockHeightResponse {
-                block_height: block_meta.block_height.unwrap(),
-            })),
-            None => Err(Status::internal("block_meta is not available yet")),
-        }
+        self.blocks_meta
+            .get_block(
+                |block| {
+                    block
+                        .block_height
+                        .map(|block_height| GetBlockHeightResponse { block_height })
+                },
+                request.get_ref().commitment,
+            )
+            .await
     }
 
     async fn get_slot(
         &self,
-        _request: Request<GetSlotRequest>,
+        request: Request<GetSlotRequest>,
     ) -> Result<Response<GetSlotResponse>, Status> {
-        match self.latest_block_meta.read().await.as_ref() {
-            Some(block_meta) => Ok(Response::new(GetSlotResponse {
-                slot: block_meta.slot,
-            })),
-            None => Err(Status::internal("block_meta is not available yet")),
-        }
+        self.blocks_meta
+            .get_block(
+                |block| Some(GetSlotResponse { slot: block.slot }),
+                request.get_ref().commitment,
+            )
+            .await
     }
 }
