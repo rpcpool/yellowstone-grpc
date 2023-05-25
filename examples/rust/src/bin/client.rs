@@ -83,6 +83,7 @@ enum Action {
     GetLatestBlockhash,
     GetBlockHeight,
     GetSlot,
+    GetVersion,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -333,6 +334,11 @@ async fn main() -> anyhow::Result<()> {
                     .map(|response| info!("response: {:?}", response)),
                 Action::GetSlot => client
                     .get_slot(commitment)
+                    .await
+                    .map_err(anyhow::Error::new)
+                    .map(|response| info!("response: {:?}", response)),
+                Action::GetVersion => client
+                    .get_version()
                     .await
                     .map_err(anyhow::Error::new)
                     .map(|response| info!("response: {:?}", response)),

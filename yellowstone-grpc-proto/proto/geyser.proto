@@ -12,6 +12,7 @@ service Geyser {
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
 }
 
 enum CommitmentLevel {
@@ -175,4 +176,10 @@ message GetSlotRequest {
 
 message GetSlotResponse {
   uint64 slot = 1;
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;
 }

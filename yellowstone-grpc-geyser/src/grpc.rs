@@ -9,11 +9,12 @@ use {
             subscribe_update::UpdateOneof,
             CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateTransaction,
-            SubscribeUpdateTransactionInfo,
+            GetVersionRequest, GetVersionResponse, PingRequest, PongResponse, SubscribeRequest,
+            SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
+        version::VERSION,
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -669,5 +670,14 @@ impl Geyser for GrpcService {
                 request.get_ref().commitment,
             )
             .await
+    }
+
+    async fn get_version(
+        &self,
+        _request: Request<GetVersionRequest>,
+    ) -> Result<Response<GetVersionResponse>, Status> {
+        Ok(Response::new(GetVersionResponse {
+            version: serde_json::to_string(&VERSION).unwrap(),
+        }))
     }
 }

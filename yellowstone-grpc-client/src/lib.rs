@@ -17,10 +17,10 @@ use {
     yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
-        GetSlotRequest, GetSlotResponse, PingRequest, PongResponse, SubscribeRequest,
-        SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate,
+        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, PingRequest,
+        PongResponse, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -160,6 +160,12 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             commitment: commitment.map(|value| value as i32),
         });
         let response = self.client.get_slot(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn get_version(&mut self) -> GeyserGrpcClientResult<GetVersionResponse> {
+        let request = tonic::Request::new(GetVersionRequest {});
+        let response = self.client.get_version(request).await?;
         Ok(response.into_inner())
     }
 }
