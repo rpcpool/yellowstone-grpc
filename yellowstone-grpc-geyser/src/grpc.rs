@@ -9,10 +9,11 @@ use {
             subscribe_update::UpdateOneof,
             CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, PingRequest, PongResponse, SubscribeRequest,
-            SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdatePing, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         version::VERSION,
     },
@@ -21,7 +22,9 @@ use {
         ReplicaAccountInfoV2, ReplicaBlockInfoV2, ReplicaTransactionInfoV2, SlotStatus,
     },
     solana_sdk::{
-        clock::UnixTimestamp, pubkey::Pubkey, signature::Signature,
+        clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
+        pubkey::Pubkey,
+        signature::Signature,
         transaction::SanitizedTransaction,
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
@@ -297,9 +300,29 @@ struct ClientConnection {
     stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
 }
 
+#[derive(Debug)]
+struct BlockhashStatus {
+    slot: u64,
+    processed: bool,
+    confirmed: bool,
+    finalized: bool,
+}
+
+impl BlockhashStatus {
+    fn new(slot: u64) -> Self {
+        Self {
+            slot,
+            processed: false,
+            confirmed: false,
+            finalized: false,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct BlockMetaStorageInner {
     blocks: BTreeMap<u64, MessageBlockMeta>,
+    blockhashes: HashMap<String, BlockhashStatus>,
     processed: Option<u64>,
     confirmed: Option<u64>,
     finalized: Option<u64>,
@@ -330,8 +353,37 @@ impl BlockMetaStorage {
                         }
                         .replace(msg.slot);
 
+                        if let Some(blockhash) = storage
+                            .blocks
+                            .get(&msg.slot)
+                            .map(|block| block.blockhash.clone())
+                        {
+                            let entry = storage
+                                .blockhashes
+                                .entry(blockhash)
+                                .or_insert_with(|| BlockhashStatus::new(msg.slot));
+
+                            let status = match msg.status {
+                                CommitmentLevel::Processed => &mut entry.processed,
+                                CommitmentLevel::Confirmed => &mut entry.confirmed,
+                                CommitmentLevel::Finalized => &mut entry.finalized,
+                            };
+                            *status = true;
+                        }
+
                         if msg.status == CommitmentLevel::Finalized {
-                            clean_btree_slots(&mut storage.blocks, msg.slot - KEEP_SLOTS);
+                            let keep_slot = msg.slot - KEEP_SLOTS;
+                            loop {
+                                match storage.blocks.keys().next().cloned() {
+                                    Some(slot) if slot < keep_slot => storage.blocks.remove(&slot),
+                                    _ => break,
+                                };
+                            }
+
+                            let keep_slot = msg.slot - MAX_RECENT_BLOCKHASHES as u64 - 32;
+                            storage
+                                .blockhashes
+                                .retain(|_blockhash, status| status.slot >= keep_slot);
                         }
                     }
                     Message::BlockMeta(msg) => {
@@ -347,6 +399,14 @@ impl BlockMetaStorage {
         (Self { inner }, tx)
     }
 
+    fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
+        let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
+        CommitmentLevel::from_i32(commitment).ok_or_else(|| {
+            let msg = format!("failed to create CommitmentLevel from {commitment:?}");
+            Status::unknown(msg)
+        })
+    }
+
     async fn get_block<F, T>(
         &self,
         handler: F,
@@ -355,12 +415,7 @@ impl BlockMetaStorage {
     where
         F: FnOnce(&MessageBlockMeta) -> Option<T>,
     {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
-        let commitment = CommitmentLevel::from_i32(commitment).ok_or_else(|| {
-            let msg = format!("failed to create CommitmentLevel from {commitment:?}");
-            Status::unknown(msg)
-        })?;
-
+        let commitment = Self::parse_commitment(commitment)?;
         let storage = self.inner.read().await;
 
         let slot = match commitment {
@@ -368,6 +423,7 @@ impl BlockMetaStorage {
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
         };
+
         match slot.and_then(|slot| storage.blocks.get(&slot)) {
             Some(block) => match handler(block) {
                 Some(resp) => Ok(Response::new(resp)),
@@ -376,15 +432,37 @@ impl BlockMetaStorage {
             None => Err(Status::internal("block is not available yet")),
         }
     }
-}
 
-fn clean_btree_slots<T>(storage: &mut BTreeMap<u64, T>, keep_slot: u64) {
-    while let Some(slot) = storage.keys().next().cloned() {
-        if slot < keep_slot {
-            storage.remove(&slot);
-        } else {
-            break;
+    async fn is_blockhash_valid(
+        &self,
+        blockhash: &str,
+        commitment: Option<i32>,
+    ) -> Result<Response<IsBlockhashValidResponse>, Status> {
+        let commitment = Self::parse_commitment(commitment)?;
+        let storage = self.inner.read().await;
+
+        if storage.blockhashes.len() < MAX_RECENT_BLOCKHASHES + 32 {
+            return Err(Status::internal("startup"));
         }
+
+        let slot = match commitment {
+            CommitmentLevel::Processed => storage.processed,
+            CommitmentLevel::Confirmed => storage.confirmed,
+            CommitmentLevel::Finalized => storage.finalized,
+        }
+        .ok_or_else(|| Status::internal("startup"))?;
+
+        let valid = storage
+            .blockhashes
+            .get(blockhash)
+            .map(|status| match commitment {
+                CommitmentLevel::Processed => status.processed,
+                CommitmentLevel::Confirmed => status.confirmed,
+                CommitmentLevel::Finalized => status.finalized,
+            })
+            .unwrap_or(false);
+
+        Ok(Response::new(IsBlockhashValidResponse { valid, slot }))
     }
 }
 
@@ -507,7 +585,13 @@ impl GrpcService {
                     }
 
                     if slot.status == CommitmentLevel::Finalized {
-                        clean_btree_slots(&mut messages, slot.slot - KEEP_SLOTS);
+                        let keep_slot = slot.slot - KEEP_SLOTS;
+                        loop {
+                            match messages.keys().next().cloned() {
+                                Some(slot) if slot < keep_slot => messages.remove(&slot),
+                                _ => break,
+                            };
+                        }
                     }
                 },
                 Some(msg) = new_clients_rx.recv() => {
@@ -669,6 +753,16 @@ impl Geyser for GrpcService {
                 |block| Some(GetSlotResponse { slot: block.slot }),
                 request.get_ref().commitment,
             )
+            .await
+    }
+
+    async fn is_blockhash_valid(
+        &self,
+        request: Request<IsBlockhashValidRequest>,
+    ) -> Result<Response<IsBlockhashValidResponse>, Status> {
+        let req = request.get_ref();
+        self.blocks_meta
+            .is_blockhash_valid(&req.blockhash, req.commitment)
             .await
     }
 

@@ -17,10 +17,11 @@ use {
     yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
-        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, PingRequest,
-        PongResponse, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
+        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
+        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -160,6 +161,19 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             commitment: commitment.map(|value| value as i32),
         });
         let response = self.client.get_slot(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn is_blockhash_valid(
+        &mut self,
+        blockhash: String,
+        commitment: Option<CommitmentLevel>,
+    ) -> GeyserGrpcClientResult<IsBlockhashValidResponse> {
+        let request = tonic::Request::new(IsBlockhashValidRequest {
+            blockhash,
+            commitment: commitment.map(|value| value as i32),
+        });
+        let response = self.client.is_blockhash_valid(request).await?;
         Ok(response.into_inner())
     }
 

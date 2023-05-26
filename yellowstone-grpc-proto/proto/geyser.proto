@@ -12,6 +12,7 @@ service Geyser {
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
+  rpc isBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
 }
 
@@ -156,7 +157,6 @@ message GetLatestBlockhashRequest {
 }
 
 message GetLatestBlockhashResponse {
-  // The latest blockhash
   uint64 slot = 1;
   string blockhash = 2;
   uint64 last_valid_block_height = 3;
@@ -182,4 +182,14 @@ message GetVersionRequest {}
 
 message GetVersionResponse {
   string version = 1;
+}
+
+message IsBlockhashValidRequest {
+  string blockhash = 1;
+  optional CommitmentLevel commitment = 2;
+}
+
+message IsBlockhashValidResponse {
+  uint64 slot = 1;
+  bool valid = 2;
 }
