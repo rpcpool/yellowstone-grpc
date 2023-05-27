@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "0.6.1+solana.1.15.2"
+version = "0.7.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Geyser Plugin"

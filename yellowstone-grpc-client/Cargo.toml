@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "1.1.1+solana.1.15.2"
+version = "1.2.0+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -15,7 +15,7 @@ futures = "0.3.24"
 http = "0.2.8"
 thiserror = "1.0"
 tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
-yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto", version = "1.1.0+solana.1.15.2" }
+yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto", version = "1.2.0+solana.1.15.2" }
 
 [dev-dependencies]
 tokio = { version = "1.21.2", features = ["macros"] }
