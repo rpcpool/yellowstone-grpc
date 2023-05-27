@@ -12,7 +12,7 @@ service Geyser {
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
-  rpc isBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
+  rpc IsBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
 }
 
