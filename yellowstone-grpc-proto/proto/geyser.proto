@@ -12,6 +12,14 @@ service Geyser {
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
+  rpc IsBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
+}
+
+enum CommitmentLevel {
+  PROCESSED = 0;
+  CONFIRMED = 1;
+  FINALIZED = 2;
 }
 
 message SubscribeRequest {
@@ -20,6 +28,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterTransactions> transactions = 3;
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
+  optional CommitmentLevel commitment = 6;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -52,6 +61,7 @@ message SubscribeRequestFilterTransactions {
   optional string signature = 5;
   repeated string account_include = 3;
   repeated string account_exclude = 4;
+  repeated string account_required = 6;
 }
 
 message SubscribeRequestFilterBlocks {}
@@ -90,13 +100,7 @@ message SubscribeUpdateAccountInfo {
 message SubscribeUpdateSlot {
   uint64 slot = 1;
   optional uint64 parent = 2;
-  SubscribeUpdateSlotStatus status = 3;
-}
-
-enum SubscribeUpdateSlotStatus {
-  PROCESSED = 0;
-  CONFIRMED = 1;
-  FINALIZED = 2;
+  CommitmentLevel status = 3;
 }
 
 message SubscribeUpdateTransaction {
@@ -148,21 +152,44 @@ message PongResponse {
   int32 count = 1;
 }
 
-message GetLatestBlockhashRequest {}
+message GetLatestBlockhashRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetLatestBlockhashResponse {
-  // The latest blockhash
   uint64 slot = 1;
   string blockhash = 2;
-  uint64 lastValidBlockHeight = 3;
+  uint64 last_valid_block_height = 3;
 }
 
-message GetBlockHeightRequest {}
+message GetBlockHeightRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetBlockHeightResponse {
-  uint64 BlockHeight = 1;
+  uint64 block_height = 1;
 }
 
-message GetSlotRequest {}
+message GetSlotRequest {
+  optional CommitmentLevel commitment = 1;
+}
+
 message GetSlotResponse {
   uint64 slot = 1;
 }
 
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;
+}
+
+message IsBlockhashValidRequest {
+  string blockhash = 1;
+  optional CommitmentLevel commitment = 2;
+}
+
+message IsBlockhashValidResponse {
+  uint64 slot = 1;
+  bool valid = 2;
+}
