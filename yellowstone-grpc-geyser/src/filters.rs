@@ -49,7 +49,7 @@ impl Filter {
     }
 
     fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Finalized as i32);
+        let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
         CommitmentLevel::from_i32(commitment)
             .ok_or_else(|| anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}"))
     }

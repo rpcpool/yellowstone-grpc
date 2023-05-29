@@ -52,9 +52,9 @@ impl Args {
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum ArgsCommitment {
+    #[default]
     Processed,
     Confirmed,
-    #[default]
     Finalized,
 }
 
