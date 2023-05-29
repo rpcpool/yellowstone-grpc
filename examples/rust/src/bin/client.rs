@@ -59,7 +59,7 @@ enum ArgsCommitment {
 
 impl Default for ArgsCommitment {
     fn default() -> Self {
-        Self::Finalized
+        Self::Processed
     }
 }
 
