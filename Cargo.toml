@@ -2,7 +2,7 @@
 members = [
     "examples/rust", # 1.2.0+solana.1.14.17
     "yellowstone-grpc-client", # 1.2.0+solana.1.14.17
-    "yellowstone-grpc-geyser", # 0.8.0+solana.1.14.17
+    "yellowstone-grpc-geyser", # 0.8.1+solana.1.14.17
     "yellowstone-grpc-proto", # 1.2.0+solana.1.14.17
 ]
 
