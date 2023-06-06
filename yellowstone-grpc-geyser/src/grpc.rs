@@ -609,6 +609,7 @@ impl GrpcService {
                         }
                         ClientMessage::Drop { id } => {
                             if clients.remove(&id).is_some() {
+                                info!("{id}, client removed");
                                 CONNECTIONS_TOTAL.dec();
                             }
                         }
@@ -692,11 +693,15 @@ impl Geyser for GrpcService {
                                 .await;
                         }
                     }
-                    Ok(None) => break,
-                    Err(_error) => break,
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(_error) => {
+                        let _ = new_clients_tx.send(ClientMessage::Drop { id });
+                        break;
+                    }
                 }
             }
-            let _ = new_clients_tx.send(ClientMessage::Drop { id });
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
