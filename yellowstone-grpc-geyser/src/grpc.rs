@@ -508,13 +508,13 @@ impl GrpcService {
             Self::send_loop(update_channel_rx, new_clients_rx, update_blocks_meta_tx).await
         });
 
-        // gRPC Health check service
-        let (mut health_reporter, health_service) = health_reporter();
-        tokio::spawn(async move { health_reporter.set_serving::<GeyserServer<Self>>().await });
-
         // Run Server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
+            // gRPC Health check service
+            let (mut health_reporter, health_service) = health_reporter();
+            health_reporter.set_serving::<GeyserServer<Self>>().await;
+
             Server::builder()
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(health_service)
@@ -709,7 +709,7 @@ impl Geyser for GrpcService {
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
         let count = request.get_ref().count;
-        let response = PongResponse { count: count + 1 };
+        let response = PongResponse { count };
         Ok(Response::new(response))
     }
 
