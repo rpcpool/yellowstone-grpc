@@ -30,8 +30,9 @@ lazy_static::lazy_static! {
         "invalid_full_blocks_total", "Total number of fails on constructin full blocks"
     ).unwrap();
 
-    pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
-        "message_queue_size", "Size of message queue"
+    pub static ref MESSAGE_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("message_queue_size", "Size of message queue"),
+        &["kind"]
     ).unwrap();
 
     pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
@@ -118,7 +119,7 @@ fn not_found_handler() -> Response<Body> {
         .unwrap()
 }
 
-pub fn update_slot_status(slot: u64, status: SlotStatus) {
+pub fn update_slot_status(status: SlotStatus, slot: u64) {
     SLOT_STATUS
         .with_label_values(&[match status {
             SlotStatus::Processed => "processed",
@@ -126,4 +127,8 @@ pub fn update_slot_status(slot: u64, status: SlotStatus) {
             SlotStatus::Rooted => "finalized",
         }])
         .set(slot as i64);
+}
+
+pub fn message_queue_size_inc_by(kind: &'static str, delta: i64) {
+    MESSAGE_QUEUE_SIZE.with_label_values(&[kind]).add(delta)
 }

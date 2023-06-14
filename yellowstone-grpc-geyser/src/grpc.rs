@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigGrpc,
         filters::Filter,
-        prom::{CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        prom::{self, CONNECTIONS_TOTAL},
         proto::{
             self,
             geyser_server::{Geyser, GeyserServer},
@@ -536,9 +536,21 @@ impl GrpcService {
         let (processed_tx, processed_rx) = mpsc::unbounded_channel();
         let (confirmed_tx, confirmed_rx) = mpsc::unbounded_channel();
         let (finalized_tx, finalized_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), processed_rx));
-        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), confirmed_rx));
-        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), finalized_rx));
+        tokio::spawn(Self::send_loop_commitment(
+            clients_tx.clone(),
+            processed_rx,
+            "processed",
+        ));
+        tokio::spawn(Self::send_loop_commitment(
+            clients_tx.clone(),
+            confirmed_rx,
+            "confirmed",
+        ));
+        tokio::spawn(Self::send_loop_commitment(
+            clients_tx.clone(),
+            finalized_rx,
+            "finalized",
+        ));
 
         // Clients management
         let mut clients: HashMap<usize, CommitmentLevel> = HashMap::new();
@@ -604,12 +616,30 @@ impl GrpcService {
             };
         }
 
+        // Helper for count messages in queue size
+        macro_rules! send_messages {
+            ($commitment:expr, $messages:expr) => {
+                let messages = $messages;
+                let size = messages.len() as i64;
+                if match $commitment {
+                    "processed" => processed_tx.send((Arc::clone(&processed_clients), messages)),
+                    "confirmed" => confirmed_tx.send((Arc::clone(&confirmed_clients), messages)),
+                    "finalized" => finalized_tx.send((Arc::clone(&finalized_clients), messages)),
+                    _ => unreachable!(),
+                }
+                .is_ok()
+                {
+                    prom::message_queue_size_inc_by($commitment, size);
+                }
+            };
+        }
+
         // Receive messages from Geyser plugin or gRPC clients updates
         let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
         loop {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    prom::message_queue_size_inc_by("geyser", -1);
 
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
                         let _ = blocks_meta_tx.send(message.clone());
@@ -620,19 +650,19 @@ impl GrpcService {
                             CommitmentLevel::Processed => {},
                             CommitmentLevel::Confirmed => {
                                 let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
-                                let _ = confirmed_tx.send((Arc::clone(&confirmed_clients), messages));
+                                send_messages!("confirmed", messages);
                             }
                             CommitmentLevel::Finalized => {
                                 let messages = messages.remove(&slot.slot).unwrap_or_default();
-                                let _ = finalized_tx.send((Arc::clone(&finalized_clients), messages));
+                                send_messages!("finalized", messages);
                             }
                         }
 
-                        let _ = processed_tx.send((Arc::clone(&processed_clients), vec![message.clone()]));
-                        let _ = confirmed_tx.send((Arc::clone(&confirmed_clients), vec![message.clone()]));
-                        let _ = finalized_tx.send((Arc::clone(&finalized_clients), vec![message]));
+                        send_messages!("processed", vec![message.clone()]);
+                        send_messages!("confirmed", vec![message.clone()]);
+                        send_messages!("finalized", vec![message]);
                     } else {
-                        let _ = processed_tx.send((Arc::clone(&processed_clients), vec![message.clone()]));
+                        send_messages!("processed", vec![message.clone()]);
                         messages.entry(message.get_slot()).or_default().push(message);
                     }
                 }
@@ -677,10 +707,12 @@ impl GrpcService {
             Arc<HashMap<usize, ClientConnection>>,
             Vec<Message>,
         )>,
+        commitment: &'static str,
     ) {
         while let Some((clients, messages)) = messages_rx.recv().await {
-            let mut failed_clients = vec![];
+            prom::message_queue_size_inc_by(commitment, -(messages.len() as i64));
 
+            let mut failed_clients = vec![];
             for message in messages {
                 for (id, client) in clients.iter() {
                     if failed_clients.iter().any(|failed_id| failed_id == id) {
