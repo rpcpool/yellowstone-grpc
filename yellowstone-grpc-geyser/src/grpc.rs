@@ -29,7 +29,7 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
         sync::Arc,
         time::Duration,
@@ -267,7 +267,7 @@ impl From<&Message> for UpdateOneof {
 }
 
 impl Message {
-    pub fn get_slot(&self) -> u64 {
+    pub const fn get_slot(&self) -> u64 {
         match self {
             Self::Slot(msg) => msg.slot,
             Self::Account(msg) => msg.slot,
@@ -294,7 +294,7 @@ enum ClientMessage {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ClientConnection {
     filter: Filter,
     stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
@@ -309,7 +309,7 @@ struct BlockhashStatus {
 }
 
 impl BlockhashStatus {
-    fn new(slot: u64) -> Self {
+    const fn new(slot: u64) -> Self {
         Self {
             slot,
             processed: false,
@@ -321,7 +321,7 @@ impl BlockhashStatus {
 
 #[derive(Debug, Default)]
 struct BlockMetaStorageInner {
-    blocks: BTreeMap<u64, MessageBlockMeta>,
+    blocks: HashMap<u64, MessageBlockMeta>,
     blockhashes: HashMap<String, BlockhashStatus>,
     processed: Option<u64>,
     confirmed: Option<u64>,
@@ -373,12 +373,7 @@ impl BlockMetaStorage {
 
                         if msg.status == CommitmentLevel::Finalized {
                             let keep_slot = msg.slot - KEEP_SLOTS;
-                            loop {
-                                match storage.blocks.keys().next().cloned() {
-                                    Some(slot) if slot < keep_slot => storage.blocks.remove(&slot),
-                                    _ => break,
-                                };
-                            }
+                            storage.blocks.retain(|slot, _block| *slot >= keep_slot);
 
                             let keep_slot = msg.slot - MAX_RECENT_BLOCKHASHES as u64 - 32;
                             storage
@@ -470,7 +465,7 @@ impl BlockMetaStorage {
 pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
-    new_clients_tx: mpsc::UnboundedSender<ClientMessage>,
+    clients_tx: mpsc::UnboundedSender<ClientMessage>,
     blocks_meta: BlockMetaStorage,
 }
 
@@ -489,24 +484,27 @@ impl GrpcService {
         )?;
 
         // Blocks meta storage
-        let (blocks_meta, update_blocks_meta_tx) = BlockMetaStorage::new();
+        let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new();
 
         // Create Server
-        let (new_clients_tx, new_clients_rx) = mpsc::unbounded_channel();
+        let (clients_tx, clients_rx) = mpsc::unbounded_channel();
         let service = GeyserServer::new(Self {
             config,
             subscribe_id: AtomicUsize::new(0),
-            new_clients_tx,
+            clients_tx: clients_tx.clone(),
             blocks_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
 
         // Run filter and send loop
-        let (update_channel_tx, update_channel_rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            Self::send_loop(update_channel_rx, new_clients_rx, update_blocks_meta_tx).await
-        });
+        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+        tokio::spawn(Self::send_loop(
+            messages_rx,
+            clients_tx,
+            clients_rx,
+            blocks_meta_tx,
+        ));
 
         // Run Server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -525,100 +523,191 @@ impl GrpcService {
                 .await
         });
 
-        Ok((update_channel_tx, shutdown_tx))
+        Ok((messages_tx, shutdown_tx))
     }
 
     async fn send_loop(
-        mut update_channel_rx: mpsc::UnboundedReceiver<Message>,
-        mut new_clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
-        update_blocks_meta_tx: mpsc::UnboundedSender<Message>,
+        mut messages_rx: mpsc::UnboundedReceiver<Message>,
+        clients_tx: mpsc::UnboundedSender<ClientMessage>,
+        mut clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
+        blocks_meta_tx: mpsc::UnboundedSender<Message>,
     ) {
-        // Number of slots hold in memory after finalized
-        const KEEP_SLOTS: u64 = 3;
+        // Send messages to clients on different commitments levels
+        let (processed_tx, processed_rx) = mpsc::unbounded_channel();
+        let (confirmed_tx, confirmed_rx) = mpsc::unbounded_channel();
+        let (finalized_tx, finalized_rx) = mpsc::unbounded_channel();
+        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), processed_rx));
+        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), confirmed_rx));
+        tokio::spawn(Self::send_loop_commitment(clients_tx.clone(), finalized_rx));
 
-        let mut clients: HashMap<usize, ClientConnection> = HashMap::new();
-        let mut messages: BTreeMap<u64, Vec<Message>> = BTreeMap::new();
+        // Clients management
+        let mut clients: HashMap<usize, CommitmentLevel> = HashMap::new();
+        let mut processed_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
+        let mut confirmed_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
+        let mut finalized_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
+        macro_rules! client_add {
+            ($id:expr, $filter:expr, $stream_tx:expr) => {
+                if clients
+                    .insert($id, $filter.get_commitment_level())
+                    .is_none()
+                {
+                    let clients = match $filter.get_commitment_level() {
+                        CommitmentLevel::Processed => &mut processed_clients,
+                        CommitmentLevel::Confirmed => &mut confirmed_clients,
+                        CommitmentLevel::Finalized => &mut finalized_clients,
+                    };
+                    *clients = Arc::new(
+                        clients
+                            .iter()
+                            .map(|(client_id, connection)| (*client_id, connection.clone()))
+                            .chain(std::iter::once((
+                                $id,
+                                ClientConnection {
+                                    filter: $filter,
+                                    stream_tx: $stream_tx,
+                                },
+                            )))
+                            .collect(),
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+        }
+        macro_rules! client_remove {
+            ($id:expr) => {
+                if let Some(commitment) = clients.remove(&$id) {
+                    let clients = match commitment {
+                        CommitmentLevel::Processed => &mut processed_clients,
+                        CommitmentLevel::Confirmed => &mut confirmed_clients,
+                        CommitmentLevel::Finalized => &mut finalized_clients,
+                    };
+                    let mut stream_tx = None;
+                    *clients = Arc::new(
+                        clients
+                            .iter()
+                            .filter_map(|(client_id, connection)| {
+                                if *client_id == $id {
+                                    stream_tx = Some(connection.stream_tx.clone());
+                                    None
+                                } else {
+                                    Some((*client_id, connection.clone()))
+                                }
+                            })
+                            .collect(),
+                    );
+                    stream_tx
+                } else {
+                    None
+                }
+            };
+        }
+
+        // Receive messages from Geyser plugin or gRPC clients updates
+        let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
         loop {
             tokio::select! {
-                Some(message) = update_channel_rx.recv() => {
+                Some(message) = messages_rx.recv() => {
                     MESSAGE_QUEUE_SIZE.dec();
 
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
-                        let _ = update_blocks_meta_tx.send(message.clone());
+                        let _ = blocks_meta_tx.send(message.clone());
                     }
 
-                    let slot = if let Message::Slot(slot) = message {
-                        slot
+                    if let Message::Slot(slot) = message {
+                        match slot.status {
+                            CommitmentLevel::Processed => {},
+                            CommitmentLevel::Confirmed => {
+                                let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
+                                let _ = confirmed_tx.send((Arc::clone(&confirmed_clients), messages));
+                            }
+                            CommitmentLevel::Finalized => {
+                                let messages = messages.remove(&slot.slot).unwrap_or_default();
+                                let _ = finalized_tx.send((Arc::clone(&finalized_clients), messages));
+                            }
+                        }
+
+                        let _ = processed_tx.send((Arc::clone(&processed_clients), vec![message.clone()]));
+                        let _ = confirmed_tx.send((Arc::clone(&confirmed_clients), vec![message.clone()]));
+                        let _ = finalized_tx.send((Arc::clone(&finalized_clients), vec![message]));
                     } else {
+                        let _ = processed_tx.send((Arc::clone(&processed_clients), vec![message.clone()]));
                         messages.entry(message.get_slot()).or_default().push(message);
-                        continue;
-                    };
-
-                    let slot_messages = messages.get(&slot.slot).map(|x| x.as_slice()).unwrap_or_default();
-                    for message in slot_messages.iter().chain(std::iter::once(&message)) {
-                        let mut ids_full = vec![];
-                        let mut ids_closed = vec![];
-
-                        for (id, client) in clients.iter() {
-                            if let Some(msg) = client.filter.get_update(message, slot.status) {
-                                match client.stream_tx.try_send(Ok(msg)) {
-                                    Ok(()) => {}
-                                    Err(mpsc::error::TrySendError::Full(_)) => ids_full.push(*id),
-                                    Err(mpsc::error::TrySendError::Closed(_)) => ids_closed.push(*id),
-                                }
-                            }
-                        }
-
-                        for id in ids_full {
-                            if let Some(client) = clients.remove(&id) {
-                                tokio::spawn(async move {
-                                    CONNECTIONS_TOTAL.dec();
-                                    error!("{}, lagged, close stream", id);
-                                    let _ = client.stream_tx.send(Err(Status::internal("lagged"))).await;
-                                });
-                            }
-                        }
-                        for id in ids_closed {
-                            if let Some(_client) = clients.remove(&id) {
-                                CONNECTIONS_TOTAL.dec();
-                                error!("{}, client closed stream", id);
-                            }
-                        }
                     }
-
-                    if slot.status == CommitmentLevel::Finalized {
-                        let keep_slot = slot.slot - KEEP_SLOTS;
-                        loop {
-                            match messages.keys().next().cloned() {
-                                Some(slot) if slot < keep_slot => messages.remove(&slot),
-                                _ => break,
-                            };
-                        }
-                    }
-                },
-                Some(msg) = new_clients_rx.recv() => {
+                }
+                Some(msg) = clients_rx.recv() => {
                     match msg {
                         ClientMessage::New { id, filter, stream_tx } => {
-                            info!("{}, add client to receivers", id);
-                            clients.insert(id, ClientConnection { filter, stream_tx });
-                            CONNECTIONS_TOTAL.inc();
+                            if client_add!(id, filter, stream_tx) {
+                                info!("client #{id}: new");
+                                CONNECTIONS_TOTAL.inc();
+                            } else {
+                                error!("client #{id}: already exists");
+                            }
                         }
                         ClientMessage::Update { id, filter } => {
-                            if let Some(client) = clients.get_mut(&id) {
-                                info!("{}, update client", id);
-                                client.filter = filter;
+                            if let Some(stream_tx) = client_remove!(id) {
+                                if client_add!(id, filter, stream_tx) {
+                                    info!("client #{id}, updated");
+                                } else {
+                                    error!("client #{id}, failed to update (add)");
+                                }
+                            } else {
+                                error!("client #{id}: failed to update (remove)")
                             }
                         }
                         ClientMessage::Drop { id } => {
-                            if clients.remove(&id).is_some() {
-                                info!("{id}, client removed");
+                            if client_remove!(id).is_some() {
+                                info!("client #{id}: removed");
                                 CONNECTIONS_TOTAL.dec();
                             }
                         }
                     }
                 }
                 else => break,
-            };
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn send_loop_commitment(
+        clients_tx: mpsc::UnboundedSender<ClientMessage>,
+        mut messages_rx: mpsc::UnboundedReceiver<(
+            Arc<HashMap<usize, ClientConnection>>,
+            Vec<Message>,
+        )>,
+    ) {
+        while let Some((clients, messages)) = messages_rx.recv().await {
+            let mut failed_clients = vec![];
+
+            for message in messages {
+                for (id, client) in clients.iter() {
+                    if failed_clients.iter().any(|failed_id| failed_id == id) {
+                        continue;
+                    }
+
+                    if let Some(msg) = client.filter.get_update(&message) {
+                        match client.stream_tx.try_send(Ok(msg)) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                error!("client #{id}: lagged");
+                                failed_clients.push(*id);
+                                let _ = clients_tx.send(ClientMessage::Drop { id: *id });
+                                let stream_tx = client.stream_tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                                });
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                error!("client #{id}: closed");
+                                failed_clients.push(*id);
+                                let _ = clients_tx.send(ClientMessage::Drop { id: *id });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -648,7 +737,7 @@ impl Geyser for GrpcService {
         .expect("empty filter");
 
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
-        if let Err(_error) = self.new_clients_tx.send(ClientMessage::New {
+        if let Err(_error) = self.clients_tx.send(ClientMessage::New {
             id,
             filter,
             stream_tx: stream_tx.clone(),
@@ -657,7 +746,7 @@ impl Geyser for GrpcService {
         }
 
         let ping_stream_tx = stream_tx.clone();
-        let new_clients_tx = self.new_clients_tx.clone();
+        let clients_tx = self.clients_tx.clone();
         tokio::spawn(async move {
             loop {
                 sleep(Duration::from_secs(10)).await;
@@ -670,18 +759,18 @@ impl Geyser for GrpcService {
                     Err(mpsc::error::TrySendError::Closed(_)) => break,
                 }
             }
-            let _ = new_clients_tx.send(ClientMessage::Drop { id });
+            let _ = clients_tx.send(ClientMessage::Drop { id });
         });
 
         let config_filters_limit = self.config.filters.clone();
-        let new_clients_tx = self.new_clients_tx.clone();
+        let clients_tx = self.clients_tx.clone();
         tokio::spawn(async move {
             loop {
                 match request.get_mut().message().await {
                     Ok(Some(request)) => {
                         if let Err(error) = match Filter::new(&request, &config_filters_limit) {
                             Ok(filter) => {
-                                match new_clients_tx.send(ClientMessage::Update { id, filter }) {
+                                match clients_tx.send(ClientMessage::Update { id, filter }) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
                                 }
@@ -699,7 +788,7 @@ impl Geyser for GrpcService {
                         break;
                     }
                     Err(_error) => {
-                        let _ = new_clients_tx.send(ClientMessage::Drop { id });
+                        let _ = clients_tx.send(ClientMessage::Drop { id });
                         break;
                     }
                 }

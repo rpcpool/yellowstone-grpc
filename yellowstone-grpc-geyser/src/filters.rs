@@ -26,7 +26,7 @@ use {
     },
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Filter {
     accounts: FilterAccounts,
     slots: FilterSlots,
@@ -70,6 +70,10 @@ impl Filter {
             .collect::<_>()
     }
 
+    pub const fn get_commitment_level(&self) -> CommitmentLevel {
+        self.commitment
+    }
+
     pub fn get_filters(&self, message: &Message) -> Vec<String> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
@@ -80,28 +84,20 @@ impl Filter {
         }
     }
 
-    pub fn get_update(
-        &self,
-        message: &Message,
-        commitment: CommitmentLevel,
-    ) -> Option<SubscribeUpdate> {
-        if commitment == self.commitment || matches!(message, Message::Slot(_)) {
-            let filters = self.get_filters(message);
-            if filters.is_empty() {
-                None
-            } else {
-                Some(SubscribeUpdate {
-                    filters,
-                    update_oneof: Some(message.into()),
-                })
-            }
-        } else {
+    pub fn get_update(&self, message: &Message) -> Option<SubscribeUpdate> {
+        let filters = self.get_filters(message);
+        if filters.is_empty() {
             None
+        } else {
+            Some(SubscribeUpdate {
+                filters,
+                update_oneof: Some(message.into()),
+            })
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FilterAccounts {
     filters: Vec<(String, FilterAccountsData)>,
     account: HashMap<Pubkey, HashSet<String>>,
@@ -174,7 +170,7 @@ impl FilterAccounts {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FilterAccountsData {
     memcmp: Vec<(usize, Vec<u8>)>,
     datasize: Option<usize>,
@@ -319,7 +315,7 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FilterSlots {
     filters: Vec<String>,
 }
@@ -345,7 +341,7 @@ impl FilterSlots {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
@@ -355,7 +351,7 @@ pub struct FilterTransactionsInner {
     account_required: HashSet<Pubkey>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FilterTransactions {
     filters: HashMap<String, FilterTransactionsInner>,
 }
@@ -490,7 +486,7 @@ impl FilterTransactions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FilterBlocks {
     filters: Vec<String>,
 }
@@ -516,7 +512,7 @@ impl FilterBlocks {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FilterBlocksMeta {
     filters: Vec<String>,
 }
