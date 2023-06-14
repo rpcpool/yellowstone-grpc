@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigGrpc,
         filters::Filter,
-        prom::CONNECTIONS_TOTAL,
+        prom::{CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         proto::{
             self,
             geyser_server::{Geyser, GeyserServer},
@@ -541,6 +541,8 @@ impl GrpcService {
         loop {
             tokio::select! {
                 Some(message) = update_channel_rx.recv() => {
+                    MESSAGE_QUEUE_SIZE.dec();
+
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
                         let _ = update_blocks_meta_tx.send(message.clone());
                     }
