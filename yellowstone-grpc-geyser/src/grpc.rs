@@ -638,6 +638,35 @@ impl GrpcService {
         let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
         loop {
             tokio::select! {
+                Some(message) = clients_rx.recv() => {
+                    match message {
+                        ClientMessage::New { id, filter, stream_tx } => {
+                            if client_add!(id, filter, stream_tx) {
+                                info!("client #{id}: new");
+                                CONNECTIONS_TOTAL.inc();
+                            } else {
+                                error!("client #{id}: already exists");
+                            }
+                        }
+                        ClientMessage::Update { id, filter } => {
+                            if let Some(stream_tx) = client_remove!(id) {
+                                if client_add!(id, filter, stream_tx) {
+                                    info!("client #{id}, updated");
+                                } else {
+                                    error!("client #{id}, failed to update (add)");
+                                }
+                            } else {
+                                error!("client #{id}: failed to update (remove)")
+                            }
+                        }
+                        ClientMessage::Drop { id } => {
+                            if client_remove!(id).is_some() {
+                                info!("client #{id}: removed");
+                                CONNECTIONS_TOTAL.dec();
+                            }
+                        }
+                    }
+                }
                 Some(message) = messages_rx.recv() => {
                     prom::message_queue_size_inc_by("geyser", -1);
 
@@ -664,35 +693,6 @@ impl GrpcService {
                     } else {
                         send_messages!("processed", vec![message.clone()]);
                         messages.entry(message.get_slot()).or_default().push(message);
-                    }
-                }
-                Some(msg) = clients_rx.recv() => {
-                    match msg {
-                        ClientMessage::New { id, filter, stream_tx } => {
-                            if client_add!(id, filter, stream_tx) {
-                                info!("client #{id}: new");
-                                CONNECTIONS_TOTAL.inc();
-                            } else {
-                                error!("client #{id}: already exists");
-                            }
-                        }
-                        ClientMessage::Update { id, filter } => {
-                            if let Some(stream_tx) = client_remove!(id) {
-                                if client_add!(id, filter, stream_tx) {
-                                    info!("client #{id}, updated");
-                                } else {
-                                    error!("client #{id}, failed to update (add)");
-                                }
-                            } else {
-                                error!("client #{id}: failed to update (remove)")
-                            }
-                        }
-                        ClientMessage::Drop { id } => {
-                            if client_remove!(id).is_some() {
-                                info!("client #{id}: removed");
-                                CONNECTIONS_TOTAL.dec();
-                            }
-                        }
                     }
                 }
                 else => break,
