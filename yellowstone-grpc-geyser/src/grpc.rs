@@ -32,11 +32,10 @@ use {
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
         sync::Arc,
-        time::Duration,
     },
     tokio::{
         sync::{mpsc, oneshot, RwLock},
-        time::sleep,
+        time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
@@ -634,8 +633,14 @@ impl GrpcService {
             };
         }
 
+        const PROCESSED_MESSAGES_MAX: usize = 10;
+        const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
+
         // Receive messages from Geyser plugin or gRPC clients updates
         let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
+        let mut processed_messages = Vec::new();
+        let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
+        tokio::pin!(processed_sleep);
         loop {
             tokio::select! {
                 Some(message) = clients_rx.recv() => {
@@ -676,7 +681,13 @@ impl GrpcService {
 
                     if let Message::Slot(slot) = message {
                         match slot.status {
-                            CommitmentLevel::Processed => {},
+                            CommitmentLevel::Processed => {
+                                if !processed_messages.is_empty() {
+                                    send_messages!("processed", processed_messages);
+                                    processed_messages = vec![];
+                                    processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                                }
+                            },
                             CommitmentLevel::Confirmed => {
                                 let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
                                 send_messages!("confirmed", messages);
@@ -691,9 +702,21 @@ impl GrpcService {
                         send_messages!("confirmed", vec![message.clone()]);
                         send_messages!("finalized", vec![message]);
                     } else {
-                        send_messages!("processed", vec![message.clone()]);
+                        processed_messages.push(message.clone());
+                        if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
+                            send_messages!("processed", processed_messages);
+                            processed_messages = vec![];
+                            processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                        }
                         messages.entry(message.get_slot()).or_default().push(message);
                     }
+                }
+                () = &mut processed_sleep => {
+                    if !processed_messages.is_empty() {
+                        send_messages!("processed", processed_messages);
+                        processed_messages = vec![];
+                    }
+                    processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                 }
                 else => break,
             }
