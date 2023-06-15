@@ -63,8 +63,7 @@ jobs:
             target/release/client
             target/release/config-check
 
-jobs:
-  release:
+  release22:
     runs-on: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v3
