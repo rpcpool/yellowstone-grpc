@@ -687,10 +687,12 @@ impl Geyser for GrpcService {
                 })) {
                     Ok(()) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        let _ = ping_client_tx.send(None);
+                        break;
+                    }
                 }
             }
-            let _ = ping_client_tx.send(None);
         });
 
         let config_filters_limit = self.config.filters.clone();
