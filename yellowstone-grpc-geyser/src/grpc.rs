@@ -30,8 +30,10 @@ use {
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
         collections::HashMap,
-        sync::atomic::{AtomicUsize, Ordering},
-        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
     },
     tokio::{
         sync::{broadcast, mpsc, oneshot, RwLock},
@@ -575,6 +577,7 @@ impl GrpcService {
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
+        exit: Arc<AtomicBool>,
     ) {
         CONNECTIONS_TOTAL.inc();
         info!("client #{id}: new");
@@ -634,6 +637,7 @@ impl GrpcService {
         }
         info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
+        exit.store(true, Ordering::Relaxed);
     }
 }
 
@@ -660,6 +664,7 @@ impl Geyser for GrpcService {
         .expect("empty filter");
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let exit = Arc::new(AtomicBool::new(false));
 
         tokio::spawn(Self::client_loop(
             id,
@@ -667,12 +672,14 @@ impl Geyser for GrpcService {
             stream_tx.clone(),
             client_rx,
             self.broadcast_tx.subscribe(),
+            Arc::clone(&exit),
         ));
 
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
+        let ping_exit = Arc::clone(&exit);
         tokio::spawn(async move {
-            loop {
+            while !ping_exit.load(Ordering::Relaxed) {
                 sleep(Duration::from_secs(10)).await;
                 match ping_stream_tx.try_send(Ok(SubscribeUpdate {
                     filters: vec![],
@@ -688,7 +695,7 @@ impl Geyser for GrpcService {
 
         let config_filters_limit = self.config.filters.clone();
         tokio::spawn(async move {
-            loop {
+            while !exit.load(Ordering::Relaxed) {
                 match request.get_mut().message().await {
                     Ok(Some(request)) => {
                         if let Err(error) = match Filter::new(&request, &config_filters_limit) {
