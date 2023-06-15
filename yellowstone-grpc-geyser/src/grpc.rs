@@ -680,27 +680,31 @@ impl GrpcService {
                     }
 
                     if let Message::Slot(slot) = message {
-                        match slot.status {
-                            CommitmentLevel::Processed => {
-                                if !processed_messages.is_empty() {
-                                    send_messages!("processed", processed_messages);
-                                    processed_messages = vec![];
-                                    processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
-                                }
-                            },
+                        let (mut confirmed_messages, mut finalized_messages) = match slot.status {
+                            CommitmentLevel::Processed => (vec![], vec![]),
                             CommitmentLevel::Confirmed => {
                                 let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
-                                send_messages!("confirmed", messages);
+                                (messages, vec![])
                             }
                             CommitmentLevel::Finalized => {
                                 let messages = messages.remove(&slot.slot).unwrap_or_default();
-                                send_messages!("finalized", messages);
+                                (vec![], messages)
                             }
-                        }
+                        };
 
-                        send_messages!("processed", vec![message.clone()]);
-                        send_messages!("confirmed", vec![message.clone()]);
-                        send_messages!("finalized", vec![message]);
+                        // processed
+                        processed_messages.push(message.clone());
+                        send_messages!("processed", processed_messages);
+                        processed_messages = vec![];
+                        processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+
+                        // confirmed
+                        confirmed_messages.push(message.clone());
+                        send_messages!("confirmed", confirmed_messages);
+
+                        // finalized
+                        finalized_messages.push(message);
+                        send_messages!("finalized", finalized_messages);
                     } else {
                         processed_messages.push(message.clone());
                         if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
