@@ -62,3 +62,56 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client
             target/release/config-check
+
+jobs:
+  release:
+    runs-on: [ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set rust version
+        run: |
+          source ci/rust-version.sh
+          echo "RUST_STABLE=$rust_stable" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          override: true
+          profile: minimal
+          components: rustfmt
+
+      - name: Check Solana version
+        run: |
+          echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
+          echo "CI_OS_NAME=linux" >> "$GITHUB_ENV"
+
+          SOLANA_VERSION="$(./ci/solana-version.sh)"
+          echo "SOLANA_VERSION=$SOLANA_VERSION" >> "$GITHUB_ENV"
+
+      - name: Create build name
+        run: |
+          echo "BUILD_NAME=$CI_TAG" >> "$GITHUB_ENV"
+
+      - name: Build release tarball
+        run: ./ci/create-tarball.sh
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.BUILD_NAME }}
+          body: |
+            ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
+            solana ${{ env.SOLANA_VERSION }}
+            rust ${{ env.RUST_STABLE }}
+          files: |
+            ${{ env.GEYSER_PLUGIN_NAME }}-release-*
+            yellowstone-grpc-proto/proto/*.proto
+            target/release/client
+            target/release/config-check
