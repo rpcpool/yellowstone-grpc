@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigGrpc,
         filters::Filter,
-        prom::{self, CONNECTIONS_TOTAL},
+        prom::{CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         proto::{
             self,
             geyser_server::{Geyser, GeyserServer},
@@ -34,7 +34,7 @@ use {
         sync::Arc,
     },
     tokio::{
-        sync::{mpsc, oneshot, RwLock},
+        sync::{broadcast, mpsc, oneshot, RwLock},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -277,26 +277,11 @@ impl Message {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ClientMessage {
-    New {
-        id: usize,
-        filter: Filter,
-        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
-    },
-    Update {
-        id: usize,
-        filter: Filter,
-    },
-    Drop {
-        id: usize,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct ClientConnection {
-    filter: Filter,
-    stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+    Update { filter: Filter },
+    Drop,
 }
 
 #[derive(Debug)]
@@ -464,7 +449,7 @@ impl BlockMetaStorage {
 pub struct GrpcService {
     config: ConfigGrpc,
     subscribe_id: AtomicUsize,
-    clients_tx: mpsc::UnboundedSender<ClientMessage>,
+    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
     blocks_meta: BlockMetaStorage,
 }
 
@@ -485,12 +470,14 @@ impl GrpcService {
         // Blocks meta storage
         let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new();
 
+        // Messages to clients combined by commitment
+        let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
         // Create Server
-        let (clients_tx, clients_rx) = mpsc::unbounded_channel();
         let service = GeyserServer::new(Self {
             config,
             subscribe_id: AtomicUsize::new(0),
-            clients_tx: clients_tx.clone(),
+            broadcast_tx: broadcast_tx.clone(),
             blocks_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
@@ -498,12 +485,7 @@ impl GrpcService {
 
         // Run filter and send loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::send_loop(
-            messages_rx,
-            clients_tx,
-            clients_rx,
-            blocks_meta_tx,
-        ));
+        tokio::spawn(Self::geyser_loop(messages_rx, blocks_meta_tx, broadcast_tx));
 
         // Run Server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -525,155 +507,22 @@ impl GrpcService {
         Ok((messages_tx, shutdown_tx))
     }
 
-    async fn send_loop(
+    async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
-        clients_tx: mpsc::UnboundedSender<ClientMessage>,
-        mut clients_rx: mpsc::UnboundedReceiver<ClientMessage>,
         blocks_meta_tx: mpsc::UnboundedSender<Message>,
+        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
     ) {
-        // Send messages to clients on different commitments levels
-        let (processed_tx, processed_rx) = mpsc::unbounded_channel();
-        let (confirmed_tx, confirmed_rx) = mpsc::unbounded_channel();
-        let (finalized_tx, finalized_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::send_loop_commitment(
-            clients_tx.clone(),
-            processed_rx,
-            "processed",
-        ));
-        tokio::spawn(Self::send_loop_commitment(
-            clients_tx.clone(),
-            confirmed_rx,
-            "confirmed",
-        ));
-        tokio::spawn(Self::send_loop_commitment(
-            clients_tx.clone(),
-            finalized_rx,
-            "finalized",
-        ));
-
-        // Clients management
-        let mut clients: HashMap<usize, CommitmentLevel> = HashMap::new();
-        let mut processed_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
-        let mut confirmed_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
-        let mut finalized_clients: Arc<HashMap<usize, ClientConnection>> = Arc::new(HashMap::new());
-        macro_rules! client_add {
-            ($id:expr, $filter:expr, $stream_tx:expr) => {
-                if clients
-                    .insert($id, $filter.get_commitment_level())
-                    .is_none()
-                {
-                    let clients = match $filter.get_commitment_level() {
-                        CommitmentLevel::Processed => &mut processed_clients,
-                        CommitmentLevel::Confirmed => &mut confirmed_clients,
-                        CommitmentLevel::Finalized => &mut finalized_clients,
-                    };
-                    *clients = Arc::new(
-                        clients
-                            .iter()
-                            .map(|(client_id, connection)| (*client_id, connection.clone()))
-                            .chain(std::iter::once((
-                                $id,
-                                ClientConnection {
-                                    filter: $filter,
-                                    stream_tx: $stream_tx,
-                                },
-                            )))
-                            .collect(),
-                    );
-                    true
-                } else {
-                    false
-                }
-            };
-        }
-        macro_rules! client_remove {
-            ($id:expr) => {
-                if let Some(commitment) = clients.remove(&$id) {
-                    let clients = match commitment {
-                        CommitmentLevel::Processed => &mut processed_clients,
-                        CommitmentLevel::Confirmed => &mut confirmed_clients,
-                        CommitmentLevel::Finalized => &mut finalized_clients,
-                    };
-                    let mut stream_tx = None;
-                    *clients = Arc::new(
-                        clients
-                            .iter()
-                            .filter_map(|(client_id, connection)| {
-                                if *client_id == $id {
-                                    stream_tx = Some(connection.stream_tx.clone());
-                                    None
-                                } else {
-                                    Some((*client_id, connection.clone()))
-                                }
-                            })
-                            .collect(),
-                    );
-                    stream_tx
-                } else {
-                    None
-                }
-            };
-        }
-
-        // Helper for count messages in queue size
-        macro_rules! send_messages {
-            ($commitment:expr, $messages:expr) => {
-                let messages = $messages;
-                let size = messages.len() as i64;
-                if match $commitment {
-                    "processed" => processed_tx.send((Arc::clone(&processed_clients), messages)),
-                    "confirmed" => confirmed_tx.send((Arc::clone(&confirmed_clients), messages)),
-                    "finalized" => finalized_tx.send((Arc::clone(&finalized_clients), messages)),
-                    _ => unreachable!(),
-                }
-                .is_ok()
-                {
-                    prom::message_queue_size_add($commitment, size);
-                }
-            };
-        }
-
-        const PROCESSED_MESSAGES_MAX: usize = 10;
+        const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
 
-        // Receive messages from Geyser plugin or gRPC clients updates
         let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
-        let mut processed_messages = Vec::new();
+        let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
         loop {
             tokio::select! {
-                Some(message) = clients_rx.recv() => {
-                    match message {
-                        ClientMessage::New { id, filter, stream_tx } => {
-                            if client_add!(id, filter, stream_tx) {
-                                info!("client #{id}: new");
-                                CONNECTIONS_TOTAL.inc();
-                            } else {
-                                error!("client #{id}: already exists");
-                            }
-                        }
-                        ClientMessage::Update { id, filter } => {
-                            if let Some(stream_tx) = client_remove!(id) {
-                                if client_add!(id, filter, stream_tx) {
-                                    info!("client #{id}, updated");
-                                } else {
-                                    error!("client #{id}, failed to update (add)");
-                                }
-                            } else {
-                                error!("client #{id}: failed to update (remove)")
-                            }
-                        }
-                        ClientMessage::Drop { id } => {
-                            if client_remove!(id).is_some() {
-                                info!("client #{id}: removed");
-                                CONNECTIONS_TOTAL.dec();
-                            }
-                        }
-                    }
-                }
                 Some(message) = messages_rx.recv() => {
-                    prom::message_queue_size_sub("geyser", 1);
+                    MESSAGE_QUEUE_SIZE.dec();
 
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
                         let _ = blocks_meta_tx.send(message.clone());
@@ -681,35 +530,35 @@ impl GrpcService {
 
                     if let Message::Slot(slot) = message {
                         let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                            CommitmentLevel::Processed => (vec![], vec![]),
+                            CommitmentLevel::Processed => (Vec::with_capacity(1), Vec::with_capacity(1)),
                             CommitmentLevel::Confirmed => {
                                 let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
-                                (messages, vec![])
+                                (messages, Vec::with_capacity(1))
                             }
                             CommitmentLevel::Finalized => {
                                 let messages = messages.remove(&slot.slot).unwrap_or_default();
-                                (vec![], messages)
+                                (Vec::with_capacity(1), messages)
                             }
                         };
 
                         // processed
                         processed_messages.push(message.clone());
-                        send_messages!("processed", processed_messages);
-                        processed_messages = vec![];
+                        let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                         processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                         // confirmed
                         confirmed_messages.push(message.clone());
-                        send_messages!("confirmed", confirmed_messages);
+                        let _ = broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
 
                         // finalized
                         finalized_messages.push(message);
-                        send_messages!("finalized", finalized_messages);
+                        let _ = broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
                     } else {
                         processed_messages.push(message.clone());
                         if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
-                            send_messages!("processed", processed_messages);
-                            processed_messages = vec![];
+                            let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                            processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                             processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                         }
                         messages.entry(message.get_slot()).or_default().push(message);
@@ -717,8 +566,8 @@ impl GrpcService {
                 }
                 () = &mut processed_sleep => {
                     if !processed_messages.is_empty() {
-                        send_messages!("processed", processed_messages);
-                        processed_messages = vec![];
+                        let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
                     processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                 }
@@ -727,47 +576,71 @@ impl GrpcService {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    async fn send_loop_commitment(
-        clients_tx: mpsc::UnboundedSender<ClientMessage>,
-        mut messages_rx: mpsc::UnboundedReceiver<(
-            Arc<HashMap<usize, ClientConnection>>,
-            Vec<Message>,
-        )>,
-        commitment: &'static str,
+    async fn client_loop(
+        id: usize,
+        mut filter: Filter,
+        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        mut client_rx: mpsc::UnboundedReceiver<ClientMessage>,
+        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
     ) {
-        while let Some((clients, messages)) = messages_rx.recv().await {
-            prom::message_queue_size_sub(commitment, messages.len() as i64);
-
-            let mut failed_clients = vec![];
-            for message in messages {
-                for (id, client) in clients.iter() {
-                    if failed_clients.iter().any(|failed_id| failed_id == id) {
-                        continue;
+        CONNECTIONS_TOTAL.inc();
+        info!("client #{id}: new");
+        'outer: loop {
+            tokio::select! {
+                message = client_rx.recv() => {
+                    match message {
+                        Some(ClientMessage::Update { filter: filter_new }) => {
+                            filter = filter_new;
+                            info!("client #{id}: filter updated");
+                        }
+                        Some(ClientMessage::Drop) => {
+                            break 'outer;
+                        },
+                        None => {
+                            break 'outer;
+                        }
                     }
-
-                    if let Some(msg) = client.filter.get_update(&message) {
-                        match client.stream_tx.try_send(Ok(msg)) {
-                            Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(_)) => {
-                                error!("client #{id}: lagged");
-                                failed_clients.push(*id);
-                                let _ = clients_tx.send(ClientMessage::Drop { id: *id });
-                                let stream_tx = client.stream_tx.clone();
-                                tokio::spawn(async move {
-                                    let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
-                                });
+                }
+                message = messages_rx.recv() => {
+                    match message {
+                        Ok((commitment, messages)) => {
+                            if commitment == filter.get_commitment_level() {
+                                for message in messages.iter() {
+                                    if let Some(message) = filter.get_update(message) {
+                                        match stream_tx.try_send(Ok(message)) {
+                                            Ok(()) => {}
+                                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                                error!("client #{id}: lagged to send update");
+                                                tokio::spawn(async move {
+                                                    let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                                                });
+                                                break 'outer;
+                                            }
+                                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                                error!("client #{id}: stream closed");
+                                                break 'outer;
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                error!("client #{id}: closed");
-                                failed_clients.push(*id);
-                                let _ = clients_tx.send(ClientMessage::Drop { id: *id });
-                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break 'outer;
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            info!("client #{id}: lagged to receive geyser messages");
+                            tokio::spawn(async move {
+                                let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                            });
+                            break 'outer;
                         }
                     }
                 }
             }
         }
+        info!("client #{id}: removed");
+        CONNECTIONS_TOTAL.dec();
     }
 }
 
@@ -780,8 +653,6 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
-        info!("{}, new subscriber", id);
-
         let filter = Filter::new(
             &SubscribeRequest {
                 accounts: HashMap::new(),
@@ -794,18 +665,19 @@ impl Geyser for GrpcService {
             &self.config.filters,
         )
         .expect("empty filter");
-
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
-        if let Err(_error) = self.clients_tx.send(ClientMessage::New {
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+
+        tokio::spawn(Self::client_loop(
             id,
             filter,
-            stream_tx: stream_tx.clone(),
-        }) {
-            return Err(Status::internal("failed to add client"));
-        }
+            stream_tx.clone(),
+            client_rx,
+            self.broadcast_tx.subscribe(),
+        ));
 
         let ping_stream_tx = stream_tx.clone();
-        let clients_tx = self.clients_tx.clone();
+        let ping_client_tx = client_tx.clone();
         tokio::spawn(async move {
             loop {
                 sleep(Duration::from_secs(10)).await;
@@ -818,22 +690,19 @@ impl Geyser for GrpcService {
                     Err(mpsc::error::TrySendError::Closed(_)) => break,
                 }
             }
-            let _ = clients_tx.send(ClientMessage::Drop { id });
+            let _ = ping_client_tx.send(ClientMessage::Drop);
         });
 
         let config_filters_limit = self.config.filters.clone();
-        let clients_tx = self.clients_tx.clone();
         tokio::spawn(async move {
             loop {
                 match request.get_mut().message().await {
                     Ok(Some(request)) => {
                         if let Err(error) = match Filter::new(&request, &config_filters_limit) {
-                            Ok(filter) => {
-                                match clients_tx.send(ClientMessage::Update { id, filter }) {
-                                    Ok(()) => Ok(()),
-                                    Err(error) => Err(error.to_string()),
-                                }
-                            }
+                            Ok(filter) => match client_tx.send(ClientMessage::Update { filter }) {
+                                Ok(()) => Ok(()),
+                                Err(error) => Err(error.to_string()),
+                            },
                             Err(error) => Err(error.to_string()),
                         } {
                             let _ = stream_tx
@@ -847,7 +716,7 @@ impl Geyser for GrpcService {
                         break;
                     }
                     Err(_error) => {
-                        let _ = clients_tx.send(ClientMessage::Drop { id });
+                        let _ = client_tx.send(ClientMessage::Drop);
                         break;
                     }
                 }

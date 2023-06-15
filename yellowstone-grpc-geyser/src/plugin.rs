@@ -4,7 +4,7 @@ use {
         grpc::{
             GrpcService, Message, MessageBlockMeta, MessageTransaction, MessageTransactionInfo,
         },
-        prom::{self, PrometheusService},
+        prom::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -44,7 +44,7 @@ impl PluginInner {
 
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(message).is_ok() {
-            prom::message_queue_size_add("geyser", 1);
+            MESSAGE_QUEUE_SIZE.inc();
         }
     }
 }

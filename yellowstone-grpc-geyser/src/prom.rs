@@ -30,9 +30,8 @@ lazy_static::lazy_static! {
         "invalid_full_blocks_total", "Total number of fails on constructin full blocks"
     ).unwrap();
 
-    pub static ref MESSAGE_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("message_queue_size", "Size of message queue"),
-        &["kind"]
+    pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "message_queue_size", "Size of geyser message queue"
     ).unwrap();
 
     pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
@@ -127,12 +126,4 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
             SlotStatus::Rooted => "finalized",
         }])
         .set(slot as i64);
-}
-
-pub fn message_queue_size_add(kind: &'static str, delta: i64) {
-    MESSAGE_QUEUE_SIZE.with_label_values(&[kind]).add(delta)
-}
-
-pub fn message_queue_size_sub(kind: &'static str, delta: i64) {
-    MESSAGE_QUEUE_SIZE.with_label_values(&[kind]).sub(delta)
 }
