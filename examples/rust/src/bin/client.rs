@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
             info!("Retry to connect to the server");
 
             let commitment = args.get_commitment();
-            let mut client = GeyserGrpcClient::connect(args.endpoint.clone(), args.x_token, None)
+            let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)
                 .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
 
             match &args.action {
