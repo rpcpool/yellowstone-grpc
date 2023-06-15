@@ -277,13 +277,6 @@ impl Message {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-enum ClientMessage {
-    Update { filter: Filter },
-    Drop,
-}
-
 #[derive(Debug)]
 struct BlockhashStatus {
     slot: u64,
@@ -580,7 +573,7 @@ impl GrpcService {
         id: usize,
         mut filter: Filter,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
-        mut client_rx: mpsc::UnboundedReceiver<ClientMessage>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
     ) {
         CONNECTIONS_TOTAL.inc();
@@ -589,11 +582,11 @@ impl GrpcService {
             tokio::select! {
                 message = client_rx.recv() => {
                     match message {
-                        Some(ClientMessage::Update { filter: filter_new }) => {
+                        Some(Some(filter_new)) => {
                             filter = filter_new;
                             info!("client #{id}: filter updated");
                         }
-                        Some(ClientMessage::Drop) => {
+                        Some(None) => {
                             break 'outer;
                         },
                         None => {
@@ -690,7 +683,7 @@ impl Geyser for GrpcService {
                     Err(mpsc::error::TrySendError::Closed(_)) => break,
                 }
             }
-            let _ = ping_client_tx.send(ClientMessage::Drop);
+            let _ = ping_client_tx.send(None);
         });
 
         let config_filters_limit = self.config.filters.clone();
@@ -699,7 +692,7 @@ impl Geyser for GrpcService {
                 match request.get_mut().message().await {
                     Ok(Some(request)) => {
                         if let Err(error) = match Filter::new(&request, &config_filters_limit) {
-                            Ok(filter) => match client_tx.send(ClientMessage::Update { filter }) {
+                            Ok(filter) => match client_tx.send(Some(filter)) {
                                 Ok(()) => Ok(()),
                                 Err(error) => Err(error.to_string()),
                             },
@@ -716,7 +709,7 @@ impl Geyser for GrpcService {
                         break;
                     }
                     Err(_error) => {
-                        let _ = client_tx.send(ClientMessage::Drop);
+                        let _ = client_tx.send(None);
                         break;
                     }
                 }
