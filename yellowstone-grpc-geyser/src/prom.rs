@@ -129,6 +129,10 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
         .set(slot as i64);
 }
 
-pub fn message_queue_size_inc_by(kind: &'static str, delta: i64) {
+pub fn message_queue_size_add(kind: &'static str, delta: i64) {
     MESSAGE_QUEUE_SIZE.with_label_values(&[kind]).add(delta)
+}
+
+pub fn message_queue_size_sub(kind: &'static str, delta: i64) {
+    MESSAGE_QUEUE_SIZE.with_label_values(&[kind]).sub(delta)
 }

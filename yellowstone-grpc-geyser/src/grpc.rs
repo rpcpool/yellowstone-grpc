@@ -628,7 +628,7 @@ impl GrpcService {
                 }
                 .is_ok()
                 {
-                    prom::message_queue_size_inc_by($commitment, size);
+                    prom::message_queue_size_add($commitment, size);
                 }
             };
         }
@@ -673,7 +673,7 @@ impl GrpcService {
                     }
                 }
                 Some(message) = messages_rx.recv() => {
-                    prom::message_queue_size_inc_by("geyser", -1);
+                    prom::message_queue_size_sub("geyser", 1);
 
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
                         let _ = blocks_meta_tx.send(message.clone());
@@ -737,7 +737,7 @@ impl GrpcService {
         commitment: &'static str,
     ) {
         while let Some((clients, messages)) = messages_rx.recv().await {
-            prom::message_queue_size_inc_by(commitment, -(messages.len() as i64));
+            prom::message_queue_size_sub(commitment, messages.len() as i64);
 
             let mut failed_clients = vec![];
             for message in messages {

@@ -44,7 +44,7 @@ impl PluginInner {
 
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(message).is_ok() {
-            prom::message_queue_size_inc_by("geyser", 1);
+            prom::message_queue_size_add("geyser", 1);
         }
     }
 }
