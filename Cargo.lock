@@ -4309,6 +4309,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tonic",
+ "tonic-health",
  "yellowstone-grpc-proto",
 ]
 
