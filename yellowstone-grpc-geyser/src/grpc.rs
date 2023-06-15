@@ -441,9 +441,9 @@ impl BlockMetaStorage {
 #[derive(Debug)]
 pub struct GrpcService {
     config: ConfigGrpc,
+    blocks_meta: BlockMetaStorage,
     subscribe_id: AtomicUsize,
     broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
-    blocks_meta: BlockMetaStorage,
 }
 
 impl GrpcService {
@@ -469,14 +469,14 @@ impl GrpcService {
         // Create Server
         let service = GeyserServer::new(Self {
             config,
+            blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             broadcast_tx: broadcast_tx.clone(),
-            blocks_meta,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
 
-        // Run filter and send loop
+        // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         tokio::spawn(Self::geyser_loop(messages_rx, blocks_meta_tx, broadcast_tx));
 
