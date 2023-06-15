@@ -10,10 +10,10 @@ license = "Apache-2.0"
 keywords = ["solana"]
 
 [dependencies]
-prost = "0.11.0"
-tonic = "0.8.0"
+prost = "0.11.9"
+tonic = "0.9.2"
 
 [build-dependencies]
 anyhow = "1.0.62"
 protobuf-src = "1.1.0"
-tonic-build = "0.8.2"
+tonic-build = "0.9.2"
