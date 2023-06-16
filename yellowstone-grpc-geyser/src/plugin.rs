@@ -4,7 +4,7 @@ use {
         grpc::{
             GrpcService, Message, MessageBlockMeta, MessageTransaction, MessageTransactionInfo,
         },
-        prom::{self, PrometheusService},
+        prom::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -38,7 +38,13 @@ impl PluginInner {
             let (block_meta, mut transactions) = self.transactions.remove(&slot).expect("checked");
             transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
             let message = Message::Block((block_meta.expect("checked"), transactions).into());
-            let _ = self.grpc_channel.send(message);
+            self.send_message(message);
+        }
+    }
+
+    fn send_message(&self, message: Message) {
+        if self.grpc_channel.send(message).is_ok() {
+            MESSAGE_QUEUE_SIZE.inc();
         }
     }
 }
@@ -128,7 +134,7 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = Message::Account((account, slot, is_startup).into());
-            let _ = inner.grpc_channel.send(message);
+            inner.send_message(message);
             Ok(())
         })
     }
@@ -169,8 +175,8 @@ impl GeyserPlugin for Plugin {
             }
 
             let message = Message::Slot((slot, parent, status).into());
-            let _ = inner.grpc_channel.send(message);
-            prom::update_slot_status(slot, status);
+            inner.send_message(message);
+            prom::update_slot_status(status, slot);
 
             Ok(())
         })
@@ -197,7 +203,7 @@ impl GeyserPlugin for Plugin {
             inner.try_send_full_block(slot);
 
             let message = Message::Transaction(msg_tx);
-            let _ = inner.grpc_channel.send(message);
+            inner.send_message(message);
 
             Ok(())
         })
@@ -222,7 +228,7 @@ impl GeyserPlugin for Plugin {
             inner.try_send_full_block(block_meta.slot);
 
             let message = Message::BlockMeta(block_meta);
-            let _ = inner.grpc_channel.send(message);
+            inner.send_message(message);
 
             Ok(())
         })

@@ -26,12 +26,16 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
-    pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
-        "connections_total", "Total number of connections to GRPC service"
-    ).unwrap();
-
     pub static ref INVALID_FULL_BLOCKS: IntGauge = IntGauge::new(
         "invalid_full_blocks_total", "Total number of fails on constructin full blocks"
+    ).unwrap();
+
+    pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "message_queue_size", "Size of geyser message queue"
+    ).unwrap();
+
+    pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
+        "connections_total", "Total number of connections to GRPC service"
     ).unwrap();
 }
 
@@ -53,8 +57,9 @@ impl PrometheusService {
             }
             register!(VERSION);
             register!(SLOT_STATUS);
-            register!(CONNECTIONS_TOTAL);
             register!(INVALID_FULL_BLOCKS);
+            register!(MESSAGE_QUEUE_SIZE);
+            register!(CONNECTIONS_TOTAL);
 
             VERSION
                 .with_label_values(&[
@@ -113,7 +118,7 @@ fn not_found_handler() -> Response<Body> {
         .unwrap()
 }
 
-pub fn update_slot_status(slot: u64, status: SlotStatus) {
+pub fn update_slot_status(status: SlotStatus, slot: u64) {
     SLOT_STATUS
         .with_label_values(&[match status {
             SlotStatus::Processed => "processed",

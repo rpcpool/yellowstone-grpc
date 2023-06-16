@@ -14,6 +14,7 @@ use {
         transport::channel::{Channel, ClientTlsConfig},
         Request, Response, Status,
     },
+    tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
     yellowstone_grpc_proto::prelude::{
         geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
@@ -24,6 +25,20 @@ use {
         SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
+
+#[derive(Debug, Clone)]
+struct InterceptorFn {
+    x_token: Option<AsciiMetadataValue>,
+}
+
+impl Interceptor for InterceptorFn {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
+        if let Some(x_token) = self.x_token.clone() {
+            request.metadata_mut().insert("x-token", x_token);
+        }
+        Ok(request)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeyserGrpcClientError {
@@ -44,7 +59,8 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 pub struct GeyserGrpcClient<F> {
-    client: GeyserClient<InterceptedService<Channel, F>>,
+    health: HealthClient<InterceptedService<Channel, F>>,
+    geyser: GeyserClient<InterceptedService<Channel, F>>,
 }
 
 impl GeyserGrpcClient<()> {
@@ -76,19 +92,34 @@ impl GeyserGrpcClient<()> {
             }
             _ => {}
         }
+        let interceptor = InterceptorFn { x_token };
 
-        let client = GeyserClient::with_interceptor(channel, move |mut req: Request<()>| {
-            if let Some(x_token) = x_token.clone() {
-                req.metadata_mut().insert("x-token", x_token);
-            }
-            Ok(req)
-        });
-
-        Ok(GeyserGrpcClient { client })
+        Ok(GeyserGrpcClient {
+            health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
+            geyser: GeyserClient::with_interceptor(channel, interceptor),
+        })
     }
 }
 
 impl<F: Interceptor> GeyserGrpcClient<F> {
+    pub async fn health_check(&mut self) -> GeyserGrpcClientResult<HealthCheckResponse> {
+        let request = HealthCheckRequest {
+            service: "geyser.Geyser".to_owned(),
+        };
+        let response = self.health.check(request).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn health_watch(
+        &mut self,
+    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<HealthCheckResponse, Status>>> {
+        let request = HealthCheckRequest {
+            service: "geyser.Geyser".to_owned(),
+        };
+        let response = self.health.watch(request).await?;
+        Ok(response.into_inner())
+    }
+
     pub async fn subscribe(
         &mut self,
     ) -> GeyserGrpcClientResult<(
@@ -97,7 +128,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     )> {
         let (subscribe_tx, subscribe_rx) = mpsc::unbounded();
         let response: Response<Streaming<SubscribeUpdate>> =
-            self.client.subscribe(subscribe_rx).await?;
+            self.geyser.subscribe(subscribe_rx).await?;
         Ok((subscribe_tx, response.into_inner()))
     }
 
@@ -127,7 +158,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     pub async fn ping(&mut self, count: i32) -> GeyserGrpcClientResult<PongResponse> {
         let message = PingRequest { count };
         let request = tonic::Request::new(message);
-        let response = self.client.ping(request).await?;
+        let response = self.geyser.ping(request).await?;
         Ok(response.into_inner())
     }
 
@@ -138,7 +169,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         let request = tonic::Request::new(GetLatestBlockhashRequest {
             commitment: commitment.map(|value| value as i32),
         });
-        let response = self.client.get_latest_blockhash(request).await?;
+        let response = self.geyser.get_latest_blockhash(request).await?;
         Ok(response.into_inner())
     }
 
@@ -149,7 +180,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         let request = tonic::Request::new(GetBlockHeightRequest {
             commitment: commitment.map(|value| value as i32),
         });
-        let response = self.client.get_block_height(request).await?;
+        let response = self.geyser.get_block_height(request).await?;
         Ok(response.into_inner())
     }
 
@@ -160,7 +191,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         let request = tonic::Request::new(GetSlotRequest {
             commitment: commitment.map(|value| value as i32),
         });
-        let response = self.client.get_slot(request).await?;
+        let response = self.geyser.get_slot(request).await?;
         Ok(response.into_inner())
     }
 
@@ -173,13 +204,13 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             blockhash,
             commitment: commitment.map(|value| value as i32),
         });
-        let response = self.client.is_blockhash_valid(request).await?;
+        let response = self.geyser.is_blockhash_valid(request).await?;
         Ok(response.into_inner())
     }
 
     pub async fn get_version(&mut self) -> GeyserGrpcClientResult<GetVersionResponse> {
         let request = tonic::Request::new(GetVersionRequest {});
-        let response = self.client.get_version(request).await?;
+        let response = self.geyser.get_version(request).await?;
         Ok(response.into_inner())
     }
 }

@@ -142,8 +142,6 @@ message SubscribeUpdatePing {}
 
 // non-streaming methods
 
-// for testing purposes
-// Ping is used to check if the server is up and to measure the response time.
 message PingRequest {
   int32 count = 1;
 }
