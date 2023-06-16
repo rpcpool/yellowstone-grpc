@@ -70,6 +70,8 @@ impl From<ArgsCommitment> for CommitmentLevel {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Action {
+    HealthCheck,
+    HealthWatch,
     Subscribe(Box<ActionSubscribe>),
     Ping {
         #[clap(long, short, default_value_t = 0)]
@@ -307,6 +309,12 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
 
             match &args.action {
+                Action::HealthCheck => client
+                    .health_check()
+                    .await
+                    .map_err(anyhow::Error::new)
+                    .map(|response| info!("response: {response:?}")),
+                Action::HealthWatch => geyser_health_watch(client).await,
                 Action::Subscribe(_) => {
                     let (request, resub) = args
                         .action
@@ -356,6 +364,16 @@ async fn main() -> anyhow::Result<()> {
     .map_err(Into::into)
 }
 
+async fn geyser_health_watch(mut client: GeyserGrpcClient<impl Interceptor>) -> anyhow::Result<()> {
+    let mut stream = client.health_watch().await?;
+    info!("stream opened");
+    while let Some(message) = stream.next().await {
+        info!("new message: {message:?}");
+    }
+    info!("stream closed");
+    Ok(())
+}
+
 async fn geyser_subscribe(
     mut client: GeyserGrpcClient<impl Interceptor>,
     request: SubscribeRequest,
@@ -384,9 +402,9 @@ async fn geyser_subscribe(
                     }
                     _ => {}
                 }
-                info!("new message: {:?}", msg)
+                info!("new message: {msg:?}")
             }
-            Err(error) => error!("error: {:?}", error),
+            Err(error) => error!("error: {error:?}"),
         }
 
         // Example to illustrate how to resubscribe/update the subscription

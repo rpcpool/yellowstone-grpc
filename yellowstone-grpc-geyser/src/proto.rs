@@ -72,7 +72,7 @@ pub mod convert {
         }
     }
 
-    pub fn create_header(header: &MessageHeader) -> super::MessageHeader {
+    pub const fn create_header(header: &MessageHeader) -> super::MessageHeader {
         super::MessageHeader {
             num_required_signatures: header.num_required_signatures as u32,
             num_readonly_signed_accounts: header.num_readonly_signed_accounts as u32,
@@ -231,11 +231,11 @@ pub mod convert {
         }
     }
 
-    pub fn create_block_height(block_height: u64) -> super::BlockHeight {
+    pub const fn create_block_height(block_height: u64) -> super::BlockHeight {
         super::BlockHeight { block_height }
     }
 
-    pub fn create_timestamp(timestamp: UnixTimestamp) -> super::UnixTimestamp {
+    pub const fn create_timestamp(timestamp: UnixTimestamp) -> super::UnixTimestamp {
         super::UnixTimestamp { timestamp }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "0.8.1+solana.1.15.2"
+version = "0.8.2+solana.1.15.2"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Geyser Plugin"
@@ -31,12 +31,12 @@ solana-sdk = "=1.15.2"
 solana-transaction-status = "=1.15.2"
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
 tokio-stream = "0.1.11"
-tonic = { version = "0.8.2", features = ["gzip", "tls", "tls-roots"] }
-tonic-health = "0.8.0"
+tonic = { version = "0.9.2", features = ["gzip", "tls", "tls-roots"] }
+tonic-health = "0.9.2"
 yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto" }
 
 [build-dependencies]
 anyhow = "1.0.62"
-cargo-lock = "8.0.2"
+cargo-lock = "9.0.0"
 git-version = "0.3.5"
 vergen = "=7.2.1"
