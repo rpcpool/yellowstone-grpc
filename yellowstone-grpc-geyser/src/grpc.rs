@@ -531,6 +531,7 @@ impl GrpcService {
                                 (messages, Vec::with_capacity(1))
                             }
                             CommitmentLevel::Finalized => {
+                                messages.retain(|msg_slot, _messages| *msg_slot >= slot.slot);
                                 let messages = messages.remove(&slot.slot).unwrap_or_default();
                                 (Vec::with_capacity(1), messages)
                             }
