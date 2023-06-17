@@ -11,7 +11,7 @@ pub struct Version {
 }
 
 pub const VERSION: Version = Version {
-    version: env!("VERGEN_BUILD_SEMVER"),
+    version: env!("CARGO_PKG_VERSION"),
     proto: env!("YELLOWSTONE_GRPC_PROTO_VERSION"),
     solana: env!("SOLANA_SDK_VERSION"),
     git: env!("GIT_VERSION"),

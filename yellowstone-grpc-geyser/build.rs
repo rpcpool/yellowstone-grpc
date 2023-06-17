@@ -1,11 +1,13 @@
-use {
-    cargo_lock::Lockfile,
-    std::collections::HashSet,
-    vergen::{vergen, Config},
-};
+use {cargo_lock::Lockfile, std::collections::HashSet};
 
 fn main() -> anyhow::Result<()> {
-    vergen(Config::default())?;
+    let mut envs = vergen::EmitBuilder::builder();
+    envs.all_build()
+        .all_cargo()
+        .all_git()
+        .all_rustc()
+        .all_sysinfo();
+    envs.emit()?;
 
     // vergen git version does not looks cool
     println!(

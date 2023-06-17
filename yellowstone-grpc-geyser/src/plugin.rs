@@ -1,17 +1,17 @@
 use {
     crate::{
         config::Config,
-        grpc::{
-            GrpcService, Message, MessageBlockMeta, MessageTransaction, MessageTransactionInfo,
-        },
+        grpc::{GrpcService, Message},
         prom::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
     },
-    log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
-    std::{collections::BTreeMap, time::Duration},
+    std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    },
     tokio::{
         runtime::Runtime,
         sync::{mpsc, oneshot},
@@ -21,27 +21,14 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    startup_received: bool,
-    startup_processed_received: bool,
+    startup_received: AtomicBool,
+    startup_processed_received: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
-    transactions: BTreeMap<u64, (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>)>,
 }
 
 impl PluginInner {
-    fn try_send_full_block(&mut self, slot: u64) {
-        if matches!(
-            self.transactions.get(&slot),
-            Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
-        ) {
-            let (block_meta, mut transactions) = self.transactions.remove(&slot).expect("checked");
-            transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
-            let message = Message::Block((block_meta.expect("checked"), transactions).into());
-            self.send_message(message);
-        }
-    }
-
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(message).is_ok() {
             MESSAGE_QUEUE_SIZE.inc();
@@ -55,13 +42,15 @@ pub struct Plugin {
 }
 
 impl Plugin {
-    fn with_inner<F>(&mut self, f: F) -> PluginResult<()>
+    fn with_inner<F>(&self, f: F) -> PluginResult<()>
     where
-        F: FnOnce(&mut PluginInner) -> PluginResult<()>,
+        F: FnOnce(&PluginInner) -> PluginResult<()>,
     {
         // Before processed slot after end of startup message we will fail to construct full block
-        let inner = self.inner.as_mut().expect("initialized");
-        if inner.startup_received && inner.startup_processed_received {
+        let inner = self.inner.as_ref().expect("initialized");
+        if inner.startup_received.load(Ordering::SeqCst)
+            && inner.startup_processed_received.load(Ordering::SeqCst)
+        {
             f(inner)
         } else {
             Ok(())
@@ -93,12 +82,11 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
-            startup_received: false,
-            startup_processed_received: false,
+            startup_received: AtomicBool::new(false),
+            startup_processed_received: AtomicBool::new(false),
             grpc_channel,
             grpc_shutdown_tx,
             prometheus,
-            transactions: BTreeMap::new(),
         });
 
         Ok(())
@@ -113,14 +101,14 @@ impl GeyserPlugin for Plugin {
         }
     }
 
-    fn notify_end_of_startup(&mut self) -> PluginResult<()> {
-        let inner = self.inner.as_mut().expect("initialized");
-        inner.startup_received = true;
+    fn notify_end_of_startup(&self) -> PluginResult<()> {
+        let inner = self.inner.as_ref().expect("initialized");
+        inner.startup_received.store(true, Ordering::SeqCst);
         Ok(())
     }
 
     fn update_account(
-        &mut self,
+        &self,
         account: ReplicaAccountInfoVersions,
         slot: u64,
         is_startup: bool,
@@ -130,7 +118,10 @@ impl GeyserPlugin for Plugin {
                 ReplicaAccountInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaAccountInfoVersions::V0_0_2(info) => info,
+                ReplicaAccountInfoVersions::V0_0_2(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
+                }
+                ReplicaAccountInfoVersions::V0_0_3(info) => info,
             };
 
             let message = Message::Account((account, slot, is_startup).into());
@@ -140,40 +131,22 @@ impl GeyserPlugin for Plugin {
     }
 
     fn update_slot_status(
-        &mut self,
+        &self,
         slot: u64,
         parent: Option<u64>,
         status: SlotStatus,
     ) -> PluginResult<()> {
-        let inner = self.inner.as_mut().expect("initialized");
-        if inner.startup_received
-            && !inner.startup_processed_received
+        let inner = self.inner.as_ref().expect("initialized");
+        if inner.startup_received.load(Ordering::SeqCst)
+            && !inner.startup_processed_received.load(Ordering::SeqCst)
             && status == SlotStatus::Processed
         {
-            inner.startup_processed_received = true;
+            inner
+                .startup_processed_received
+                .store(true, Ordering::SeqCst);
         }
 
         self.with_inner(|inner| {
-            // Remove outdated records
-            if status == SlotStatus::Rooted {
-                loop {
-                    match inner.transactions.keys().next().cloned() {
-                        // Block was dropped, not in chain
-                        Some(kslot) if kslot < slot => {
-                            inner.transactions.remove(&kslot);
-                        }
-                        // Maybe log error
-                        Some(kslot) if kslot == slot => {
-                            if let Some((Some(_), vec)) = inner.transactions.remove(&kslot) {
-                                prom::INVALID_FULL_BLOCKS.inc();
-                                error!("{} transactions left for block {kslot}", vec.len());
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-            }
-
             let message = Message::Slot((slot, parent, status).into());
             inner.send_message(message);
             prom::update_slot_status(status, slot);
@@ -183,7 +156,7 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_transaction(
-        &mut self,
+        &self,
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: u64,
     ) -> PluginResult<()> {
@@ -195,24 +168,14 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_2(info) => info,
             };
 
-            let msg_tx: MessageTransaction = (transaction, slot).into();
-
-            // Collect Transactions for full block message
-            let tx = msg_tx.transaction.clone();
-            inner.transactions.entry(slot).or_default().1.push(tx);
-            inner.try_send_full_block(slot);
-
-            let message = Message::Transaction(msg_tx);
+            let message = Message::Transaction((transaction, slot).into());
             inner.send_message(message);
 
             Ok(())
         })
     }
 
-    fn notify_block_metadata(
-        &mut self,
-        blockinfo: ReplicaBlockInfoVersions<'_>,
-    ) -> PluginResult<()> {
+    fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
         self.with_inner(|inner| {
             let blockinfo = match blockinfo {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
@@ -221,13 +184,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_2(info) => info,
             };
 
-            let block_meta: MessageBlockMeta = (blockinfo).into();
-
-            // Save block meta for full block message
-            inner.transactions.entry(block_meta.slot).or_default().0 = Some(block_meta.clone());
-            inner.try_send_full_block(block_meta.slot);
-
-            let message = Message::BlockMeta(block_meta);
+            let message = Message::BlockMeta((blockinfo).into());
             inner.send_message(message);
 
             Ok(())
