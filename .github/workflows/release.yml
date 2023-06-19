@@ -105,8 +105,8 @@ jobs:
         run: |
           mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
-          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}22-release-x86_64-unknown-linux-gnu.tar.bz2
-          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}22-release-x86_64-unknown-linux-gnu.yml
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
       - name: Release
         uses: softprops/action-gh-release@v1
@@ -117,7 +117,7 @@ jobs:
             solana ${{ env.SOLANA_VERSION }}
             rust ${{ env.RUST_STABLE }}
           files: |
-            ${{ env.GEYSER_PLUGIN_NAME }}22-release-*
+            ${{ env.GEYSER_PLUGIN_NAME }}-release22-*
             yellowstone-grpc-proto/proto/*.proto
             target/release/client22
             target/release/config-check22
