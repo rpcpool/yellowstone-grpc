@@ -11,8 +11,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    runs-on: [ubuntu-20.04]
+  build:
+    runs-on: [ubuntu-20.04, ubuntu-22.04]
     steps:
       - uses: actions/checkout@v3
 
@@ -49,6 +49,19 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
+  rename22:
+    runs-on: [ubuntu-22.04]
+    steps:
+      - name: rename22
+        run: |
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
+          mv target/release/client target/release/client22 
+          mv target/release/config-check target/release/config-check22
+
+  release:
+    runs-on: [ubuntu-20.04, ubuntu-22.04]
+    steps:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
@@ -58,7 +71,7 @@ jobs:
             solana ${{ env.SOLANA_VERSION }}
             rust ${{ env.RUST_STABLE }}
           files: |
-            ${{ env.GEYSER_PLUGIN_NAME }}-release-*
+            ${{ env.GEYSER_PLUGIN_NAME }}-release*
             yellowstone-grpc-proto/proto/*.proto
-            target/release/client
-            target/release/config-check
+            target/release/client*
+            target/release/config-check*
