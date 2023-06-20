@@ -50,6 +50,7 @@ jobs:
         run: ./ci/create-tarball.sh
 
   rename22:
+    needs: build
     runs-on: [ubuntu-22.04]
     steps:
       - name: rename22*
@@ -60,6 +61,7 @@ jobs:
           mv target/release/config-check target/release/config-check22
 
   release:
+    needs: rename22
     runs-on: [ubuntu-20.04, ubuntu-22.04]
     steps:
       - name: Release
