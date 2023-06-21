@@ -54,7 +54,7 @@ jobs:
         run: ./ci/create-tarball.sh
 
       - name: rename binaries for ubuntu22 release
-        if: matrix.os == '22.04'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           for file in *-release-x86_64-unknown-linux-gnu*; do
             mv "$file" "${file/-release/-release-ubuntu22}"
@@ -63,8 +63,10 @@ jobs:
           mv target/release/config-check target/release/config-check22
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+            uses: softprops/action-gh-release@v1
         with:
+          prerelease: true
+          draft: true
           tag_name: ${{ env.BUILD_NAME }}
           body: |
             ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
