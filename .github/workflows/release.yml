@@ -38,7 +38,7 @@ jobs:
           profile: minimal
           components: rustfmt
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v2
         with:
           path: |
             ~/.cargo/registry
