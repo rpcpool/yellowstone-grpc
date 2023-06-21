@@ -73,7 +73,7 @@ jobs:
             solana ${{ env.SOLANA_VERSION }}
             rust ${{ env.RUST_STABLE }}
           files: |
-            ${{ env.GEYSER_PLUGIN_NAME }}-release*
+            ${{ env.GEYSER_PLUGIN_NAME }}*
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
