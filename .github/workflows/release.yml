@@ -63,7 +63,7 @@ jobs:
           mv target/release/config-check target/release/config-check22
 
       - name: Release
-            uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           draft: true
