@@ -16,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, "${{ matrix.os }}"]
     steps:
       - uses: actions/checkout@v3
 
@@ -65,7 +65,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           for file in *-release-x86_64-unknown-linux-gnu*; do
-            mv "$file" "${file/-release/-release-ubuntu22}"
+            mv "$file" "${file/-release/-release22}"
           done
           mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
