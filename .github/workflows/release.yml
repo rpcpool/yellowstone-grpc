@@ -16,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
 
-    runs-on: [self-hosted, "${{ matrix.os }}"]
+    runs-on: [runner-nyc1]
     steps:
       - uses: actions/checkout@v3
 
@@ -70,18 +70,18 @@ jobs:
           mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          draft: true
-          tag_name: ${{ env.BUILD_NAME }}
-          body: |
-            ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
-            solana ${{ env.SOLANA_VERSION }}
-            rust ${{ env.RUST_STABLE }}
-          files: |
-            ${{ env.GEYSER_PLUGIN_NAME }}*
-            yellowstone-grpc-proto/proto/*.proto
-            target/release/client*
-            target/release/config-check*
+      # - name: Release
+      #   uses: softprops/action-gh-release@v1
+      #   with:
+      #     prerelease: true
+      #     draft: true
+      #     tag_name: ${{ env.BUILD_NAME }}
+      #     body: |
+      #       ${{ env.GEYSER_PLUGIN_NAME }} ${{ env.CI_TAG }}
+      #       solana ${{ env.SOLANA_VERSION }}
+      #       rust ${{ env.RUST_STABLE }}
+      #     files: |
+      #       ${{ env.GEYSER_PLUGIN_NAME }}*
+      #       yellowstone-grpc-proto/proto/*.proto
+      #       target/release/client*
+      #       target/release/config-check*
