@@ -12,7 +12,11 @@ env:
 
 jobs:
   build:
-    runs-on: [ubuntu-20.04, ubuntu-22.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+
+    runs-on: ${{ matrix.version }}
     steps:
       - uses: actions/checkout@v3
 
@@ -57,12 +61,14 @@ jobs:
         run: |
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
-          mv target/release/client target/release/client22 
+          mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
 
   release:
-    needs: rename22
-    runs-on: [ubuntu-20.04, ubuntu-22.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+    runs-on: ${{ matrix.version }}
     steps:
       - name: Release
         uses: softprops/action-gh-release@v1
