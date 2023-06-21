@@ -20,7 +20,7 @@ jobs:
           - os: ubuntu-22.04
             runner: self-hosted
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ["${{ matrix.os }}", "${{ matrix.runner }}"]
 
     steps:
       - uses: actions/checkout@v3
@@ -74,6 +74,14 @@ jobs:
           done
           mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
+
+      - name: test renaming
+        run: |
+          echo $(pwd)
+          echo "ls to pwd"
+          ls -lah
+          echo "ls to target/release folder"
+          ls -lah target/release
 
       # - name: Release
       #   uses: softprops/action-gh-release@v1
