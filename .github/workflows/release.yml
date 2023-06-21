@@ -53,11 +53,8 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
-  rename22:
-    needs: build
-    runs-on: [ubuntu-22.04]
-    steps:
-      - name: rename22*
+      - name: rename binaries for ubuntu22 release
+        if: matrix.os == '22.04'
         run: |
           for file in *-release-x86_64-unknown-linux-gnu*; do
             mv "$file" "${file/-release/-release-ubuntu22}"
@@ -65,13 +62,6 @@ jobs:
           mv target/release/client target/release/client22
           mv target/release/config-check target/release/config-check22
 
-  release:
-    needs: rename22
-    strategy:
-      matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
-    runs-on: ${{ matrix.os }}
-    steps:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
