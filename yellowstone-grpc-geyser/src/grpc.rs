@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigGrpc,
-        filters::Filter,
+        filters::{Filter, FilterAccountsDataSlice},
         prom::{CONNECTIONS_TOTAL, INVALID_FULL_BLOCKS, MESSAGE_QUEUE_SIZE},
         proto::{
             self,
@@ -213,33 +213,56 @@ pub enum Message {
     BlockMeta(MessageBlockMeta),
 }
 
-impl From<&Message> for UpdateOneof {
-    fn from(message: &Message) -> Self {
-        match message {
-            Message::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
+impl Message {
+    pub const fn get_slot(&self) -> u64 {
+        match self {
+            Self::Slot(msg) => msg.slot,
+            Self::Account(msg) => msg.slot,
+            Self::Transaction(msg) => msg.slot,
+            Self::Block(msg) => msg.slot,
+            Self::BlockMeta(msg) => msg.slot,
+        }
+    }
+
+    pub fn to_proto(&self, accounts_data_slice: Option<FilterAccountsDataSlice>) -> UpdateOneof {
+        match self {
+            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
                 parent: message.parent,
                 status: message.status as i32,
             }),
-            Message::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(SubscribeUpdateAccountInfo {
-                    pubkey: message.account.pubkey.as_ref().into(),
-                    lamports: message.account.lamports,
-                    owner: message.account.owner.as_ref().into(),
-                    executable: message.account.executable,
-                    rent_epoch: message.account.rent_epoch,
-                    data: message.account.data.clone(),
-                    write_version: message.account.write_version,
-                    txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
-                }),
-                slot: message.slot,
-                is_startup: message.is_startup,
-            }),
-            Message::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
+            Self::Account(message) => {
+                let data =
+                    if let Some(FilterAccountsDataSlice { offset, length }) = accounts_data_slice {
+                        let end = offset + length;
+                        if message.account.data.len() >= end {
+                            message.account.data[offset..end].to_vec()
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        message.account.data.clone()
+                    };
+                UpdateOneof::Account(SubscribeUpdateAccount {
+                    account: Some(SubscribeUpdateAccountInfo {
+                        pubkey: message.account.pubkey.as_ref().into(),
+                        lamports: message.account.lamports,
+                        owner: message.account.owner.as_ref().into(),
+                        executable: message.account.executable,
+                        rent_epoch: message.account.rent_epoch,
+                        data,
+                        write_version: message.account.write_version,
+                        txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
+                    }),
+                    slot: message.slot,
+                    is_startup: message.is_startup,
+                })
+            }
+            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
                 transaction: Some((&message.transaction).into()),
                 slot: message.slot,
             }),
-            Message::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
+            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
                 rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
@@ -251,7 +274,7 @@ impl From<&Message> for UpdateOneof {
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
             }),
-            Message::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
                 rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
@@ -263,18 +286,6 @@ impl From<&Message> for UpdateOneof {
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
             }),
-        }
-    }
-}
-
-impl Message {
-    pub const fn get_slot(&self) -> u64 {
-        match self {
-            Self::Slot(msg) => msg.slot,
-            Self::Account(msg) => msg.slot,
-            Self::Transaction(msg) => msg.slot,
-            Self::Block(msg) => msg.slot,
-            Self::BlockMeta(msg) => msg.slot,
         }
     }
 }
@@ -728,6 +739,7 @@ impl Geyser for GrpcService {
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
                 commitment: None,
+                accounts_data_slice: None,
             },
             &self.config.filters,
         )
