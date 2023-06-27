@@ -224,7 +224,7 @@ impl Message {
         }
     }
 
-    pub fn to_proto(&self, accounts_data_slice: Option<FilterAccountsDataSlice>) -> UpdateOneof {
+    pub fn to_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
@@ -232,17 +232,20 @@ impl Message {
                 status: message.status as i32,
             }),
             Self::Account(message) => {
-                let data =
-                    if let Some(FilterAccountsDataSlice { offset, length }) = accounts_data_slice {
-                        let end = offset + length;
-                        if message.account.data.len() >= end {
-                            message.account.data[offset..end].to_vec()
-                        } else {
-                            vec![]
+                let data = if accounts_data_slice.is_empty() {
+                    message.account.data.clone()
+                } else {
+                    let mut data =
+                        Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+                    for data_slice in accounts_data_slice {
+                        if message.account.data.len() >= data_slice.end {
+                            data.extend_from_slice(
+                                &message.account.data[data_slice.start..data_slice.end],
+                            );
                         }
-                    } else {
-                        message.account.data.clone()
-                    };
+                    }
+                    data
+                };
                 UpdateOneof::Account(SubscribeUpdateAccount {
                     account: Some(SubscribeUpdateAccountInfo {
                         pubkey: message.account.pubkey.as_ref().into(),
@@ -739,7 +742,7 @@ impl Geyser for GrpcService {
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
                 commitment: None,
-                accounts_data_slice: None,
+                accounts_data_slice: Vec::new(),
             },
             &self.config.filters,
         )

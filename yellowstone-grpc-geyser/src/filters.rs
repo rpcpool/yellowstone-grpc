@@ -34,7 +34,7 @@ pub struct Filter {
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
-    accounts_data_slice: Option<FilterAccountsDataSlice>,
+    accounts_data_slice: Vec<FilterAccountsDataSlice>,
 }
 
 impl Filter {
@@ -46,7 +46,7 @@ impl Filter {
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
             commitment: Self::decode_commitment(config.commitment)?,
-            accounts_data_slice: config.accounts_data_slice.as_ref().map(Into::into),
+            accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
         })
     }
 
@@ -93,7 +93,7 @@ impl Filter {
         } else {
             Some(SubscribeUpdate {
                 filters,
-                update_oneof: Some(message.to_proto(self.accounts_data_slice)),
+                update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
             })
         }
     }
@@ -542,16 +542,38 @@ impl FilterBlocksMeta {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FilterAccountsDataSlice {
-    pub offset: usize,
+    pub start: usize,
+    pub end: usize,
     pub length: usize,
 }
 
 impl From<&SubscribeRequestAccountsDataSlice> for FilterAccountsDataSlice {
     fn from(data_slice: &SubscribeRequestAccountsDataSlice) -> Self {
         Self {
-            offset: data_slice.offset as usize,
+            start: data_slice.offset as usize,
+            end: (data_slice.offset + data_slice.length) as usize,
             length: data_slice.length as usize,
         }
+    }
+}
+
+impl FilterAccountsDataSlice {
+    pub fn create(slices: &[SubscribeRequestAccountsDataSlice]) -> anyhow::Result<Vec<Self>> {
+        let slices = slices.iter().map(Into::into).collect::<Vec<Self>>();
+
+        for (i, slice_a) in slices.iter().enumerate() {
+            // check order
+            for slice_b in slices[i + 1..].iter() {
+                anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
+            }
+
+            // check overlap
+            for slice_b in slices[0..i].iter() {
+                anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
+            }
+        }
+
+        Ok(slices)
     }
 }
 
@@ -631,7 +653,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit);
@@ -658,7 +680,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
@@ -690,7 +712,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -721,7 +743,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -758,7 +780,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -798,7 +820,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -838,7 +860,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -884,7 +906,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -932,7 +954,7 @@ mod tests {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             commitment: None,
-            accounts_data_slice: None,
+            accounts_data_slice: Vec::new(),
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();

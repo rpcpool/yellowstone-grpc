@@ -29,7 +29,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
   optional CommitmentLevel commitment = 6;
-  optional SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
+  repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
 }
 
 message SubscribeRequestFilterAccounts {

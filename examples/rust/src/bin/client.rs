@@ -112,7 +112,7 @@ struct ActionSubscribe {
 
     /// Receive only part of updated data account, format: `offset,size`
     #[clap(long)]
-    accounts_data_slice: Option<String>,
+    accounts_data_slice: Vec<String>,
 
     /// Subscribe on slots updates
     #[clap(long)]
@@ -234,13 +234,13 @@ impl Action {
                     blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
                 }
 
-                let mut accounts_data_slice = None;
-                if let Some(data_slice) = args.accounts_data_slice.as_ref() {
+                let mut accounts_data_slice = Vec::new();
+                for data_slice in args.accounts_data_slice.iter() {
                     match data_slice.split_once(',') {
                         Some((offset, length)) => match (offset.parse(), length.parse()) {
                             (Ok(offset), Ok(length)) => {
-                                accounts_data_slice =
-                                    Some(SubscribeRequestAccountsDataSlice { offset, length });
+                                accounts_data_slice
+                                    .push(SubscribeRequestAccountsDataSlice { offset, length });
                             }
                             _ => anyhow::bail!("invalid data_slice"),
                         },
@@ -441,7 +441,7 @@ async fn geyser_subscribe(
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),
                     commitment: None,
-                    accounts_data_slice: None,
+                    accounts_data_slice: Vec::default(),
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;

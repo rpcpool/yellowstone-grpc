@@ -4157,7 +4157,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "0.9.0+solana.1.16.1"
+version = "1.0.0+solana.1.16.1"
 dependencies = [
  "anyhow",
  "base64 0.21.2",

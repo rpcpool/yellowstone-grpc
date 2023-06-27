@@ -142,7 +142,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
         commitment: Option<CommitmentLevel>,
-        accounts_data_slice: Option<SubscribeRequestAccountsDataSlice>,
+        accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
         subscribe_tx
