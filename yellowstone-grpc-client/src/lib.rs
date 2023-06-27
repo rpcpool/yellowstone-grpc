@@ -96,7 +96,8 @@ impl GeyserGrpcClient<()> {
 
         Ok(GeyserGrpcClient {
             health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            geyser: GeyserClient::with_interceptor(channel, interceptor),
+            geyser: GeyserClient::with_interceptor(channel, interceptor)
+                .max_decoding_message_size(16 * 1024 * 1024), // 16 MiB
         })
     }
 }
