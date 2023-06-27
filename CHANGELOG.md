@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- client: set max message size for decode ([#151](https://github.com/rpcpool/yellowstone-grpc/pull/151)).
+
 ### Breaking
 
 ## [yellowstone-grpc-proto-1.3.0+solana.1.16.1] - 2023-06-16
