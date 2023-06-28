@@ -20,9 +20,9 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate,
+        SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -96,7 +96,8 @@ impl GeyserGrpcClient<()> {
 
         Ok(GeyserGrpcClient {
             health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            geyser: GeyserClient::with_interceptor(channel, interceptor),
+            geyser: GeyserClient::with_interceptor(channel, interceptor)
+                .max_decoding_message_size(16 * 1024 * 1024), // 16 MiB
         })
     }
 }
@@ -132,6 +133,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok((subscribe_tx, response.into_inner()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn subscribe_once(
         &mut self,
         slots: HashMap<String, SubscribeRequestFilterSlots>,
@@ -140,6 +142,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
         commitment: Option<CommitmentLevel>,
+        accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
         subscribe_tx
@@ -150,6 +153,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 blocks,
                 blocks_meta,
                 commitment: commitment.map(|value| value as i32),
+                accounts_data_slice,
             })
             .await?;
         Ok(response)

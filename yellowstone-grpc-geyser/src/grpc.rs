@@ -1,8 +1,8 @@
 use {
     crate::{
         config::ConfigGrpc,
-        filters::Filter,
-        prom::{CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        filters::{Filter, FilterAccountsDataSlice},
+        prom::{CONNECTIONS_TOTAL, INVALID_FULL_BLOCKS, MESSAGE_QUEUE_SIZE},
         proto::{
             self,
             geyser_server::{Geyser, GeyserServer},
@@ -29,7 +29,7 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
-        collections::HashMap,
+        collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
@@ -213,33 +213,59 @@ pub enum Message {
     BlockMeta(MessageBlockMeta),
 }
 
-impl From<&Message> for UpdateOneof {
-    fn from(message: &Message) -> Self {
-        match message {
-            Message::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
+impl Message {
+    pub const fn get_slot(&self) -> u64 {
+        match self {
+            Self::Slot(msg) => msg.slot,
+            Self::Account(msg) => msg.slot,
+            Self::Transaction(msg) => msg.slot,
+            Self::Block(msg) => msg.slot,
+            Self::BlockMeta(msg) => msg.slot,
+        }
+    }
+
+    pub fn to_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+        match self {
+            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
                 parent: message.parent,
                 status: message.status as i32,
             }),
-            Message::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(SubscribeUpdateAccountInfo {
-                    pubkey: message.account.pubkey.as_ref().into(),
-                    lamports: message.account.lamports,
-                    owner: message.account.owner.as_ref().into(),
-                    executable: message.account.executable,
-                    rent_epoch: message.account.rent_epoch,
-                    data: message.account.data.clone(),
-                    write_version: message.account.write_version,
-                    txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
-                }),
-                slot: message.slot,
-                is_startup: message.is_startup,
-            }),
-            Message::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
+            Self::Account(message) => {
+                let data = if accounts_data_slice.is_empty() {
+                    message.account.data.clone()
+                } else {
+                    let mut data =
+                        Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+                    for data_slice in accounts_data_slice {
+                        if message.account.data.len() >= data_slice.end {
+                            data.extend_from_slice(
+                                &message.account.data[data_slice.start..data_slice.end],
+                            );
+                        }
+                    }
+                    data
+                };
+                UpdateOneof::Account(SubscribeUpdateAccount {
+                    account: Some(SubscribeUpdateAccountInfo {
+                        pubkey: message.account.pubkey.as_ref().into(),
+                        lamports: message.account.lamports,
+                        owner: message.account.owner.as_ref().into(),
+                        executable: message.account.executable,
+                        rent_epoch: message.account.rent_epoch,
+                        data,
+                        write_version: message.account.write_version,
+                        txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
+                    }),
+                    slot: message.slot,
+                    is_startup: message.is_startup,
+                })
+            }
+            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
                 transaction: Some((&message.transaction).into()),
                 slot: message.slot,
             }),
-            Message::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
+            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
                 rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
@@ -251,7 +277,7 @@ impl From<&Message> for UpdateOneof {
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
             }),
-            Message::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
                 rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
@@ -263,18 +289,6 @@ impl From<&Message> for UpdateOneof {
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
             }),
-        }
-    }
-}
-
-impl Message {
-    pub const fn get_slot(&self) -> u64 {
-        match self {
-            Self::Slot(msg) => msg.slot,
-            Self::Account(msg) => msg.slot,
-            Self::Transaction(msg) => msg.slot,
-            Self::Block(msg) => msg.slot,
-            Self::BlockMeta(msg) => msg.slot,
         }
     }
 }
@@ -510,10 +524,93 @@ impl GrpcService {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
 
-        let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
+        let mut transactions: BTreeMap<
+            u64,
+            (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>),
+        > = BTreeMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut messages: HashMap<
+            u64,
+            (Vec<Option<Message>>, HashMap<Pubkey, (u64, usize)>),
+        > = HashMap::new();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
+
+        macro_rules! process_message {
+            ($message:ident) => {
+                if let Message::Slot(slot) = $message {
+                    let (mut confirmed_messages, mut finalized_messages) = match slot.status {
+                        CommitmentLevel::Processed => {
+                            (Vec::with_capacity(1), Vec::with_capacity(1))
+                        }
+                        CommitmentLevel::Confirmed => {
+                            let messages = messages
+                                .get(&slot.slot)
+                                .map(|entry| entry.0.iter().filter_map(|x| x.clone()).collect())
+                                .unwrap_or_default();
+                            (messages, Vec::with_capacity(1))
+                        }
+                        CommitmentLevel::Finalized => {
+                            messages.retain(|msg_slot, _messages| *msg_slot >= slot.slot);
+                            let messages = messages
+                                .remove(&slot.slot)
+                                .map(|entry| entry.0.into_iter().filter_map(|x| x).collect())
+                                .unwrap_or_default();
+                            (Vec::with_capacity(1), messages)
+                        }
+                    };
+
+                    // processed
+                    processed_messages.push($message.clone());
+                    let _ =
+                        broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                    processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                    processed_sleep
+                        .as_mut()
+                        .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+
+                    // confirmed
+                    confirmed_messages.push($message.clone());
+                    let _ =
+                        broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
+
+                    // finalized
+                    finalized_messages.push($message);
+                    let _ =
+                        broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
+                } else {
+                    processed_messages.push($message.clone());
+                    if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
+                        let _ = broadcast_tx
+                            .send((CommitmentLevel::Processed, processed_messages.into()));
+                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                        processed_sleep
+                            .as_mut()
+                            .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                    }
+                    let (vec, map) = messages.entry($message.get_slot()).or_default();
+                    if let Message::Account(message) = &$message {
+                        let write_version = message.account.write_version;
+                        let index = vec.len();
+                        if let Some(entry) = map.get_mut(&message.account.pubkey) {
+                            if entry.0 < write_version {
+                                vec[entry.1] = None; // We would able to make replace but then we will lose message order
+                                vec.push(Some($message));
+                                entry.0 = write_version;
+                                entry.1 = index;
+                            }
+                        } else {
+                            map.insert(message.account.pubkey, (write_version, index));
+                            vec.push(Some($message));
+                        }
+                    } else {
+                        vec.push(Some($message));
+                    }
+                }
+            };
+        }
+
         loop {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
@@ -523,42 +620,52 @@ impl GrpcService {
                         let _ = blocks_meta_tx.send(message.clone());
                     }
 
-                    if let Message::Slot(slot) = message {
-                        let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                            CommitmentLevel::Processed => (Vec::with_capacity(1), Vec::with_capacity(1)),
-                            CommitmentLevel::Confirmed => {
-                                let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
-                                (messages, Vec::with_capacity(1))
-                            }
-                            CommitmentLevel::Finalized => {
-                                messages.retain(|msg_slot, _messages| *msg_slot >= slot.slot);
-                                let messages = messages.remove(&slot.slot).unwrap_or_default();
-                                (Vec::with_capacity(1), messages)
-                            }
-                        };
-
-                        // processed
-                        processed_messages.push(message.clone());
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                        processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
-
-                        // confirmed
-                        confirmed_messages.push(message.clone());
-                        let _ = broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
-
-                        // finalized
-                        finalized_messages.push(message);
-                        let _ = broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
-                    } else {
-                        processed_messages.push(message.clone());
-                        if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
-                            let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
-                            processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                            processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                    // consctruct Block message
+                    let slot = message.get_slot();
+                    if match &message {
+                        // Collect Transactions for full Block message
+                        Message::Transaction(msg_tx) => {
+                            transactions.entry(slot).or_default().1.push(msg_tx.transaction.clone());
+                            true
                         }
-                        messages.entry(message.get_slot()).or_default().push(message);
+                        // Save block meta for full Block message
+                        Message::BlockMeta(msg_block) => {
+                            transactions.entry(slot).or_default().0 = Some(msg_block.clone());
+                            true
+                        }
+                        _ => false
+                    } && matches!(
+                            transactions.get(&slot),
+                            Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
+                        ) {
+                            let (block_meta, mut transactions) = transactions.remove(&slot).expect("checked");
+                            transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
+                            let message = Message::Block((block_meta.expect("checked"), transactions).into());
+                            process_message!(message);
                     }
+
+                    // remove outdated transactions
+                    if matches!(message, Message::Slot(msg) if msg.status == CommitmentLevel::Finalized) {
+                        loop {
+                            match transactions.keys().next().cloned() {
+                                // Block was dropped, not in chain
+                                Some(kslot) if kslot < slot => {
+                                    transactions.remove(&kslot);
+                                }
+                                // Maybe log error
+                                Some(kslot) if kslot == slot => {
+                                    if let Some((Some(_), vec)) = transactions.remove(&kslot) {
+                                        INVALID_FULL_BLOCKS.inc();
+                                        error!("{} transactions left for block {kslot}", vec.len());
+                                    }
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+
+                    // process original message
+                    process_message!(message);
                 }
                 () = &mut processed_sleep => {
                     if !processed_messages.is_empty() {
@@ -659,6 +766,7 @@ impl Geyser for GrpcService {
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
                 commitment: None,
+                accounts_data_slice: Vec::new(),
             },
             &self.config.filters,
         )
