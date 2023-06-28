@@ -582,9 +582,9 @@ impl GrpcService {
                         if let Some(entry) = map.get_mut(&message.account.pubkey) {
                             if entry.0 < write_version {
                                 vec[entry.1] = None; // We would able to make replace but then we will lose message order
+                                vec.push(Some($message));
                                 entry.0 = write_version;
                                 entry.1 = index;
-                                vec.push(Some($message));
                             }
                         } else {
                             map.insert(message.account.pubkey, (write_version, index));
