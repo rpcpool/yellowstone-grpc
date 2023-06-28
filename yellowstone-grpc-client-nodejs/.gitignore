@@ -1,0 +1,7 @@
+node_modules
+
+# Ignore built files
+dist/**/*
+
+# Do not include automatically generated files.
+src/grpc/*.ts
