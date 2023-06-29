@@ -42,6 +42,7 @@ message SubscribeRequestFilterAccountsFilter {
   oneof filter {
     SubscribeRequestFilterAccountsFilterMemcmp memcmp = 1;
     uint64 datasize = 2;
+    bool token_account_state = 3;
   }
 }
 

@@ -110,6 +110,10 @@ struct ActionSubscribe {
     #[clap(long)]
     accounts_datasize: Option<u64>,
 
+    /// Filter valid token accounts
+    #[clap(long)]
+    accounts_token_account_state: bool,
+
     /// Receive only part of updated data account, format: `offset,size`
     #[clap(long)]
     accounts_data_slice: Vec<String>,
@@ -191,6 +195,11 @@ impl Action {
                     if let Some(datasize) = args.accounts_datasize {
                         filters.push(SubscribeRequestFilterAccountsFilter {
                             filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
+                        });
+                    }
+                    if args.accounts_token_account_state {
+                        filters.push(SubscribeRequestFilterAccountsFilter {
+                            filter: Some(AccountsFilterDataOneof::TokenAccountState(true)),
                         });
                     }
 
