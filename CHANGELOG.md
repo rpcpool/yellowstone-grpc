@@ -16,7 +16,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-## 2023-06-??
+## 2023-06-29
 
 - @triton-one/yellowstone-grpc:0.1.3
 - yellowstone-grpc-client-1.5.0+solana.1.16.1
