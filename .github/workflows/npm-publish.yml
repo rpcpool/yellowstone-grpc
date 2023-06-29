@@ -5,6 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - uses: arduino/setup-protoc@v2
       # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@v3
         with:

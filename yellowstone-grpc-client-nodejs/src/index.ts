@@ -8,6 +8,7 @@ import {
   GetLatestBlockhashResponse,
   GeyserClient,
   IsBlockhashValidResponse,
+  SubscribeRequestAccountsDataSlice,
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterBlocks,
   SubscribeRequestFilterBlocksMeta,
@@ -81,7 +82,8 @@ export default class Client {
     transactions: { [key: string]: SubscribeRequestFilterTransactions },
     blocks: { [key: string]: SubscribeRequestFilterBlocks },
     blocksMeta: { [key: string]: SubscribeRequestFilterBlocksMeta },
-    commitment?: CommitmentLevel | undefined
+    commitment: CommitmentLevel | undefined,
+    accountsDataSlice: SubscribeRequestAccountsDataSlice[]
   ) {
     const stream = await this._client.subscribe();
 
@@ -94,6 +96,7 @@ export default class Client {
           blocks,
           blocksMeta,
           commitment,
+          accountsDataSlice,
         },
         (err) => {
           if (err === null || err === undefined) {
