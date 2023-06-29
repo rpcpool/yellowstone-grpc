@@ -109,6 +109,12 @@ async function subscribeCommand(client, args) {
       }
     }
 
+    if (args.accounts.tokenaccountstate) {
+      filters.push({
+        tokenAccountState: args.accounts.tokenaccountstate,
+      });
+    }
+
     if (args.accounts.datasize) {
       filters.push({ datasize: args.accounts.datasize });
     }
@@ -237,6 +243,11 @@ function parseCommandLineArgs() {
           default: 0,
           describe: "filter by data size",
           type: "number",
+        },
+        "accounts-tokenaccountstate": {
+          default: false,
+          describe: "filter valid token accounts",
+          type: "boolean",
         },
         "accounts-dataslice": {
           default: [],
