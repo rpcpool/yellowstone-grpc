@@ -514,7 +514,11 @@ impl GrpcService {
             u64,
             (Option<MessageBlockMeta>, Vec<MessageTransactionInfo>),
         > = BTreeMap::new();
-        let mut messages: HashMap<u64, Vec<Message>> = HashMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut messages: HashMap<
+            u64,
+            (Vec<Option<Message>>, HashMap<Pubkey, (u64, usize)>),
+        > = HashMap::new();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
@@ -527,12 +531,18 @@ impl GrpcService {
                             (Vec::with_capacity(1), Vec::with_capacity(1))
                         }
                         CommitmentLevel::Confirmed => {
-                            let messages = messages.get(&slot.slot).cloned().unwrap_or_default();
+                            let messages = messages
+                                .get(&slot.slot)
+                                .map(|entry| entry.0.iter().filter_map(|x| x.clone()).collect())
+                                .unwrap_or_default();
                             (messages, Vec::with_capacity(1))
                         }
                         CommitmentLevel::Finalized => {
                             messages.retain(|msg_slot, _messages| *msg_slot >= slot.slot);
-                            let messages = messages.remove(&slot.slot).unwrap_or_default();
+                            let messages = messages
+                                .remove(&slot.slot)
+                                .map(|entry| entry.0.into_iter().filter_map(|x| x).collect())
+                                .unwrap_or_default();
                             (Vec::with_capacity(1), messages)
                         }
                     };
@@ -565,10 +575,24 @@ impl GrpcService {
                             .as_mut()
                             .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                     }
-                    messages
-                        .entry($message.get_slot())
-                        .or_default()
-                        .push($message);
+                    let (vec, map) = messages.entry($message.get_slot()).or_default();
+                    if let Message::Account(message) = &$message {
+                        let write_version = message.account.write_version;
+                        let index = vec.len();
+                        if let Some(entry) = map.get_mut(&message.account.pubkey) {
+                            if entry.0 < write_version {
+                                vec[entry.1] = None; // We would able to make replace but then we will lose message order
+                                vec.push(Some($message));
+                                entry.0 = write_version;
+                                entry.1 = index;
+                            }
+                        } else {
+                            map.insert(message.account.pubkey, (write_version, index));
+                            vec.push(Some($message));
+                        }
+                    } else {
+                        vec.push(Some($message));
+                    }
                 }
             };
         }
