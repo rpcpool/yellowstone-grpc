@@ -12,7 +12,10 @@ env:
 
 jobs:
   release:
-    runs-on: [ubuntu-20.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+    runs-on: ["${{ matrix.os }}"]
     steps:
       - uses: actions/checkout@v3
 
@@ -41,8 +44,8 @@ jobs:
               ~/.cargo/registry/index/
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
-              yellowstone-grpc/target/
-          key: cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
+              target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
 
       - name: Check Solana version
         run: |
@@ -59,6 +62,14 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
+      - name: rename binaries for ubuntu22 release
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mv target/release/client target/release/client22
+          mv target/release/config-check target/release/config-check22
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
+
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
@@ -69,7 +80,7 @@ jobs:
             solana ${{ env.SOLANA_VERSION }}
             rust ${{ env.RUST_STABLE }}
           files: |
-            ${{ env.GEYSER_PLUGIN_NAME }}-release-*
+            ${{ env.GEYSER_PLUGIN_NAME }}-release*
             yellowstone-grpc-proto/proto/*.proto
-            target/release/client
-            target/release/config-check
+            target/release/client*
+            target/release/config-check*

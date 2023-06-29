@@ -8,7 +8,10 @@ env:
 
 jobs:
   test:
-    runs-on: [ubuntu-20.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+    runs-on: ["${{ matrix.os }}"]
     steps:
       - uses: actions/checkout@v3
 
@@ -37,8 +40,8 @@ jobs:
               ~/.cargo/registry/index/
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
-              yellowstone-grpc/target/
-          key: cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
+              target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
 
       - name: cargo tree
         run: |
