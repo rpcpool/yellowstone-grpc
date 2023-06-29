@@ -20,9 +20,9 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate,
+        SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -133,6 +133,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok((subscribe_tx, response.into_inner()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn subscribe_once(
         &mut self,
         slots: HashMap<String, SubscribeRequestFilterSlots>,
@@ -141,6 +142,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
         commitment: Option<CommitmentLevel>,
+        accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
         subscribe_tx
@@ -151,6 +153,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 blocks,
                 blocks_meta,
                 commitment: commitment.map(|value| value as i32),
+                accounts_data_slice,
             })
             .await?;
         Ok(response)

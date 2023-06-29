@@ -34,6 +34,16 @@ jobs:
           profile: minimal
           components: rustfmt
 
+      - uses: actions/cache@v3
+        with:
+          path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              yellowstone-grpc/target/
+          key: cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
+
       - name: Check Solana version
         run: |
           echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
@@ -50,6 +60,7 @@ jobs:
         run: ./ci/create-tarball.sh
 
       - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.BUILD_NAME }}

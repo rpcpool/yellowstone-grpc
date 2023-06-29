@@ -1,6 +1,3 @@
-# Source:
-# https://github.com/solana-labs/solana-accountsdb-plugin-postgres/blob/master/.github/workflows/test.yml
-
 on:
   workflow_dispatch:
   push:
@@ -33,12 +30,15 @@ jobs:
           profile: minimal
           components: rustfmt, clippy
 
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_STABLE}}
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              yellowstone-grpc/target/
+          key: cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
 
       - name: cargo tree
         run: |

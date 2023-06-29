@@ -29,6 +29,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
   optional CommitmentLevel commitment = 6;
+  repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -67,6 +68,11 @@ message SubscribeRequestFilterTransactions {
 message SubscribeRequestFilterBlocks {}
 
 message SubscribeRequestFilterBlocksMeta {}
+
+message SubscribeRequestAccountsDataSlice {
+  uint64 offset = 1;
+  uint64 length = 2;
+}
 
 message SubscribeUpdate {
   repeated string filters = 1;

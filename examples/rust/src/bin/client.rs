@@ -11,10 +11,11 @@ use {
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
             subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
+            SubscribeUpdateAccount,
         },
         tonic::service::Interceptor,
     },
@@ -108,6 +109,10 @@ struct ActionSubscribe {
     /// Filter by Data size
     #[clap(long)]
     accounts_datasize: Option<u64>,
+
+    /// Receive only part of updated data account, format: `offset,size`
+    #[clap(long)]
+    accounts_data_slice: Vec<String>,
 
     /// Subscribe on slots updates
     #[clap(long)]
@@ -229,6 +234,20 @@ impl Action {
                     blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
                 }
 
+                let mut accounts_data_slice = Vec::new();
+                for data_slice in args.accounts_data_slice.iter() {
+                    match data_slice.split_once(',') {
+                        Some((offset, length)) => match (offset.parse(), length.parse()) {
+                            (Ok(offset), Ok(length)) => {
+                                accounts_data_slice
+                                    .push(SubscribeRequestAccountsDataSlice { offset, length });
+                            }
+                            _ => anyhow::bail!("invalid data_slice"),
+                        },
+                        _ => anyhow::bail!("invalid data_slice"),
+                    }
+                }
+
                 Some((
                     SubscribeRequest {
                         slots,
@@ -237,6 +256,7 @@ impl Action {
                         blocks,
                         blocks_meta,
                         commitment: commitment.map(|x| x as i32),
+                        accounts_data_slice,
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -421,6 +441,7 @@ async fn geyser_subscribe(
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),
                     commitment: None,
+                    accounts_data_slice: Vec::default(),
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;

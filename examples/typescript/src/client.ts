@@ -90,6 +90,7 @@ async function subscribeCommand(client, args) {
     transactions: {},
     blocks: {},
     blocksMeta: {},
+    accountsDataSlice: [],
   };
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
@@ -140,6 +141,21 @@ async function subscribeCommand(client, args) {
 
   if (args.blocksMeta) {
     request.blocksMeta.client = {};
+  }
+
+  if (args.accounts.dataslice) {
+    for (let filter in args.accounts.dataslice) {
+      const filterSpec = filter.split(",", 1);
+      if (filterSpec.length != 2) {
+        throw new Error("invalid data slice");
+      }
+
+      const [offset, length] = filterSpec;
+      request.accountsDataSlice.push({
+        offset: parseInt(offset, 10),
+        length: parseInt(length, 10),
+      });
+    }
   }
 
   // Send subscribe request
@@ -221,6 +237,12 @@ function parseCommandLineArgs() {
           default: 0,
           describe: "filter by data size",
           type: "number",
+        },
+        "accounts-dataslice": {
+          default: [],
+          describe:
+            "receive only part of updated data account, format: `offset,size`",
+          type: "string",
         },
         slots: {
           default: false,
