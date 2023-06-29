@@ -18,6 +18,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2023-06-29
 
+- @triton-one/yellowstone-grpc:0.1.3
+- yellowstone-grpc-client-1.5.0+solana.1.16.1
+- yellowstone-grpc-geyser-1.1.0+solana.1.16.1
+- yellowstone-grpc-proto-1.5.0+solana.1.16.1
+
+### Features
+
+- geyser: support TokenAccountState in accounts filter ([#154](https://github.com/rpcpool/yellowstone-grpc/pull/154)).
+
+## 2023-06-29
+
 - @triton-one/yellowstone-grpc:0.1.2
 - yellowstone-grpc-client-1.4.0+solana.1.16.1
 - yellowstone-grpc-geyser-1.0.0+solana.1.16.1

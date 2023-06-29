@@ -19,6 +19,7 @@ use {
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
+    spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
         iter::FromIterator,
@@ -176,6 +177,7 @@ impl FilterAccounts {
 struct FilterAccountsData {
     memcmp: Vec<(usize, Vec<u8>)>,
     datasize: Option<usize>,
+    token_account_state: bool,
 }
 
 impl FilterAccountsData {
@@ -219,6 +221,10 @@ impl FilterAccountsData {
                         "datasize used more than once",
                     );
                 }
+                Some(AccountsFilterDataOneof::TokenAccountState(value)) => {
+                    anyhow::ensure!(value, "token_account_state only allowed to be true");
+                    this.token_account_state = true;
+                }
                 None => {
                     anyhow::bail!("filter should be defined");
                 }
@@ -228,11 +234,14 @@ impl FilterAccountsData {
     }
 
     fn is_empty(&self) -> bool {
-        self.memcmp.is_empty() && self.datasize.is_none()
+        self.memcmp.is_empty() && self.datasize.is_none() && !self.token_account_state
     }
 
     fn is_match(&self, data: &[u8]) -> bool {
         if matches!(self.datasize, Some(datasize) if data.len() != datasize) {
+            return false;
+        }
+        if self.token_account_state && !TokenAccount::valid_account_data(data) {
             return false;
         }
         for (offset, bytes) in self.memcmp.iter() {
