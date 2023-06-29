@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - client: set max message size for decode ([#151](https://github.com/rpcpool/yellowstone-grpc/pull/151)).
+- geyser: remove duplicated account updates for confirmed/finalized ([#152](https://github.com/rpcpool/yellowstone-grpc/pull/152)).
 
 ### Breaking
 
