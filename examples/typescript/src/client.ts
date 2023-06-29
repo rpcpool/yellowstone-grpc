@@ -1,106 +1,71 @@
-// Import generated gRPC client and types.
-import { GeyserClient, SubscribeRequest } from "./grpc/geyser";
-
-import { ChannelCredentials, credentials, Metadata } from "@grpc/grpc-js";
-import yargs from 'yargs';
+import yargs from "yargs";
+import Client, {
+  CommitmentLevel,
+  SubscribeRequest,
+  SubscribeRequestFilterAccountsFilter,
+} from "@triton-one/yellowstone-grpc";
 
 async function main() {
-  const args = yargs(process.argv.slice(2))
-    .options({
-      endpoint: {
-        default: "http://localhost:10000",
-        describe: "gRPC endpoint",
-        type: "string",
-      },
-      "x-token": {
-        describe: "token for auth, can be used only with ssl",
-        type: "string",
-      },
-      accounts: {
-        default: false,
-        describe: "subscribe on accounts updates",
-        type: "boolean",
-      },
-      "accounts-account": {
-        default: [],
-        describe: "filter by account pubkey",
-        type: "array",
-      },
-      "accounts-owner": {
-        default: [],
-        describe: "filter by owner pubkey",
-        type: "array",
-      },
-      slots: {
-        default: false,
-        describe: "subscribe on slots updates",
-        type: "boolean",
-      },
-      transactions: {
-        default: false,
-        describe: "subscribe on transactions updates",
-        type: "boolean",
-      },
-      "transactions-vote": {
-        description: "filter vote transactions",
-        type: "boolean",
-      },
-      "transactions-failed": {
-        description: "filter failed transactions",
-        type: "boolean",
-      },
-      "transactions-signature": {
-        description: "filter by transaction signature",
-        type: "string",
-      },
-      "transactions-account-include": {
-        default: [],
-        description: "filter included account in transactions",
-        type: "array",
-      },
-      "transactions-account-exclude": {
-        default: [],
-        description: "filter excluded account in transactions",
-        type: "array",
-      },
-      blocks: {
-        default: false,
-        description: "subscribe on block updates",
-        type: "boolean",
-      },
-      "blocks-meta": {
-        default: false,
-        description: "subscribe on block meta updates (without transactions)",
-        type: "boolean",
-      },
-    })
-    .help().argv;
+  const args = parseCommandLineArgs();
 
-  const endpointURL = new URL(args.endpoint);
+  // Open connection.
+  const client = new Client(args.endpoint, args.xToken);
 
-  // Open connection
-  let creds: ChannelCredentials;
-  if (endpointURL.protocol === "https:") {
-    creds = credentials.combineChannelCredentials(
-      credentials.createSsl(),
-      credentials.createFromMetadataGenerator((_params, callback) => {
-        const metadata = new Metadata();
-        if (args.xToken !== undefined) {
-          metadata.add(`x-token`, args.xToken);
-        }
-        return callback(null, metadata);
-      })
-    );
-  } else {
-    creds = ChannelCredentials.createInsecure();
+  const commitment = parseCommitmentLevel(args.commitment);
+
+  // Execute a requested command
+  switch (args["_"][0]) {
+    case "ping":
+      console.log("response: " + (await client.ping(1)));
+      break;
+
+    case "get-version":
+      console.log("response: " + (await client.getVersion()));
+      break;
+
+    case "get-slot":
+      console.log("response: " + (await client.getSlot(commitment)));
+      break;
+
+    case "get-block-height":
+      console.log("response: " + (await client.getBlockHeight(commitment)));
+      break;
+
+    case "get-latest-blockhash":
+      console.log("response: ", await client.getLatestBlockhash(commitment));
+      break;
+
+    case "is-blockhash-valid":
+      console.log("response: ", await client.isBlockhashValid(args.blockhash));
+      break;
+
+    case "subscribe":
+      await subscribeCommand(client, args);
+      break;
+
+    default:
+      console.error(
+        `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
+      );
+      break;
   }
+}
 
-  // Create the client
-  const client = new GeyserClient(endpointURL.host, creds);
+function parseCommitmentLevel(commitment: string | undefined) {
+  if (!commitment) {
+    return;
+  }
+  const typedCommitment =
+    commitment.toUpperCase() as keyof typeof CommitmentLevel;
+  return CommitmentLevel[typedCommitment];
+}
+
+async function subscribeCommand(client, args) {
+  // Subscribe for events
   const stream = await client.subscribe();
 
   // Create `error` / `end` handler
-  const stream_closed = new Promise<void>((resolve, reject) => {
+  const streamClosed = new Promise<void>((resolve, reject) => {
     stream.on("error", (error) => {
       reject(error);
       stream.end();
@@ -118,7 +83,7 @@ async function main() {
     console.log("data", data);
   });
 
-  // Create subscribe request
+  // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
     accounts: {},
     slots: {},
@@ -127,14 +92,37 @@ async function main() {
     blocksMeta: {},
   };
   if (args.accounts) {
+    const filters: SubscribeRequestFilterAccountsFilter[] = [];
+
+    if (args.accounts.memcmp) {
+      for (let filter in args.accounts.memcmp) {
+        const filterSpec = filter.split(",", 1);
+        if (filterSpec.length != 2) {
+          throw new Error("invalid memcmp");
+        }
+
+        const [offset, data] = filterSpec;
+        filters.push({
+          memcmp: { offset: parseInt(offset, 10), base58: data.trim() },
+        });
+      }
+    }
+
+    if (args.accounts.datasize) {
+      filters.push({ datasize: args.accounts.datasize });
+    }
+
     request.accounts.client = {
       account: args.accountsAccount,
       owner: args.accountsOwner,
+      filters,
     };
   }
+
   if (args.slots) {
     request.slots.client = {};
   }
+
   if (args.transactions) {
     request.transactions.client = {
       vote: args.transactionsVote,
@@ -142,11 +130,14 @@ async function main() {
       signature: args.transactionsSignature,
       accountInclude: args.transactionsAccountInclude,
       accountExclude: args.transactionsAccountExclude,
+      accountRequired: args.transactionsAccountRequired,
     };
   }
+
   if (args.blocks) {
     request.blocks.client = {};
   }
+
   if (args.blocksMeta) {
     request.blocksMeta.client = {};
   }
@@ -165,7 +156,123 @@ async function main() {
     throw reason;
   });
 
-  await stream_closed;
+  await streamClosed;
+}
+
+function parseCommandLineArgs() {
+  return yargs(process.argv.slice(2))
+    .options({
+      endpoint: {
+        alias: "e",
+        default: "http://localhost:10000",
+        describe: "gRPC endpoint",
+        type: "string",
+      },
+      "x-token": {
+        describe: "token for auth, can be used only with ssl",
+        type: "string",
+      },
+      commitment: {
+        describe: "commitment level",
+        choices: ["processed", "confirmed", "finalized"],
+      },
+    })
+    .command("ping", "single ping of the RPC server")
+    .command("get-version", "get the server version")
+    .command("get-latest-blockhash", "get the latest block hash")
+    .command("get-block-height", "get the current block height")
+    .command("get-slot", "get the current slot")
+    .command(
+      "is-blockhash-valid",
+      "check the validity of a given block hash",
+      (yargs) => {
+        return yargs.options({
+          blockhash: {
+            type: "string",
+            demandOption: true,
+          },
+        });
+      }
+    )
+    .command("subscribe", "subscribe to events", (yargs) => {
+      return yargs.options({
+        accounts: {
+          default: false,
+          describe: "subscribe on accounts updates",
+          type: "boolean",
+        },
+        "accounts-account": {
+          default: [],
+          describe: "filter by account pubkey",
+          type: "array",
+        },
+        "accounts-owner": {
+          default: [],
+          describe: "filter by owner pubkey",
+          type: "array",
+        },
+        "accounts-memcmp": {
+          default: [],
+          describe:
+            "filter by offset and data, format: `offset,data in base58`",
+          type: "array",
+        },
+        "accounts-datasize": {
+          default: 0,
+          describe: "filter by data size",
+          type: "number",
+        },
+        slots: {
+          default: false,
+          describe: "subscribe on slots updates",
+          type: "boolean",
+        },
+        transactions: {
+          default: false,
+          describe: "subscribe on transactions updates",
+          type: "boolean",
+        },
+        "transactions-vote": {
+          description: "filter vote transactions",
+          type: "boolean",
+        },
+        "transactions-failed": {
+          description: "filter failed transactions",
+          type: "boolean",
+        },
+        "transactions-signature": {
+          description: "filter by transaction signature",
+          type: "string",
+        },
+        "transactions-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
+        },
+        "transactions-account-exclude": {
+          default: [],
+          description: "filter excluded account in transactions",
+          type: "array",
+        },
+        "transactions-account-required": {
+          default: [],
+          description: "filter required account in transactions",
+          type: "array",
+        },
+        blocks: {
+          default: false,
+          description: "subscribe on block updates",
+          type: "boolean",
+        },
+        "blocks-meta": {
+          default: false,
+          description: "subscribe on block meta updates (without transactions)",
+          type: "boolean",
+        },
+      });
+    })
+    .demandCommand(1)
+    .help().argv;
 }
 
 main();
