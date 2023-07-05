@@ -223,7 +223,19 @@ impl Message {
             Self::BlockMeta(msg) => msg.slot,
         }
     }
+}
 
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum MessageRef<'a> {
+    Slot(&'a MessageSlot),
+    Account(&'a MessageAccount),
+    Transaction(&'a MessageTransaction),
+    Block(&'a MessageBlock),
+    BlockMeta(&'a MessageBlockMeta),
+}
+
+impl<'a> MessageRef<'a> {
     pub fn to_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -710,7 +722,7 @@ impl GrpcService {
                         Ok((commitment, messages)) => {
                             if commitment == filter.get_commitment_level() {
                                 for message in messages.iter() {
-                                    if let Some(message) = filter.get_update(message) {
+                                    for message in filter.get_update(message) {
                                         match stream_tx.try_send(Ok(message)) {
                                             Ok(()) => {}
                                             Err(mpsc::error::TrySendError::Full(_)) => {
