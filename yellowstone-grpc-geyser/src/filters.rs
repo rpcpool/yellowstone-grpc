@@ -506,9 +506,14 @@ impl FilterTransactions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FilterBlocksInner {
+    account_include: HashSet<Pubkey>,
+}
+
 #[derive(Debug, Default, Clone)]
 struct FilterBlocks {
-    filters: Vec<String>,
+    filters: HashMap<String, FilterBlocksInner>,
 }
 
 impl FilterBlocks {
@@ -518,17 +523,61 @@ impl FilterBlocks {
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
-        Ok(Self {
-            filters: configs
-                .iter()
-                // .filter_map(|(name, _filter)| Some(name.clone()))
-                .map(|(name, _filter)| name.clone())
-                .collect(),
-        })
+        let mut this = Self::default();
+        for (name, filter) in configs {
+            ConfigGrpcFilters::check_any(filter.account_include.is_empty(), limit.any)?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_include.len(),
+                limit.account_include_max,
+            )?;
+
+            this.filters.insert(
+                name.clone(),
+                FilterBlocksInner {
+                    account_include: Filter::decode_pubkeys(
+                        &filter.account_include,
+                        &limit.account_include_reject,
+                    )?,
+                },
+            );
+        }
+        Ok(this)
     }
 
     fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::Block(message))]
+        self.filters
+            .iter()
+            .filter_map(|(filter, inner)| {
+                #[allow(clippy::unnecessary_filter_map)]
+                let transactions = message
+                    .transactions
+                    .iter()
+                    .filter_map(|tx| {
+                        if !inner.account_include.is_empty()
+                            && tx
+                                .transaction
+                                .message()
+                                .account_keys()
+                                .iter()
+                                .all(|pubkey| !inner.account_include.contains(pubkey))
+                        {
+                            return None;
+                        }
+
+                        Some(tx)
+                    })
+                    .collect::<Vec<_>>();
+
+                if transactions.is_empty() {
+                    None
+                } else {
+                    Some((
+                        vec![filter.clone()],
+                        MessageRef::Block((message, transactions).into()),
+                    ))
+                }
+            })
+            .collect()
     }
 }
 

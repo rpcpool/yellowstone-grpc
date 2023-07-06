@@ -226,12 +226,39 @@ impl Message {
 }
 
 #[derive(Debug, Clone)]
+pub struct MessageBlockRef<'a> {
+    pub parent_slot: u64,
+    pub slot: u64,
+    pub parent_blockhash: &'a String,
+    pub blockhash: &'a String,
+    pub rewards: &'a Vec<Reward>,
+    pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<u64>,
+    pub transactions: Vec<&'a MessageTransactionInfo>,
+}
+
+impl<'a> From<(&'a MessageBlock, Vec<&'a MessageTransactionInfo>)> for MessageBlockRef<'a> {
+    fn from((block, transactions): (&'a MessageBlock, Vec<&'a MessageTransactionInfo>)) -> Self {
+        Self {
+            parent_slot: block.parent_slot,
+            slot: block.slot,
+            parent_blockhash: &block.parent_blockhash,
+            blockhash: &block.blockhash,
+            rewards: &block.rewards,
+            block_time: block.block_time,
+            block_height: block.block_height,
+            transactions,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),
     Transaction(&'a MessageTransaction),
-    Block(&'a MessageBlock),
+    Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
 }
 
@@ -285,7 +312,7 @@ impl<'a> MessageRef<'a> {
                 block_height: message
                     .block_height
                     .map(proto::convert::create_block_height),
-                transactions: message.transactions.iter().map(Into::into).collect(),
+                transactions: message.transactions.iter().map(|tx| (*tx).into()).collect(),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
             }),
