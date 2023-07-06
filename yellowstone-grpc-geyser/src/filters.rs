@@ -5,7 +5,7 @@ use {
             ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
         },
         grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageSlot,
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageRef, MessageSlot,
             MessageTransaction,
         },
         proto::{
@@ -77,7 +77,7 @@ impl Filter {
         self.commitment
     }
 
-    pub fn get_filters(&self, message: &Message) -> Vec<String> {
+    pub fn get_filters<'a>(&self, message: &'a Message) -> Vec<(Vec<String>, MessageRef<'a>)> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message),
@@ -87,16 +87,20 @@ impl Filter {
         }
     }
 
-    pub fn get_update(&self, message: &Message) -> Option<SubscribeUpdate> {
-        let filters = self.get_filters(message);
-        if filters.is_empty() {
-            None
-        } else {
-            Some(SubscribeUpdate {
-                filters,
-                update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+    pub fn get_update(&self, message: &Message) -> Vec<SubscribeUpdate> {
+        self.get_filters(message)
+            .into_iter()
+            .filter_map(|(filters, message)| {
+                if filters.is_empty() {
+                    None
+                } else {
+                    Some(SubscribeUpdate {
+                        filters,
+                        update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+                    })
+                }
             })
-        }
+            .collect()
     }
 }
 
@@ -164,12 +168,12 @@ impl FilterAccounts {
         required
     }
 
-    fn get_filters(&self, message: &MessageAccount) -> Vec<String> {
+    fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
-        filter.get_filters()
+        vec![(filter.get_filters(), MessageRef::Account(message))]
     }
 }
 
@@ -347,8 +351,8 @@ impl FilterSlots {
         })
     }
 
-    fn get_filters(&self, _message: &MessageSlot) -> Vec<String> {
-        self.filters.clone()
+    fn get_filters<'a>(&self, message: &'a MessageSlot) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        vec![(self.filters.clone(), MessageRef::Slot(message))]
     }
 }
 
@@ -429,33 +433,35 @@ impl FilterTransactions {
         Ok(this)
     }
 
-    pub fn get_filters(
+    pub fn get_filters<'a>(
         &self,
-        MessageTransaction { transaction, .. }: &MessageTransaction,
-    ) -> Vec<String> {
-        self.filters
+        message: &'a MessageTransaction,
+    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        let filters = self
+            .filters
             .iter()
             .filter_map(|(name, inner)| {
                 if let Some(is_vote) = inner.vote {
-                    if is_vote != transaction.is_vote {
+                    if is_vote != message.transaction.is_vote {
                         return None;
                     }
                 }
 
                 if let Some(is_failed) = inner.failed {
-                    if is_failed != transaction.meta.status.is_err() {
+                    if is_failed != message.transaction.meta.status.is_err() {
                         return None;
                     }
                 }
 
                 if let Some(signature) = &inner.signature {
-                    if signature != transaction.transaction.signature() {
+                    if signature != message.transaction.transaction.signature() {
                         return None;
                     }
                 }
 
                 if !inner.account_include.is_empty()
-                    && transaction
+                    && message
+                        .transaction
                         .transaction
                         .message()
                         .account_keys()
@@ -466,7 +472,8 @@ impl FilterTransactions {
                 }
 
                 if !inner.account_exclude.is_empty()
-                    && transaction
+                    && message
+                        .transaction
                         .transaction
                         .message()
                         .account_keys()
@@ -479,7 +486,8 @@ impl FilterTransactions {
                 // check if transaction contains all required account keys
                 if !inner.account_required.is_empty()
                     && !inner.account_required.is_subset(
-                        &transaction
+                        &message
+                            .transaction
                             .transaction
                             .message()
                             .account_keys()
@@ -493,13 +501,19 @@ impl FilterTransactions {
 
                 Some(name.clone())
             })
-            .collect()
+            .collect();
+        vec![(filters, MessageRef::Transaction(message))]
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct FilterBlocksInner {
+    account_include: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Default, Clone)]
 struct FilterBlocks {
-    filters: Vec<String>,
+    filters: HashMap<String, FilterBlocksInner>,
 }
 
 impl FilterBlocks {
@@ -509,17 +523,61 @@ impl FilterBlocks {
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
-        Ok(Self {
-            filters: configs
-                .iter()
-                // .filter_map(|(name, _filter)| Some(name.clone()))
-                .map(|(name, _filter)| name.clone())
-                .collect(),
-        })
+        let mut this = Self::default();
+        for (name, filter) in configs {
+            ConfigGrpcFilters::check_any(filter.account_include.is_empty(), limit.any)?;
+            ConfigGrpcFilters::check_pubkey_max(
+                filter.account_include.len(),
+                limit.account_include_max,
+            )?;
+
+            this.filters.insert(
+                name.clone(),
+                FilterBlocksInner {
+                    account_include: Filter::decode_pubkeys(
+                        &filter.account_include,
+                        &limit.account_include_reject,
+                    )?,
+                },
+            );
+        }
+        Ok(this)
     }
 
-    fn get_filters(&self, _message: &MessageBlock) -> Vec<String> {
-        self.filters.clone()
+    fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        self.filters
+            .iter()
+            .filter_map(|(filter, inner)| {
+                #[allow(clippy::unnecessary_filter_map)]
+                let transactions = message
+                    .transactions
+                    .iter()
+                    .filter_map(|tx| {
+                        if !inner.account_include.is_empty()
+                            && tx
+                                .transaction
+                                .message()
+                                .account_keys()
+                                .iter()
+                                .all(|pubkey| !inner.account_include.contains(pubkey))
+                        {
+                            return None;
+                        }
+
+                        Some(tx)
+                    })
+                    .collect::<Vec<_>>();
+
+                if transactions.is_empty() {
+                    None
+                } else {
+                    Some((
+                        vec![filter.clone()],
+                        MessageRef::Block((message, transactions).into()),
+                    ))
+                }
+            })
+            .collect()
     }
 }
 
@@ -544,8 +602,8 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters(&self, _message: &MessageBlockMeta) -> Vec<String> {
-        self.filters.clone()
+    fn get_filters<'a>(&self, message: &'a MessageBlockMeta) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        vec![(self.filters.clone(), MessageRef::BlockMeta(message))]
     }
 }
 
@@ -797,8 +855,9 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let filters = filter.get_filters(&message);
-        assert!(!filters.is_empty());
+        for (filters, _message) in filter.get_filters(&message) {
+            assert!(!filters.is_empty());
+        }
     }
 
     #[test]
@@ -837,8 +896,9 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let filters = filter.get_filters(&message);
-        assert!(!filters.is_empty());
+        for (filters, _message) in filter.get_filters(&message) {
+            assert!(!filters.is_empty());
+        }
     }
 
     #[test]
@@ -877,8 +937,9 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let filters = filter.get_filters(&message);
-        assert!(filters.is_empty());
+        for (filters, _message) in filter.get_filters(&message) {
+            assert!(filters.is_empty());
+        }
     }
 
     #[test]
@@ -925,8 +986,9 @@ mod tests {
             vec![account_key_x, account_key_y, account_key_z],
         );
         let message = Message::Transaction(message_transaction);
-        let filters = filter.get_filters(&message);
-        assert!(!filters.is_empty());
+        for (filters, _message) in filter.get_filters(&message) {
+            assert!(!filters.is_empty());
+        }
     }
 
     #[test]
@@ -971,7 +1033,8 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);
         let message = Message::Transaction(message_transaction);
-        let filters = filter.get_filters(&message);
-        assert!(filters.is_empty());
+        for (filters, _message) in filter.get_filters(&message) {
+            assert!(filters.is_empty());
+        }
     }
 }

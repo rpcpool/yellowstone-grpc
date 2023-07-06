@@ -195,11 +195,21 @@ impl Default for ConfigGrpcFiltersTransactions {
 pub struct ConfigGrpcFiltersBlocks {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
+    pub any: bool,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub account_include_max: usize,
+    #[serde(deserialize_with = "deserialize_pubkey_set")]
+    pub account_include_reject: HashSet<Pubkey>,
 }
 
 impl Default for ConfigGrpcFiltersBlocks {
     fn default() -> Self {
-        Self { max: usize::MAX }
+        Self {
+            max: usize::MAX,
+            any: true,
+            account_include_max: usize::MAX,
+            account_include_reject: HashSet::new(),
+        }
     }
 }
 
