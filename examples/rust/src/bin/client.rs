@@ -159,6 +159,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks: bool,
 
+    /// Filter included account in transactions
+    #[clap(long)]
+    blocks_account_include: Vec<String>,
+
     /// Subscribe on block meta updates (without transactions)
     #[clap(long)]
     blocks_meta: bool,
@@ -240,7 +244,12 @@ impl Action {
 
                 let mut blocks: BlocksFilterMap = HashMap::new();
                 if args.blocks {
-                    blocks.insert("client".to_owned(), SubscribeRequestFilterBlocks {});
+                    blocks.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterBlocks {
+                            account_include: args.blocks_account_include.clone(),
+                        },
+                    );
                 }
 
                 let mut blocks_meta: BlocksMetaFilterMap = HashMap::new();
