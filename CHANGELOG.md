@@ -12,11 +12,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add `account_include` to Blocks filter ([#155](https://github.com/rpcpool/yellowstone-grpc/pull/155)).
-
 ### Fixes
 
 ### Breaking
+
+## 2023-07-07
+
+- @triton-one/yellowstone-grpc:0.1.4
+- yellowstone-grpc-client-1.6.0+solana.1.16.1
+- yellowstone-grpc-geyser-1.2.0+solana.1.16.1
+- yellowstone-grpc-proto-1.6.0+solana.1.16.1
+
+### Features
+
+- geyser: add `account_include` to Blocks filter ([#155](https://github.com/rpcpool/yellowstone-grpc/pull/155)).
 
 ## 2023-06-29
 

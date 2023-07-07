@@ -547,7 +547,7 @@ impl FilterBlocks {
     fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
         self.filters
             .iter()
-            .filter_map(|(filter, inner)| {
+            .map(|(filter, inner)| {
                 #[allow(clippy::unnecessary_filter_map)]
                 let transactions = message
                     .transactions
@@ -568,14 +568,10 @@ impl FilterBlocks {
                     })
                     .collect::<Vec<_>>();
 
-                if transactions.is_empty() {
-                    None
-                } else {
-                    Some((
-                        vec![filter.clone()],
-                        MessageRef::Block((message, transactions).into()),
-                    ))
-                }
+                (
+                    vec![filter.clone()],
+                    MessageRef::Block((message, transactions).into()),
+                )
             })
             .collect()
     }
