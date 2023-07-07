@@ -146,7 +146,9 @@ async function subscribeCommand(client, args) {
   }
 
   if (args.blocksMeta) {
-    request.blocksMeta.client = {};
+    request.blocksMeta.client = {
+      account_include: args.blocksAccountInclude,
+    };
   }
 
   if (args.accounts.dataslice) {
@@ -296,6 +298,11 @@ function parseCommandLineArgs() {
           default: false,
           description: "subscribe on block updates",
           type: "boolean",
+        },
+        "blocks-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
         },
         "blocks-meta": {
           default: false,

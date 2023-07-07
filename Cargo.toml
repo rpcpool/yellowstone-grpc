@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "examples/rust", # 1.5.0+solana.1.16.1
-    "yellowstone-grpc-client", # 1.5.0+solana.1.16.1
-    "yellowstone-grpc-geyser", # 1.1.0+solana.1.16.1
-    "yellowstone-grpc-proto", # 1.5.0+solana.1.16.1
+    "examples/rust", # 1.6.0+solana.1.16.1
+    "yellowstone-grpc-client", # 1.6.0+solana.1.16.1
+    "yellowstone-grpc-geyser", # 1.2.0+solana.1.16.1
+    "yellowstone-grpc-proto", # 1.6.0+solana.1.16.1
 ]
 
 [profile.release]
