@@ -452,7 +452,10 @@ async fn geyser_subscribe(
                 }
                 info!("new message: {msg:?}")
             }
-            Err(error) => error!("error: {error:?}"),
+            Err(error) => {
+                error!("error: {error:?}");
+                break
+            },
         }
 
         // Example to illustrate how to resubscribe/update the subscription
