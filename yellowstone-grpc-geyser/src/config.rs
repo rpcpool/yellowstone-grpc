@@ -200,6 +200,8 @@ pub struct ConfigGrpcFiltersBlocks {
     pub account_include_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
     pub account_include_reject: HashSet<Pubkey>,
+    pub include_transactions: bool,
+    pub include_accounts: bool,
 }
 
 impl Default for ConfigGrpcFiltersBlocks {
@@ -209,6 +211,8 @@ impl Default for ConfigGrpcFiltersBlocks {
             any: true,
             account_include_max: usize::MAX,
             account_include_reject: HashSet::new(),
+            include_transactions: true,
+            include_accounts: true,
         }
     }
 }
