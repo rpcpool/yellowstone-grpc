@@ -532,6 +532,14 @@ impl FilterBlocks {
                 filter.account_include.len(),
                 limit.account_include_max,
             )?;
+            anyhow::ensure!(
+                filter.include_transactions == Some(false) || limit.include_transactions,
+                "`include_transactions` is not allowed"
+            );
+            anyhow::ensure!(
+                matches!(filter.include_accounts, None | Some(false)) || limit.include_accounts,
+                "`include_accounts` is not allowed"
+            );
 
             this.filters.insert(
                 name.clone(),
@@ -577,7 +585,7 @@ impl FilterBlocks {
                 };
 
                 #[allow(clippy::unnecessary_filter_map)]
-                let accounts = if matches!(inner.include_accounts, None | Some(true)) {
+                let accounts = if inner.include_accounts == Some(true) {
                     message
                         .accounts
                         .iter()
