@@ -3,9 +3,10 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'main'
   pull_request:
-    paths:
-      - '.github/workflows/release.yml'
+    
 
 env:
   CARGO_TERM_COLOR: always
@@ -63,10 +64,9 @@ jobs:
         run: ./ci/create-tarball.sh
 
       - name: rename binaries for ubuntu22 release
-        if: matrix.os == 'ubuntu-22.04'
         run: |
-          mv target/release/client target/release/client22
-          mv target/release/config-check target/release/config-check22
+          mv target/release/client target/release/client-22
+          mv target/release/config-check target/release/config-check-22
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
@@ -82,5 +82,5 @@ jobs:
           files: |
             ${{ env.GEYSER_PLUGIN_NAME }}-release*
             yellowstone-grpc-proto/proto/*.proto
-            target/release/client*
-            target/release/config-check*
+            target/release/client-*
+            target/release/config-check-*
