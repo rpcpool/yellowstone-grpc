@@ -74,6 +74,7 @@ jobs:
         run: ./ci/create-tarball.sh
 
       - name: rename binaries for ubuntu22 release
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           mv target/release/client target/release/client-22
           mv target/release/config-check target/release/config-check-22
