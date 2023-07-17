@@ -1,21 +1,32 @@
+name: Release plugin
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
+
   workflow_dispatch:
+  
   push:
     tags:
       - 'v*'
-  pull_request:
-    paths:
-      - '.github/workflows/release.yml'
+    branches:
+      - 'main'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  
   release:
+
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
+
     runs-on: ["${{ matrix.os }}"]
+      
     steps:
       - uses: actions/checkout@v3
 
@@ -62,13 +73,17 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
-      - name: rename binaries for ubuntu22 release
+      - name: Rename binaries for ubuntu22 release
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          mv target/release/client target/release/client22
-          mv target/release/config-check target/release/config-check22
+          mv target/release/client target/release/client-22
+          mv target/release/config-check target/release/config-check-22
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
+
+      - name: Deleteing directories to avoid upload conflict
+        run: |
+          rm -rf target/release/client.d target/release/config-check.d 
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
