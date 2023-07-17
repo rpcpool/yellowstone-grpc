@@ -1,20 +1,37 @@
 name: Publish Package to npmjs
-on: workflow_dispatch
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on: 
+
+  workflow_dispatch:
+
 jobs:
+
   build:
+
     runs-on: ubuntu-latest
+
     steps:
+
       - uses: actions/checkout@v3
+
       - uses: arduino/setup-protoc@v2
+
       # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@v3
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
+
       - run: npm ci
         working-directory: yellowstone-grpc-client-nodejs
+
       - run: npm run build
         working-directory: yellowstone-grpc-client-nodejs
+
       - run: npm publish
         working-directory: yellowstone-grpc-client-nodejs
         env:
