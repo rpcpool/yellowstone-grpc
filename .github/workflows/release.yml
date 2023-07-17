@@ -73,7 +73,7 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
-      - name: rename binaries for ubuntu22 release
+      - name: Rename binaries for ubuntu22 release
         if: matrix.os == 'ubuntu-22.04'
         run: |
           mv target/release/client target/release/client-22
@@ -81,10 +81,9 @@ jobs:
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
-      - name: rename binaries for ubuntu22 release
+      - name: Deleteing directories to avoid upload conflict
         run: |
-          mv target/release/client.d target/release/aclient.d
-          mv target/release/config-check.d target/release/aconfig-check.d
+          rm -rf target/release/client.d target/release/config-check.d 
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
