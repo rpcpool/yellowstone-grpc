@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-07-17
+
+- @triton-one/yellowstone-grpc:0.1.5
+- yellowstone-grpc-client-1.7.0+solana.1.16.1
+- yellowstone-grpc-geyser-1.3.0+solana.1.16.1
+- yellowstone-grpc-proto-1.7.0+solana.1.16.1
+
+### Features
+
+- geyser: add `accounts` to Block message ([#160](https://github.com/rpcpool/yellowstone-grpc/pull/160)).
+
 ## 2023-07-07
 
 - @triton-one/yellowstone-grpc:0.1.4

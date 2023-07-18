@@ -509,6 +509,8 @@ impl FilterTransactions {
 #[derive(Debug, Clone)]
 pub struct FilterBlocksInner {
     account_include: HashSet<Pubkey>,
+    include_transactions: Option<bool>,
+    include_accounts: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -530,6 +532,14 @@ impl FilterBlocks {
                 filter.account_include.len(),
                 limit.account_include_max,
             )?;
+            anyhow::ensure!(
+                filter.include_transactions == Some(false) || limit.include_transactions,
+                "`include_transactions` is not allowed"
+            );
+            anyhow::ensure!(
+                matches!(filter.include_accounts, None | Some(false)) || limit.include_accounts,
+                "`include_accounts` is not allowed"
+            );
 
             this.filters.insert(
                 name.clone(),
@@ -538,6 +548,8 @@ impl FilterBlocks {
                         &filter.account_include,
                         &limit.account_include_reject,
                     )?,
+                    include_transactions: filter.include_transactions,
+                    include_accounts: filter.include_accounts,
                 },
             );
         }
@@ -549,28 +561,51 @@ impl FilterBlocks {
             .iter()
             .map(|(filter, inner)| {
                 #[allow(clippy::unnecessary_filter_map)]
-                let transactions = message
-                    .transactions
-                    .iter()
-                    .filter_map(|tx| {
-                        if !inner.account_include.is_empty()
-                            && tx
-                                .transaction
-                                .message()
-                                .account_keys()
-                                .iter()
-                                .all(|pubkey| !inner.account_include.contains(pubkey))
-                        {
-                            return None;
-                        }
+                let transactions = if matches!(inner.include_transactions, None | Some(true)) {
+                    message
+                        .transactions
+                        .iter()
+                        .filter_map(|tx| {
+                            if !inner.account_include.is_empty()
+                                && tx
+                                    .transaction
+                                    .message()
+                                    .account_keys()
+                                    .iter()
+                                    .all(|pubkey| !inner.account_include.contains(pubkey))
+                            {
+                                return None;
+                            }
 
-                        Some(tx)
-                    })
-                    .collect::<Vec<_>>();
+                            Some(tx)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+
+                #[allow(clippy::unnecessary_filter_map)]
+                let accounts = if inner.include_accounts == Some(true) {
+                    message
+                        .accounts
+                        .iter()
+                        .filter_map(|account| {
+                            if !inner.account_include.is_empty()
+                                && !inner.account_include.contains(&account.pubkey)
+                            {
+                                return None;
+                            }
+
+                            Some(account)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
 
                 (
                     vec![filter.clone()],
-                    MessageRef::Block((message, transactions).into()),
+                    MessageRef::Block((message, transactions, accounts).into()),
                 )
             })
             .collect()

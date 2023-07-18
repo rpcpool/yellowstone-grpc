@@ -158,6 +158,14 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_account_include: Vec<String>,
 
+    /// Include transactions to block message
+    #[clap(long)]
+    blocks_include_transactions: Option<bool>,
+
+    /// Include accounts to block message
+    #[clap(long)]
+    blocks_include_accounts: Option<bool>,
+
     /// Subscribe on block meta updates (without transactions)
     #[clap(long)]
     blocks_meta: bool,
@@ -243,6 +251,8 @@ impl Action {
                         "client".to_owned(),
                         SubscribeRequestFilterBlocks {
                             account_include: args.blocks_account_include.clone(),
+                            include_transactions: args.blocks_include_transactions,
+                            include_accounts: args.blocks_include_accounts,
                         },
                     );
                 }
@@ -442,7 +452,10 @@ async fn geyser_subscribe(
                 }
                 info!("new message: {msg:?}")
             }
-            Err(error) => error!("error: {error:?}"),
+            Err(error) => {
+                error!("error: {error:?}");
+                break;
+            }
         }
 
         // Example to illustrate how to resubscribe/update the subscription
