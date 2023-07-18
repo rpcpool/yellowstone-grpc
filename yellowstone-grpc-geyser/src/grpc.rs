@@ -60,6 +60,35 @@ pub struct MessageAccountInfo {
     pub txn_signature: Option<Signature>,
 }
 
+impl MessageAccountInfo {
+    fn to_proto(
+        &self,
+        accounts_data_slice: &[FilterAccountsDataSlice],
+    ) -> SubscribeUpdateAccountInfo {
+        let data = if accounts_data_slice.is_empty() {
+            self.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+            for data_slice in accounts_data_slice {
+                if self.data.len() >= data_slice.end {
+                    data.extend_from_slice(&self.data[data_slice.start..data_slice.end]);
+                }
+            }
+            data
+        };
+        SubscribeUpdateAccountInfo {
+            pubkey: self.pubkey.as_ref().into(),
+            lamports: self.lamports,
+            owner: self.owner.as_ref().into(),
+            executable: self.executable,
+            rent_epoch: self.rent_epoch,
+            data,
+            write_version: self.write_version,
+            txn_signature: self.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageAccount {
     pub account: MessageAccountInfo,
@@ -116,14 +145,14 @@ pub struct MessageTransactionInfo {
     pub index: usize,
 }
 
-impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
-    fn from(tx: &MessageTransactionInfo) -> Self {
-        Self {
-            signature: tx.signature.as_ref().into(),
-            is_vote: tx.is_vote,
-            transaction: Some(proto::convert::create_transaction(&tx.transaction)),
-            meta: Some(proto::convert::create_transaction_meta(&tx.meta)),
-            index: tx.index as u64,
+impl MessageTransactionInfo {
+    fn to_proto(&self) -> SubscribeUpdateTransactionInfo {
+        SubscribeUpdateTransactionInfo {
+            signature: self.signature.as_ref().into(),
+            is_vote: self.is_vote,
+            transaction: Some(proto::convert::create_transaction(&self.transaction)),
+            meta: Some(proto::convert::create_transaction_meta(&self.meta)),
+            index: self.index as u64,
         }
     }
 }
@@ -158,7 +187,10 @@ pub struct MessageBlock {
     pub rewards: Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
+    pub executed_transaction_count: u64,
     pub transactions: Vec<MessageTransactionInfo>,
+    pub updated_account_count: u64,
+    pub accounts: Vec<MessageAccountInfo>,
 }
 
 impl From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
@@ -171,7 +203,10 @@ impl From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
             rewards: blockinfo.rewards,
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
+            executed_transaction_count: blockinfo.executed_transaction_count,
             transactions,
+            updated_account_count: 0,
+            accounts: Vec::new(),
         }
     }
 }
@@ -223,6 +258,16 @@ impl Message {
             Self::BlockMeta(msg) => msg.slot,
         }
     }
+
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Slot(_) => "Slot",
+            Self::Account(_) => "Account",
+            Self::Transaction(_) => "Transaction",
+            Self::Block(_) => "Block",
+            Self::BlockMeta(_) => "BlockMeta",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -234,11 +279,26 @@ pub struct MessageBlockRef<'a> {
     pub rewards: &'a Vec<Reward>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
+    pub executed_transaction_count: u64,
     pub transactions: Vec<&'a MessageTransactionInfo>,
+    pub updated_account_count: u64,
+    pub accounts: Vec<&'a MessageAccountInfo>,
 }
 
-impl<'a> From<(&'a MessageBlock, Vec<&'a MessageTransactionInfo>)> for MessageBlockRef<'a> {
-    fn from((block, transactions): (&'a MessageBlock, Vec<&'a MessageTransactionInfo>)) -> Self {
+impl<'a>
+    From<(
+        &'a MessageBlock,
+        Vec<&'a MessageTransactionInfo>,
+        Vec<&'a MessageAccountInfo>,
+    )> for MessageBlockRef<'a>
+{
+    fn from(
+        (block, transactions, accounts): (
+            &'a MessageBlock,
+            Vec<&'a MessageTransactionInfo>,
+            Vec<&'a MessageAccountInfo>,
+        ),
+    ) -> Self {
         Self {
             parent_slot: block.parent_slot,
             slot: block.slot,
@@ -247,7 +307,10 @@ impl<'a> From<(&'a MessageBlock, Vec<&'a MessageTransactionInfo>)> for MessageBl
             rewards: &block.rewards,
             block_time: block.block_time,
             block_height: block.block_height,
+            executed_transaction_count: block.executed_transaction_count,
             transactions,
+            updated_account_count: block.updated_account_count,
+            accounts,
         }
     }
 }
@@ -270,38 +333,13 @@ impl<'a> MessageRef<'a> {
                 parent: message.parent,
                 status: message.status as i32,
             }),
-            Self::Account(message) => {
-                let data = if accounts_data_slice.is_empty() {
-                    message.account.data.clone()
-                } else {
-                    let mut data =
-                        Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-                    for data_slice in accounts_data_slice {
-                        if message.account.data.len() >= data_slice.end {
-                            data.extend_from_slice(
-                                &message.account.data[data_slice.start..data_slice.end],
-                            );
-                        }
-                    }
-                    data
-                };
-                UpdateOneof::Account(SubscribeUpdateAccount {
-                    account: Some(SubscribeUpdateAccountInfo {
-                        pubkey: message.account.pubkey.as_ref().into(),
-                        lamports: message.account.lamports,
-                        owner: message.account.owner.as_ref().into(),
-                        executable: message.account.executable,
-                        rent_epoch: message.account.rent_epoch,
-                        data,
-                        write_version: message.account.write_version,
-                        txn_signature: message.account.txn_signature.map(|s| s.as_ref().into()),
-                    }),
-                    slot: message.slot,
-                    is_startup: message.is_startup,
-                })
-            }
+            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(message.account.to_proto(accounts_data_slice)),
+                slot: message.slot,
+                is_startup: message.is_startup,
+            }),
             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some((&message.transaction).into()),
+                transaction: Some(message.transaction.to_proto()),
                 slot: message.slot,
             }),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
@@ -312,9 +350,20 @@ impl<'a> MessageRef<'a> {
                 block_height: message
                     .block_height
                     .map(proto::convert::create_block_height),
-                transactions: message.transactions.iter().map(|tx| (*tx).into()).collect(),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
+                executed_transaction_count: message.executed_transaction_count,
+                transactions: message
+                    .transactions
+                    .iter()
+                    .map(|tx| tx.to_proto())
+                    .collect(),
+                updated_account_count: message.updated_account_count,
+                accounts: message
+                    .accounts
+                    .iter()
+                    .map(|acc| acc.to_proto(accounts_data_slice))
+                    .collect(),
             }),
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
@@ -570,7 +619,7 @@ impl GrpcService {
         #[allow(clippy::type_complexity)]
         let mut messages: HashMap<
             u64,
-            (Vec<Option<Message>>, HashMap<Pubkey, (u64, usize)>),
+            (Vec<Option<Message>>, HashMap<Pubkey, (u64, usize)>, bool),
         > = HashMap::new();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
@@ -619,16 +668,27 @@ impl GrpcService {
                     let _ =
                         broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
                 } else {
-                    processed_messages.push($message.clone());
-                    if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
-                        let _ = broadcast_tx
-                            .send((CommitmentLevel::Processed, processed_messages.into()));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                        processed_sleep
-                            .as_mut()
-                            .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                    if let Message::Block(block) = &mut $message {
+                        if let Some((vec, map, collected)) = messages.get_mut(&block.slot) {
+                            let mut accounts = Vec::with_capacity(vec.len());
+                            for (_write_version, idx) in map.values() {
+                                if let Some(Some(Message::Account(account))) = vec.get(*idx) {
+                                    accounts.push(account.account.clone());
+                                }
+                            }
+
+                            block.updated_account_count = accounts.len() as u64;
+                            block.accounts = accounts;
+
+                            *collected = true;
+                        }
                     }
-                    let (vec, map) = messages.entry($message.get_slot()).or_default();
+
+                    let processed_message = $message.clone();
+                    let (vec, map, collected) = messages.entry($message.get_slot()).or_default();
+                    if *collected && !matches!(&$message, Message::Block(_) | Message::BlockMeta(_)) {
+                        error!("unexpected message order for slot {}", $message.get_slot());
+                    }
                     if let Message::Account(message) = &$message {
                         let write_version = message.account.write_version;
                         let index = vec.len();
@@ -646,13 +706,23 @@ impl GrpcService {
                     } else {
                         vec.push(Some($message));
                     }
+
+                    processed_messages.push(processed_message);
+                    if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
+                        let _ = broadcast_tx
+                            .send((CommitmentLevel::Processed, processed_messages.into()));
+                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                        processed_sleep
+                            .as_mut()
+                            .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
+                    }
                 }
             };
         }
 
         loop {
             tokio::select! {
-                Some(message) = messages_rx.recv() => {
+                Some(mut message) = messages_rx.recv() => {
                     MESSAGE_QUEUE_SIZE.dec();
 
                     if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
@@ -679,7 +749,7 @@ impl GrpcService {
                         ) {
                             let (block_meta, mut transactions) = transactions.remove(&slot).expect("checked");
                             transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
-                            let message = Message::Block((block_meta.expect("checked"), transactions).into());
+                            let mut message = Message::Block((block_meta.expect("checked"), transactions).into());
                             process_message!(message);
                     }
 

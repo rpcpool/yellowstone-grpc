@@ -40,12 +40,18 @@ If all fields are empty then all accounts are broadcasted. Otherwise fields work
 
    - `vote` — enable/disable broadcast `vote` transactions
    - `failed` — enable/disable broadcast `failed` transactions
+   - `signature` — match only specified transaction
    - `account_include` — filter transactions which use any account
    - `account_exclude` — filter transactions which do not use any account
+   - `account_required` — require all accounts used in transaction
 
 If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
 #### Blocks
+
+   - `account_include` — filter transactions and accounts which use any of listed accounts
+   - `include_transactions` — include all transactions
+   - `include_accounts` — include all accounts updates
 
 Currently all blocks are broadcasted.
 

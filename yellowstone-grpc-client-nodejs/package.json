@@ -1,6 +1,6 @@
 {
     "name": "@triton-one/yellowstone-grpc",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "license": "Apache-2.0",
     "author": "Triton One",
     "description": "Yellowstone gRPC Geyser Node.js Client",
@@ -8,7 +8,7 @@
     "types": "dist/index.d.ts",
     "scripts": {
         "build": "npm run grpc-generate && tsc -p .",
-        "grpc-generate": "protoc -I../yellowstone-grpc-proto/proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
+        "grpc-generate": "protoc -I../yellowstone-grpc-proto/proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=forceLong=string --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
     },
     "repository": {
         "type": "git",
