@@ -9,7 +9,7 @@ use {
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     std::{
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicU8, Ordering},
         time::Duration,
     },
     tokio::{
@@ -18,11 +18,13 @@ use {
     },
 };
 
+const STARTUP_END_OF_RECEIVED: u8 = 1 << 0;
+const STARTUP_PROCESSED_RECEIVED: u8 = 1 << 1;
+
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    startup_received: AtomicBool,
-    startup_processed_received: AtomicBool,
+    startup_status: AtomicU8,
     grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown_tx: oneshot::Sender<()>,
     prometheus: PrometheusService,
@@ -48,8 +50,8 @@ impl Plugin {
     {
         // Before processed slot after end of startup message we will fail to construct full block
         let inner = self.inner.as_ref().expect("initialized");
-        if inner.startup_received.load(Ordering::SeqCst)
-            && inner.startup_processed_received.load(Ordering::SeqCst)
+        if inner.startup_status.load(Ordering::SeqCst)
+            == STARTUP_END_OF_RECEIVED | STARTUP_PROCESSED_RECEIVED
         {
             f(inner)
         } else {
@@ -82,8 +84,7 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
-            startup_received: AtomicBool::new(false),
-            startup_processed_received: AtomicBool::new(false),
+            startup_status: AtomicU8::new(0),
             grpc_channel,
             grpc_shutdown_tx,
             prometheus,
@@ -103,7 +104,9 @@ impl GeyserPlugin for Plugin {
 
     fn notify_end_of_startup(&self) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        inner.startup_received.store(true, Ordering::SeqCst);
+        inner
+            .startup_status
+            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
         Ok(())
     }
 
@@ -137,13 +140,12 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        if inner.startup_received.load(Ordering::SeqCst)
-            && !inner.startup_processed_received.load(Ordering::SeqCst)
+        if inner.startup_status.load(Ordering::SeqCst) == STARTUP_END_OF_RECEIVED
             && status == SlotStatus::Processed
         {
             inner
-                .startup_processed_received
-                .store(true, Ordering::SeqCst);
+                .startup_status
+                .fetch_or(STARTUP_PROCESSED_RECEIVED, Ordering::SeqCst);
         }
 
         self.with_inner(|inner| {

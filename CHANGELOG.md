@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-07-18
+
+- yellowstone-grpc-geyser-1.4.0+solana.1.16.1
+
+### Features
+
+- geyser: reduce the amount of locks ([#161](https://github.com/rpcpool/yellowstone-grpc/pull/161)).
+
 ## 2023-07-17
 
 - @triton-one/yellowstone-grpc:0.1.5
