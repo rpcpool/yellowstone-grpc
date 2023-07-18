@@ -137,8 +137,8 @@ export default class Client {
     });
   }
 
-  async getBlockHeight(commitment?: CommitmentLevel): Promise<number> {
-    return await new Promise<number>((resolve, reject) => {
+  async getBlockHeight(commitment?: CommitmentLevel): Promise<string> {
+    return await new Promise<string>((resolve, reject) => {
       this._client.getBlockHeight({ commitment }, (err, response) => {
         if (err === null || err === undefined) {
           resolve(response.blockHeight);
@@ -149,8 +149,8 @@ export default class Client {
     });
   }
 
-  async getSlot(commitment?: CommitmentLevel): Promise<number> {
-    return await new Promise<number>((resolve, reject) => {
+  async getSlot(commitment?: CommitmentLevel): Promise<string> {
+    return await new Promise<string>((resolve, reject) => {
       this._client.getSlot({ commitment }, (err, response) => {
         if (err === null || err === undefined) {
           resolve(response.slot);

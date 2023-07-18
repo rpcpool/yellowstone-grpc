@@ -104,7 +104,7 @@ async function subscribeCommand(client, args) {
 
         const [offset, data] = filterSpec;
         filters.push({
-          memcmp: { offset: parseInt(offset, 10), base58: data.trim() },
+          memcmp: { offset, base58: data.trim() },
         });
       }
     }
@@ -164,8 +164,8 @@ async function subscribeCommand(client, args) {
 
       const [offset, length] = filterSpec;
       request.accountsDataSlice.push({
-        offset: parseInt(offset, 10),
-        length: parseInt(length, 10),
+        offset,
+        length,
       });
     }
   }
@@ -311,12 +311,12 @@ function parseCommandLineArgs() {
         "blocks-include-transactions": {
           default: false,
           description: "include transactions to block messsage",
-          type: "boolean"
+          type: "boolean",
         },
         "blocks-include-accounts": {
           default: false,
           description: "include accounts to block message",
-          type: "boolean"
+          type: "boolean",
         },
         "blocks-meta": {
           default: false,
