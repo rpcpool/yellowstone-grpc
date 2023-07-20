@@ -18,8 +18,8 @@ use {
             SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            SubscribeUpdateAccount,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
         },
         tonic::service::Interceptor,
     },
@@ -28,6 +28,7 @@ use {
 type SlotsFilterMap = HashMap<String, SubscribeRequestFilterSlots>;
 type AccountFilterMap = HashMap<String, SubscribeRequestFilterAccounts>;
 type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
+type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
 
@@ -159,6 +160,9 @@ struct ActionSubscribe {
     #[clap(long)]
     transactions_account_required: Vec<String>,
 
+    #[clap(long)]
+    entry: bool,
+
     /// Subscribe on block updates
     #[clap(long)]
     blocks: bool,
@@ -254,6 +258,11 @@ impl Action {
                     );
                 }
 
+                let mut entry: EntryFilterMap = HashMap::new();
+                if args.entry {
+                    entry.insert("client".to_owned(), SubscribeRequestFilterEntry {});
+                }
+
                 let mut blocks: BlocksFilterMap = HashMap::new();
                 if args.blocks {
                     blocks.insert(
@@ -290,6 +299,7 @@ impl Action {
                         slots,
                         accounts,
                         transactions,
+                        entry,
                         blocks,
                         blocks_meta,
                         commitment: commitment.map(|x| x as i32),
@@ -486,6 +496,7 @@ async fn geyser_subscribe(
                     slots: new_slots.clone(),
                     accounts: HashMap::default(),
                     transactions: HashMap::default(),
+                    entry: HashMap::default(),
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),
                     commitment: None,

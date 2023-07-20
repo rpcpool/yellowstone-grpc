@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc -p .",
+    "fmt": "prettier -w .",
     "start": "npm run build && node dist/client.js"
   },
   "devDependencies": {

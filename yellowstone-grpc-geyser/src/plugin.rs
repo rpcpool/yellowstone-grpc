@@ -103,14 +103,6 @@ impl GeyserPlugin for Plugin {
         }
     }
 
-    fn notify_end_of_startup(&mut self) -> PluginResult<()> {
-        let inner = self.inner.as_ref().expect("initialized");
-        inner
-            .startup_status
-            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
-        Ok(())
-    }
-
     fn update_account(
         &mut self,
         account: ReplicaAccountInfoVersions,
@@ -129,6 +121,14 @@ impl GeyserPlugin for Plugin {
             inner.send_message(message);
             Ok(())
         })
+    }
+
+    fn notify_end_of_startup(&mut self) -> PluginResult<()> {
+        let inner = self.inner.as_ref().expect("initialized");
+        inner
+            .startup_status
+            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
+        Ok(())
     }
 
     fn update_slot_status(
@@ -192,6 +192,10 @@ impl GeyserPlugin for Plugin {
 
             Ok(())
         })
+    }
+
+    fn account_data_notifications_enabled(&self) -> bool {
+        true
     }
 
     fn transaction_notifications_enabled(&self) -> bool {

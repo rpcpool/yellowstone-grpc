@@ -22,7 +22,8 @@ use {
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
         SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 
@@ -139,6 +140,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         slots: HashMap<String, SubscribeRequestFilterSlots>,
         accounts: HashMap<String, SubscribeRequestFilterAccounts>,
         transactions: HashMap<String, SubscribeRequestFilterTransactions>,
+        entry: HashMap<String, SubscribeRequestFilterEntry>,
         blocks: HashMap<String, SubscribeRequestFilterBlocks>,
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
         commitment: Option<CommitmentLevel>,
@@ -150,6 +152,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 slots,
                 accounts,
                 transactions,
+                entry,
                 blocks,
                 blocks_meta,
                 commitment: commitment.map(|value| value as i32),
