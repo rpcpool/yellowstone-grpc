@@ -34,6 +34,9 @@
             },
             "blocks_meta": {
                 "max": 1
+            },
+            "entry": {
+                "max": 1
             }
         }
     },

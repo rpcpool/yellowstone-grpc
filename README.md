@@ -94,7 +94,6 @@ It's possible to add limits for filters in config. If `filters` field is omitted
 ### Examples
 
    - [Go](examples/golang)
-   - [Node.js](examples/nodejs)
    - [Rust](examples/rust)
    - [TypeScript](examples/typescript)
 

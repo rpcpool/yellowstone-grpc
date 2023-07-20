@@ -88,6 +88,7 @@ async function subscribeCommand(client, args) {
     accounts: {},
     slots: {},
     transactions: {},
+    entry: {},
     blocks: {},
     blocksMeta: {},
     accountsDataSlice: [],
@@ -139,6 +140,10 @@ async function subscribeCommand(client, args) {
       accountExclude: args.transactionsAccountExclude,
       accountRequired: args.transactionsAccountRequired,
     };
+  }
+
+  if (args.entry) {
+    request.entry.client = {};
   }
 
   if (args.blocks) {
@@ -297,6 +302,11 @@ function parseCommandLineArgs() {
           default: [],
           description: "filter required account in transactions",
           type: "array",
+        },
+        entry: {
+          default: false,
+          description: "subscribe on entry updates",
+          type: "boolean",
         },
         blocks: {
           default: false,
