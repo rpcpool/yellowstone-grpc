@@ -6,7 +6,8 @@ use {
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
+        SlotStatus,
     },
     std::{
         sync::atomic::{AtomicU8, Ordering},
@@ -102,14 +103,6 @@ impl GeyserPlugin for Plugin {
         }
     }
 
-    fn notify_end_of_startup(&self) -> PluginResult<()> {
-        let inner = self.inner.as_ref().expect("initialized");
-        inner
-            .startup_status
-            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
-        Ok(())
-    }
-
     fn update_account(
         &self,
         account: ReplicaAccountInfoVersions,
@@ -131,6 +124,14 @@ impl GeyserPlugin for Plugin {
             inner.send_message(message);
             Ok(())
         })
+    }
+
+    fn notify_end_of_startup(&self) -> PluginResult<()> {
+        let inner = self.inner.as_ref().expect("initialized");
+        inner
+            .startup_status
+            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
+        Ok(())
     }
 
     fn update_slot_status(
@@ -177,6 +178,20 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn notify_entry(&self, entry: ReplicaEntryInfoVersions) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
+            let entry = match entry {
+                ReplicaEntryInfoVersions::V0_0_1(entry) => entry,
+            };
+
+            let message = Message::Entry(entry.into());
+            inner.send_message(message);
+
+            Ok(())
+        })
+    }
+
     fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
         self.with_inner(|inner| {
             let blockinfo = match blockinfo {
@@ -193,7 +208,15 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn account_data_notifications_enabled(&self) -> bool {
+        true
+    }
+
     fn transaction_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn entry_notifications_enabled(&self) -> bool {
         true
     }
 }

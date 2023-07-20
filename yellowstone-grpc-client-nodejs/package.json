@@ -1,36 +1,39 @@
 {
-    "name": "@triton-one/yellowstone-grpc",
-    "version": "0.1.5",
-    "license": "Apache-2.0",
-    "author": "Triton One",
-    "description": "Yellowstone gRPC Geyser Node.js Client",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "scripts": {
-        "build": "npm run grpc-generate && tsc -p .",
-        "grpc-generate": "protoc -I../yellowstone-grpc-proto/proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=forceLong=string --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
-    },
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/rpcpool/yellowstone-grpc.git"
-    },
-    "publishConfig": {
-        "access": "public"
-    },
-    "bugs": {
-        "url": "https://github.com/rpcpool/yellowstone-grpc/issues"
-    },
-    "keywords": [
-        "solana"
-    ],
-    "homepage": "https://triton.one",
-    "dependencies": {
-        "@grpc/grpc-js": "^1.8.0"
-    },
-    "devDependencies": {
-        "prettier": "2.8.3",
-        "ts-proto": "^1.139.0",
-        "typescript": "^4.9.5"
-    },
-    "files": ["dist"]
+  "name": "@triton-one/yellowstone-grpc",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "author": "Triton One",
+  "description": "Yellowstone gRPC Geyser Node.js Client",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "npm run grpc-generate && tsc -p .",
+    "fmt": "prettier -w .",
+    "grpc-generate": "protoc -I../yellowstone-grpc-proto/proto --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=forceLong=string --ts_proto_opt=outputServices=grpc-js --ts_proto_out=./src/grpc geyser.proto"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rpcpool/yellowstone-grpc.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bugs": {
+    "url": "https://github.com/rpcpool/yellowstone-grpc/issues"
+  },
+  "keywords": [
+    "solana"
+  ],
+  "homepage": "https://triton.one",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.8.0"
+  },
+  "devDependencies": {
+    "prettier": "2.8.3",
+    "ts-proto": "^1.139.0",
+    "typescript": "^4.9.5"
+  },
+  "files": [
+    "dist"
+  ]
 }

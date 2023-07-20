@@ -2,11 +2,12 @@ use {
     crate::{
         config::{
             ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersSlots, ConfigGrpcFiltersTransactions,
+            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
+            ConfigGrpcFiltersTransactions,
         },
         grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageRef, MessageSlot,
-            MessageTransaction,
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
+            MessageSlot, MessageTransaction,
         },
         proto::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
@@ -14,7 +15,8 @@ use {
             CommitmentLevel, SubscribeRequest, SubscribeRequestAccountsDataSlice,
             SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdate,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -32,6 +34,7 @@ pub struct Filter {
     accounts: FilterAccounts,
     slots: FilterSlots,
     transactions: FilterTransactions,
+    entry: FilterEntry,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
@@ -44,6 +47,7 @@ impl Filter {
             accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
+            entry: FilterEntry::new(&config.entry, &limit.entry)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
             commitment: Self::decode_commitment(config.commitment)?,
@@ -82,6 +86,7 @@ impl Filter {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message),
             Message::Transaction(message) => self.transactions.get_filters(message),
+            Message::Entry(message) => self.entry.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
@@ -506,6 +511,32 @@ impl FilterTransactions {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct FilterEntry {
+    filters: Vec<String>,
+}
+
+impl FilterEntry {
+    fn new(
+        configs: &HashMap<String, SubscribeRequestFilterEntry>,
+        limit: &ConfigGrpcFiltersEntry,
+    ) -> anyhow::Result<Self> {
+        ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
+
+        Ok(Self {
+            filters: configs
+                .iter()
+                // .filter_map(|(name, _filter)| Some(name.clone()))
+                .map(|(name, _filter)| name.clone())
+                .collect(),
+        })
+    }
+
+    fn get_filters<'a>(&self, message: &'a MessageEntry) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        vec![(self.filters.clone(), MessageRef::Entry(message))]
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FilterBlocksInner {
     account_include: HashSet<Pubkey>,
@@ -750,6 +781,7 @@ mod tests {
             transactions: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -777,6 +809,7 @@ mod tests {
             transactions: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -809,6 +842,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -840,6 +874,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -877,6 +912,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -918,6 +954,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -959,6 +996,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -1006,6 +1044,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };
@@ -1055,6 +1094,7 @@ mod tests {
             transactions,
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
         };

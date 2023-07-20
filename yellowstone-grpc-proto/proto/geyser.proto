@@ -28,6 +28,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterTransactions> transactions = 3;
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
+  map<string, SubscribeRequestFilterEntry> entry = 8;
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
 }
@@ -74,6 +75,8 @@ message SubscribeRequestFilterBlocks {
 
 message SubscribeRequestFilterBlocksMeta {}
 
+message SubscribeRequestFilterEntry {}
+
 message SubscribeRequestAccountsDataSlice {
   uint64 offset = 1;
   uint64 length = 2;
@@ -88,6 +91,7 @@ message SubscribeUpdate {
     SubscribeUpdateBlock block = 5;
     SubscribeUpdatePing ping = 6;
     SubscribeUpdateBlockMeta block_meta = 7;
+    SubscribeUpdateEntry entry = 8;
   }
 }
 
@@ -150,6 +154,14 @@ message SubscribeUpdateBlockMeta {
   uint64 parent_slot = 6;
   string parent_blockhash = 7;
   uint64 executed_transaction_count = 8;
+}
+
+message SubscribeUpdateEntry {
+  uint64 slot = 1;
+  uint64 index = 2;
+  uint64 num_hashes = 3;
+  bytes hash = 4;
+  uint64 executed_transaction_count = 5;
 }
 
 message SubscribeUpdatePing {}

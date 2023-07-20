@@ -12,14 +12,15 @@ use {
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
             IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateBlockMeta, SubscribeUpdatePing, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         version::VERSION,
     },
     log::*,
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaTransactionInfoV2, SlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaEntryInfo, ReplicaTransactionInfoV2,
+        SlotStatus,
     },
     solana_sdk::{
         clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
@@ -179,6 +180,27 @@ impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
 }
 
 #[derive(Debug, Clone)]
+pub struct MessageEntry {
+    pub slot: u64,
+    pub index: usize,
+    pub num_hashes: u64,
+    pub hash: Vec<u8>,
+    pub executed_transaction_count: u64,
+}
+
+impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
+    fn from(entry: &ReplicaEntryInfo) -> Self {
+        Self {
+            slot: entry.slot,
+            index: entry.index,
+            num_hashes: entry.num_hashes,
+            hash: entry.hash.into(),
+            executed_transaction_count: entry.executed_transaction_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MessageBlock {
     pub parent_slot: u64,
     pub slot: u64,
@@ -244,6 +266,7 @@ pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
+    Entry(MessageEntry),
     Block(MessageBlock),
     BlockMeta(MessageBlockMeta),
 }
@@ -254,6 +277,7 @@ impl Message {
             Self::Slot(msg) => msg.slot,
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
+            Self::Entry(msg) => msg.slot,
             Self::Block(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
         }
@@ -264,6 +288,7 @@ impl Message {
             Self::Slot(_) => "Slot",
             Self::Account(_) => "Account",
             Self::Transaction(_) => "Transaction",
+            Self::Entry(_) => "Entry",
             Self::Block(_) => "Block",
             Self::BlockMeta(_) => "BlockMeta",
         }
@@ -321,6 +346,7 @@ pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),
     Transaction(&'a MessageTransaction),
+    Entry(&'a MessageEntry),
     Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
 }
@@ -341,6 +367,13 @@ impl<'a> MessageRef<'a> {
             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
                 transaction: Some(message.transaction.to_proto()),
                 slot: message.slot,
+            }),
+            Self::Entry(message) => UpdateOneof::Entry(SubscribeUpdateEntry {
+                slot: message.slot,
+                index: message.index as u64,
+                num_hashes: message.num_hashes,
+                hash: message.hash.clone(),
+                executed_transaction_count: message.executed_transaction_count,
             }),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
@@ -874,6 +907,7 @@ impl Geyser for GrpcService {
                 transactions: HashMap::new(),
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
                 commitment: None,
                 accounts_data_slice: Vec::new(),
             },
