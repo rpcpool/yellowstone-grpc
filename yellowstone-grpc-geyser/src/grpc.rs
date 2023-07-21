@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
         prom::{CONNECTIONS_TOTAL, INVALID_FULL_BLOCKS, MESSAGE_QUEUE_SIZE},
         proto::{
@@ -586,6 +586,7 @@ pub struct GrpcService {
 impl GrpcService {
     pub fn create(
         config: ConfigGrpc,
+        block_fail_action: ConfigBlockFailAction,
     ) -> Result<
         (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -615,7 +616,12 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::geyser_loop(messages_rx, blocks_meta_tx, broadcast_tx));
+        tokio::spawn(Self::geyser_loop(
+            messages_rx,
+            blocks_meta_tx,
+            broadcast_tx,
+            block_fail_action,
+        ));
 
         // Run Server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -641,6 +647,7 @@ impl GrpcService {
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: mpsc::UnboundedSender<Message>,
         broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
+        block_fail_action: ConfigBlockFailAction,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
@@ -720,7 +727,15 @@ impl GrpcService {
                     let processed_message = $message.clone();
                     let (vec, map, collected) = messages.entry($message.get_slot()).or_default();
                     if *collected && !matches!(&$message, Message::Block(_) | Message::BlockMeta(_)) {
-                        error!("unexpected message order for slot {}", $message.get_slot());
+                        match block_fail_action {
+                            ConfigBlockFailAction::Log => {
+                                INVALID_FULL_BLOCKS.inc();
+                                error!("unexpected message order for slot {}", $message.get_slot());
+                            }
+                            ConfigBlockFailAction::Panic => {
+                                panic!("unexpected message order for slot {}", $message.get_slot());
+                            }
+                        }
                     }
                     if let Message::Account(message) = &$message {
                         let write_version = message.account.write_version;
@@ -780,10 +795,11 @@ impl GrpcService {
                             transactions.get(&slot),
                             Some((Some(block_meta), transactions)) if block_meta.executed_transaction_count as usize == transactions.len()
                         ) {
-                            let (block_meta, mut transactions) = transactions.remove(&slot).expect("checked");
-                            transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
-                            let mut message = Message::Block((block_meta.expect("checked"), transactions).into());
-                            process_message!(message);
+                            if let Some((Some(block_meta), mut transactions)) = transactions.remove(&slot) {
+                                transactions.sort_by(|tx1, tx2| tx1.index.cmp(&tx2.index));
+                                let mut message = Message::Block((block_meta, transactions).into());
+                                process_message!(message);
+                            }
                     }
 
                     // remove outdated transactions
@@ -797,8 +813,15 @@ impl GrpcService {
                                 // Maybe log error
                                 Some(kslot) if kslot == slot => {
                                     if let Some((Some(_), vec)) = transactions.remove(&kslot) {
-                                        INVALID_FULL_BLOCKS.inc();
-                                        error!("{} transactions left for block {kslot}", vec.len());
+                                        match block_fail_action {
+                                            ConfigBlockFailAction::Log => {
+                                                INVALID_FULL_BLOCKS.inc();
+                                                error!("{} transactions left for block {kslot}", vec.len());
+                                            }
+                                            ConfigBlockFailAction::Panic => {
+                                                panic!("{} transactions left for block {kslot}", vec.len());
+                                            }
+                                        }
                                     }
                                 }
                                 _ => break,
