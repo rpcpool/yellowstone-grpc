@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "examples/rust", # 1.7.0+solana.1.14.18
-    "yellowstone-grpc-client", # 1.7.0+solana.1.14.18
-    "yellowstone-grpc-geyser", # 1.4.0+solana.1.14.18
-    "yellowstone-grpc-proto", # 1.7.0+solana.1.14.18
+    "examples/rust", # 1.7.0+solana.1.14.8
+    "yellowstone-grpc-client", # 1.7.0+solana.1.14.8
+    "yellowstone-grpc-geyser", # 1.6.0+solana.1.14.8
+    "yellowstone-grpc-proto", # 1.7.0+solana.1.14.8
 ]
 
 [patch.crates-io]

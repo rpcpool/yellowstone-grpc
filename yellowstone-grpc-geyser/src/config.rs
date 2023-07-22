@@ -5,6 +5,7 @@ use {
     },
     solana_sdk::pubkey::Pubkey,
     std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path},
+    tokio::sync::Semaphore,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +68,15 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_usize_str"
     )]
     pub channel_capacity: usize,
+    /// Concurrency limit for unary requests
+    #[serde(
+        default = "ConfigGrpc::unary_concurrency_limit_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub unary_concurrency_limit: usize,
+    /// Enable/disable unary methods
+    #[serde(default)]
+    pub unary_disabled: bool,
     /// Limits for possible filters
     #[serde(default)]
     pub filters: ConfigGrpcFilters,
@@ -75,6 +85,10 @@ pub struct ConfigGrpc {
 impl ConfigGrpc {
     const fn channel_capacity_default() -> usize {
         250_000
+    }
+
+    const fn unary_concurrency_limit_default() -> usize {
+        Semaphore::MAX_PERMITS
     }
 }
 
