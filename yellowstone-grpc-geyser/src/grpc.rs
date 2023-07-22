@@ -37,7 +37,7 @@ use {
         },
     },
     tokio::{
-        sync::{broadcast, mpsc, oneshot, RwLock},
+        sync::{broadcast, mpsc, oneshot, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -444,11 +444,12 @@ struct BlockMetaStorageInner {
 
 #[derive(Debug)]
 struct BlockMetaStorage {
+    read_sem: Semaphore,
     inner: Arc<RwLock<BlockMetaStorageInner>>,
 }
 
 impl BlockMetaStorage {
-    fn new() -> (Self, mpsc::UnboundedSender<Message>) {
+    fn new(unary_concurrency_limit: usize) -> (Self, mpsc::UnboundedSender<Message>) {
         let inner = Arc::new(RwLock::new(BlockMetaStorageInner::default()));
         let (tx, mut rx) = mpsc::unbounded_channel();
 
@@ -505,7 +506,13 @@ impl BlockMetaStorage {
             }
         });
 
-        (Self { inner }, tx)
+        (
+            Self {
+                read_sem: Semaphore::new(unary_concurrency_limit),
+                inner,
+            },
+            tx,
+        )
     }
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
@@ -525,6 +532,7 @@ impl BlockMetaStorage {
         F: FnOnce(&MessageBlockMeta) -> Option<T>,
     {
         let commitment = Self::parse_commitment(commitment)?;
+        let _permit = self.read_sem.acquire().await;
         let storage = self.inner.read().await;
 
         let slot = match commitment {
@@ -548,6 +556,7 @@ impl BlockMetaStorage {
         commitment: Option<i32>,
     ) -> Result<Response<IsBlockhashValidResponse>, Status> {
         let commitment = Self::parse_commitment(commitment)?;
+        let _permit = self.read_sem.acquire().await;
         let storage = self.inner.read().await;
 
         if storage.blockhashes.len() < MAX_RECENT_BLOCKHASHES + 32 {
@@ -578,7 +587,7 @@ impl BlockMetaStorage {
 #[derive(Debug)]
 pub struct GrpcService {
     config: ConfigGrpc,
-    blocks_meta: BlockMetaStorage,
+    blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
 }
@@ -599,7 +608,13 @@ impl GrpcService {
         )?;
 
         // Blocks meta storage
-        let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new();
+        let (blocks_meta, blocks_meta_tx) = if config.unary_disabled {
+            (None, None)
+        } else {
+            let (blocks_meta, blocks_meta_tx) =
+                BlockMetaStorage::new(config.unary_concurrency_limit);
+            (Some(blocks_meta), Some(blocks_meta_tx))
+        };
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
@@ -645,7 +660,7 @@ impl GrpcService {
 
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
-        blocks_meta_tx: mpsc::UnboundedSender<Message>,
+        blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
         block_fail_action: ConfigBlockFailAction,
     ) {
@@ -773,8 +788,10 @@ impl GrpcService {
                 Some(mut message) = messages_rx.recv() => {
                     MESSAGE_QUEUE_SIZE.dec();
 
-                    if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
-                        let _ = blocks_meta_tx.send(message.clone());
+                    if let Some(blocks_meta_tx) = &blocks_meta_tx {
+                        if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
+                            let _ = blocks_meta_tx.send(message.clone());
+                        }
                     }
 
                     // consctruct Block message
@@ -1013,58 +1030,74 @@ impl Geyser for GrpcService {
         &self,
         request: Request<GetLatestBlockhashRequest>,
     ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
-        self.blocks_meta
-            .get_block(
-                |block| {
-                    block
-                        .block_height
-                        .map(|last_valid_block_height| GetLatestBlockhashResponse {
-                            slot: block.slot,
-                            blockhash: block.blockhash.clone(),
-                            last_valid_block_height,
+        if let Some(blocks_meta) = &self.blocks_meta {
+            blocks_meta
+                .get_block(
+                    |block| {
+                        block.block_height.map(|last_valid_block_height| {
+                            GetLatestBlockhashResponse {
+                                slot: block.slot,
+                                blockhash: block.blockhash.clone(),
+                                last_valid_block_height,
+                            }
                         })
-                },
-                request.get_ref().commitment,
-            )
-            .await
+                    },
+                    request.get_ref().commitment,
+                )
+                .await
+        } else {
+            Err(Status::unimplemented("method disabled"))
+        }
     }
 
     async fn get_block_height(
         &self,
         request: Request<GetBlockHeightRequest>,
     ) -> Result<Response<GetBlockHeightResponse>, Status> {
-        self.blocks_meta
-            .get_block(
-                |block| {
-                    block
-                        .block_height
-                        .map(|block_height| GetBlockHeightResponse { block_height })
-                },
-                request.get_ref().commitment,
-            )
-            .await
+        if let Some(blocks_meta) = &self.blocks_meta {
+            blocks_meta
+                .get_block(
+                    |block| {
+                        block
+                            .block_height
+                            .map(|block_height| GetBlockHeightResponse { block_height })
+                    },
+                    request.get_ref().commitment,
+                )
+                .await
+        } else {
+            Err(Status::unimplemented("method disabled"))
+        }
     }
 
     async fn get_slot(
         &self,
         request: Request<GetSlotRequest>,
     ) -> Result<Response<GetSlotResponse>, Status> {
-        self.blocks_meta
-            .get_block(
-                |block| Some(GetSlotResponse { slot: block.slot }),
-                request.get_ref().commitment,
-            )
-            .await
+        if let Some(blocks_meta) = &self.blocks_meta {
+            blocks_meta
+                .get_block(
+                    |block| Some(GetSlotResponse { slot: block.slot }),
+                    request.get_ref().commitment,
+                )
+                .await
+        } else {
+            Err(Status::unimplemented("method disabled"))
+        }
     }
 
     async fn is_blockhash_valid(
         &self,
         request: Request<IsBlockhashValidRequest>,
     ) -> Result<Response<IsBlockhashValidResponse>, Status> {
-        let req = request.get_ref();
-        self.blocks_meta
-            .is_blockhash_valid(&req.blockhash, req.commitment)
-            .await
+        if let Some(blocks_meta) = &self.blocks_meta {
+            let req = request.get_ref();
+            blocks_meta
+                .is_blockhash_valid(&req.blockhash, req.commitment)
+                .await
+        } else {
+            Err(Status::unimplemented("method disabled"))
+        }
     }
 
     async fn get_version(

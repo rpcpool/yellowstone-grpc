@@ -1,10 +1,14 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::{Parser, Subcommand, ValueEnum},
-    futures::{sink::SinkExt, stream::StreamExt},
+    futures::{future::TryFutureExt, sink::SinkExt, stream::StreamExt},
     log::{error, info},
     solana_sdk::pubkey::Pubkey,
-    std::{collections::HashMap, env},
+    std::{
+        collections::HashMap,
+        env,
+        sync::{Arc, Mutex},
+    },
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::{
         prelude::{
@@ -352,15 +356,22 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
+    let zero_attempts = Arc::new(Mutex::new(true));
 
     // The default exponential backoff strategy intervals:
     // [500ms, 750ms, 1.125s, 1.6875s, 2.53125s, 3.796875s, 5.6953125s,
     // 8.5s, 12.8s, 19.2s, 28.8s, 43.2s, 64.8s, 97s, ... ]
     retry(ExponentialBackoff::default(), move || {
         let args = args.clone();
+        let zero_attempts = Arc::clone(&zero_attempts);
 
         async move {
-            info!("Retry to connect to the server");
+            let mut zero_attempts = zero_attempts.lock().unwrap();
+            if *zero_attempts {
+                *zero_attempts = false;
+            } else {
+                info!("Retry to connect to the server");
+            }
 
             let commitment = args.get_commitment();
             let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)
@@ -417,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
 
             Ok::<(), backoff::Error<anyhow::Error>>(())
         }
+        .inspect_err(|error| error!("failed to connect: {error}"))
     })
     .await
     .map_err(Into::into)

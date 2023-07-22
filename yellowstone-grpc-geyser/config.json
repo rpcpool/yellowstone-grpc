@@ -6,6 +6,8 @@
     "grpc": {
         "address": "0.0.0.0:10000",
         "channel_capacity": "100_000",
+        "unary_concurrency_limit": 100,
+        "unary_disabled": false,
         "filters": {
             "accounts": {
                 "max": 1,
