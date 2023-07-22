@@ -37,7 +37,7 @@ use {
         },
     },
     tokio::{
-        sync::{broadcast, mpsc, oneshot, RwLock},
+        sync::{broadcast, mpsc, oneshot, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -444,11 +444,12 @@ struct BlockMetaStorageInner {
 
 #[derive(Debug)]
 struct BlockMetaStorage {
+    read_sem: Semaphore,
     inner: Arc<RwLock<BlockMetaStorageInner>>,
 }
 
 impl BlockMetaStorage {
-    fn new() -> (Self, mpsc::UnboundedSender<Message>) {
+    fn new(unary_concurrency_limit: usize) -> (Self, mpsc::UnboundedSender<Message>) {
         let inner = Arc::new(RwLock::new(BlockMetaStorageInner::default()));
         let (tx, mut rx) = mpsc::unbounded_channel();
 
@@ -505,7 +506,13 @@ impl BlockMetaStorage {
             }
         });
 
-        (Self { inner }, tx)
+        (
+            Self {
+                read_sem: Semaphore::new(unary_concurrency_limit),
+                inner,
+            },
+            tx,
+        )
     }
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
@@ -525,6 +532,7 @@ impl BlockMetaStorage {
         F: FnOnce(&MessageBlockMeta) -> Option<T>,
     {
         let commitment = Self::parse_commitment(commitment)?;
+        let _permit = self.read_sem.acquire().await;
         let storage = self.inner.read().await;
 
         let slot = match commitment {
@@ -548,6 +556,7 @@ impl BlockMetaStorage {
         commitment: Option<i32>,
     ) -> Result<Response<IsBlockhashValidResponse>, Status> {
         let commitment = Self::parse_commitment(commitment)?;
+        let _permit = self.read_sem.acquire().await;
         let storage = self.inner.read().await;
 
         if storage.blockhashes.len() < MAX_RECENT_BLOCKHASHES + 32 {
@@ -599,7 +608,7 @@ impl GrpcService {
         )?;
 
         // Blocks meta storage
-        let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new();
+        let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new(config.unary_concurrency_limit);
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
