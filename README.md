@@ -18,6 +18,10 @@ $ solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-geyser/config.json
 ```
 
+### Block reconstruction
+
+Geyser interface on block update do not provide detailed information about transactions and accounts updates. To provide this information with block message we need to collect all messages and expect specified order. By default if we failed to reconstruct full block we log error message and increase `invalid_full_blocks_total` counter in prometheus metrics. If you want to panic on invalid reconstruction you can change option `block_fail_action` in config to `panic` (default value is `log`).
+
 ### Filters
 
 See [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto).
