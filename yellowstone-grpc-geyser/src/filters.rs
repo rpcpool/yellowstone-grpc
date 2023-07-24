@@ -558,7 +558,12 @@ impl FilterBlocks {
 
         let mut this = Self::default();
         for (name, filter) in configs {
-            ConfigGrpcFilters::check_any(filter.account_include.is_empty(), limit.any)?;
+            ConfigGrpcFilters::check_any(
+                filter.account_include.is_empty()
+                    && filter.include_transactions.is_none()
+                    && filter.include_accounts.is_none(),
+                limit.any,
+            )?;
             ConfigGrpcFilters::check_pubkey_max(
                 filter.account_include.len(),
                 limit.account_include_max,
