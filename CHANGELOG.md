@@ -16,14 +16,24 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-07-26
+
+- yellowstone-grpc-geyser-1.6.1+solana.1.16.1
+- yellowstone-grpc-geyser-1.6.1+solana.1.14.18
+
+### Fix
+
+geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168)).
+
 ## 2023-07-22
 
+- yellowstone-grpc-geyser-1.6.0+solana.1.16.1
 - yellowstone-grpc-geyser-1.6.0+solana.1.14.18
 
 ### Features
 
-geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
-geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
+- geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
+- geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
 
 ## 2023-07-18
 
