@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-07-26
+
+- yellowstone-grpc-geyser-1.6.1+solana.1.16.1
+
+### Fix
+
+geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168)).
+
 ## 2023-07-22
 
 - yellowstone-grpc-geyser-1.6.0+solana.1.16.1
