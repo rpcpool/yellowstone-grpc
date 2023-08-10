@@ -151,6 +151,7 @@ async function subscribeCommand(client, args) {
       accountInclude: args.blocksAccountInclude,
       includeTransactions: args.blocksIncludeTransactions,
       includeAccounts: args.blocksIncludeAccounts,
+      includeEntries: args.blocksIncludeEntries,
     };
   }
 
@@ -326,6 +327,11 @@ function parseCommandLineArgs() {
         "blocks-include-accounts": {
           default: false,
           description: "include accounts to block message",
+          type: "boolean",
+        },
+        "blocks-include-entries": {
+          default: false,
+          description: "include entries to block message",
           type: "boolean",
         },
         "blocks-meta": {

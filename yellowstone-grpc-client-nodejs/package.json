@@ -1,6 +1,6 @@
 {
   "name": "@triton-one/yellowstone-grpc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "Apache-2.0",
   "author": "Triton One",
   "description": "Yellowstone gRPC Geyser Node.js Client",

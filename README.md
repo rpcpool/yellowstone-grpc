@@ -56,6 +56,7 @@ If all fields are empty then all transactions are broadcasted. Otherwise fields 
    - `account_include` — filter transactions and accounts which use any of listed accounts
    - `include_transactions` — include all transactions
    - `include_accounts` — include all accounts updates
+   - `include_entries` — include all entries
 
 Currently all blocks are broadcasted.
 
