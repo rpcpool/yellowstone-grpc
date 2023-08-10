@@ -200,6 +200,18 @@ impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
     }
 }
 
+impl MessageEntry {
+    fn to_proto(&self) -> SubscribeUpdateEntry {
+        SubscribeUpdateEntry {
+            slot: self.slot,
+            index: self.index as u64,
+            num_hashes: self.num_hashes,
+            hash: self.hash.clone(),
+            executed_transaction_count: self.executed_transaction_count,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageBlock {
     pub parent_slot: u64,
@@ -213,6 +225,8 @@ pub struct MessageBlock {
     pub transactions: Vec<MessageTransactionInfo>,
     pub updated_account_count: u64,
     pub accounts: Vec<MessageAccountInfo>,
+    pub entries_count: u64,
+    pub entries: Vec<MessageEntry>,
 }
 
 impl From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
@@ -229,6 +243,8 @@ impl From<(MessageBlockMeta, Vec<MessageTransactionInfo>)> for MessageBlock {
             transactions,
             updated_account_count: 0,
             accounts: Vec::new(),
+            entries_count: 0,
+            entries: Vec::new(),
         }
     }
 }
@@ -308,6 +324,8 @@ pub struct MessageBlockRef<'a> {
     pub transactions: Vec<&'a MessageTransactionInfo>,
     pub updated_account_count: u64,
     pub accounts: Vec<&'a MessageAccountInfo>,
+    pub entries_count: u64,
+    pub entries: Vec<&'a MessageEntry>,
 }
 
 impl<'a>
@@ -315,13 +333,15 @@ impl<'a>
         &'a MessageBlock,
         Vec<&'a MessageTransactionInfo>,
         Vec<&'a MessageAccountInfo>,
+        Vec<&'a MessageEntry>,
     )> for MessageBlockRef<'a>
 {
     fn from(
-        (block, transactions, accounts): (
+        (block, transactions, accounts, entries): (
             &'a MessageBlock,
             Vec<&'a MessageTransactionInfo>,
             Vec<&'a MessageAccountInfo>,
+            Vec<&'a MessageEntry>,
         ),
     ) -> Self {
         Self {
@@ -336,6 +356,8 @@ impl<'a>
             transactions,
             updated_account_count: block.updated_account_count,
             accounts,
+            entries_count: block.entries_count,
+            entries,
         }
     }
 }
@@ -368,13 +390,7 @@ impl<'a> MessageRef<'a> {
                 transaction: Some(message.transaction.to_proto()),
                 slot: message.slot,
             }),
-            Self::Entry(message) => UpdateOneof::Entry(SubscribeUpdateEntry {
-                slot: message.slot,
-                index: message.index as u64,
-                num_hashes: message.num_hashes,
-                hash: message.hash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-            }),
+            Self::Entry(message) => UpdateOneof::Entry(message.to_proto()),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
@@ -396,6 +412,12 @@ impl<'a> MessageRef<'a> {
                     .accounts
                     .iter()
                     .map(|acc| acc.to_proto(accounts_data_slice))
+                    .collect(),
+                entries_count: message.entries_count,
+                entries: message
+                    .entries
+                    .iter()
+                    .map(|entry| entry.to_proto())
                     .collect(),
             }),
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
@@ -731,9 +753,17 @@ impl GrpcService {
                                     accounts.push(account.account.clone());
                                 }
                             }
-
                             block.updated_account_count = accounts.len() as u64;
                             block.accounts = accounts;
+
+                            let mut entries = Vec::with_capacity(vec.len());
+                            for item in vec {
+                                if let Some(Message::Entry(entry)) = item {
+                                    entries.push(entry.clone());
+                                }
+                            }
+                            block.entries_count = entries.len() as u64;
+                            block.entries = entries;
 
                             *collected = true;
                         }

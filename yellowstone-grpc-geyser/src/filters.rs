@@ -542,6 +542,7 @@ pub struct FilterBlocksInner {
     account_include: HashSet<Pubkey>,
     include_transactions: Option<bool>,
     include_accounts: Option<bool>,
+    include_entries: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -574,6 +575,10 @@ impl FilterBlocks {
                 matches!(filter.include_accounts, None | Some(false)) || limit.include_accounts,
                 "`include_accounts` is not allowed"
             );
+            anyhow::ensure!(
+                matches!(filter.include_entries, None | Some(false)) || limit.include_accounts,
+                "`include_entries` is not allowed"
+            );
 
             this.filters.insert(
                 name.clone(),
@@ -584,6 +589,7 @@ impl FilterBlocks {
                     )?,
                     include_transactions: filter.include_transactions,
                     include_accounts: filter.include_accounts,
+                    include_entries: filter.include_entries,
                 },
             );
         }
@@ -637,9 +643,15 @@ impl FilterBlocks {
                     vec![]
                 };
 
+                let entries = if inner.include_entries == Some(true) {
+                    message.entries.iter().collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+
                 (
                     vec![filter.clone()],
-                    MessageRef::Block((message, transactions, accounts).into()),
+                    MessageRef::Block((message, transactions, accounts, entries).into()),
                 )
             })
             .collect()

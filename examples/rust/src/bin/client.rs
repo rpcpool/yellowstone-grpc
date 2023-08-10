@@ -174,6 +174,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_include_accounts: Option<bool>,
 
+    /// Include entries to block message
+    #[clap(long)]
+    blocks_include_entries: Option<bool>,
+
     /// Subscribe on block meta updates (without transactions)
     #[clap(long)]
     blocks_meta: bool,
@@ -266,6 +270,7 @@ impl Action {
                             account_include: args.blocks_account_include.clone(),
                             include_transactions: args.blocks_include_transactions,
                             include_accounts: args.blocks_include_accounts,
+                            include_entries: args.blocks_include_entries,
                         },
                     );
                 }

@@ -221,6 +221,7 @@ pub struct ConfigGrpcFiltersBlocks {
     pub account_include_reject: HashSet<Pubkey>,
     pub include_transactions: bool,
     pub include_accounts: bool,
+    pub include_entries: bool,
 }
 
 impl Default for ConfigGrpcFiltersBlocks {
@@ -232,6 +233,7 @@ impl Default for ConfigGrpcFiltersBlocks {
             account_include_reject: HashSet::new(),
             include_transactions: true,
             include_accounts: true,
+            include_entries: true,
         }
     }
 }

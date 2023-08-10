@@ -71,6 +71,7 @@ message SubscribeRequestFilterBlocks {
   repeated string account_include = 1;
   optional bool include_transactions = 2;
   optional bool include_accounts = 3;
+  optional bool include_entries = 4;
 }
 
 message SubscribeRequestFilterBlocksMeta {}
@@ -143,6 +144,8 @@ message SubscribeUpdateBlock {
   repeated SubscribeUpdateTransactionInfo transactions = 6;
   uint64 updated_account_count = 10;
   repeated SubscribeUpdateAccountInfo accounts = 11;
+  uint64 entries_count = 12;
+  repeated SubscribeUpdateEntry entries = 13;
 }
 
 message SubscribeUpdateBlockMeta {
