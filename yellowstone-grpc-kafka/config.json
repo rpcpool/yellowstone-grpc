@@ -1,0 +1,30 @@
+{
+    "kafka": {
+        "bootstrap.servers": "localhost:29092"
+    },
+    "output": {
+        "kafka_topic": "grpc",
+        "kafka": {
+            "group.id": "output",
+            "group.instance.id": "output"
+        },
+        "listen": "127.0.0.1:10001",
+        "channel_capacity": 250000
+    },
+    "input": {
+        "endpoint": "http://127.0.0.1:10000",
+        "x_token": "",
+        "request": {
+            "slots": ["client"],
+            "blocks": {
+                "client": {
+                    "include_transactions": false,
+                    "include_accounts": false,
+                    "include_entries": false
+                }
+            }
+        },
+        "kafka_topic": "grpc",
+        "kafka": {}
+    }
+}
