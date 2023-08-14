@@ -12,15 +12,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-
   test:
-
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
-
     runs-on: ["${{ matrix.os }}"]
-
     steps:
       - uses: actions/checkout@v3
 
@@ -51,6 +47,11 @@ jobs:
               ~/.cargo/git/db/
               target
           key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsasl2-dev
 
       - name: cargo tree
         run: |
