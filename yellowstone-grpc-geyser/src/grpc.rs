@@ -509,13 +509,17 @@ impl BlockMetaStorage {
                         }
 
                         if msg.status == CommitmentLevel::Finalized {
-                            let keep_slot = msg.slot - KEEP_SLOTS;
-                            storage.blocks.retain(|slot, _block| *slot >= keep_slot);
+                            if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
+                                storage.blocks.retain(|slot, _block| *slot >= keep_slot);
+                            }
 
-                            let keep_slot = msg.slot - MAX_RECENT_BLOCKHASHES as u64 - 32;
-                            storage
-                                .blockhashes
-                                .retain(|_blockhash, status| status.slot >= keep_slot);
+                            if let Some(keep_slot) =
+                                msg.slot.checked_sub(MAX_RECENT_BLOCKHASHES as u64 + 32)
+                            {
+                                storage
+                                    .blockhashes
+                                    .retain(|_blockhash, status| status.slot >= keep_slot);
+                            }
                         }
                     }
                     Message::BlockMeta(msg) => {
@@ -775,10 +779,10 @@ impl GrpcService {
                         match block_fail_action {
                             ConfigBlockFailAction::Log => {
                                 INVALID_FULL_BLOCKS.inc();
-                                error!("unexpected message order for slot {}", $message.get_slot());
+                                error!("unexpected message ({}) order for slot {}", $message.kind(), $message.get_slot());
                             }
                             ConfigBlockFailAction::Panic => {
-                                panic!("unexpected message order for slot {}", $message.get_slot());
+                                panic!("unexpected message ({}) order for slot {}", $message.kind(), $message.get_slot());
                             }
                         }
                     }
