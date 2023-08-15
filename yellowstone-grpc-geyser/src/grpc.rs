@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
-        prom::{CONNECTIONS_TOTAL, INVALID_FULL_BLOCKS, MESSAGE_QUEUE_SIZE},
+        prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         proto::{
             self,
             geyser_server::{Geyser, GeyserServer},
@@ -775,9 +775,9 @@ impl GrpcService {
                     let processed_message = $message.clone();
                     let (vec, map, collected) = messages.entry($message.get_slot()).or_default();
                     if *collected && !matches!(&$message, Message::Block(_) | Message::BlockMeta(_)) {
+                        prom::update_invalid_blocks(format!("unexpected message {}", $message.kind()));
                         match block_fail_action {
                             ConfigBlockFailAction::Log => {
-                                INVALID_FULL_BLOCKS.inc();
                                 error!("unexpected message ({}) order for slot {}", $message.kind(), $message.get_slot());
                             }
                             ConfigBlockFailAction::Panic => {
@@ -863,9 +863,9 @@ impl GrpcService {
                                 // Maybe log error
                                 Some(kslot) if kslot == slot => {
                                     if let Some((Some(_), vec)) = transactions.remove(&kslot) {
+                                        prom::update_invalid_blocks("not used transactions");
                                         match block_fail_action {
                                             ConfigBlockFailAction::Log => {
-                                                INVALID_FULL_BLOCKS.inc();
                                                 error!("{} transactions left for block {kslot}", vec.len());
                                             }
                                             ConfigBlockFailAction::Panic => {

@@ -26,8 +26,9 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
-    pub static ref INVALID_FULL_BLOCKS: IntGauge = IntGauge::new(
-        "invalid_full_blocks_total", "Total number of fails on constructin full blocks"
+    pub static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("invalid_full_blocks_total", "Total number of fails on constructin full blocks"),
+        &["reason"]
     ).unwrap();
 
     pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
@@ -127,4 +128,11 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
             SlotStatus::Rooted => "finalized",
         }])
         .set(slot as i64);
+}
+
+pub fn update_invalid_blocks(reason: impl AsRef<str>) {
+    INVALID_FULL_BLOCKS
+        .with_label_values(&[reason.as_ref()])
+        .inc();
+    INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
 }
