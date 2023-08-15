@@ -837,6 +837,9 @@ impl GrpcService {
                         }
                         // Save block meta for full Block message
                         Message::BlockMeta(msg_block) => {
+                            if transactions.entry(slot).or_default().0.is_some() {
+                                error!("transactions left: duplicate blockmeta");
+                            }
                             transactions.entry(slot).or_default().0 = Some(msg_block.clone());
                             true
                         }
@@ -862,7 +865,8 @@ impl GrpcService {
                                 }
                                 // Maybe log error
                                 Some(kslot) if kslot == slot => {
-                                    if let Some((Some(_), vec)) = transactions.remove(&kslot) {
+                                    if let Some((Some(block_meta), vec)) = transactions.remove(&kslot) {
+                                        error!("transactions left: {} {} {}", block_meta.slot, block_meta.executed_transaction_count, vec.len());
                                         prom::update_invalid_blocks("not used transactions");
                                         match block_fail_action {
                                             ConfigBlockFailAction::Log => {
