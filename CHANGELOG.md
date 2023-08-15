@@ -12,7 +12,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-geyser: add package name to version info ([#172](https://github.com/rpcpool/yellowstone-grpc/pull/172)).
+geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173)).
 
 ### Fixes
 
