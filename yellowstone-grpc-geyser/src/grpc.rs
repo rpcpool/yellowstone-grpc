@@ -17,7 +17,7 @@ use {
         },
         version::VERSION,
     },
-    log::*,
+    log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaEntryInfo, ReplicaTransactionInfoV2,
         SlotStatus,
