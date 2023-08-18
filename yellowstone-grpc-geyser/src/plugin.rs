@@ -10,12 +10,15 @@ use {
         SlotStatus,
     },
     std::{
-        sync::atomic::{AtomicU8, Ordering},
+        sync::{
+            atomic::{AtomicU8, Ordering},
+            Arc,
+        },
         time::Duration,
     },
     tokio::{
         runtime::Runtime,
-        sync::{mpsc, oneshot},
+        sync::{mpsc, Notify},
     },
 };
 
@@ -27,7 +30,7 @@ pub struct PluginInner {
     runtime: Runtime,
     startup_status: AtomicU8,
     grpc_channel: mpsc::UnboundedSender<Message>,
-    grpc_shutdown_tx: oneshot::Sender<()>,
+    grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
 }
 
@@ -75,20 +78,20 @@ impl GeyserPlugin for Plugin {
         // Create inner
         let runtime = Runtime::new().map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (grpc_channel, grpc_shutdown_tx, prometheus) = runtime.block_on(async move {
-            let (grpc_channel, grpc_shutdown_tx) =
+        let (grpc_channel, grpc_shutdown, prometheus) = runtime.block_on(async move {
+            let (grpc_channel, grpc_shutdown) =
                 GrpcService::create(config.grpc, config.block_fail_action)
                     .map_err(|error| GeyserPluginError::Custom(error))?;
             let prometheus = PrometheusService::new(config.prometheus)
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-            Ok::<_, GeyserPluginError>((grpc_channel, grpc_shutdown_tx, prometheus))
+            Ok::<_, GeyserPluginError>((grpc_channel, grpc_shutdown, prometheus))
         })?;
 
         self.inner = Some(PluginInner {
             runtime,
             startup_status: AtomicU8::new(0),
             grpc_channel,
-            grpc_shutdown_tx,
+            grpc_shutdown,
             prometheus,
         });
 
@@ -97,7 +100,7 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
-            let _ = inner.grpc_shutdown_tx.send(());
+            inner.grpc_shutdown.notify_one();
             drop(inner.grpc_channel);
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));

@@ -37,7 +37,7 @@ use {
         },
     },
     tokio::{
-        sync::{broadcast, mpsc, oneshot, RwLock, Semaphore},
+        sync::{broadcast, mpsc, Notify, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -623,7 +623,7 @@ impl GrpcService {
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
     ) -> Result<
-        (mpsc::UnboundedSender<Message>, oneshot::Sender<()>),
+        (mpsc::UnboundedSender<Message>, Arc<Notify>),
         Box<dyn std::error::Error + Send + Sync>,
     > {
         // Bind service address
@@ -665,7 +665,8 @@ impl GrpcService {
         ));
 
         // Run Server
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_grpc = Arc::clone(&shutdown);
         tokio::spawn(async move {
             // gRPC Health check service
             let (mut health_reporter, health_service) = health_reporter();
@@ -675,13 +676,11 @@ impl GrpcService {
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(health_service)
                 .add_service(service)
-                .serve_with_incoming_shutdown(incoming, async move {
-                    let _ = shutdown_rx.await;
-                })
+                .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
                 .await
         });
 
-        Ok((messages_tx, shutdown_tx))
+        Ok((messages_tx, shutdown))
     }
 
     async fn geyser_loop(

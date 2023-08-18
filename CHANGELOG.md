@@ -45,8 +45,8 @@ geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/p
 
 ### Features
 
-geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
-geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
+- geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
+- geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
 
 ## 2023-07-20
 
