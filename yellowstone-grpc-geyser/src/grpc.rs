@@ -32,7 +32,7 @@ use {
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
             Arc,
         },
     },
@@ -900,7 +900,7 @@ impl GrpcService {
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
-        exit: Arc<AtomicBool>,
+        notify_exit: Vec<Arc<Notify>>,
     ) {
         CONNECTIONS_TOTAL.inc();
         info!("client #{id}: new");
@@ -960,7 +960,9 @@ impl GrpcService {
         }
         info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
-        exit.store(true, Ordering::Relaxed);
+        for notify in notify_exit {
+            notify.notify_one();
+        }
     }
 }
 
@@ -989,66 +991,87 @@ impl Geyser for GrpcService {
         .expect("empty filter");
         let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let exit = Arc::new(AtomicBool::new(false));
-
-        tokio::spawn(Self::client_loop(
-            id,
-            filter,
-            stream_tx.clone(),
-            client_rx,
-            self.broadcast_tx.subscribe(),
-            Arc::clone(&exit),
-        ));
+        let notify_exit1 = Arc::new(Notify::new());
+        let notify_exit2 = Arc::new(Notify::new());
 
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
-        let ping_exit = Arc::clone(&exit);
+        let ping_exit = Arc::clone(&notify_exit1);
         tokio::spawn(async move {
-            while !ping_exit.load(Ordering::Relaxed) {
-                sleep(Duration::from_secs(10)).await;
-                match ping_stream_tx.try_send(Ok(SubscribeUpdate {
-                    filters: vec![],
-                    update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-                })) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        let _ = ping_client_tx.send(None);
+            let exit = ping_exit.notified();
+            tokio::pin!(exit);
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
                         break;
+                    }
+                    _ = sleep(Duration::from_secs(10)) => {
+                        match ping_stream_tx.try_send(Ok(SubscribeUpdate {
+                            filters: vec![],
+                            update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+                        })) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                let _ = ping_client_tx.send(None);
+                                break;
+                            }
+                        }
                     }
                 }
             }
         });
 
         let config_filters_limit = self.config.filters.clone();
+        let incoming_stream_tx = stream_tx.clone();
+        let incoming_client_tx = client_tx;
+        let incoming_exit = Arc::clone(&notify_exit2);
         tokio::spawn(async move {
-            while !exit.load(Ordering::Relaxed) {
-                match request.get_mut().message().await {
-                    Ok(Some(request)) => {
-                        if let Err(error) = match Filter::new(&request, &config_filters_limit) {
-                            Ok(filter) => match client_tx.send(Some(filter)) {
-                                Ok(()) => Ok(()),
+            let exit = incoming_exit.notified();
+            tokio::pin!(exit);
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
+                        break;
+                    }
+                    message = request.get_mut().message() => match message {
+                        Ok(Some(request)) => {
+                            if let Err(error) = match Filter::new(&request, &config_filters_limit) {
+                                Ok(filter) => match incoming_client_tx.send(Some(filter)) {
+                                    Ok(()) => Ok(()),
+                                    Err(error) => Err(error.to_string()),
+                                },
                                 Err(error) => Err(error.to_string()),
-                            },
-                            Err(error) => Err(error.to_string()),
-                        } {
-                            let _ = stream_tx
-                                .send(Err(Status::invalid_argument(format!(
-                                    "failed to create filter: {error}"
-                                ))))
-                                .await;
+                            } {
+                                let _ = incoming_stream_tx
+                                    .send(Err(Status::invalid_argument(format!(
+                                        "failed to create filter: {error}"
+                                    ))))
+                                    .await;
+                            }
                         }
-                    }
-                    Ok(None) => {
-                        break;
-                    }
-                    Err(_error) => {
-                        let _ = client_tx.send(None);
-                        break;
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(_error) => {
+                            let _ = incoming_client_tx.send(None);
+                            break;
+                        }
                     }
                 }
             }
         });
+
+        tokio::spawn(Self::client_loop(
+            id,
+            filter,
+            stream_tx,
+            client_rx,
+            self.broadcast_tx.subscribe(),
+            vec![notify_exit1, notify_exit2],
+        ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
     }

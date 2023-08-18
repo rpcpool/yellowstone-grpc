@@ -17,6 +17,7 @@ geyser: add package name to version info ([#173](https://github.com/rpcpool/yell
 ### Fixes
 
 geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
+geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
 
 ### Breaking
 
