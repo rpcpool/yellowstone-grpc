@@ -17,6 +17,7 @@ geyser: add package name to version info ([#173](https://github.com/rpcpool/yell
 ### Fixes
 
 geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
+geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
 
 ### Breaking
 
@@ -45,8 +46,8 @@ geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/p
 
 ### Features
 
-geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
-geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
+- geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
+- geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
 
 ## 2023-07-20
 
