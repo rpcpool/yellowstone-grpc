@@ -302,10 +302,6 @@ pub enum Message {
 }
 
 impl Message {
-    pub const fn is_slot(&self) -> bool {
-        matches!(self, Self::Slot(_))
-    }
-
     pub const fn get_slot(&self) -> u64 {
         match self {
             Self::Slot(msg) => msg.slot,
@@ -653,9 +649,7 @@ impl SlotMessages {
                     let mut entries = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
                         match item {
-                            Message::Account(account) => {
-                                accounts.push(account.account.clone())
-                            }
+                            Message::Account(account) => accounts.push(account.account.clone()),
                             Message::Entry(entry) => entries.push(entry.clone()),
                             _ => {}
                         }
@@ -760,6 +754,7 @@ impl GrpcService {
 
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        let mut processed_first_slot = None;
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
 
@@ -777,6 +772,11 @@ impl GrpcService {
 
                     // Remove outdated block reconstruction info
                     match &message {
+                        // On startup we can receive few Confirmed/Finalized slots without BlockMeta message
+                        // With saved first Processed slot we can ignore errors caused by startup process
+                        Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
+                            processed_first_slot = Some(msg.slot);
+                        }
                         Message::Slot(msg) if msg.status == CommitmentLevel::Finalized => {
                             // keep extra 10 slots
                             if let Some(msg_slot) = msg.slot.checked_sub(10) {
@@ -784,7 +784,12 @@ impl GrpcService {
                                     match messages.keys().next().cloned() {
                                         Some(slot) if slot < msg_slot => {
                                             if let Some(slot_messages) = messages.remove(&slot) {
-                                                // TODO: should we check `finalized_at`?
+                                                match processed_first_slot {
+                                                    Some(processed_first) if slot <= processed_first => continue,
+                                                    None => continue,
+                                                    _ => {}
+                                                }
+
                                                 if !slot_messages.sealed && slot_messages.finalized_at.is_some() {
                                                     let mut reasons = vec![];
                                                     if let Some(block_meta) = slot_messages.block_meta {
@@ -826,7 +831,7 @@ impl GrpcService {
 
                     // Update block reconstruction info
                     let slot_messages = messages.entry(message.get_slot()).or_default();
-                    if !message.is_slot() {
+                    if !matches!(message, Message::Slot(_)) {
                         slot_messages.messages.push(Some(message.clone()));
 
                         // If we already build Block message, new message will be a problem
@@ -916,9 +921,8 @@ impl GrpcService {
 
                                     let vec = messages
                                         .get(&slot.slot)
-                                        .map(|slot_messages| {
-                                            slot_messages.messages.iter().flatten().cloned().collect()
-                                        }).unwrap_or_default();
+                                        .map(|slot_messages| slot_messages.messages.iter().flatten().cloned().collect())
+                                        .unwrap_or_default();
                                     (vec, Vec::with_capacity(1))
                                 }
                                 CommitmentLevel::Finalized => {
@@ -930,11 +934,8 @@ impl GrpcService {
 
                                     let vec = messages
                                         .get_mut(&slot.slot)
-                                        .map(|slot_messages| {
-                                            // let messages = std::mem::take(&mut slot_messages.messages);
-                                            // messages.into_iter().flatten().collect()
-                                            slot_messages.messages.iter().flatten().cloned().collect()
-                                        }).unwrap_or_default();
+                                        .map(|slot_messages| slot_messages.messages.iter().flatten().cloned().collect())
+                                        .unwrap_or_default();
                                     (Vec::with_capacity(1), vec)
                                 }
                             };
