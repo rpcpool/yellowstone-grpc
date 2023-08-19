@@ -900,7 +900,7 @@ impl GrpcService {
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
-        notify_exit: Vec<Arc<Notify>>,
+        drop_client: impl FnOnce(),
     ) {
         CONNECTIONS_TOTAL.inc();
         info!("client #{id}: new");
@@ -960,9 +960,7 @@ impl GrpcService {
         }
         info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
-        for notify in notify_exit {
-            notify.notify_one();
-        }
+        drop_client();
     }
 }
 
@@ -1070,7 +1068,10 @@ impl Geyser for GrpcService {
             stream_tx,
             client_rx,
             self.broadcast_tx.subscribe(),
-            vec![notify_exit1, notify_exit2],
+            move || {
+                notify_exit1.notify_one();
+                notify_exit2.notify_one();
+            },
         ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
