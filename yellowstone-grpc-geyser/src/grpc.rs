@@ -999,16 +999,18 @@ impl Geyser for GrpcService {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
 
+            let ping_msg = SubscribeUpdate {
+                filters: vec![],
+                update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+            };
+
             loop {
                 tokio::select! {
                     _ = &mut exit => {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        match ping_stream_tx.try_send(Ok(SubscribeUpdate {
-                            filters: vec![],
-                            update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-                        })) {
+                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -1043,11 +1045,12 @@ impl Geyser for GrpcService {
                                 },
                                 Err(error) => Err(error.to_string()),
                             } {
-                                let _ = incoming_stream_tx
-                                    .send(Err(Status::invalid_argument(format!(
-                                        "failed to create filter: {error}"
-                                    ))))
-                                    .await;
+                                let err = Err(Status::invalid_argument(format!(
+                                    "failed to create filter: {error}"
+                                )));
+                                if incoming_stream_tx.send(err).await.is_err() {
+                                    let _ = incoming_client_tx.send(None);
+                                }
                             }
                         }
                         Ok(None) => {
