@@ -12,14 +12,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Fixes
+
+### Breaking
+
+## 2023-08-21
+
+- yellowstone-grpc-geyser-1.7.1+solana.1.16.1
+
+### Features
+
 geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173)).
 
 ### Fixes
 
 geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
 geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
-
-### Breaking
+geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yellowstone-grpc/pull/177)).
 
 ## 2023-08-10
 
