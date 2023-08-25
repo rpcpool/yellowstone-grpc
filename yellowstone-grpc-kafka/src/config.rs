@@ -25,8 +25,8 @@ pub trait GrpcRequestToProto<T> {
 #[serde(default)]
 pub struct Config {
     pub kafka: HashMap<String, String>,
-    pub output: Option<ConfigOutput>,
     pub input: Option<ConfigInput>,
+    pub output: Option<ConfigOutput>,
 }
 
 impl Config {
@@ -36,22 +36,6 @@ impl Config {
             .context("failed to read config from file")?;
 
         serde_json::from_str(&text).context("failed to parse config from file")
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ConfigOutput {
-    pub kafka_topic: String,
-    #[serde(default)]
-    pub kafka: HashMap<String, String>,
-    pub listen: SocketAddr,
-    #[serde(default = "ConfigOutput::channel_capacity_default")]
-    pub channel_capacity: usize,
-}
-
-impl ConfigOutput {
-    const fn channel_capacity_default() -> usize {
-        250_000
     }
 }
 
@@ -227,6 +211,22 @@ impl GrpcRequestToProto<SubscribeRequestAccountsDataSlice> for ConfigInputReques
             offset: self.offset,
             length: self.length,
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfigOutput {
+    pub kafka_topic: String,
+    #[serde(default)]
+    pub kafka: HashMap<String, String>,
+    pub listen: SocketAddr,
+    #[serde(default = "ConfigOutput::channel_capacity_default")]
+    pub channel_capacity: usize,
+}
+
+impl ConfigOutput {
+    const fn channel_capacity_default() -> usize {
+        250_000
     }
 }
 
