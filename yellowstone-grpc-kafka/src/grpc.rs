@@ -3,12 +3,12 @@ use {
     std::{
         net::SocketAddr,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
             Arc,
         },
     },
     tokio::{
-        sync::{broadcast, mpsc},
+        sync::{broadcast, mpsc, Notify},
         time::{sleep, Duration},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -81,41 +81,61 @@ impl Geyser for GrpcService {
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
         let (stream_tx, stream_rx) = mpsc::channel(self.channel_capacity);
-        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
-        let exit = Arc::new(AtomicBool::new(false));
+        let notify_client = Arc::new(Notify::new());
+        let notify_exit1 = Arc::new(Notify::new());
+        let notify_exit2 = Arc::new(Notify::new());
 
         let ping_stream_tx = stream_tx.clone();
-        let ping_client_tx = client_tx.clone();
-        let ping_exit = Arc::clone(&exit);
+        let ping_client = Arc::clone(&notify_client);
+        let ping_exit = Arc::clone(&notify_exit1);
         tokio::spawn(async move {
-            while !ping_exit.load(Ordering::Relaxed) {
-                sleep(Duration::from_secs(10)).await;
-                match ping_stream_tx.try_send(Ok(SubscribeUpdate {
-                    filters: vec![],
-                    update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-                })) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        let _ = ping_client_tx.send(());
+            let exit = ping_exit.notified();
+            tokio::pin!(exit);
+
+            let ping_msg = SubscribeUpdate {
+                filters: vec![],
+                update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+            };
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
                         break;
+                    }
+                    _ = sleep(Duration::from_secs(10)) => {
+                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                ping_client.notify_one();
+                                break;
+                            }
+                        }
                     }
                 }
             }
         });
 
-        let incoming_client_tx = client_tx;
-        let incoming_exit = Arc::clone(&exit);
+        let incoming_client = Arc::clone(&notify_client);
+        let incoming_exit = Arc::clone(&notify_exit2);
         tokio::spawn(async move {
-            while !incoming_exit.load(Ordering::Relaxed) {
-                match request.get_mut().message().await {
-                    Ok(Some(_request)) => {}
-                    Ok(None) => {
+            let exit = incoming_exit.notified();
+            tokio::pin!(exit);
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
                         break;
                     }
-                    Err(_error) => {
-                        let _ = incoming_client_tx.send(());
-                        break;
+                    message = request.get_mut().message() => match message {
+                        Ok(Some(_request)) => {}
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(_error) => {
+                            let _ = incoming_client.notify_one();
+                            break;
+                        }
                     }
                 }
             }
@@ -126,7 +146,7 @@ impl Geyser for GrpcService {
             info!("client #{id}: new");
             loop {
                 tokio::select! {
-                    _ = client_rx.recv() => {
+                    _ = notify_client.notified() => {
                         break;
                     }
                     message = messages_rx.recv() => {
@@ -162,7 +182,8 @@ impl Geyser for GrpcService {
                 }
             }
             info!("client #{id}: removed");
-            exit.store(true, Ordering::Relaxed);
+            notify_exit1.notify_one();
+            notify_exit2.notify_one();
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
