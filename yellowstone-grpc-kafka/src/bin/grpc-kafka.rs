@@ -112,19 +112,15 @@ impl ArgsAction {
         let mut kid = 0u64;
         let mut send_tasks = JoinSet::new();
         loop {
-            let message = if send_tasks.is_empty() {
-                geyser.next().await
-            } else {
-                tokio::select! {
-                    // always should be Some(x)
-                    maybe_result = send_tasks.join_next() => {
-                        if let Some(result) = maybe_result {
-                            let _ = result??;
-                        }
+            let message = tokio::select! {
+                maybe_result = send_tasks.join_next() => match maybe_result {
+                    Some(result) => {
+                        let _ = result??;
                         continue;
                     }
-                    message = geyser.next() => message
-                }
+                    None => geyser.next().await
+                },
+                message = geyser.next() => message,
             }
             .transpose()?;
 
