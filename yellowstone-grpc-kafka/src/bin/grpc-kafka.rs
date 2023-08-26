@@ -22,7 +22,7 @@ use {
         util::SubscriberInitExt,
     },
     yellowstone_grpc_kafka::{
-        config::{Config, ConfigInput, ConfigOutput, GrpcRequestToProto},
+        config::{Config, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         grpc::GrpcService,
     },
     yellowstone_grpc_proto::{
@@ -47,36 +47,36 @@ enum ArgsAction {
     // Receive data from Kafka, deduplicate and send them back to Kafka
     // TODO: Dedup
     /// Receive data from gRPC and send them to the Kafka
-    Input,
+    #[command(name = "grpc2kafka")]
+    Grpc2Kafka,
     /// Receive data from Kafka and send them over gRPC
-    Output,
+    #[command(name = "kafka2grpc")]
+    Kafka2Grpc,
 }
 
 impl ArgsAction {
     async fn run(self, config: Config, kafka_config: ClientConfig) -> anyhow::Result<()> {
         match self {
-            ArgsAction::Input => {
-                let input_config = match config.input {
-                    Some(config) => config,
-                    None => anyhow::bail!("`input` section in config should be defined"),
-                };
-                Self::input(kafka_config, input_config).await
+            ArgsAction::Grpc2Kafka => {
+                let config = config.grpc2kafka.ok_or_else(|| {
+                    anyhow::anyhow!("`grpc2kafka` section in config should be defined")
+                })?;
+                Self::grpc2kafka(kafka_config, config).await
             }
-            ArgsAction::Output => {
-                let output_config = match config.output {
-                    Some(config) => config,
-                    None => anyhow::bail!("`output` section in config should be defined"),
-                };
-                Self::output(kafka_config, output_config).await
+            ArgsAction::Kafka2Grpc => {
+                let config = config.kafka2grpc.ok_or_else(|| {
+                    anyhow::anyhow!("`kafka2grpc` section in config should be defined")
+                })?;
+                Self::kafka2grpc(kafka_config, config).await
             }
         }
     }
 
-    async fn input(
+    async fn grpc2kafka(
         mut kafka_config: ClientConfig,
-        input_config: ConfigInput,
+        config: ConfigGrpc2Kafka,
     ) -> anyhow::Result<()> {
-        for (key, value) in input_config.kafka.into_iter() {
+        for (key, value) in config.kafka.into_iter() {
             kafka_config.set(key, value);
         }
 
@@ -86,12 +86,12 @@ impl ArgsAction {
             .context("failed to create kafka producer")?;
 
         // Create gRPC client
-        let mut endpoint = Channel::from_shared(input_config.endpoint)?;
+        let mut endpoint = Channel::from_shared(config.endpoint)?;
         if endpoint.uri().scheme_str() == Some("https") {
             endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
         }
         let channel = endpoint.connect().await?;
-        let x_token: Option<AsciiMetadataValue> = match input_config.x_token {
+        let x_token: Option<AsciiMetadataValue> = match config.x_token {
             Some(x_token) => Some(x_token.try_into()?),
             None => None,
         };
@@ -104,7 +104,7 @@ impl ArgsAction {
 
         // Subscribe on Geyser events
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
-        subscribe_tx.send(input_config.request.to_proto()).await?;
+        subscribe_tx.send(config.request.to_proto()).await?;
         let response: Response<Streaming<SubscribeUpdate>> = client.subscribe(subscribe_rx).await?;
         let mut geyser = response.into_inner().boxed();
 
@@ -130,7 +130,7 @@ impl ArgsAction {
 
                     let key = kid.to_be_bytes();
                     let payload = message.encode_to_vec();
-                    let record = FutureRecord::to(&input_config.kafka_topic)
+                    let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
                         .payload(&payload);
 
@@ -158,18 +158,18 @@ impl ArgsAction {
         }
     }
 
-    async fn output(
+    async fn kafka2grpc(
         mut kafka_config: ClientConfig,
-        output_config: ConfigOutput,
+        config: ConfigKafka2Grpc,
     ) -> anyhow::Result<()> {
-        for (key, value) in output_config.kafka.into_iter() {
+        for (key, value) in config.kafka.into_iter() {
             kafka_config.set(key, value);
         }
 
-        let grpc_tx = GrpcService::run(output_config.listen, output_config.channel_capacity)?;
+        let grpc_tx = GrpcService::run(config.listen, config.channel_capacity)?;
 
         let consumer: StreamConsumer = kafka_config.create()?;
-        consumer.subscribe(&[&output_config.kafka_topic])?;
+        consumer.subscribe(&[&config.kafka_topic])?;
 
         loop {
             let message = consumer.recv().await?;

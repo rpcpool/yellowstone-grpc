@@ -2,7 +2,7 @@
     "kafka": {
         "bootstrap.servers": "localhost:29092"
     },
-    "input": {
+    "grpc2kafka": {
         "endpoint": "http://127.0.0.1:10000",
         "x_token": "",
         "request": {
@@ -19,7 +19,7 @@
         "kafka_topic": "grpc",
         "kafka": {}
     },
-    "output": {
+    "kafka2grpc": {
         "kafka_topic": "grpc",
         "kafka": {
             "group.id": "output",

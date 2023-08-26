@@ -25,8 +25,8 @@ pub trait GrpcRequestToProto<T> {
 #[serde(default)]
 pub struct Config {
     pub kafka: HashMap<String, String>,
-    pub input: Option<ConfigInput>,
-    pub output: Option<ConfigOutput>,
+    pub grpc2kafka: Option<ConfigGrpc2Kafka>,
+    pub kafka2grpc: Option<ConfigKafka2Grpc>,
 }
 
 impl Config {
@@ -40,10 +40,10 @@ impl Config {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ConfigInput {
+pub struct ConfigGrpc2Kafka {
     pub endpoint: String,
     pub x_token: Option<String>,
-    pub request: ConfigInputRequest,
+    pub request: ConfigGrpc2KafkaRequest,
     pub kafka_topic: String,
     #[serde(default)]
     pub kafka: HashMap<String, String>,
@@ -51,18 +51,18 @@ pub struct ConfigInput {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct ConfigInputRequest {
+pub struct ConfigGrpc2KafkaRequest {
     pub slots: HashSet<String>,
-    pub accounts: HashMap<String, ConfigInputRequestAccounts>,
-    pub transactions: HashMap<String, ConfigInputRequestTransactions>,
+    pub accounts: HashMap<String, ConfigGrpc2KafkaRequestAccounts>,
+    pub transactions: HashMap<String, ConfigGrpc2KafkaRequestTransactions>,
     pub entries: HashSet<String>,
-    pub blocks: HashMap<String, ConfigInputRequestBlocks>,
+    pub blocks: HashMap<String, ConfigGrpc2KafkaRequestBlocks>,
     pub blocks_meta: HashSet<String>,
-    pub commitment: Option<ConfigInputRequestCommitment>,
-    pub accounts_data_slice: Vec<ConfigInputRequestAccountsDataSlice>,
+    pub commitment: Option<ConfigGrpc2KafkaRequestCommitment>,
+    pub accounts_data_slice: Vec<ConfigGrpc2KafkaRequestAccountsDataSlice>,
 }
 
-impl ConfigInputRequest {
+impl ConfigGrpc2KafkaRequest {
     fn map_to_proto<T>(map: HashMap<String, impl GrpcRequestToProto<T>>) -> HashMap<String, T> {
         map.into_iter().map(|(k, v)| (k, v.to_proto())).collect()
     }
@@ -76,30 +76,30 @@ impl ConfigInputRequest {
     }
 }
 
-impl GrpcRequestToProto<SubscribeRequest> for ConfigInputRequest {
+impl GrpcRequestToProto<SubscribeRequest> for ConfigGrpc2KafkaRequest {
     fn to_proto(self) -> SubscribeRequest {
         SubscribeRequest {
-            slots: ConfigInputRequest::set_to_proto(self.slots),
-            accounts: ConfigInputRequest::map_to_proto(self.accounts),
-            transactions: ConfigInputRequest::map_to_proto(self.transactions),
-            entry: ConfigInputRequest::set_to_proto(self.entries),
-            blocks: ConfigInputRequest::map_to_proto(self.blocks),
-            blocks_meta: ConfigInputRequest::set_to_proto(self.blocks_meta),
+            slots: ConfigGrpc2KafkaRequest::set_to_proto(self.slots),
+            accounts: ConfigGrpc2KafkaRequest::map_to_proto(self.accounts),
+            transactions: ConfigGrpc2KafkaRequest::map_to_proto(self.transactions),
+            entry: ConfigGrpc2KafkaRequest::set_to_proto(self.entries),
+            blocks: ConfigGrpc2KafkaRequest::map_to_proto(self.blocks),
+            blocks_meta: ConfigGrpc2KafkaRequest::set_to_proto(self.blocks_meta),
             commitment: self.commitment.map(|v| v.to_proto() as i32),
-            accounts_data_slice: ConfigInputRequest::vec_to_proto(self.accounts_data_slice),
+            accounts_data_slice: ConfigGrpc2KafkaRequest::vec_to_proto(self.accounts_data_slice),
         }
     }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct ConfigInputRequestAccounts {
+pub struct ConfigGrpc2KafkaRequestAccounts {
     account: Vec<String>,
     owner: Vec<String>,
-    filters: Vec<ConfigInputRequestAccountsFilter>,
+    filters: Vec<ConfigGrpc2KafkaRequestAccountsFilter>,
 }
 
-impl GrpcRequestToProto<SubscribeRequestFilterAccounts> for ConfigInputRequestAccounts {
+impl GrpcRequestToProto<SubscribeRequestFilterAccounts> for ConfigGrpc2KafkaRequestAccounts {
     fn to_proto(self) -> SubscribeRequestFilterAccounts {
         SubscribeRequestFilterAccounts {
             account: self.account,
@@ -110,26 +110,28 @@ impl GrpcRequestToProto<SubscribeRequestFilterAccounts> for ConfigInputRequestAc
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ConfigInputRequestAccountsFilter {
+pub enum ConfigGrpc2KafkaRequestAccountsFilter {
     Memcmp { offset: u64, base58: String },
     DataSize(u64),
     TokenAccountState,
 }
 
-impl GrpcRequestToProto<SubscribeRequestFilterAccountsFilter> for ConfigInputRequestAccountsFilter {
+impl GrpcRequestToProto<SubscribeRequestFilterAccountsFilter>
+    for ConfigGrpc2KafkaRequestAccountsFilter
+{
     fn to_proto(self) -> SubscribeRequestFilterAccountsFilter {
         SubscribeRequestFilterAccountsFilter {
             filter: Some(match self {
-                ConfigInputRequestAccountsFilter::Memcmp { offset, base58 } => {
+                ConfigGrpc2KafkaRequestAccountsFilter::Memcmp { offset, base58 } => {
                     AccountsFilterDataOneof::Memcmp(SubscribeRequestFilterAccountsFilterMemcmp {
                         offset,
                         data: Some(AccountsFilterMemcmpOneof::Base58(base58)),
                     })
                 }
-                ConfigInputRequestAccountsFilter::DataSize(size) => {
+                ConfigGrpc2KafkaRequestAccountsFilter::DataSize(size) => {
                     AccountsFilterDataOneof::Datasize(size)
                 }
-                ConfigInputRequestAccountsFilter::TokenAccountState => {
+                ConfigGrpc2KafkaRequestAccountsFilter::TokenAccountState => {
                     AccountsFilterDataOneof::TokenAccountState(true)
                 }
             }),
@@ -139,7 +141,7 @@ impl GrpcRequestToProto<SubscribeRequestFilterAccountsFilter> for ConfigInputReq
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct ConfigInputRequestTransactions {
+pub struct ConfigGrpc2KafkaRequestTransactions {
     pub vote: Option<bool>,
     pub failed: Option<bool>,
     pub signature: Option<String>,
@@ -148,7 +150,9 @@ pub struct ConfigInputRequestTransactions {
     pub account_required: Vec<String>,
 }
 
-impl GrpcRequestToProto<SubscribeRequestFilterTransactions> for ConfigInputRequestTransactions {
+impl GrpcRequestToProto<SubscribeRequestFilterTransactions>
+    for ConfigGrpc2KafkaRequestTransactions
+{
     fn to_proto(self) -> SubscribeRequestFilterTransactions {
         SubscribeRequestFilterTransactions {
             vote: self.vote,
@@ -163,14 +167,14 @@ impl GrpcRequestToProto<SubscribeRequestFilterTransactions> for ConfigInputReque
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct ConfigInputRequestBlocks {
+pub struct ConfigGrpc2KafkaRequestBlocks {
     pub account_include: Vec<String>,
     pub include_transactions: Option<bool>,
     pub include_accounts: Option<bool>,
     pub include_entries: Option<bool>,
 }
 
-impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigInputRequestBlocks {
+impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigGrpc2KafkaRequestBlocks {
     fn to_proto(self) -> SubscribeRequestFilterBlocks {
         SubscribeRequestFilterBlocks {
             account_include: self.account_include,
@@ -183,13 +187,13 @@ impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigInputRequestBloc
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ConfigInputRequestCommitment {
+pub enum ConfigGrpc2KafkaRequestCommitment {
     Processed,
     Confirmed,
     Finalized,
 }
 
-impl GrpcRequestToProto<CommitmentLevel> for ConfigInputRequestCommitment {
+impl GrpcRequestToProto<CommitmentLevel> for ConfigGrpc2KafkaRequestCommitment {
     fn to_proto(self) -> CommitmentLevel {
         match self {
             Self::Processed => CommitmentLevel::Processed,
@@ -200,12 +204,14 @@ impl GrpcRequestToProto<CommitmentLevel> for ConfigInputRequestCommitment {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ConfigInputRequestAccountsDataSlice {
+pub struct ConfigGrpc2KafkaRequestAccountsDataSlice {
     pub offset: u64,
     pub length: u64,
 }
 
-impl GrpcRequestToProto<SubscribeRequestAccountsDataSlice> for ConfigInputRequestAccountsDataSlice {
+impl GrpcRequestToProto<SubscribeRequestAccountsDataSlice>
+    for ConfigGrpc2KafkaRequestAccountsDataSlice
+{
     fn to_proto(self) -> SubscribeRequestAccountsDataSlice {
         SubscribeRequestAccountsDataSlice {
             offset: self.offset,
@@ -215,16 +221,16 @@ impl GrpcRequestToProto<SubscribeRequestAccountsDataSlice> for ConfigInputReques
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ConfigOutput {
+pub struct ConfigKafka2Grpc {
     pub kafka_topic: String,
     #[serde(default)]
     pub kafka: HashMap<String, String>,
     pub listen: SocketAddr,
-    #[serde(default = "ConfigOutput::channel_capacity_default")]
+    #[serde(default = "ConfigKafka2Grpc::channel_capacity_default")]
     pub channel_capacity: usize,
 }
 
-impl ConfigOutput {
+impl ConfigKafka2Grpc {
     const fn channel_capacity_default() -> usize {
         250_000
     }
@@ -232,37 +238,37 @@ impl ConfigOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::ConfigInputRequestAccountsFilter;
+    use super::ConfigGrpc2KafkaRequestAccountsFilter;
 
     #[test]
     fn grpc_config_accounts_filter_memcmp() {
-        let filter = ConfigInputRequestAccountsFilter::Memcmp {
+        let filter = ConfigGrpc2KafkaRequestAccountsFilter::Memcmp {
             offset: 42,
             base58: "123".to_owned(),
         };
         let text = serde_json::to_string(&filter).unwrap();
         assert_eq!(
-            serde_json::from_str::<ConfigInputRequestAccountsFilter>(&text).unwrap(),
+            serde_json::from_str::<ConfigGrpc2KafkaRequestAccountsFilter>(&text).unwrap(),
             filter
         );
     }
 
     #[test]
     fn grpc_config_accounts_filter_datasize() {
-        let filter = ConfigInputRequestAccountsFilter::DataSize(42);
+        let filter = ConfigGrpc2KafkaRequestAccountsFilter::DataSize(42);
         let text = serde_json::to_string(&filter).unwrap();
         assert_eq!(
-            serde_json::from_str::<ConfigInputRequestAccountsFilter>(&text).unwrap(),
+            serde_json::from_str::<ConfigGrpc2KafkaRequestAccountsFilter>(&text).unwrap(),
             filter
         );
     }
 
     #[test]
     fn grpc_config_accounts_filter_token() {
-        let filter = ConfigInputRequestAccountsFilter::TokenAccountState;
+        let filter = ConfigGrpc2KafkaRequestAccountsFilter::TokenAccountState;
         let text = serde_json::to_string(&filter).unwrap();
         assert_eq!(
-            serde_json::from_str::<ConfigInputRequestAccountsFilter>(&text).unwrap(),
+            serde_json::from_str::<ConfigGrpc2KafkaRequestAccountsFilter>(&text).unwrap(),
             filter
         );
     }
