@@ -8,6 +8,7 @@ use {
         message::Message,
         producer::{FutureProducer, FutureRecord},
     },
+    std::collections::BTreeMap,
     tokio::task::JoinSet,
     tonic::{
         codec::Streaming,
@@ -26,7 +27,7 @@ use {
         grpc::GrpcService,
     },
     yellowstone_grpc_proto::{
-        prelude::{geyser_client::GeyserClient, SubscribeUpdate},
+        prelude::{geyser_client::GeyserClient, subscribe_update::UpdateOneof, SubscribeUpdate},
         prost::Message as _,
     },
 };
@@ -109,7 +110,7 @@ impl ArgsAction {
         let mut geyser = response.into_inner().boxed();
 
         // Receive-send loop
-        let mut kid = 0u64;
+        let mut kid = Grpc2KafkaKey::default();
         let mut send_tasks = JoinSet::new();
         loop {
             let message = tokio::select! {
@@ -126,9 +127,11 @@ impl ArgsAction {
 
             match message {
                 Some(message) => {
-                    kid = kid.wrapping_add(1);
+                    if matches!(message.update_oneof, Some(UpdateOneof::Ping(_))) {
+                        continue;
+                    }
 
-                    let key = kid.to_be_bytes();
+                    let key = kid.get_key(&message);
                     let payload = message.encode_to_vec();
                     let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
@@ -138,7 +141,9 @@ impl ArgsAction {
                         Ok(future) => {
                             let _ = send_tasks.spawn(async move {
                                 let result = future.await;
-                                tracing::debug!("kafka send result: {result:?}");
+                                tracing::debug!(
+                                    "kafka send message with key: {key:?}, result: {result:?}"
+                                );
 
                                 Ok::<(i32, i64), anyhow::Error>(
                                     result?.map_err(|(error, _message)| error)?,
@@ -175,10 +180,7 @@ impl ArgsAction {
             let message = consumer.recv().await?;
             debug!(
                 "received message with key: {:?}",
-                message
-                    .key()
-                    .and_then(|k| k.try_into().ok())
-                    .map(u64::from_be_bytes)
+                message.key().and_then(|k| std::str::from_utf8(k).ok())
             );
 
             if let Some(payload) = message.payload() {
@@ -192,6 +194,38 @@ impl ArgsAction {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Grpc2KafkaKey {
+    slots: BTreeMap<u64, u64>,
+}
+
+impl Grpc2KafkaKey {
+    fn get_key(&mut self, message: &SubscribeUpdate) -> String {
+        let slot = match &message.update_oneof {
+            Some(UpdateOneof::Account(msg)) => msg.slot,
+            Some(UpdateOneof::Slot(msg)) => msg.slot,
+            Some(UpdateOneof::Transaction(msg)) => msg.slot,
+            Some(UpdateOneof::Block(msg)) => msg.slot,
+            Some(UpdateOneof::Ping(_)) => unreachable!("Ping message not expected"),
+            Some(UpdateOneof::BlockMeta(msg)) => msg.slot,
+            Some(UpdateOneof::Entry(msg)) => msg.slot,
+            None => unreachable!("Expect valid message"),
+        };
+
+        // remove oudated
+        loop {
+            match self.slots.keys().next().cloned() {
+                Some(kslot) if kslot < slot - 32 => self.slots.remove(&kslot),
+                _ => break,
+            };
+        }
+
+        let id = self.slots.entry(slot).or_default();
+        *id = id.wrapping_add(1);
+        format!("{slot}_{id}")
     }
 }
 
