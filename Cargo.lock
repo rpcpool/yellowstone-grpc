@@ -825,6 +825,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-hex"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca268df6cd88e646b564e6aff1a016834e5f42077c736ef6b6789c31ef9ec5dc"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "hex",
+ "serde",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4515,11 +4527,13 @@ dependencies = [
  "atty",
  "cargo-lock",
  "clap",
+ "const-hex",
  "futures",
  "git-version",
  "rdkafka",
  "serde",
  "serde_json",
+ "sha2 0.10.7",
  "tokio",
  "tokio-stream",
  "tonic",

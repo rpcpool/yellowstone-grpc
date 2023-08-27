@@ -8,7 +8,7 @@ use {
         message::Message,
         producer::{FutureProducer, FutureRecord},
     },
-    std::collections::BTreeMap,
+    sha2::{Digest, Sha256},
     tokio::task::JoinSet,
     tonic::{
         codec::Streaming,
@@ -110,7 +110,6 @@ impl ArgsAction {
         let mut geyser = response.into_inner().boxed();
 
         // Receive-send loop
-        let mut kid = Grpc2KafkaKey::default();
         let mut send_tasks = JoinSet::new();
         loop {
             let message = tokio::select! {
@@ -131,8 +130,20 @@ impl ArgsAction {
                         continue;
                     }
 
-                    let key = kid.get_key(&message);
+                    let slot = match &message.update_oneof {
+                        Some(UpdateOneof::Account(msg)) => msg.slot,
+                        Some(UpdateOneof::Slot(msg)) => msg.slot,
+                        Some(UpdateOneof::Transaction(msg)) => msg.slot,
+                        Some(UpdateOneof::Block(msg)) => msg.slot,
+                        Some(UpdateOneof::Ping(_)) => unreachable!("Ping message not expected"),
+                        Some(UpdateOneof::BlockMeta(msg)) => msg.slot,
+                        Some(UpdateOneof::Entry(msg)) => msg.slot,
+                        None => unreachable!("Expect valid message"),
+                    };
                     let payload = message.encode_to_vec();
+                    let hash = Sha256::digest(&payload);
+                    let key = format!("{slot}_{}", const_hex::encode(hash));
+
                     let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
                         .payload(&payload);
@@ -194,38 +205,6 @@ impl ArgsAction {
                 }
             }
         }
-    }
-}
-
-#[derive(Debug, Default)]
-struct Grpc2KafkaKey {
-    slots: BTreeMap<u64, u64>,
-}
-
-impl Grpc2KafkaKey {
-    fn get_key(&mut self, message: &SubscribeUpdate) -> String {
-        let slot = match &message.update_oneof {
-            Some(UpdateOneof::Account(msg)) => msg.slot,
-            Some(UpdateOneof::Slot(msg)) => msg.slot,
-            Some(UpdateOneof::Transaction(msg)) => msg.slot,
-            Some(UpdateOneof::Block(msg)) => msg.slot,
-            Some(UpdateOneof::Ping(_)) => unreachable!("Ping message not expected"),
-            Some(UpdateOneof::BlockMeta(msg)) => msg.slot,
-            Some(UpdateOneof::Entry(msg)) => msg.slot,
-            None => unreachable!("Expect valid message"),
-        };
-
-        // remove oudated
-        loop {
-            match self.slots.keys().next().cloned() {
-                Some(kslot) if kslot < slot - 32 => self.slots.remove(&kslot),
-                _ => break,
-            };
-        }
-
-        let id = self.slots.entry(slot).or_default();
-        *id = id.wrapping_add(1);
-        format!("{slot}_{id}")
     }
 }
 
