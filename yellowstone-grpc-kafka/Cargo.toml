@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.62"
+async-trait = "0.1.73"
 atty = "0.2.14"
 clap = { version = "4.3.0", features = ["cargo", "derive"] }
 const-hex = "1.6.2"

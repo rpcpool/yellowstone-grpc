@@ -1,4 +1,5 @@
 use {
+    crate::dedup::{KafkaDedup, KafkaDedupMemory},
     anyhow::Context,
     serde::{Deserialize, Serialize},
     std::{
@@ -25,6 +26,7 @@ pub trait GrpcRequestToProto<T> {
 #[serde(default)]
 pub struct Config {
     pub kafka: HashMap<String, String>,
+    pub dedup: Option<ConfigDedup>,
     pub grpc2kafka: Option<ConfigGrpc2Kafka>,
     pub kafka2grpc: Option<ConfigKafka2Grpc>,
 }
@@ -40,13 +42,38 @@ impl Config {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ConfigDedup {
+    #[serde(default)]
+    pub kafka: HashMap<String, String>,
+    pub kafka_input: String,
+    pub kafka_output: String,
+    pub kafka_queue_size: usize,
+    pub backend: ConfigDedupBackend,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ConfigDedupBackend {
+    Memory,
+}
+
+impl ConfigDedupBackend {
+    pub async fn create(&self) -> anyhow::Result<Box<impl KafkaDedup>> {
+        Ok(match self {
+            Self::Memory => Box::<KafkaDedupMemory>::default(),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ConfigGrpc2Kafka {
     pub endpoint: String,
     pub x_token: Option<String>,
     pub request: ConfigGrpc2KafkaRequest,
-    pub kafka_topic: String,
     #[serde(default)]
     pub kafka: HashMap<String, String>,
+    pub kafka_topic: String,
+    pub kafka_queue_size: usize,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -222,9 +249,9 @@ impl GrpcRequestToProto<SubscribeRequestAccountsDataSlice>
 
 #[derive(Debug, Deserialize)]
 pub struct ConfigKafka2Grpc {
-    pub kafka_topic: String,
     #[serde(default)]
     pub kafka: HashMap<String, String>,
+    pub kafka_topic: String,
     pub listen: SocketAddr,
     #[serde(default = "ConfigKafka2Grpc::channel_capacity_default")]
     pub channel_capacity: usize,

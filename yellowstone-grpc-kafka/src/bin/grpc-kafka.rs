@@ -9,6 +9,7 @@ use {
         producer::{FutureProducer, FutureRecord},
     },
     sha2::{Digest, Sha256},
+    std::sync::Arc,
     tokio::task::JoinSet,
     tonic::{
         codec::Streaming,
@@ -16,14 +17,15 @@ use {
         transport::{Channel, ClientTlsConfig},
         Request, Response,
     },
-    tracing::{debug, warn},
+    tracing::{debug, trace, warn},
     tracing_subscriber::{
         filter::{EnvFilter, LevelFilter},
         layer::SubscriberExt,
         util::SubscriberInitExt,
     },
     yellowstone_grpc_kafka::{
-        config::{Config, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
+        config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
+        dedup::KafkaDedup,
         grpc::GrpcService,
     },
     yellowstone_grpc_proto::{
@@ -46,7 +48,7 @@ struct Args {
 #[derive(Debug, Clone, Subcommand)]
 enum ArgsAction {
     // Receive data from Kafka, deduplicate and send them back to Kafka
-    // TODO: Dedup
+    Dedup,
     /// Receive data from gRPC and send them to the Kafka
     #[command(name = "grpc2kafka")]
     Grpc2Kafka,
@@ -58,6 +60,12 @@ enum ArgsAction {
 impl ArgsAction {
     async fn run(self, config: Config, kafka_config: ClientConfig) -> anyhow::Result<()> {
         match self {
+            ArgsAction::Dedup => {
+                let config = config.dedup.ok_or_else(|| {
+                    anyhow::anyhow!("`dedup` section in config should be defined")
+                })?;
+                Self::dedup(kafka_config, config).await
+            }
             ArgsAction::Grpc2Kafka => {
                 let config = config.grpc2kafka.ok_or_else(|| {
                     anyhow::anyhow!("`grpc2kafka` section in config should be defined")
@@ -69,6 +77,92 @@ impl ArgsAction {
                     anyhow::anyhow!("`kafka2grpc` section in config should be defined")
                 })?;
                 Self::kafka2grpc(kafka_config, config).await
+            }
+        }
+    }
+
+    async fn dedup(mut kafka_config: ClientConfig, config: ConfigDedup) -> anyhow::Result<()> {
+        for (key, value) in config.kafka.into_iter() {
+            kafka_config.set(key, value);
+        }
+
+        // input
+        let consumer: StreamConsumer = kafka_config.create()?;
+        consumer.subscribe(&[&config.kafka_input])?;
+
+        // output
+        let kafka: FutureProducer = kafka_config
+            .create()
+            .context("failed to create kafka producer")?;
+
+        let dedup = config.backend.create().await?;
+
+        // input -> output loop
+        let kafka_output = Arc::new(config.kafka_output);
+        let mut send_tasks = JoinSet::new();
+        loop {
+            let message = tokio::select! {
+                maybe_result = send_tasks.join_next() => match maybe_result {
+                    Some(result) => {
+                        result??;
+                        continue;
+                    }
+                    None => consumer.recv().await
+                },
+                message = consumer.recv() => message,
+            }?;
+            trace!(
+                "received message with key: {:?}",
+                message.key().and_then(|k| std::str::from_utf8(k).ok())
+            );
+
+            let (key, payload) = match (
+                message
+                    .key()
+                    .and_then(|k| String::from_utf8(k.to_vec()).ok()),
+                message.payload(),
+            ) {
+                (Some(key), Some(payload)) => (key, payload.to_vec()),
+                _ => continue,
+            };
+            let (slot, hash, bytes) = match key
+                .split_once('_')
+                .and_then(|(slot, hash)| slot.parse::<u64>().ok().map(|slot| (slot, hash)))
+                .and_then(|(slot, hash)| {
+                    let mut bytes: [u8; 32] = [0u8; 32];
+                    const_hex::decode_to_slice(hash, &mut bytes)
+                        .ok()
+                        .map(|()| (slot, hash, bytes))
+                }) {
+                Some((slot, hash, bytes)) => (slot, hash, bytes),
+                _ => continue,
+            };
+            debug!("received message slot #{slot} with hash {hash}");
+
+            let kafka = kafka.clone();
+            let dedup = dedup.clone();
+            let kafka_output = Arc::clone(&kafka_output);
+            send_tasks.spawn(async move {
+                if dedup.allowed(slot, bytes).await {
+                    let record = FutureRecord::to(&kafka_output).key(&key).payload(&payload);
+                    match kafka.send_result(record) {
+                        Ok(future) => {
+                            let result = future.await;
+                            debug!("kafka send message with key: {key}, result: {result:?}");
+
+                            result?.map_err(|(error, _message)| error)?;
+                            Ok::<(), anyhow::Error>(())
+                        }
+                        Err(error) => Err(error.0.into()),
+                    }
+                } else {
+                    Ok(())
+                }
+            });
+            if send_tasks.len() >= config.kafka_queue_size {
+                if let Some(result) = send_tasks.join_next().await {
+                    result??;
+                }
             }
         }
     }
@@ -152,14 +246,17 @@ impl ArgsAction {
                         Ok(future) => {
                             let _ = send_tasks.spawn(async move {
                                 let result = future.await;
-                                tracing::debug!(
-                                    "kafka send message with key: {key:?}, result: {result:?}"
-                                );
+                                debug!("kafka send message with key: {key}, result: {result:?}");
 
                                 Ok::<(i32, i64), anyhow::Error>(
                                     result?.map_err(|(error, _message)| error)?,
                                 )
                             });
+                            if send_tasks.len() >= config.kafka_queue_size {
+                                if let Some(result) = send_tasks.join_next().await {
+                                    let _ = result??;
+                                }
+                            }
                         }
                         Err(error) => return Err(error.0.into()),
                     }
@@ -210,6 +307,8 @@ impl ArgsAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // TODO: SIGTERM handler
+
     // Setup tracing
     let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
     let io_layer = tracing_subscriber::fmt::layer().with_ansi(is_atty);
