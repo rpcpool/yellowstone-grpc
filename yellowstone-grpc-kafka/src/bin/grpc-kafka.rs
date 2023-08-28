@@ -1,7 +1,12 @@
 use {
     anyhow::Context,
     clap::{Parser, Subcommand},
-    futures::{channel::mpsc, sink::SinkExt, stream::StreamExt},
+    futures::{
+        channel::mpsc,
+        future::{BoxFuture, FutureExt},
+        sink::SinkExt,
+        stream::StreamExt,
+    },
     rdkafka::{
         config::ClientConfig,
         consumer::{Consumer, StreamConsumer},
@@ -10,7 +15,10 @@ use {
     },
     sha2::{Digest, Sha256},
     std::sync::Arc,
-    tokio::task::JoinSet,
+    tokio::{
+        signal::unix::{signal, SignalKind},
+        task::JoinSet,
+    },
     tonic::{
         codec::Streaming,
         metadata::AsciiMetadataValue,
@@ -58,30 +66,39 @@ enum ArgsAction {
 }
 
 impl ArgsAction {
-    async fn run(self, config: Config, kafka_config: ClientConfig) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        config: Config,
+        kafka_config: ClientConfig,
+        shutdown: BoxFuture<'static, ()>,
+    ) -> anyhow::Result<()> {
         match self {
             ArgsAction::Dedup => {
                 let config = config.dedup.ok_or_else(|| {
                     anyhow::anyhow!("`dedup` section in config should be defined")
                 })?;
-                Self::dedup(kafka_config, config).await
+                Self::dedup(kafka_config, config, shutdown).await
             }
             ArgsAction::Grpc2Kafka => {
                 let config = config.grpc2kafka.ok_or_else(|| {
                     anyhow::anyhow!("`grpc2kafka` section in config should be defined")
                 })?;
-                Self::grpc2kafka(kafka_config, config).await
+                Self::grpc2kafka(kafka_config, config, shutdown).await
             }
             ArgsAction::Kafka2Grpc => {
                 let config = config.kafka2grpc.ok_or_else(|| {
                     anyhow::anyhow!("`kafka2grpc` section in config should be defined")
                 })?;
-                Self::kafka2grpc(kafka_config, config).await
+                Self::kafka2grpc(kafka_config, config, shutdown).await
             }
         }
     }
 
-    async fn dedup(mut kafka_config: ClientConfig, config: ConfigDedup) -> anyhow::Result<()> {
+    async fn dedup(
+        mut kafka_config: ClientConfig,
+        config: ConfigDedup,
+        mut shutdown: BoxFuture<'static, ()>,
+    ) -> anyhow::Result<()> {
         for (key, value) in config.kafka.into_iter() {
             kafka_config.set(key, value);
         }
@@ -95,6 +112,7 @@ impl ArgsAction {
             .create()
             .context("failed to create kafka producer")?;
 
+        // dedup
         let dedup = config.backend.create().await?;
 
         // input -> output loop
@@ -102,12 +120,16 @@ impl ArgsAction {
         let mut send_tasks = JoinSet::new();
         loop {
             let message = tokio::select! {
+                _ = &mut shutdown => break,
                 maybe_result = send_tasks.join_next() => match maybe_result {
                     Some(result) => {
                         result??;
                         continue;
                     }
-                    None => consumer.recv().await
+                    None => tokio::select! {
+                        _ = &mut shutdown => break,
+                        message = consumer.recv() => message,
+                    }
                 },
                 message = consumer.recv() => message,
             }?;
@@ -160,16 +182,27 @@ impl ArgsAction {
                 }
             });
             if send_tasks.len() >= config.kafka_queue_size {
-                if let Some(result) = send_tasks.join_next().await {
-                    result??;
+                tokio::select! {
+                    _ = &mut shutdown => break,
+                    result = send_tasks.join_next() => {
+                        if let Some(result) = result {
+                            result??;
+                        }
+                    }
                 }
             }
         }
+        warn!("shutdown received...");
+        while let Some(result) = send_tasks.join_next().await {
+            result??;
+        }
+        Ok(())
     }
 
     async fn grpc2kafka(
         mut kafka_config: ClientConfig,
         config: ConfigGrpc2Kafka,
+        mut shutdown: BoxFuture<'static, ()>,
     ) -> anyhow::Result<()> {
         for (key, value) in config.kafka.into_iter() {
             kafka_config.set(key, value);
@@ -207,12 +240,16 @@ impl ArgsAction {
         let mut send_tasks = JoinSet::new();
         loop {
             let message = tokio::select! {
+                _ = &mut shutdown => break,
                 maybe_result = send_tasks.join_next() => match maybe_result {
                     Some(result) => {
                         let _ = result??;
                         continue;
                     }
-                    None => geyser.next().await
+                    None => tokio::select! {
+                        _ = &mut shutdown => break,
+                        message = geyser.next() => message,
+                    }
                 },
                 message = geyser.next() => message,
             }
@@ -253,39 +290,48 @@ impl ArgsAction {
                                 )
                             });
                             if send_tasks.len() >= config.kafka_queue_size {
-                                if let Some(result) = send_tasks.join_next().await {
-                                    let _ = result??;
+                                tokio::select! {
+                                    _ = &mut shutdown => break,
+                                    result = send_tasks.join_next() => {
+                                        if let Some(result) = result {
+                                            result??;
+                                        }
+                                    }
                                 }
                             }
                         }
                         Err(error) => return Err(error.0.into()),
                     }
                 }
-                None => {
-                    while let Some(result) = send_tasks.join_next().await {
-                        let _ = result??;
-                    }
-                    return Ok(());
-                }
+                None => break,
             }
         }
+        warn!("shutdown received...");
+        while let Some(result) = send_tasks.join_next().await {
+            let _ = result??;
+        }
+        Ok(())
     }
 
     async fn kafka2grpc(
         mut kafka_config: ClientConfig,
         config: ConfigKafka2Grpc,
+        mut shutdown: BoxFuture<'static, ()>,
     ) -> anyhow::Result<()> {
         for (key, value) in config.kafka.into_iter() {
             kafka_config.set(key, value);
         }
 
-        let grpc_tx = GrpcService::run(config.listen, config.channel_capacity)?;
+        let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
         let consumer: StreamConsumer = kafka_config.create()?;
         consumer.subscribe(&[&config.kafka_topic])?;
 
         loop {
-            let message = consumer.recv().await?;
+            let message = tokio::select! {
+                _ = &mut shutdown => break,
+                message = consumer.recv() => message?,
+            };
             debug!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -302,13 +348,14 @@ impl ArgsAction {
                 }
             }
         }
+
+        warn!("shutdown received...");
+        Ok(grpc_shutdown.await??)
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // TODO: SIGTERM handler
-
     // Setup tracing
     let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
     let io_layer = tracing_subscriber::fmt::layer().with_ansi(is_atty);
@@ -330,5 +377,16 @@ async fn main() -> anyhow::Result<()> {
         kafka_config.set(key, value);
     }
 
-    args.action.run(config, kafka_config).await
+    // Create shutdown signal
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let shutdown = async move {
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {}
+        };
+    }
+    .boxed();
+
+    args.action.run(config, kafka_config, shutdown).await
 }

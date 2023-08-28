@@ -1,5 +1,6 @@
 use {
     crate::version::VERSION,
+    futures::future::{BoxFuture, FutureExt},
     std::{
         net::SocketAddr,
         sync::{
@@ -9,12 +10,16 @@ use {
     },
     tokio::{
         sync::{broadcast, mpsc, Notify},
+        task::JoinError,
         time::{sleep, Duration},
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::{CompressionEncoding, Streaming},
-        transport::server::{Server, TcpIncoming},
+        transport::{
+            server::{Server, TcpIncoming},
+            Error as TransportError,
+        },
         Request, Response, Result as TonicResult, Status,
     },
     tracing::{error, info},
@@ -36,10 +41,14 @@ pub struct GrpcService {
 }
 
 impl GrpcService {
+    #[allow(clippy::type_complexity)]
     pub fn run(
         listen: SocketAddr,
         channel_capacity: usize,
-    ) -> anyhow::Result<broadcast::Sender<SubscribeUpdate>> {
+    ) -> anyhow::Result<(
+        broadcast::Sender<SubscribeUpdate>,
+        BoxFuture<'static, Result<Result<(), TransportError>, JoinError>>,
+    )> {
         // Bind service address
         let incoming = TcpIncoming::new(
             listen,
@@ -59,15 +68,24 @@ impl GrpcService {
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
-        tokio::spawn(async move {
+
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_grpc = Arc::clone(&shutdown);
+
+        let server = tokio::spawn(async move {
             Server::builder()
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(service)
-                .serve_with_incoming(incoming)
+                .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
                 .await
         });
+        let shutdown = async move {
+            shutdown.notify_one();
+            server.await
+        }
+        .boxed();
 
-        Ok(broadcast_tx)
+        Ok((broadcast_tx, shutdown))
     }
 }
 
