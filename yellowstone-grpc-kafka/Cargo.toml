@@ -3,7 +3,7 @@ name = "yellowstone-grpc-kafka"
 version = "1.0.0-rc.0+solana.1.16.1"
 authors = ["Triton One"]
 edition = "2021"
-description = "Yellowstone gRPC Kafka Producer"
+description = "Yellowstone gRPC Kafka Producer/Dedup/Consumer"
 publish = false
 
 [dependencies]

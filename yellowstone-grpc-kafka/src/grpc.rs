@@ -117,9 +117,7 @@ impl Geyser for GrpcService {
 
             loop {
                 tokio::select! {
-                    _ = &mut exit => {
-                        break;
-                    }
+                    _ = &mut exit => break,
                     _ = sleep(Duration::from_secs(10)) => {
                         match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
                             Ok(()) => {}
@@ -142,14 +140,10 @@ impl Geyser for GrpcService {
 
             loop {
                 tokio::select! {
-                    _ = &mut exit => {
-                        break;
-                    }
+                    _ = &mut exit => break,
                     message = request.get_mut().message() => match message {
                         Ok(Some(_request)) => {}
-                        Ok(None) => {
-                            break;
-                        }
+                        Ok(None) => break,
                         Err(_error) => {
                             let _ = incoming_client.notify_one();
                             break;
@@ -164,9 +158,7 @@ impl Geyser for GrpcService {
             info!("client #{id}: new");
             loop {
                 tokio::select! {
-                    _ = notify_client.notified() => {
-                        break;
-                    }
+                    _ = notify_client.notified() => break,
                     message = messages_rx.recv() => {
                         match message {
                             Ok(message) => {
@@ -185,9 +177,7 @@ impl Geyser for GrpcService {
                                     }
                                 }
                             }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                break;
-                            },
+                            Err(broadcast::error::RecvError::Closed) => break,
                             Err(broadcast::error::RecvError::Lagged(_)) => {
                                 info!("client #{id}: lagged to receive geyser messages");
                                 tokio::spawn(async move {

@@ -42,10 +42,7 @@ impl KafkaDedup for KafkaDedupMemory {
 
                 true
             }
-            Entry::Occupied(entry) => {
-                let set = entry.into_mut();
-                set.insert(hash)
-            }
+            Entry::Occupied(entry) => entry.into_mut().insert(hash),
         }
     }
 }
