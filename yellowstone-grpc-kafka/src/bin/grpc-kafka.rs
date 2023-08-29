@@ -14,7 +14,7 @@ use {
         producer::{FutureProducer, FutureRecord},
     },
     sha2::{Digest, Sha256},
-    std::sync::Arc,
+    std::{net::SocketAddr, sync::Arc},
     tokio::{
         signal::unix::{signal, SignalKind},
         task::JoinSet,
@@ -35,6 +35,7 @@ use {
         config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         dedup::KafkaDedup,
         grpc::GrpcService,
+        prom,
     },
     yellowstone_grpc_proto::{
         prelude::{geyser_client::GeyserClient, subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -48,6 +49,10 @@ struct Args {
     /// Path to config file
     #[clap(short, long)]
     config: String,
+
+    /// Prometheus listen address
+    #[clap(long)]
+    prometheus: Option<SocketAddr>,
 
     #[command(subcommand)]
     action: ArgsAction,
@@ -370,6 +375,9 @@ async fn main() -> anyhow::Result<()> {
     // Parse args
     let args = Args::parse();
     let config = Config::load(&args.config).await?;
+
+    // Run prometheus server
+    prom::run_server(args.prometheus)?;
 
     // Create kafka config
     let mut kafka_config = ClientConfig::new();
