@@ -22,7 +22,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170)).
+- kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170)).
 
 ## 2023-08-21
 
@@ -30,13 +30,13 @@ kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170)).
 
 ### Features
 
-geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173)).
+- geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173)).
 
 ### Fixes
 
-geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
-geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
-geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yellowstone-grpc/pull/177)).
+- geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
+- geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
+- geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yellowstone-grpc/pull/177)).
 
 ## 2023-08-10
 
@@ -47,7 +47,7 @@ geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yell
 
 ### Features
 
-geyser: include entries to block message ([#169](https://github.com/rpcpool/yellowstone-grpc/pull/169)).
+- geyser: include entries to block message ([#169](https://github.com/rpcpool/yellowstone-grpc/pull/169)).
 
 ## 2023-07-26
 
@@ -55,7 +55,7 @@ geyser: include entries to block message ([#169](https://github.com/rpcpool/yell
 
 ### Fixes
 
-geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168)).
+- geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168)).
 
 ## 2023-07-22
 
