@@ -20,6 +20,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - yellowstone-grpc-kafka-1.0.0-rc.0+solana.1.16.1
 
+### Features
+
+kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170)).
+
 ## 2023-08-21
 
 - yellowstone-grpc-geyser-1.7.1+solana.1.16.1
