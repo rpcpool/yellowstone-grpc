@@ -16,6 +16,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-08-28
+
+- yellowstone-grpc-kafka-1.0.0-rc.0+solana.1.16.1
+
 ## 2023-08-21
 
 - yellowstone-grpc-geyser-1.7.1+solana.1.16.1
