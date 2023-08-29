@@ -1,0 +1,44 @@
+{
+    "kafka": {
+        "bootstrap.servers": "localhost:29092"
+    },
+    "dedup": {
+        "kafka": {
+            "group.id": "dedup",
+            "group.instance.id": "dedup"
+        },
+        "kafka_input": "grpc1",
+        "kafka_output": "grpc2",
+        "kafka_queue_size": 10000,
+        "backend": {
+            "type": "memory"
+        }
+    },
+    "grpc2kafka": {
+        "endpoint": "http://127.0.0.1:10000",
+        "x_token": "",
+        "request": {
+            "slots": ["client"],
+            "blocks": {
+                "client": {
+                    "account_include": [],
+                    "include_transactions": false,
+                    "include_accounts": false,
+                    "include_entries": false
+                }
+            }
+        },
+        "kafka": {},
+        "kafka_topic": "grpc1",
+        "kafka_queue_size": 10000
+    },
+    "kafka2grpc": {
+        "kafka": {
+            "group.id": "kafka2grpc",
+            "group.instance.id": "kafka2grpc"
+        },
+        "kafka_topic": "grpc2",
+        "listen": "127.0.0.1:10001",
+        "channel_capacity": 250000
+    }
+}

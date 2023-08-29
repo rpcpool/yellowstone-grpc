@@ -5,9 +5,7 @@ concurrency:
   cancel-in-progress: true
 
 on:
-
   workflow_dispatch:
-  
   push:
     tags:
       - 'v*'
@@ -18,15 +16,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  
   release:
-
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
-
     runs-on: ["${{ matrix.os }}"]
-      
     steps:
       - uses: actions/checkout@v3
 
@@ -58,6 +52,11 @@ jobs:
               target
           key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsasl2-dev
+
       - name: Check Solana version
         run: |
           echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
@@ -78,6 +77,7 @@ jobs:
         run: |
           mv target/release/client target/release/client-22
           mv target/release/config-check target/release/config-check-22
+          mv target/release/grpc-kafka target/release/grpc-kafka-22
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
@@ -99,3 +99,4 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
+            target/release/grpc-kafka*
