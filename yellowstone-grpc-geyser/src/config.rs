@@ -62,6 +62,13 @@ impl ConfigLog {
 pub struct ConfigGrpc {
     /// Address of Grpc service.
     pub address: SocketAddr,
+    /// Capacity of the channel used for account from snapshot,
+    /// on reaching the limit Sender block validator startup.
+    #[serde(
+        default = "ConfigGrpc::snapshot_capacity_default",
+        deserialize_with = "deserialize_usize_str_maybe"
+    )]
+    pub snapshot_capacity: Option<usize>,
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
@@ -83,6 +90,10 @@ pub struct ConfigGrpc {
 }
 
 impl ConfigGrpc {
+    const fn snapshot_capacity_default() -> Option<usize> {
+        None
+    }
+
     const fn channel_capacity_default() -> usize {
         250_000
     }
@@ -301,6 +312,28 @@ where
             .replace('_', "")
             .parse::<usize>()
             .map_err(de::Error::custom),
+    }
+}
+
+fn deserialize_usize_str_maybe<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Integer(usize),
+        String(String),
+    }
+
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Integer(value)) => Ok(Some(value)),
+        Some(Value::String(value)) => value
+            .replace('_', "")
+            .parse::<usize>()
+            .map(Some)
+            .map_err(de::Error::custom),
+        None => Ok(None),
     }
 }
 

@@ -4508,6 +4508,7 @@ dependencies = [
  "bs58",
  "cargo-lock",
  "clap",
+ "crossbeam-channel",
  "futures",
  "git-version",
  "hyper",

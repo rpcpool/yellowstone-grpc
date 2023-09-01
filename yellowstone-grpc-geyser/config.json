@@ -5,6 +5,7 @@
     },
     "grpc": {
         "address": "0.0.0.0:10000",
+        "snapshot_capacity": null,
         "channel_capacity": "100_000",
         "unary_concurrency_limit": 100,
         "unary_disabled": false,

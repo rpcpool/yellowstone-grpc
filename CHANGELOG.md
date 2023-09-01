@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser: support snapshot data ([#180](https://github.com/rpcpool/yellowstone-grpc/pull/180)).
+
 ### Fixes
 
 ### Breaking
