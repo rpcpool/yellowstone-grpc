@@ -38,7 +38,6 @@ use {
     },
     tokio::{
         sync::{broadcast, mpsc, Mutex, Notify, RwLock, Semaphore},
-        task::yield_now,
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -1070,7 +1069,7 @@ impl GrpcService {
                         }
                     }
                     Err(crossbeam_channel::TryRecvError::Empty) => {
-                        yield_now().await;
+                        sleep(Duration::from_millis(1)).await;
                         continue;
                     }
                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
