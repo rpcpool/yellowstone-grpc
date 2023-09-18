@@ -80,6 +80,8 @@ pub struct ConfigGrpc {
     /// Limits for possible filters
     #[serde(default)]
     pub filters: ConfigGrpcFilters,
+    /// TLS config
+    pub tls_config: Option<ConfigGrpcServerTls>,
 }
 
 impl ConfigGrpc {
@@ -262,6 +264,13 @@ impl Default for ConfigGrpcFiltersEntry {
     fn default() -> Self {
         Self { max: usize::MAX }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigGrpcServerTls {
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

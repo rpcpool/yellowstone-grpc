@@ -1,3 +1,7 @@
+use tonic::{
+    codec::CompressionEncoding,
+    transport::{Identity, ServerTlsConfig},
+};
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
@@ -42,7 +46,6 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        codec::CompressionEncoding,
         transport::server::{Server, TcpIncoming},
         Request, Response, Result as TonicResult, Status, Streaming,
     },
@@ -707,7 +710,7 @@ impl GrpcService {
 
         // Create Server
         let service = GeyserServer::new(Self {
-            config,
+            config: config.clone(),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             broadcast_tx: broadcast_tx.clone(),
@@ -727,12 +730,21 @@ impl GrpcService {
         // Run Server
         let shutdown = Arc::new(Notify::new());
         let shutdown_grpc = Arc::clone(&shutdown);
+
+        let mut server_builder = Server::builder();
+
+        if let Some(tls_config) = config.tls_config {
+            let cert = std::fs::read_to_string(tls_config.cert_path)?;
+            let key = std::fs::read_to_string(tls_config.key_path)?;
+            server_builder = server_builder
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(&cert, &key)))?;
+        }
         tokio::spawn(async move {
             // gRPC Health check service
             let (mut health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            Server::builder()
+            server_builder
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(health_service)
                 .add_service(service)
