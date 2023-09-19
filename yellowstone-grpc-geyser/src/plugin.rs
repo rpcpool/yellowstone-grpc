@@ -81,6 +81,7 @@ impl GeyserPlugin for Plugin {
         let (grpc_channel, grpc_shutdown, prometheus) = runtime.block_on(async move {
             let (grpc_channel, grpc_shutdown) =
                 GrpcService::create(config.grpc, config.block_fail_action)
+                    .await
                     .map_err(|error| GeyserPluginError::Custom(error))?;
             let prometheus = PrometheusService::new(config.prometheus)
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;

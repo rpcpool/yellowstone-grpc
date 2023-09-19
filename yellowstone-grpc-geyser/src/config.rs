@@ -62,6 +62,8 @@ impl ConfigLog {
 pub struct ConfigGrpc {
     /// Address of Grpc service.
     pub address: SocketAddr,
+    /// TLS config
+    pub tls_config: Option<ConfigGrpcServerTls>,
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
@@ -90,6 +92,13 @@ impl ConfigGrpc {
     const fn unary_concurrency_limit_default() -> usize {
         Semaphore::MAX_PERMITS
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigGrpcServerTls {
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]

@@ -37,13 +37,17 @@ use {
         },
     },
     tokio::{
+        fs,
         sync::{broadcast, mpsc, Notify, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
-        transport::server::{Server, TcpIncoming},
+        transport::{
+            server::{Server, TcpIncoming},
+            Identity, ServerTlsConfig,
+        },
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
@@ -679,7 +683,7 @@ pub struct GrpcService {
 }
 
 impl GrpcService {
-    pub fn create(
+    pub async fn create(
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
     ) -> Result<
@@ -704,6 +708,17 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
+        // gRPC server builder with optional TLS
+        let mut server_builder = Server::builder();
+        if let Some(tls_config) = &config.tls_config {
+            let (cert, key) = tokio::try_join!(
+                fs::read(&tls_config.cert_path),
+                fs::read(&tls_config.key_path)
+            )?;
+            server_builder = server_builder
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))?;
+        }
 
         // Create Server
         let service = GeyserServer::new(Self {
@@ -732,7 +747,7 @@ impl GrpcService {
             let (mut health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            Server::builder()
+            server_builder
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(health_service)
                 .add_service(service)
