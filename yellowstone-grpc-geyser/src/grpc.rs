@@ -7,7 +7,7 @@ use {
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaEntryInfo, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
         SlotStatus,
     },
     solana_sdk::{
@@ -281,8 +281,8 @@ pub struct MessageBlockMeta {
     pub executed_transaction_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV2<'a>) -> Self {
+impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
