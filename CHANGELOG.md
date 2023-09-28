@@ -50,6 +50,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - geyser: add `fs` feature to `tokio` dependencies in the plugin ([#184](https://github.com/rpcpool/yellowstone-grpc/pull/184)).
+- geyser: use entry_count from ReplicaBlockInfoV3 ([#185](https://github.com/rpcpool/yellowstone-grpc/pull/185)).
 
 ### Breaking
 
