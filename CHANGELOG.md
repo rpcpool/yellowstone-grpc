@@ -13,6 +13,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser: add optional TLS to gRPC server config ([#183](https://github.com/rpcpool/yellowstone-grpc/pull/183)).
+- client: add timeout options to rust ([#187](https://github.com/rpcpool/yellowstone-grpc/pull/187)).
 
 ### Fixes
 

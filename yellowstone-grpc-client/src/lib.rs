@@ -6,12 +6,12 @@ use {
         stream::Stream,
     },
     http::uri::InvalidUri,
-    std::collections::HashMap,
+    std::{collections::HashMap, time::Duration},
     tonic::{
         codec::Streaming,
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
         service::{interceptor::InterceptedService, Interceptor},
-        transport::channel::{Channel, ClientTlsConfig},
+        transport::channel::{Channel, ClientTlsConfig, Endpoint},
         Request, Response, Status,
     },
     tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
@@ -65,23 +65,21 @@ pub struct GeyserGrpcClient<F> {
 }
 
 impl GeyserGrpcClient<()> {
-    pub fn connect<E, T>(
+    fn connect2<E, T>(
         endpoint: E,
-        x_token: Option<T>,
         tls_config: Option<ClientTlsConfig>,
-    ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
+        x_token: Option<T>,
+    ) -> GeyserGrpcClientResult<(Endpoint, InterceptorFn)>
     where
         E: Into<Bytes>,
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
     {
         let mut endpoint = Channel::from_shared(endpoint)?;
-
         if let Some(tls_config) = tls_config {
             endpoint = endpoint.tls_config(tls_config)?;
         } else if endpoint.uri().scheme_str() == Some("https") {
             endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
         }
-        let channel = endpoint.connect_lazy();
 
         let x_token: Option<AsciiMetadataValue> = match x_token {
             Some(x_token) => Some(x_token.try_into()?),
@@ -94,6 +92,53 @@ impl GeyserGrpcClient<()> {
             _ => {}
         }
         let interceptor = InterceptorFn { x_token };
+
+        Ok((endpoint, interceptor))
+    }
+
+    pub fn connect<E, T>(
+        endpoint: E,
+        x_token: Option<T>,
+        tls_config: Option<ClientTlsConfig>,
+    ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
+    where
+        E: Into<Bytes>,
+        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
+    {
+        let (endpoint, interceptor) = Self::connect2(endpoint, tls_config, x_token)?;
+        let channel = endpoint.connect_lazy();
+        Ok(GeyserGrpcClient {
+            health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
+            geyser: GeyserClient::with_interceptor(channel, interceptor)
+                .max_decoding_message_size(64 * 1024 * 1024), // 64 MiB
+        })
+    }
+
+    pub async fn connect_with_timeout<E, T>(
+        endpoint: E,
+        x_token: Option<T>,
+        tls_config: Option<ClientTlsConfig>,
+        connect_timeout: Option<Duration>,
+        request_timeout: Option<Duration>,
+        connect_lazy: bool,
+    ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
+    where
+        E: Into<Bytes>,
+        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
+    {
+        let (mut endpoint, interceptor) = Self::connect2(endpoint, tls_config, x_token)?;
+
+        if let Some(timeout) = connect_timeout {
+            endpoint = endpoint.connect_timeout(timeout);
+        }
+        if let Some(timeout) = request_timeout {
+            endpoint = endpoint.timeout(timeout);
+        }
+        let channel = if connect_lazy {
+            endpoint.connect_lazy()
+        } else {
+            endpoint.connect().await?
+        };
 
         Ok(GeyserGrpcClient {
             health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),

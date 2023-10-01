@@ -8,6 +8,7 @@ use {
         collections::HashMap,
         env,
         sync::{Arc, Mutex},
+        time::Duration,
     },
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::{
@@ -379,8 +380,17 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let commitment = args.get_commitment();
-            let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)
-                .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
+            let mut client = GeyserGrpcClient::connect_with_timeout(
+                args.endpoint,
+                args.x_token,
+                None,
+                Some(Duration::from_secs(10)),
+                Some(Duration::from_secs(10)),
+                false,
+            )
+            .await
+            .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
+            info!("Connected");
 
             match &args.action {
                 Action::HealthCheck => client
