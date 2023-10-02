@@ -12,8 +12,22 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Fixes
+
+### Breaking
+
+## 2023-10-02
+
+- yellowstone-grpc-client-1.10.0+solana.1.16.14
+- yellowstone-grpc-geyser-1.8.0+solana.1.16.14
+- yellowstone-grpc-kafka-1.0.0-rc.0+solana.1.16.14
+- yellowstone-grpc-proto-1.9.0+solana.1.16.14
+
+### Features
+
 - geyser: add optional TLS to gRPC server config ([#183](https://github.com/rpcpool/yellowstone-grpc/pull/183)).
 - client: add timeout options to rust ([#187](https://github.com/rpcpool/yellowstone-grpc/pull/187)).
+- geyser: update solana =1.16.14 ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188)).
 
 ### Fixes
 
