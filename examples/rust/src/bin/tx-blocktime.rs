@@ -114,7 +114,8 @@ async fn main() -> anyhow::Result<()> {
                 match msg.update_oneof {
                     Some(UpdateOneof::Transaction(tx)) => {
                         let entry = messages.entry(tx.slot).or_default();
-                        let sig = Signature::new(tx.transaction.unwrap().signature.as_slice())
+                        let sig = Signature::try_from(tx.transaction.unwrap().signature.as_slice())
+                            .expect("valid signature")
                             .to_string();
                         if let Some(timestamp) = entry.0 {
                             info!("received txn {} at {}", sig, timestamp);
