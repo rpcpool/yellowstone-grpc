@@ -12,8 +12,21 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Fixes
+
+### Breaking
+
+## 2023-10-03
+
+- yellowstone-grpc-client-1.11.0+solana.1.16.14
+- yellowstone-grpc-geyser-1.9.0+solana.1.16.14
+- yellowstone-grpc-proto-1.10.0+solana.1.16.14
+
+### Features
+
 - proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190)).
 - client: add tx pretty print to rust ([#189](https://github.com/rpcpool/yellowstone-grpc/pull/189)).
+- geyser: update deps, tokio=1.32.0 ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
 
 ### Fixes
 

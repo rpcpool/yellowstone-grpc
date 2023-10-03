@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
                     Some(UpdateOneof::BlockMeta(block)) => {
                         let entry = messages.entry(block.slot).or_default();
                         entry.0 = block.block_time.map(|obj| {
-                            DateTime::from_utc(
+                            DateTime::from_naive_utc_and_offset(
                                 NaiveDateTime::from_timestamp_opt(obj.timestamp, 0).unwrap(),
                                 Utc,
                             )

@@ -57,8 +57,9 @@ impl Filter {
 
     fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::from_i32(commitment)
-            .ok_or_else(|| anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}"))
+        CommitmentLevel::try_from(commitment).map_err(|_error| {
+            anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}")
+        })
     }
 
     fn decode_pubkeys<T: FromIterator<Pubkey>>(
