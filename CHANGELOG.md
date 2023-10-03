@@ -13,6 +13,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190)).
+- client: add tx pretty print to rust ([#189](https://github.com/rpcpool/yellowstone-grpc/pull/189)).
 
 ### Fixes
 
