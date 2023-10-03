@@ -12,6 +12,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- client: add tx pretty print to rust ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188)).
+- geyser: add mod `proto::convert_from` ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188)).
+
 ### Fixes
 
 ### Breaking
