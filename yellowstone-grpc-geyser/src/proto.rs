@@ -1,5 +1,10 @@
 pub use yellowstone_grpc_proto::prelude::*;
 
+#[deprecated(note = "Please use `convert_to`")]
+pub mod convert {
+    pub use super::convert_to::*;
+}
+
 pub mod convert_to {
     use {
         solana_sdk::{
