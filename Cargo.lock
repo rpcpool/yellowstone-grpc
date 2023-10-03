@@ -4517,6 +4517,7 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
+ "solana-account-decoder",
  "solana-geyser-plugin-interface",
  "solana-logger",
  "solana-sdk",

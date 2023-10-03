@@ -239,3 +239,309 @@ pub mod convert_to {
         super::UnixTimestamp { timestamp }
     }
 }
+
+pub mod convert_from {
+    use {
+        solana_account_decoder::parse_token::UiTokenAmount,
+        solana_sdk::{
+            hash::{Hash, HASH_BYTES},
+            instruction::CompiledInstruction,
+            message::{
+                v0::{LoadedAddresses, Message as MessageV0, MessageAddressTableLookup},
+                Message, MessageHeader, VersionedMessage,
+            },
+            pubkey::Pubkey,
+            signature::Signature,
+            transaction::{TransactionError, VersionedTransaction},
+            transaction_context::TransactionReturnData,
+        },
+        solana_transaction_status::{
+            ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
+            TransactionStatusMeta, TransactionTokenBalance, TransactionWithStatusMeta,
+            VersionedTransactionWithStatusMeta,
+        },
+    };
+
+    fn ensure_some<T>(maybe_value: Option<T>, message: impl Into<String>) -> Result<T, String> {
+        match maybe_value {
+            Some(value) => Ok(value),
+            None => Err(message.into()),
+        }
+    }
+
+    pub fn create_block(block: super::SubscribeUpdateBlock) -> Result<ConfirmedBlock, String> {
+        let mut transactions = vec![];
+        for tx in block.transactions {
+            transactions.push(create_tx_with_meta(tx)?);
+        }
+
+        let mut rewards = vec![];
+        for reward in ensure_some(block.rewards, "failed to get rewards")?.rewards {
+            rewards.push(create_reward(reward)?);
+        }
+
+        Ok(ConfirmedBlock {
+            previous_blockhash: block.parent_blockhash,
+            blockhash: block.blockhash,
+            parent_slot: block.parent_slot,
+            transactions,
+            rewards,
+            block_time: Some(ensure_some(
+                block.block_time.map(|wrapper| wrapper.timestamp),
+                "failed to get block_time",
+            )?),
+            block_height: Some(ensure_some(
+                block.block_height.map(|wrapper| wrapper.block_height),
+                "failed to get block_height",
+            )?),
+        })
+    }
+
+    pub fn create_tx_with_meta(
+        tx: super::SubscribeUpdateTransactionInfo,
+    ) -> Result<TransactionWithStatusMeta, String> {
+        let meta = ensure_some(tx.meta, "failed to get transaction meta")?;
+        let tx = ensure_some(tx.transaction, "failed to get transaction transaction")?;
+
+        Ok(TransactionWithStatusMeta::Complete(
+            VersionedTransactionWithStatusMeta {
+                transaction: create_tx_versioned(tx)?,
+                meta: create_tx_meta(meta)?,
+            },
+        ))
+    }
+
+    pub fn create_tx_versioned(tx: super::Transaction) -> Result<VersionedTransaction, String> {
+        let mut signatures = Vec::with_capacity(tx.signatures.len());
+        for signature in tx.signatures {
+            signatures.push(match Signature::try_from(signature.as_slice()) {
+                Ok(signature) => signature,
+                Err(_error) => return Err("failed to parse Signature".to_owned()),
+            });
+        }
+
+        Ok(VersionedTransaction {
+            signatures,
+            message: create_message(ensure_some(tx.message, "failed to get message")?)?,
+        })
+    }
+
+    fn create_message(message: super::Message) -> Result<VersionedMessage, String> {
+        let header = ensure_some(message.header, "failed to get MessageHeader")?;
+        let header = MessageHeader {
+            num_required_signatures: ensure_some(
+                header.num_required_signatures.try_into().ok(),
+                "failed to parse num_required_signatures",
+            )?,
+            num_readonly_signed_accounts: ensure_some(
+                header.num_readonly_signed_accounts.try_into().ok(),
+                "failed to parse num_readonly_signed_accounts",
+            )?,
+            num_readonly_unsigned_accounts: ensure_some(
+                header.num_readonly_unsigned_accounts.try_into().ok(),
+                "failed to parse num_readonly_unsigned_accounts",
+            )?,
+        };
+
+        if message.recent_blockhash.len() != HASH_BYTES {
+            return Err("failed to parse hash".to_owned());
+        }
+
+        let mut instructions = Vec::with_capacity(message.instructions.len());
+        for ix in message.instructions {
+            instructions.push(CompiledInstruction {
+                program_id_index: ensure_some(
+                    ix.program_id_index.try_into().ok(),
+                    "failed to decode CompiledInstruction.program_id_index)",
+                )?,
+                accounts: ix.accounts,
+                data: ix.data,
+            });
+        }
+
+        Ok(if message.versioned {
+            let mut address_table_lookups = Vec::with_capacity(message.address_table_lookups.len());
+            for table in message.address_table_lookups {
+                address_table_lookups.push(MessageAddressTableLookup {
+                    account_key: ensure_some(
+                        Pubkey::try_from(table.account_key.as_slice()).ok(),
+                        "failed to parse Pubkey",
+                    )?,
+                    writable_indexes: table.writable_indexes,
+                    readonly_indexes: table.readonly_indexes,
+                });
+            }
+
+            VersionedMessage::V0(MessageV0 {
+                header,
+                account_keys: create_pubkey_vec(message.account_keys)?,
+                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                instructions,
+                address_table_lookups,
+            })
+        } else {
+            VersionedMessage::Legacy(Message {
+                header,
+                account_keys: create_pubkey_vec(message.account_keys)?,
+                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                instructions,
+            })
+        })
+    }
+
+    pub fn create_tx_meta(
+        meta: super::TransactionStatusMeta,
+    ) -> Result<TransactionStatusMeta, String> {
+        let meta_status = match create_tx_error(meta.err.as_ref())? {
+            Some(err) => Err(err),
+            None => Ok(()),
+        };
+        let mut meta_inner_instructions = vec![];
+        for ix in meta.inner_instructions {
+            meta_inner_instructions.push(create_inner_instruction(ix)?);
+        }
+        let mut meta_rewards = vec![];
+        for reward in meta.rewards {
+            meta_rewards.push(create_reward(reward)?);
+        }
+
+        Ok(TransactionStatusMeta {
+            status: meta_status,
+            fee: meta.fee,
+            pre_balances: meta.pre_balances,
+            post_balances: meta.post_balances,
+            inner_instructions: Some(meta_inner_instructions),
+            log_messages: Some(meta.log_messages),
+            pre_token_balances: Some(create_token_balances(meta.pre_token_balances)?),
+            post_token_balances: Some(create_token_balances(meta.post_token_balances)?),
+            rewards: Some(meta_rewards),
+            loaded_addresses: create_loaded_addresses(
+                meta.loaded_writable_addresses,
+                meta.loaded_readonly_addresses,
+            )?,
+            return_data: if meta.return_data_none {
+                None
+            } else {
+                let data = ensure_some(meta.return_data, "failed to get return_data")?;
+                Some(TransactionReturnData {
+                    program_id: ensure_some(
+                        Pubkey::try_from(data.program_id.as_slice()).ok(),
+                        "failed to parse program_id",
+                    )?,
+                    data: data.data,
+                })
+            },
+            compute_units_consumed: meta.compute_units_consumed,
+        })
+    }
+
+    pub fn create_tx_error(
+        err: Option<&super::TransactionError>,
+    ) -> Result<Option<TransactionError>, String> {
+        ensure_some(
+            err.map(|err| bincode::deserialize::<TransactionError>(&err.err))
+                .transpose()
+                .ok(),
+            "failed to decode TransactionError",
+        )
+    }
+
+    fn create_inner_instruction(ix: super::InnerInstructions) -> Result<InnerInstructions, String> {
+        let mut instructions = vec![];
+        for ix in ix.instructions {
+            instructions.push(InnerInstruction {
+                instruction: CompiledInstruction {
+                    program_id_index: ensure_some(
+                        ix.program_id_index.try_into().ok(),
+                        "failed to decode CompiledInstruction.program_id_index)",
+                    )?,
+                    accounts: ix.accounts,
+                    data: ix.data,
+                },
+                stack_height: ix.stack_height,
+            });
+        }
+        Ok(InnerInstructions {
+            index: ensure_some(
+                ix.index.try_into().ok(),
+                "failed to decode InnerInstructions.index",
+            )?,
+            instructions,
+        })
+    }
+
+    pub fn create_reward(reward: super::Reward) -> Result<Reward, String> {
+        Ok(Reward {
+            pubkey: reward.pubkey,
+            lamports: reward.lamports,
+            post_balance: reward.post_balance,
+            reward_type: match ensure_some(
+                super::RewardType::from_i32(reward.reward_type),
+                "failed to parse reward_type",
+            )? {
+                super::RewardType::Unspecified => None,
+                super::RewardType::Fee => Some(RewardType::Fee),
+                super::RewardType::Rent => Some(RewardType::Rent),
+                super::RewardType::Staking => Some(RewardType::Staking),
+                super::RewardType::Voting => Some(RewardType::Voting),
+            },
+            commission: if reward.commission.is_empty() {
+                None
+            } else {
+                Some(ensure_some(
+                    reward.commission.parse().ok(),
+                    "failed to parse reward commission",
+                )?)
+            },
+        })
+    }
+
+    fn create_token_balances(
+        balances: Vec<super::TokenBalance>,
+    ) -> Result<Vec<TransactionTokenBalance>, String> {
+        let mut vec = Vec::with_capacity(balances.len());
+        for balance in balances {
+            let ui_amount = ensure_some(balance.ui_token_amount, "failed to get ui_token_amount")?;
+            vec.push(TransactionTokenBalance {
+                account_index: ensure_some(
+                    balance.account_index.try_into().ok(),
+                    "failed to parse account_index",
+                )?,
+                mint: balance.mint,
+                ui_token_amount: UiTokenAmount {
+                    ui_amount: Some(ui_amount.ui_amount),
+                    decimals: ensure_some(
+                        ui_amount.decimals.try_into().ok(),
+                        "failed to parse decimals",
+                    )?,
+                    amount: ui_amount.amount,
+                    ui_amount_string: ui_amount.ui_amount_string,
+                },
+                owner: balance.owner,
+                program_id: balance.program_id,
+            });
+        }
+        Ok(vec)
+    }
+
+    fn create_loaded_addresses(
+        writable: Vec<Vec<u8>>,
+        readonly: Vec<Vec<u8>>,
+    ) -> Result<LoadedAddresses, String> {
+        Ok(LoadedAddresses {
+            writable: create_pubkey_vec(writable)?,
+            readonly: create_pubkey_vec(readonly)?,
+        })
+    }
+
+    fn create_pubkey_vec(pubkeys: Vec<Vec<u8>>) -> Result<Vec<Pubkey>, String> {
+        let mut vec = Vec::with_capacity(pubkeys.len());
+        for pubkey in pubkeys {
+            vec.push(ensure_some(
+                Pubkey::try_from(pubkey.as_slice()).ok(),
+                "failed to parse Pubkey",
+            )?)
+        }
+        Ok(vec)
+    }
+}
