@@ -4498,7 +4498,6 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "yellowstone-grpc-client",
- "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",
 ]
 
@@ -4520,7 +4519,6 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
- "solana-account-decoder",
  "solana-geyser-plugin-interface",
  "solana-logger",
  "solana-sdk",
