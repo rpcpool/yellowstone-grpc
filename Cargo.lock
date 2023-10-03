@@ -4493,7 +4493,6 @@ dependencies = [
  "hex",
  "log",
  "maplit",
- "serde_json",
  "solana-sdk",
  "tokio",
  "yellowstone-grpc-client",
