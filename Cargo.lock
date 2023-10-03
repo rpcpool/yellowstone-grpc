@@ -4498,6 +4498,7 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "yellowstone-grpc-client",
+ "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",
 ]
 
