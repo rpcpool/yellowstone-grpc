@@ -388,7 +388,7 @@ impl From<SubscribeUpdateTransaction> for TransactionPretty {
             slot,
             signature: Signature::try_from(tx.signature.as_slice()).expect("valid signature"),
             is_vote: tx.is_vote,
-            tx: yellowstone_grpc_geyser::proto::convert_from::create_tx_with_meta(tx)
+            tx: yellowstone_grpc_proto::convert_from::create_tx_with_meta(tx)
                 .expect("valid tx with meta")
                 .encode(UiTransactionEncoding::Base64, Some(u8::MAX), true)
                 .expect("failed to encode"),

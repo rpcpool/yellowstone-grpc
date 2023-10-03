@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.9.0+solana.1.16.14"
+version = "1.10.0+solana.1.16.14"
 authors = ["Triton One"]
 edition = "2021"
 publish = false
@@ -25,5 +25,4 @@ solana-sdk = "=1.16.14"
 solana-transaction-status = "=1.16.14"
 tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time"] }
 yellowstone-grpc-client = { path = "../../yellowstone-grpc-client" }
-yellowstone-grpc-geyser = { path = "../../yellowstone-grpc-geyser" }
 yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto" }
