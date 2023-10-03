@@ -3,18 +3,6 @@ use {
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
         prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
-        proto::{
-            self,
-            geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
-            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-        },
         version::VERSION,
     },
     log::{error, info},
@@ -51,6 +39,20 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
+    yellowstone_grpc_proto::{
+        convert_to,
+        prelude::{
+            geyser_server::{Geyser, GeyserServer},
+            subscribe_update::UpdateOneof,
+            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -155,8 +157,8 @@ impl MessageTransactionInfo {
         SubscribeUpdateTransactionInfo {
             signature: self.signature.as_ref().into(),
             is_vote: self.is_vote,
-            transaction: Some(proto::convert::create_transaction(&self.transaction)),
-            meta: Some(proto::convert::create_transaction_meta(&self.meta)),
+            transaction: Some(convert_to::create_transaction(&self.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&self.meta)),
             index: self.index as u64,
         }
     }
@@ -412,11 +414,9 @@ impl<'a> MessageRef<'a> {
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
-                block_time: message.block_time.map(proto::convert::create_timestamp),
-                block_height: message
-                    .block_height
-                    .map(proto::convert::create_block_height),
+                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(convert_to::create_timestamp),
+                block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
@@ -441,11 +441,9 @@ impl<'a> MessageRef<'a> {
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
-                block_time: message.block_time.map(proto::convert::create_timestamp),
-                block_height: message
-                    .block_height
-                    .map(proto::convert::create_block_height),
+                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(convert_to::create_timestamp),
+                block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,

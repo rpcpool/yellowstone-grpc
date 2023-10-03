@@ -9,15 +9,6 @@ use {
             Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
             MessageSlot, MessageTransaction,
         },
-        proto::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            CommitmentLevel, SubscribeRequest, SubscribeRequestAccountsDataSlice,
-            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate,
-        },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
@@ -26,6 +17,15 @@ use {
         collections::{HashMap, HashSet},
         iter::FromIterator,
         str::FromStr,
+    },
+    yellowstone_grpc_proto::prelude::{
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        CommitmentLevel, SubscribeRequest, SubscribeRequestAccountsDataSlice,
+        SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate,
     },
 };
 

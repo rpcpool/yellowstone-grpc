@@ -4466,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.10.0+solana.1.16.14"
+version = "1.11.0+solana.1.16.14"
 dependencies = [
  "bytes",
  "futures",
@@ -4480,7 +4480,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.9.0+solana.1.16.14"
+version = "1.10.0+solana.1.16.14"
 dependencies = [
  "anyhow",
  "backoff",
@@ -4501,7 +4501,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.8.0+solana.1.16.14"
+version = "1.9.0+solana.1.16.14"
 dependencies = [
  "anyhow",
  "base64 0.21.2",
@@ -4560,11 +4560,15 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.9.0+solana.1.16.14"
+version = "1.10.0+solana.1.16.14"
 dependencies = [
  "anyhow",
+ "bincode",
  "prost",
  "protobuf-src",
+ "solana-account-decoder",
+ "solana-sdk",
+ "solana-transaction-status",
  "tonic",
  "tonic-build",
 ]

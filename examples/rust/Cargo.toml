@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.9.0+solana.1.16.14"
+version = "1.10.0+solana.1.16.14"
 authors = ["Triton One"]
 edition = "2021"
 publish = false

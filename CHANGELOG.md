@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190)).
+
 ### Fixes
 
 ### Breaking
