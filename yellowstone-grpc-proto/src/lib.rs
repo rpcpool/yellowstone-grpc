@@ -498,7 +498,7 @@ pub mod convert_from {
             lamports: reward.lamports,
             post_balance: reward.post_balance,
             reward_type: match ensure_some(
-                proto::RewardType::from_i32(reward.reward_type),
+                proto::RewardType::try_from(reward.reward_type).ok(),
                 "failed to parse reward_type",
             )? {
                 proto::RewardType::Unspecified => None,

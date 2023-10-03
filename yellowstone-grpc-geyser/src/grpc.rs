@@ -559,7 +559,7 @@ impl BlockMetaStorage {
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::from_i32(commitment).ok_or_else(|| {
+        CommitmentLevel::try_from(commitment).map_err(|_error| {
             let msg = format!("failed to create CommitmentLevel from {commitment:?}");
             Status::unknown(msg)
         })
