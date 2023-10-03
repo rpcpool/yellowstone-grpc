@@ -1,6 +1,6 @@
 pub use yellowstone_grpc_proto::prelude::*;
 
-pub mod convert {
+pub mod convert_to {
     use {
         solana_sdk::{
             clock::UnixTimestamp,
