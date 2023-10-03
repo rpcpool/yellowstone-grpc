@@ -4495,7 +4495,6 @@ dependencies = [
  "maplit",
  "serde_json",
  "solana-sdk",
- "solana-transaction-status",
  "tokio",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
