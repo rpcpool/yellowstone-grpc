@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
+
 ### Fixes
 
 ### Breaking
