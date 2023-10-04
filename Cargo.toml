@@ -3,7 +3,7 @@ members = [
     "examples/rust", # 1.10.0+solana.1.16.14
     "yellowstone-grpc-client", # 1.11.0+solana.1.16.14
     "yellowstone-grpc-geyser", # 1.9.0+solana.1.16.14
-    "yellowstone-grpc-kafka", # 1.0.0+solana.1.16.14
+    "yellowstone-grpc-kafka", # 1.0.0-rc.0+solana.1.16.14
     "yellowstone-grpc-proto", # 1.10.0+solana.1.16.14
 ]
 

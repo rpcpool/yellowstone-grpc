@@ -60,7 +60,7 @@ struct Args {
 
 #[derive(Debug, Clone, Subcommand)]
 enum ArgsAction {
-    // Receive data from Kafka, deduplicate and send them back to Kafka
+    /// Receive data from Kafka, deduplicate and send them back to Kafka
     Dedup,
     /// Receive data from gRPC and send them to the Kafka
     #[command(name = "grpc2kafka")]

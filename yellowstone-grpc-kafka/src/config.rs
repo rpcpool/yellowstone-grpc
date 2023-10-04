@@ -1,7 +1,10 @@
 use {
     crate::dedup::{KafkaDedup, KafkaDedupMemory},
     anyhow::Context,
-    serde::{Deserialize, Serialize},
+    serde::{
+        de::{self, Deserializer},
+        Deserialize, Serialize,
+    },
     std::{
         collections::{HashMap, HashSet},
         net::SocketAddr,
@@ -47,6 +50,10 @@ pub struct ConfigDedup {
     pub kafka: HashMap<String, String>,
     pub kafka_input: String,
     pub kafka_output: String,
+    #[serde(
+        default = "ConfigGrpc2Kafka::default_kafka_queue_size",
+        deserialize_with = "ConfigGrpc2Kafka::deserialize_usize_str"
+    )]
     pub kafka_queue_size: usize,
     pub backend: ConfigDedupBackend,
 }
@@ -73,7 +80,37 @@ pub struct ConfigGrpc2Kafka {
     #[serde(default)]
     pub kafka: HashMap<String, String>,
     pub kafka_topic: String,
+    #[serde(
+        default = "ConfigGrpc2Kafka::default_kafka_queue_size",
+        deserialize_with = "ConfigGrpc2Kafka::deserialize_usize_str"
+    )]
     pub kafka_queue_size: usize,
+}
+
+impl ConfigGrpc2Kafka {
+    const fn default_kafka_queue_size() -> usize {
+        10_000
+    }
+
+    fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Integer(usize),
+            String(String),
+        }
+
+        match Value::deserialize(deserializer)? {
+            Value::Integer(value) => Ok(value),
+            Value::String(value) => value
+                .replace('_', "")
+                .parse::<usize>()
+                .map_err(de::Error::custom),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

@@ -9,7 +9,7 @@
         },
         "kafka_input": "grpc1",
         "kafka_output": "grpc2",
-        "kafka_queue_size": 10000,
+        "kafka_queue_size": "10_000",
         "backend": {
             "type": "memory"
         }
@@ -30,7 +30,7 @@
         },
         "kafka": {},
         "kafka_topic": "grpc1",
-        "kafka_queue_size": 10000
+        "kafka_queue_size": "10_000"
     },
     "kafka2grpc": {
         "kafka": {
