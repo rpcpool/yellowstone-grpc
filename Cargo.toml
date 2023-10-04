@@ -13,6 +13,7 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.14-geyser-block-v3" }
 solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.14-geyser-block-v3" }
 solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.14-geyser-block-v3" }
 solana-program = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.14-geyser-block-v3" }

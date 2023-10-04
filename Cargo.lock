@@ -3151,8 +3151,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0ada16ccd5ca6884ae28b716211c4f09d22225a9ebde14eccd4f605cc321e42"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
@@ -3175,8 +3174,7 @@ dependencies = [
 [[package]]
 name = "solana-address-lookup-table-program"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "248b435722d18100b70bb8f09fd38b8a8c46031a0de86f6b31768f64cf4092c5"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -3196,8 +3194,7 @@ dependencies = [
 [[package]]
 name = "solana-config-program"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0622d8798d060c84883572483f214b0d5c1640450e4322483cfe2e72823a6d7"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "bincode",
  "chrono",
@@ -3210,8 +3207,7 @@ dependencies = [
 [[package]]
 name = "solana-frozen-abi"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e74d294241df12a73a229e38a819e810d54234da494c3d43f8a1a828631047d"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "ahash 0.8.3",
  "blake3",
@@ -3243,8 +3239,7 @@ dependencies = [
 [[package]]
 name = "solana-frozen-abi-macro"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dabde7fbd88a68eb083ae9d6d5f6855b7ba1bfc45d200c786b1b448ac49da5f"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3255,8 +3250,7 @@ dependencies = [
 [[package]]
 name = "solana-geyser-plugin-interface"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "908cad0de1330b6b05d6cb6a9f5004df22a9fe46529d6bf6839835ba345ef966"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3267,8 +3261,7 @@ dependencies = [
 [[package]]
 name = "solana-logger"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24dc0037a389d782c8de3c6f509b74efa1d60523ef9e5561cefe41f1a354fee0"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "env_logger 0.9.3",
  "lazy_static",
@@ -3278,8 +3271,7 @@ dependencies = [
 [[package]]
 name = "solana-measure"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19563c27f12801e0e65b42d0f216db1d910dfeaad88d8f1335dd6369697eda60"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3288,8 +3280,7 @@ dependencies = [
 [[package]]
 name = "solana-metrics"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f74c557e821c7ff48c9b4ef4ab3a296918d7fb745e3f2e820ebdb38e8e3555b"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "crossbeam-channel",
  "gethostname",
@@ -3302,8 +3293,7 @@ dependencies = [
 [[package]]
 name = "solana-program"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a2faeb9c89b354b547a229e3b39fa8fd6d11c78362ba8580f0c4721739725b6"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -3357,8 +3347,7 @@ dependencies = [
 [[package]]
 name = "solana-program-runtime"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f65907a405764cda63be89335ffd2138ade18f065e5cae09d20adab7fb09502"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "base64 0.21.4",
  "bincode",
@@ -3385,8 +3374,7 @@ dependencies = [
 [[package]]
 name = "solana-sdk"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57f4046d0d487e3d79be809ff29c63c1484793956e6ccbc5d3307b0aafbf989d"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "assert_matches",
  "base64 0.21.4",
@@ -3438,8 +3426,7 @@ dependencies = [
 [[package]]
 name = "solana-sdk-macro"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "760fdfd4b7edb02fd9173a6dcec899ffae06ac21b66b65f8c7c5f3d17b12fa64"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "bs58",
  "proc-macro2",
@@ -3451,8 +3438,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status"
 version = "1.16.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bdf7379a72c051d7879f1c36cfdab5fed0653a2a613718bc5d343e44e603401"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.14-geyser-block-v3#aff14b9b64bb33c63881a36a440eeb31cb21c192"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
