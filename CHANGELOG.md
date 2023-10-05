@@ -12,11 +12,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
-
 ### Fixes
 
 ### Breaking
+
+## 2023-10-05
+
+- yellowstone-grpc-client-1.11.0+solana.1.16.15
+- yellowstone-grpc-geyser-1.9.0+solana.1.16.15
+- yellowstone-grpc-kafka-1.0.0-rc.1+solana.1.16.15
+- yellowstone-grpc-proto-1.10.0+solana.1.16.15
+
+### Features
+
+- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
 
 ## 2023-10-03
 
