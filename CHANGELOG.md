@@ -26,6 +26,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
+- solana: update to 1.16.15 ([#193](https://github.com/rpcpool/yellowstone-grpc/pull/193)).
 
 ## 2023-10-03
 
