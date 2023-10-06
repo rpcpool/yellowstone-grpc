@@ -12,6 +12,7 @@ use {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub libpath: String,
+    pub libname: Option<String>,
     #[serde(default)]
     pub log: ConfigLog,
     pub grpc: ConfigGrpc,

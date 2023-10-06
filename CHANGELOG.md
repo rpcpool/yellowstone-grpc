@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-10-06
+
+- yellowstone-grpc-geyser-1.9.1+solana.1.16.15
+
+### Features
+
+- geyser: add optional `libname` to config ([#194](https://github.com/rpcpool/yellowstone-grpc/pull/194)).
+
 ## 2023-10-05
 
 - yellowstone-grpc-client-1.11.0+solana.1.16.15
