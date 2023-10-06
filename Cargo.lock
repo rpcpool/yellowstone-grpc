@@ -4639,7 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-kafka"
-version = "1.0.0-rc.1+solana.1.16.15"
+version = "1.0.0-rc.2+solana.1.16.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4663,6 +4663,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vergen",
+ "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
 

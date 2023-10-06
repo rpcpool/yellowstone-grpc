@@ -2,9 +2,7 @@ use {
     anyhow::Context,
     clap::{Parser, Subcommand},
     futures::{
-        channel::mpsc,
         future::{BoxFuture, FutureExt},
-        sink::SinkExt,
         stream::StreamExt,
     },
     rdkafka::{
@@ -14,16 +12,10 @@ use {
         producer::{FutureProducer, FutureRecord},
     },
     sha2::{Digest, Sha256},
-    std::{net::SocketAddr, sync::Arc},
+    std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::{
         signal::unix::{signal, SignalKind},
         task::JoinSet,
-    },
-    tonic::{
-        codec::Streaming,
-        metadata::AsciiMetadataValue,
-        transport::{Channel, ClientTlsConfig},
-        Request, Response,
     },
     tracing::{debug, trace, warn},
     tracing_subscriber::{
@@ -31,6 +23,7 @@ use {
         layer::SubscriberExt,
         util::SubscriberInitExt,
     },
+    yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_kafka::{
         config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         dedup::KafkaDedup,
@@ -38,7 +31,7 @@ use {
         prom,
     },
     yellowstone_grpc_proto::{
-        prelude::{geyser_client::GeyserClient, subscribe_update::UpdateOneof, SubscribeUpdate},
+        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
         prost::Message as _,
     },
 };
@@ -218,28 +211,17 @@ impl ArgsAction {
             .create()
             .context("failed to create kafka producer")?;
 
-        // Create gRPC client
-        let mut endpoint = Channel::from_shared(config.endpoint)?;
-        if endpoint.uri().scheme_str() == Some("https") {
-            endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
-        }
-        let channel = endpoint.connect().await?;
-        let x_token: Option<AsciiMetadataValue> = match config.x_token {
-            Some(x_token) => Some(x_token.try_into()?),
-            None => None,
-        };
-        let mut client = GeyserClient::with_interceptor(channel, move |mut req: Request<()>| {
-            if let Some(x_token) = x_token.clone() {
-                req.metadata_mut().insert("x-token", x_token);
-            }
-            Ok(req)
-        });
-
-        // Subscribe on Geyser events
-        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
-        subscribe_tx.send(config.request.to_proto()).await?;
-        let response: Response<Streaming<SubscribeUpdate>> = client.subscribe(subscribe_rx).await?;
-        let mut geyser = response.into_inner().boxed();
+        // Create gRPC client & subscribe
+        let mut client = GeyserGrpcClient::connect_with_timeout(
+            config.endpoint,
+            config.x_token,
+            None,
+            Some(Duration::from_secs(10)),
+            Some(Duration::from_secs(5)),
+            false,
+        )
+        .await?;
+        let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
