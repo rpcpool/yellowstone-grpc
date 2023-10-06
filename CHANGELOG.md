@@ -12,7 +12,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Features
+
+- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+
 ### Fixes
+
+## 2023-10-06
+
+- yellowstone-grpc-kafka-1.0.0-rc.2+solana.1.16.15
+
+### Fixes
+
+- kafka: fix message size for gRPC client ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
 
 ### Breaking
 

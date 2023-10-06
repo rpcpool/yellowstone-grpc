@@ -191,19 +191,26 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         commitment: Option<CommitmentLevel>,
         accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
+        self.subscribe_once2(SubscribeRequest {
+            slots,
+            accounts,
+            transactions,
+            entry,
+            blocks,
+            blocks_meta,
+            commitment: commitment.map(|value| value as i32),
+            accounts_data_slice,
+        })
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn subscribe_once2(
+        &mut self,
+        request: SubscribeRequest,
+    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         let (mut subscribe_tx, response) = self.subscribe().await?;
-        subscribe_tx
-            .send(SubscribeRequest {
-                slots,
-                accounts,
-                transactions,
-                entry,
-                blocks,
-                blocks_meta,
-                commitment: commitment.map(|value| value as i32),
-                accounts_data_slice,
-            })
-            .await?;
+        subscribe_tx.send(request).await?;
         Ok(response)
     }
 

@@ -138,6 +138,8 @@ docker-compose -f ./yellowstone-grpc-kafka/docker-kafka.yml up
 kafka_2.13-3.5.0/bin/kafka-topics.sh --bootstrap-server localhost:29092 --create --topic grpc1
 # send messages from gRPC to Kafka
 cargo run --bin grpc-kafka -- --config yellowstone-grpc-kafka/config.json --prometheus 127.0.0.1:8873 grpc2kafka
+# read messages from Kafka
+kafka_2.13-3.5.0/bin/kafka-console-consumer.sh --bootstrap-server localhost:29092 --topic grpc1
 ```
 
 ### License
