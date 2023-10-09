@@ -37,7 +37,7 @@ lazy_static::lazy_static! {
     ).unwrap();
 }
 
-pub fn run_server(address: Option<SocketAddr>) -> anyhow::Result<()> {
+pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
         macro_rules! register {
@@ -66,24 +66,22 @@ pub fn run_server(address: Option<SocketAddr>) -> anyhow::Result<()> {
             .inc();
     });
 
-    if let Some(address) = address {
-        let make_service = make_service_fn(move |_: &AddrStream| async move {
-            Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| async move {
-                let response = match req.uri().path() {
-                    "/metrics" => metrics_handler(),
-                    _ => not_found_handler(),
-                };
-                Ok::<_, hyper::Error>(response)
-            }))
-        });
-        let server = Server::try_bind(&address)?.serve(make_service);
-        info!("prometheus server started: {address:?}");
-        tokio::spawn(async move {
-            if let Err(error) = server.await {
-                error!("prometheus server failed: {error:?}");
-            }
-        });
-    }
+    let make_service = make_service_fn(move |_: &AddrStream| async move {
+        Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| async move {
+            let response = match req.uri().path() {
+                "/metrics" => metrics_handler(),
+                _ => not_found_handler(),
+            };
+            Ok::<_, hyper::Error>(response)
+        }))
+    });
+    let server = Server::try_bind(&address)?.serve(make_service);
+    info!("prometheus server started: {address:?}");
+    tokio::spawn(async move {
+        if let Err(error) = server.await {
+            error!("prometheus server failed: {error:?}");
+        }
+    });
 
     Ok(())
 }

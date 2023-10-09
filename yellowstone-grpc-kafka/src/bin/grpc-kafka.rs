@@ -38,7 +38,7 @@ struct Args {
     #[clap(short, long)]
     config: String,
 
-    /// Prometheus listen address
+    /// [DEPRECATED: use config] Prometheus listen address
     #[clap(long)]
     prometheus: Option<SocketAddr>,
 
@@ -358,7 +358,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(&args.config).await?;
 
     // Run prometheus server
-    prom::run_server(args.prometheus)?;
+    if let Some(address) = config.prometheus.or(args.prometheus) {
+        prom::run_server(address)?;
+    }
 
     // Create kafka config
     let mut kafka_config = ClientConfig::new();
