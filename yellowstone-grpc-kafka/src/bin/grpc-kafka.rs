@@ -5,12 +5,7 @@ use {
         future::{BoxFuture, FutureExt},
         stream::StreamExt,
     },
-    rdkafka::{
-        config::ClientConfig,
-        consumer::{Consumer, StreamConsumer},
-        message::Message,
-        producer::{FutureProducer, FutureRecord},
-    },
+    rdkafka::{config::ClientConfig, consumer::Consumer, message::Message, producer::FutureRecord},
     sha2::{Digest, Sha256},
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::{
@@ -28,7 +23,7 @@ use {
         config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         dedup::KafkaDedup,
         grpc::GrpcService,
-        prom,
+        prom::{self, PrometheusKafkaContext},
     },
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -102,12 +97,12 @@ impl ArgsAction {
         }
 
         // input
-        let consumer: StreamConsumer = kafka_config.create()?;
+        let consumer = PrometheusKafkaContext::create_stream_consumer(&kafka_config)
+            .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_input])?;
 
         // output
-        let kafka: FutureProducer = kafka_config
-            .create()
+        let kafka = PrometheusKafkaContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         // dedup
@@ -207,8 +202,7 @@ impl ArgsAction {
         }
 
         // Connect to kafka
-        let kafka: FutureProducer = kafka_config
-            .create()
+        let kafka = PrometheusKafkaContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         // Create gRPC client & subscribe
@@ -311,7 +305,8 @@ impl ArgsAction {
 
         let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
-        let consumer: StreamConsumer = kafka_config.create()?;
+        let consumer = PrometheusKafkaContext::create_stream_consumer(&kafka_config)
+            .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_topic])?;
 
         loop {
