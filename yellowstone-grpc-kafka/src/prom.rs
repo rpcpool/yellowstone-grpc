@@ -23,17 +23,17 @@ lazy_static::lazy_static! {
         &["broker", "metric"]
     ).unwrap();
 
-    static ref KAFKA_SENT_TOTAL: IntCounterVec = IntCounterVec::new(
-        Opts::new("kafka_sent_total", "Total number of uploaded messages by type"),
-        &["kind"]
+    static ref KAFKA_DEDUP_TOTAL: IntCounter = IntCounter::new(
+        "kafka_dedup_total", "Total number of deduplicated messages"
     ).unwrap();
 
     static ref KAFKA_RECV_TOTAL: IntCounter = IntCounter::new(
         "kafka_recv_total", "Total number of received messages"
     ).unwrap();
 
-    static ref KAFKA_DEDUP_TOTAL: IntCounter = IntCounter::new(
-        "kafka_dedup_total", "Total number of deduplicated messages"
+    static ref KAFKA_SENT_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("kafka_sent_total", "Total number of uploaded messages by type"),
+        &["kind"]
     ).unwrap();
 }
 
@@ -49,8 +49,9 @@ pub fn run_server(address: Option<SocketAddr>) -> anyhow::Result<()> {
         }
         register!(VERSION);
         register!(KAFKA_STATS);
-        register!(KAFKA_SENT_TOTAL);
+        register!(KAFKA_DEDUP_TOTAL);
         register!(KAFKA_RECV_TOTAL);
+        register!(KAFKA_SENT_TOTAL);
 
         VERSION
             .with_label_values(&[
