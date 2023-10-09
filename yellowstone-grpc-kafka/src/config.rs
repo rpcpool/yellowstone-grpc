@@ -28,6 +28,7 @@ pub trait GrpcRequestToProto<T> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub prometheus: Option<SocketAddr>,
     pub kafka: HashMap<String, String>,
     pub dedup: Option<ConfigDedup>,
     pub grpc2kafka: Option<ConfigGrpc2Kafka>,

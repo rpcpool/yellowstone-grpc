@@ -1,6 +1,8 @@
 {
+    "prometheus": "127.0.0.1:8873",
     "kafka": {
-        "bootstrap.servers": "localhost:29092"
+        "bootstrap.servers": "localhost:29092",
+        "statistics.interval.ms": "1000"
     },
     "dedup": {
         "kafka": {

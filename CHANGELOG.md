@@ -10,15 +10,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-### Features
+### Fixes
 
 ### Features
 
 - client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+
+### Breaking
+
+## 2023-10-09
+
+- yellowstone-grpc-kafka-1.0.0-rc.3+solana.1.16.15
+
+### Features
+
 - kafka: add metrics (stats, sent, recv) ([#196](https://github.com/rpcpool/yellowstone-grpc/pull/196)).
 - kafka: support YAML config ([#197](https://github.com/rpcpool/yellowstone-grpc/pull/197)).
-
-### Fixes
+- kafka: support prometheus address in config ([#198](https://github.com/rpcpool/yellowstone-grpc/pull/198)).
 
 ## 2023-10-06
 
@@ -27,8 +35,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - kafka: fix message size for gRPC client ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
-
-### Breaking
 
 ## 2023-10-05
 
