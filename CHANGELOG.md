@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+- kafka: add metrics (stats, sent, recv) ([#196](https://github.com/rpcpool/yellowstone-grpc/pull/196)).
 
 ### Fixes
 
