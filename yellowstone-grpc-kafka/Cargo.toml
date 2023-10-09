@@ -14,6 +14,7 @@ clap = { version = "4.3.0", features = ["cargo", "derive"] }
 const-hex = "1.6.2"
 futures = "0.3.24"
 hyper = { version = "0.14.27", features = ["server"] }
+json5 = "0.4.1"
 lazy_static = "1.4.0"
 prometheus = "0.13.2"
 rdkafka = { version = "0.33.2", features = ["ssl", "sasl"] }

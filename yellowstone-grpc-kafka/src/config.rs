@@ -40,7 +40,7 @@ impl Config {
             .await
             .context("failed to read config from file")?;
 
-        serde_json::from_str(&text).context("failed to parse config from file")
+        json5::from_str(&text).context("failed to parse config from file")
     }
 }
 
