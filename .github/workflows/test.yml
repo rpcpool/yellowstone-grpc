@@ -5,8 +5,11 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  workflow_dispatch:
   pull_request:
+  push:
+    branches:
+      - 'master'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,7 +39,7 @@ jobs:
           toolchain: ${{ env.RUST_STABLE }}
           override: true
           profile: minimal
-          components: rustfmt, clippy
+          components: clippy, rustfmt
 
       - uses: actions/cache@v3
         with:
@@ -60,16 +63,21 @@ jobs:
           cargo tree --frozen
 
       - name: cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --all-targets --tests #-- --deny=warnings
+        run: cargo clippy --workspace --all-targets --tests #-- --deny=warnings
+
+      - name: check features in `client`
+        run: cargo check -p yellowstone-grpc-client --all-targets --tests
+      - name: check features in `client-simple`
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets --tests
+      - name: check features in `geyser`
+        run: cargo check -p yellowstone-grpc-geyser --all-targets --tests
+      - name: check features in `kafka`
+        run: cargo check -p yellowstone-grpc-kafka --all-targets --tests
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets --tests
 
       - name: Build
         run: ./ci/cargo-build-test.sh
