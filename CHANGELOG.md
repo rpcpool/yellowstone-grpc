@@ -18,7 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2023-10-10
 
-- yellowstone-grpc-client-1.11.0+solana.1.16.16
+- yellowstone-grpc-client-1.11.1+solana.1.16.16
 - yellowstone-grpc-geyser-1.9.1+solana.1.16.16
 - yellowstone-grpc-kafka-1.0.0-rc.3+solana.1.16.16
 - yellowstone-grpc-proto-1.10.0+solana.1.16.16

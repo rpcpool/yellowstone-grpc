@@ -4597,7 +4597,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.11.0+solana.1.16.16"
+version = "1.11.1+solana.1.16.16"
 dependencies = [
  "bytes",
  "futures",
