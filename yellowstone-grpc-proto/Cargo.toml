@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "1.10.0+solana.1.16.15"
+version = "1.10.0+solana.1.16.16"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -12,9 +12,9 @@ keywords = ["solana"]
 [dependencies]
 bincode = "1.3.3"
 prost = "0.12.1"
-solana-account-decoder = "=1.16.15"
-solana-sdk = "=1.16.15"
-solana-transaction-status = "=1.16.15"
+solana-account-decoder = "=1.16.16"
+solana-sdk = "=1.16.16"
+solana-transaction-status = "=1.16.16"
 tonic = "0.10.2"
 
 [build-dependencies]

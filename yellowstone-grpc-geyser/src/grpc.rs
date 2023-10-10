@@ -7,7 +7,7 @@ use {
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaEntryInfo, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
         SlotStatus,
     },
     solana_sdk::{
@@ -279,10 +279,11 @@ pub struct MessageBlockMeta {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
+    pub entries_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV2<'a>) -> Self {
+impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
@@ -292,6 +293,7 @@ impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
+            entries_count: blockinfo.entry_count,
         }
     }
 }
@@ -632,8 +634,7 @@ struct SlotMessages {
     block_meta: Option<MessageBlockMeta>,
     transactions: Vec<MessageTransactionInfo>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
-    entries_parent_updated: bool,
-    entries_received: bool,
+    entries: Vec<MessageEntry>,
     sealed: bool,
     confirmed_at: Option<usize>,
     finalized_at: Option<usize>,
@@ -643,17 +644,16 @@ impl SlotMessages {
     pub fn try_seal(&mut self) -> Option<Message> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
-                let transactions_count = block_meta.executed_transaction_count as usize;
-                if transactions_count == self.transactions.len() && self.entries_received {
+                if self.transactions.len() == block_meta.executed_transaction_count as usize
+                    && self.entries.len() == block_meta.entries_count as usize
+                {
                     let transactions = std::mem::take(&mut self.transactions);
+                    let entries = std::mem::take(&mut self.entries);
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
-                    let mut entries = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
-                        match item {
-                            Message::Account(account) => accounts.push(account.account.clone()),
-                            Message::Entry(entry) => entries.push(entry.clone()),
-                            _ => {}
+                        if let Message::Account(account) = item {
+                            accounts.push(account.account.clone());
                         }
                     }
 
@@ -810,15 +810,16 @@ impl GrpcService {
                                                         let msg_txn_count = slot_messages.transactions.len();
                                                         if block_txn_count != msg_txn_count {
                                                             reasons.push("InvalidTxnCount");
-                                                            error!("failed reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
-                                                    }
+                                                            error!("failed to reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
+                                                        }
+                                                        let block_entries_count = block_meta.entries_count as usize;
+                                                        let msg_entries_count = slot_messages.entries.len();
+                                                        if block_entries_count != msg_entries_count {
+                                                            reasons.push("InvalidEntriesCount");
+                                                            error!("failed to reconstruct #{slot} -- entries count: {block_entries_count} vs {msg_entries_count}");
+                                                        }
                                                     } else {
                                                         reasons.push("NoBlockMeta");
-                                                    }
-                                                    if !slot_messages.entries_received {
-                                                        reasons.push("MissedEntries");
-                                                        let msg_entries_count = slot_messages.messages.iter().filter(|x| matches!(x, Some(Message::Entry(_)))).count();
-                                                        error!("failed reconstruct #{slot} -- entries: {msg_entries_count}");
                                                     }
                                                     let reason = reasons.join(",");
 
@@ -895,20 +896,9 @@ impl GrpcService {
                                 slot_messages.accounts_dedup.insert(msg.account.pubkey, (write_version, msg_index));
                             }
                         }
-                        // Entries can come after block meta or last transaction
-                        Message::Entry(msg) if !slot_messages.entries_parent_updated => {
-                            slot_messages.entries_parent_updated = true;
-
-                            let mut iter = messages.iter_mut().peekable();
-                            while let Some((_slot, slot_messages)) = iter.next() {
-                                if let Some((slot_peek, _slot_messages)) = iter.peek() {
-                                    if **slot_peek == msg.slot {
-                                        slot_messages.entries_received = true;
-                                        sealed_block_msg = slot_messages.try_seal();
-                                        break;
-                                    }
-                                }
-                            }
+                        Message::Entry(msg) => {
+                            slot_messages.entries.push(msg.clone());
+                            sealed_block_msg = slot_messages.try_seal();
                         }
                         _ => {}
                     }

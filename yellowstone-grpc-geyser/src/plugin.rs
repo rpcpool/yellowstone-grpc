@@ -203,10 +203,13 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaBlockInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaBlockInfoVersions::V0_0_2(info) => info,
+                ReplicaBlockInfoVersions::V0_0_2(_info) => {
+                    unreachable!("ReplicaBlockInfoVersions::V0_0_2 is not supported")
+                }
+                ReplicaBlockInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::BlockMeta((blockinfo).into());
+            let message = Message::BlockMeta(blockinfo.into());
             inner.send_message(message);
 
             Ok(())

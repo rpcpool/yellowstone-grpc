@@ -8,6 +8,8 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 
 ### Validator
 
+Current plugin version (`+solana.1.16.x`) use validator with backported `ReplicaBlockInfoV3` to Geyser interface — https://github.com/solana-labs/solana/pull/33359. As result it's not compatible with original validator from Solana Labs and would not work. You need to compile validator from the source code and can find patched releases in `Triton One` Solana fork: https://github.com/rpcpool/solana-public/tree/v1.16.16-geyser-block-v3.
+
 ```bash
 $ solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 ```

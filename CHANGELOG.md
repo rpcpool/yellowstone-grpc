@@ -14,9 +14,22 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
-
 ### Breaking
+
+## 2023-10-10
+
+- yellowstone-grpc-client-1.11.1+solana.1.16.16
+- yellowstone-grpc-geyser-1.9.1+solana.1.16.16
+- yellowstone-grpc-kafka-1.0.0-rc.3+solana.1.16.16
+- yellowstone-grpc-proto-1.10.0+solana.1.16.16
+
+### Fixes
+
+- geyser: use `entry_count` from `ReplicaBlockInfoV3` ([#186](https://github.com/rpcpool/yellowstone-grpc/pull/186)).
+
+### Features
+
+- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
 
 ## 2023-10-09
 
