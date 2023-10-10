@@ -42,7 +42,6 @@ jobs:
           toolchain: ${{ env.RUST_STABLE }}
           override: true
           profile: minimal
-          components: rustfmt
 
       - uses: actions/cache@v3
         with:
