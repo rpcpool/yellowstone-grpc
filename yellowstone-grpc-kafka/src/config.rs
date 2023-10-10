@@ -28,6 +28,7 @@ pub trait GrpcRequestToProto<T> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub prometheus: Option<SocketAddr>,
     pub kafka: HashMap<String, String>,
     pub dedup: Option<ConfigDedup>,
     pub grpc2kafka: Option<ConfigGrpc2Kafka>,
@@ -35,12 +36,18 @@ pub struct Config {
 }
 
 impl Config {
-    pub async fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub async fn load(path: impl AsRef<Path> + Copy) -> anyhow::Result<Self> {
         let text = fs::read_to_string(path)
             .await
             .context("failed to read config from file")?;
 
-        serde_json::from_str(&text).context("failed to parse config from file")
+        match path.as_ref().extension().and_then(|e| e.to_str()) {
+            Some("yaml") | Some("yml") => {
+                serde_yaml::from_str(&text).context("failed to parse config from file")
+            }
+            Some("json") => serde_yaml::from_str(&text).context("failed to parse config from file"),
+            value => anyhow::bail!("unknown config extension: {value:?}"),
+        }
     }
 }
 

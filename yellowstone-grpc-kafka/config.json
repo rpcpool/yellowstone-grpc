@@ -1,6 +1,8 @@
 {
+    "prometheus": "127.0.0.1:8873",
     "kafka": {
-        "bootstrap.servers": "localhost:29092"
+        "bootstrap.servers": "localhost:29092",
+        "statistics.interval.ms": "1000"
     },
     "dedup": {
         "kafka": {
@@ -16,7 +18,7 @@
     },
     "grpc2kafka": {
         "endpoint": "http://127.0.0.1:10000",
-        "x_token": "",
+        "x_token": null,
         "request": {
             "slots": ["client"],
             "blocks": {
