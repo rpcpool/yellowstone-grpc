@@ -1,21 +1,13 @@
 [workspace]
 members = [
-    "examples/rust", # 1.10.0+solana.1.16.16
-    "yellowstone-grpc-client", # 1.11.1+solana.1.16.16
-    "yellowstone-grpc-geyser", # 1.10.0+solana.1.16.16
-    "yellowstone-grpc-kafka", # 1.0.0-rc.3+solana.1.16.16
-    "yellowstone-grpc-proto", # 1.10.0+solana.1.16.16
+    "examples/rust", # 1.10.0+solana.1.17.1
+    "yellowstone-grpc-client", # 1.11.1+solana.1.17.1
+    "yellowstone-grpc-geyser", # 1.10.0+solana.1.17.1
+    "yellowstone-grpc-kafka", # 1.0.0-rc.3+solana.1.17.1
+    "yellowstone-grpc-proto", # 1.10.0+solana.1.17.1
 ]
 
 [profile.release]
 debug = true
 lto = true
 codegen-units = 1
-
-[patch.crates-io]
-solana-account-decoder = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
-solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
-solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
-solana-program = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
-solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.16-geyser-block-v3" }
