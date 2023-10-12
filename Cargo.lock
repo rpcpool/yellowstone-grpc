@@ -4634,7 +4634,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.9.1+solana.1.16.16"
+version = "1.10.0+solana.1.16.16"
 dependencies = [
  "anyhow",
  "base64 0.21.4",
@@ -4642,6 +4642,7 @@ dependencies = [
  "bs58",
  "cargo-lock",
  "clap",
+ "crossbeam-channel",
  "futures",
  "git-version",
  "hyper",

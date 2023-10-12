@@ -64,6 +64,19 @@ pub struct ConfigGrpc {
     pub address: SocketAddr,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
+    /// Capacity of the channel used for accounts from snapshot,
+    /// on reaching the limit Sender block validator startup.
+    #[serde(
+        default = "ConfigGrpc::snapshot_plugin_channel_capacity_default",
+        deserialize_with = "deserialize_usize_str_maybe"
+    )]
+    pub snapshot_plugin_channel_capacity: Option<usize>,
+    /// Capacity of the client channel, applicable only with snapshot
+    #[serde(
+        default = "ConfigGrpc::snapshot_client_channel_capacity_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub snapshot_client_channel_capacity: usize,
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
@@ -85,6 +98,14 @@ pub struct ConfigGrpc {
 }
 
 impl ConfigGrpc {
+    const fn snapshot_plugin_channel_capacity_default() -> Option<usize> {
+        None
+    }
+
+    const fn snapshot_client_channel_capacity_default() -> usize {
+        50_000_000
+    }
+
     const fn channel_capacity_default() -> usize {
         250_000
     }
@@ -310,6 +331,28 @@ where
             .replace('_', "")
             .parse::<usize>()
             .map_err(de::Error::custom),
+    }
+}
+
+fn deserialize_usize_str_maybe<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Integer(usize),
+        String(String),
+    }
+
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Integer(value)) => Ok(Some(value)),
+        Some(Value::String(value)) => value
+            .replace('_', "")
+            .parse::<usize>()
+            .map(Some)
+            .map_err(de::Error::custom),
+        None => Ok(None),
     }
 }
 
