@@ -909,7 +909,7 @@ mod tests {
         let account_key_a = keypair_a.pubkey();
         let keypair_b = Keypair::new();
         let account_key_b = keypair_b.pubkey();
-        let account_include = vec![account_key_a].iter().map(|k| k.to_string()).collect();
+        let account_include = [account_key_a].iter().map(|k| k.to_string()).collect();
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
@@ -951,7 +951,7 @@ mod tests {
         let account_key_a = keypair_a.pubkey();
         let keypair_b = Keypair::new();
         let account_key_b = keypair_b.pubkey();
-        let account_include = vec![account_key_b].iter().map(|k| k.to_string()).collect();
+        let account_include = [account_key_b].iter().map(|k| k.to_string()).collect();
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
@@ -993,7 +993,7 @@ mod tests {
         let account_key_a = keypair_a.pubkey();
         let keypair_b = Keypair::new();
         let account_key_b = keypair_b.pubkey();
-        let account_exclude = vec![account_key_b].iter().map(|k| k.to_string()).collect();
+        let account_exclude = [account_key_b].iter().map(|k| k.to_string()).collect();
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
@@ -1037,11 +1037,11 @@ mod tests {
         let account_key_z = Pubkey::new_unique();
 
         // require x, include y, z
-        let account_include = vec![account_key_y, account_key_z]
+        let account_include = [account_key_y, account_key_z]
             .iter()
             .map(|k| k.to_string())
             .collect();
-        let account_required = vec![account_key_x].iter().map(|k| k.to_string()).collect();
+        let account_required = [account_key_x].iter().map(|k| k.to_string()).collect();
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
@@ -1087,8 +1087,8 @@ mod tests {
         let account_key_z = Pubkey::new_unique();
 
         // require x, include y, z
-        let account_include = vec![account_key_x].iter().map(|k| k.to_string()).collect();
-        let account_required = vec![account_key_y, account_key_z]
+        let account_include = [account_key_x].iter().map(|k| k.to_string()).collect();
+        let account_required = [account_key_y, account_key_z]
             .iter()
             .map(|k| k.to_string())
             .collect();
