@@ -5,14 +5,14 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  workflow_dispatch:
   push:
+    branches:
+      - 'master'
     tags:
       - 'v*'
       - 'geyser-v*'
       - 'kafka-v*'
-    branches:
-      - 'master'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,7 +42,6 @@ jobs:
           toolchain: ${{ env.RUST_STABLE }}
           override: true
           profile: minimal
-          components: rustfmt
 
       - uses: actions/cache@v3
         with:

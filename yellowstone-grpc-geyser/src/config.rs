@@ -62,7 +62,9 @@ impl ConfigLog {
 pub struct ConfigGrpc {
     /// Address of Grpc service.
     pub address: SocketAddr,
-    /// Capacity of the channel used for account from snapshot,
+    /// TLS config
+    pub tls_config: Option<ConfigGrpcServerTls>,
+    /// Capacity of the channel used for accounts from snapshot,
     /// on reaching the limit Sender block validator startup.
     #[serde(
         default = "ConfigGrpc::snapshot_capacity_default",
@@ -101,6 +103,13 @@ impl ConfigGrpc {
     const fn unary_concurrency_limit_default() -> usize {
         Semaphore::MAX_PERMITS
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigGrpcServerTls {
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]

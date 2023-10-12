@@ -22,6 +22,7 @@ use {
         },
         Request, Response, Result as TonicResult, Status,
     },
+    tonic_health::server::health_reporter,
     tracing::{error, info},
     yellowstone_grpc_proto::prelude::{
         geyser_server::{Geyser, GeyserServer},
@@ -73,8 +74,13 @@ impl GrpcService {
         let shutdown_grpc = Arc::clone(&shutdown);
 
         let server = tokio::spawn(async move {
+            // gRPC Health check service
+            let (mut health_reporter, health_service) = health_reporter();
+            health_reporter.set_serving::<GeyserServer<Self>>().await;
+
             Server::builder()
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
+                .add_service(health_service)
                 .add_service(service)
                 .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
                 .await

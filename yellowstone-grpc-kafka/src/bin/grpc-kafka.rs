@@ -2,28 +2,15 @@ use {
     anyhow::Context,
     clap::{Parser, Subcommand},
     futures::{
-        channel::mpsc,
         future::{BoxFuture, FutureExt},
-        sink::SinkExt,
         stream::StreamExt,
     },
-    rdkafka::{
-        config::ClientConfig,
-        consumer::{Consumer, StreamConsumer},
-        message::Message,
-        producer::{FutureProducer, FutureRecord},
-    },
+    rdkafka::{config::ClientConfig, consumer::Consumer, message::Message, producer::FutureRecord},
     sha2::{Digest, Sha256},
-    std::{net::SocketAddr, sync::Arc},
+    std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::{
         signal::unix::{signal, SignalKind},
         task::JoinSet,
-    },
-    tonic::{
-        codec::Streaming,
-        metadata::AsciiMetadataValue,
-        transport::{Channel, ClientTlsConfig},
-        Request, Response,
     },
     tracing::{debug, trace, warn},
     tracing_subscriber::{
@@ -31,6 +18,7 @@ use {
         layer::SubscriberExt,
         util::SubscriberInitExt,
     },
+    yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_kafka::{
         config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         dedup::KafkaDedup,
@@ -38,7 +26,7 @@ use {
         prom,
     },
     yellowstone_grpc_proto::{
-        prelude::{geyser_client::GeyserClient, subscribe_update::UpdateOneof, SubscribeUpdate},
+        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
         prost::Message as _,
     },
 };
@@ -50,7 +38,7 @@ struct Args {
     #[clap(short, long)]
     config: String,
 
-    /// Prometheus listen address
+    /// [DEPRECATED: use config] Prometheus listen address
     #[clap(long)]
     prometheus: Option<SocketAddr>,
 
@@ -60,7 +48,7 @@ struct Args {
 
 #[derive(Debug, Clone, Subcommand)]
 enum ArgsAction {
-    // Receive data from Kafka, deduplicate and send them back to Kafka
+    /// Receive data from Kafka, deduplicate and send them back to Kafka
     Dedup,
     /// Receive data from gRPC and send them to the Kafka
     #[command(name = "grpc2kafka")]
@@ -109,12 +97,12 @@ impl ArgsAction {
         }
 
         // input
-        let consumer: StreamConsumer = kafka_config.create()?;
+        let consumer = prom::kafka::StatsContext::create_stream_consumer(&kafka_config)
+            .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_input])?;
 
         // output
-        let kafka: FutureProducer = kafka_config
-            .create()
+        let kafka = prom::kafka::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         // dedup
@@ -138,6 +126,7 @@ impl ArgsAction {
                 },
                 message = consumer.recv() => message,
             }?;
+            prom::kafka::recv_inc();
             trace!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -178,11 +167,13 @@ impl ArgsAction {
                             debug!("kafka send message with key: {key}, result: {result:?}");
 
                             result?.map_err(|(error, _message)| error)?;
+                            prom::kafka::sent_inc(prom::kafka::GprcMessageKind::Unknown);
                             Ok::<(), anyhow::Error>(())
                         }
                         Err(error) => Err(error.0.into()),
                     }
                 } else {
+                    prom::kafka::dedup_inc();
                     Ok(())
                 }
             });
@@ -214,32 +205,20 @@ impl ArgsAction {
         }
 
         // Connect to kafka
-        let kafka: FutureProducer = kafka_config
-            .create()
+        let kafka = prom::kafka::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
-        // Create gRPC client
-        let mut endpoint = Channel::from_shared(config.endpoint)?;
-        if endpoint.uri().scheme_str() == Some("https") {
-            endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
-        }
-        let channel = endpoint.connect().await?;
-        let x_token: Option<AsciiMetadataValue> = match config.x_token {
-            Some(x_token) => Some(x_token.try_into()?),
-            None => None,
-        };
-        let mut client = GeyserClient::with_interceptor(channel, move |mut req: Request<()>| {
-            if let Some(x_token) = x_token.clone() {
-                req.metadata_mut().insert("x-token", x_token);
-            }
-            Ok(req)
-        });
-
-        // Subscribe on Geyser events
-        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
-        subscribe_tx.send(config.request.to_proto()).await?;
-        let response: Response<Streaming<SubscribeUpdate>> = client.subscribe(subscribe_rx).await?;
-        let mut geyser = response.into_inner().boxed();
+        // Create gRPC client & subscribe
+        let mut client = GeyserGrpcClient::connect_with_timeout(
+            config.endpoint,
+            config.x_token,
+            None,
+            Some(Duration::from_secs(10)),
+            Some(Duration::from_secs(5)),
+            false,
+        )
+        .await?;
+        let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
@@ -262,23 +241,23 @@ impl ArgsAction {
 
             match message {
                 Some(message) => {
-                    if matches!(message.update_oneof, Some(UpdateOneof::Ping(_))) {
-                        continue;
-                    }
-
-                    let slot = match &message.update_oneof {
-                        Some(UpdateOneof::Account(msg)) => msg.slot,
-                        Some(UpdateOneof::Slot(msg)) => msg.slot,
-                        Some(UpdateOneof::Transaction(msg)) => msg.slot,
-                        Some(UpdateOneof::Block(msg)) => msg.slot,
-                        Some(UpdateOneof::Ping(_)) => unreachable!("Ping message not expected"),
-                        Some(UpdateOneof::BlockMeta(msg)) => msg.slot,
-                        Some(UpdateOneof::Entry(msg)) => msg.slot,
+                    let payload = message.encode_to_vec();
+                    let message = match &message.update_oneof {
+                        Some(value) => value,
                         None => unreachable!("Expect valid message"),
                     };
-                    let payload = message.encode_to_vec();
+                    let slot = match message {
+                        UpdateOneof::Account(msg) => msg.slot,
+                        UpdateOneof::Slot(msg) => msg.slot,
+                        UpdateOneof::Transaction(msg) => msg.slot,
+                        UpdateOneof::Block(msg) => msg.slot,
+                        UpdateOneof::Ping(_) => continue,
+                        UpdateOneof::BlockMeta(msg) => msg.slot,
+                        UpdateOneof::Entry(msg) => msg.slot,
+                    };
                     let hash = Sha256::digest(&payload);
                     let key = format!("{slot}_{}", const_hex::encode(hash));
+                    let prom_kind = prom::kafka::GprcMessageKind::from(message);
 
                     let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
@@ -290,9 +269,9 @@ impl ArgsAction {
                                 let result = future.await;
                                 debug!("kafka send message with key: {key}, result: {result:?}");
 
-                                Ok::<(i32, i64), anyhow::Error>(
-                                    result?.map_err(|(error, _message)| error)?,
-                                )
+                                let result = result?.map_err(|(error, _message)| error)?;
+                                prom::kafka::sent_inc(prom_kind);
+                                Ok::<(i32, i64), anyhow::Error>(result)
                             });
                             if send_tasks.len() >= config.kafka_queue_size {
                                 tokio::select! {
@@ -329,7 +308,8 @@ impl ArgsAction {
 
         let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
-        let consumer: StreamConsumer = kafka_config.create()?;
+        let consumer = prom::kafka::StatsContext::create_stream_consumer(&kafka_config)
+            .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_topic])?;
 
         loop {
@@ -337,6 +317,7 @@ impl ArgsAction {
                 _ = &mut shutdown => break,
                 message = consumer.recv() => message?,
             };
+            prom::kafka::recv_inc();
             debug!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -377,7 +358,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(&args.config).await?;
 
     // Run prometheus server
-    prom::run_server(args.prometheus)?;
+    if let Some(address) = config.prometheus.or(args.prometheus) {
+        prom::run_server(address)?;
+    }
 
     // Create kafka config
     let mut kafka_config = ClientConfig::new();

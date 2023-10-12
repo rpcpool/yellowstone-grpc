@@ -83,6 +83,7 @@ impl GeyserPlugin for Plugin {
             runtime.block_on(async move {
                 let (snapshot_channel, grpc_channel, grpc_shutdown) =
                     GrpcService::create(config.grpc, config.block_fail_action)
+                        .await
                         .map_err(|error| GeyserPluginError::Custom(error))?;
                 let prometheus = PrometheusService::new(config.prometheus)
                     .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
@@ -230,10 +231,13 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaBlockInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaBlockInfoVersions::V0_0_2(info) => info,
+                ReplicaBlockInfoVersions::V0_0_2(_info) => {
+                    unreachable!("ReplicaBlockInfoVersions::V0_0_2 is not supported")
+                }
+                ReplicaBlockInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::BlockMeta((blockinfo).into());
+            let message = Message::BlockMeta(blockinfo.into());
             inner.send_message(message);
 
             Ok(())

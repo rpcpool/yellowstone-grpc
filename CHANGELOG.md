@@ -10,11 +10,91 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Fixes
+
 ### Features
 
 - geyser: support snapshot data ([#182](https://github.com/rpcpool/yellowstone-grpc/pull/182)).
 
+### Breaking
+
+## 2023-10-10
+
+- yellowstone-grpc-client-1.11.1+solana.1.16.16
+- yellowstone-grpc-geyser-1.9.1+solana.1.16.16
+- yellowstone-grpc-kafka-1.0.0-rc.3+solana.1.16.16
+- yellowstone-grpc-proto-1.10.0+solana.1.16.16
+
 ### Fixes
+
+- geyser: use `entry_count` from `ReplicaBlockInfoV3` ([#186](https://github.com/rpcpool/yellowstone-grpc/pull/186)).
+
+### Features
+
+- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+
+## 2023-10-09
+
+- yellowstone-grpc-kafka-1.0.0-rc.3+solana.1.16.15
+
+### Features
+
+- kafka: add metrics (stats, sent, recv) ([#196](https://github.com/rpcpool/yellowstone-grpc/pull/196)).
+- kafka: support YAML config ([#197](https://github.com/rpcpool/yellowstone-grpc/pull/197)).
+- kafka: support prometheus address in config ([#198](https://github.com/rpcpool/yellowstone-grpc/pull/198)).
+
+## 2023-10-06
+
+- yellowstone-grpc-kafka-1.0.0-rc.2+solana.1.16.15
+
+### Fixes
+
+- kafka: fix message size for gRPC client ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+
+## 2023-10-05
+
+- yellowstone-grpc-client-1.11.0+solana.1.16.15
+- yellowstone-grpc-geyser-1.9.0+solana.1.16.15
+- yellowstone-grpc-kafka-1.0.0-rc.1+solana.1.16.15
+- yellowstone-grpc-proto-1.10.0+solana.1.16.15
+
+### Features
+
+- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
+- solana: update to 1.16.15 ([#193](https://github.com/rpcpool/yellowstone-grpc/pull/193)).
+
+## 2023-10-03
+
+- yellowstone-grpc-client-1.11.0+solana.1.16.14
+- yellowstone-grpc-geyser-1.9.0+solana.1.16.14
+- yellowstone-grpc-proto-1.10.0+solana.1.16.14
+
+### Features
+
+- proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190)).
+- client: add tx pretty print to rust ([#189](https://github.com/rpcpool/yellowstone-grpc/pull/189)).
+- geyser: update deps, tokio=1.32.0 ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
+
+### Fixes
+
+### Breaking
+
+## 2023-10-02
+
+- yellowstone-grpc-client-1.10.0+solana.1.16.14
+- yellowstone-grpc-geyser-1.8.0+solana.1.16.14
+- yellowstone-grpc-kafka-1.0.0-rc.0+solana.1.16.14
+- yellowstone-grpc-proto-1.9.0+solana.1.16.14
+
+### Features
+
+- geyser: add optional TLS to gRPC server config ([#183](https://github.com/rpcpool/yellowstone-grpc/pull/183)).
+- client: add timeout options to rust ([#187](https://github.com/rpcpool/yellowstone-grpc/pull/187)).
+- geyser: update solana =1.16.14 ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188)).
+
+### Fixes
+
+- geyser: add `fs` feature to `tokio` dependencies in the plugin ([#184](https://github.com/rpcpool/yellowstone-grpc/pull/184)).
 
 ### Breaking
 

@@ -3,23 +3,11 @@ use {
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
         prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
-        proto::{
-            self,
-            geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
-            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-        },
         version::VERSION,
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV2, ReplicaEntryInfo, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
         SlotStatus,
     },
     solana_sdk::{
@@ -37,16 +25,34 @@ use {
         },
     },
     tokio::{
+        fs,
         sync::{broadcast, mpsc, Mutex, Notify, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
-        transport::server::{Server, TcpIncoming},
+        transport::{
+            server::{Server, TcpIncoming},
+            Identity, ServerTlsConfig,
+        },
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
+    yellowstone_grpc_proto::{
+        convert_to,
+        prelude::{
+            geyser_server::{Geyser, GeyserServer},
+            subscribe_update::UpdateOneof,
+            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -151,8 +157,8 @@ impl MessageTransactionInfo {
         SubscribeUpdateTransactionInfo {
             signature: self.signature.as_ref().into(),
             is_vote: self.is_vote,
-            transaction: Some(proto::convert::create_transaction(&self.transaction)),
-            meta: Some(proto::convert::create_transaction_meta(&self.meta)),
+            transaction: Some(convert_to::create_transaction(&self.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&self.meta)),
             index: self.index as u64,
         }
     }
@@ -273,10 +279,11 @@ pub struct MessageBlockMeta {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
+    pub entries_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV2<'a>) -> Self {
+impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
@@ -286,6 +293,7 @@ impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
+            entries_count: blockinfo.entry_count,
         }
     }
 }
@@ -408,11 +416,9 @@ impl<'a> MessageRef<'a> {
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
-                block_time: message.block_time.map(proto::convert::create_timestamp),
-                block_height: message
-                    .block_height
-                    .map(proto::convert::create_block_height),
+                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(convert_to::create_timestamp),
+                block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
@@ -437,11 +443,9 @@ impl<'a> MessageRef<'a> {
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(proto::convert::create_rewards(message.rewards.as_slice())),
-                block_time: message.block_time.map(proto::convert::create_timestamp),
-                block_height: message
-                    .block_height
-                    .map(proto::convert::create_block_height),
+                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                block_time: message.block_time.map(convert_to::create_timestamp),
+                block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
@@ -557,7 +561,7 @@ impl BlockMetaStorage {
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::from_i32(commitment).ok_or_else(|| {
+        CommitmentLevel::try_from(commitment).map_err(|_error| {
             let msg = format!("failed to create CommitmentLevel from {commitment:?}");
             Status::unknown(msg)
         })
@@ -630,8 +634,7 @@ struct SlotMessages {
     block_meta: Option<MessageBlockMeta>,
     transactions: Vec<MessageTransactionInfo>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
-    entries_parent_updated: bool,
-    entries_received: bool,
+    entries: Vec<MessageEntry>,
     sealed: bool,
     confirmed_at: Option<usize>,
     finalized_at: Option<usize>,
@@ -641,17 +644,16 @@ impl SlotMessages {
     pub fn try_seal(&mut self) -> Option<Message> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
-                let transactions_count = block_meta.executed_transaction_count as usize;
-                if transactions_count == self.transactions.len() && self.entries_received {
+                if self.transactions.len() == block_meta.executed_transaction_count as usize
+                    && self.entries.len() == block_meta.entries_count as usize
+                {
                     let transactions = std::mem::take(&mut self.transactions);
+                    let entries = std::mem::take(&mut self.entries);
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
-                    let mut entries = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
-                        match item {
-                            Message::Account(account) => accounts.push(account.account.clone()),
-                            Message::Entry(entry) => entries.push(entry.clone()),
-                            _ => {}
+                        if let Message::Account(account) = item {
+                            accounts.push(account.account.clone());
                         }
                     }
 
@@ -681,7 +683,7 @@ pub struct GrpcService {
 
 impl GrpcService {
     #[allow(clippy::type_complexity)]
-    pub fn create(
+    pub async fn create(
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
     ) -> Result<
@@ -720,6 +722,17 @@ impl GrpcService {
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
 
+        // gRPC server builder with optional TLS
+        let mut server_builder = Server::builder();
+        if let Some(tls_config) = &config.tls_config {
+            let (cert, key) = tokio::try_join!(
+                fs::read(&tls_config.cert_path),
+                fs::read(&tls_config.key_path)
+            )?;
+            server_builder = server_builder
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))?;
+        }
+
         // Create Server
         let service = GeyserServer::new(Self {
             config,
@@ -748,7 +761,7 @@ impl GrpcService {
             let (mut health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            Server::builder()
+            server_builder
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .add_service(health_service)
                 .add_service(service)
@@ -813,15 +826,16 @@ impl GrpcService {
                                                         let msg_txn_count = slot_messages.transactions.len();
                                                         if block_txn_count != msg_txn_count {
                                                             reasons.push("InvalidTxnCount");
-                                                            error!("failed reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
-                                                    }
+                                                            error!("failed to reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
+                                                        }
+                                                        let block_entries_count = block_meta.entries_count as usize;
+                                                        let msg_entries_count = slot_messages.entries.len();
+                                                        if block_entries_count != msg_entries_count {
+                                                            reasons.push("InvalidEntriesCount");
+                                                            error!("failed to reconstruct #{slot} -- entries count: {block_entries_count} vs {msg_entries_count}");
+                                                        }
                                                     } else {
                                                         reasons.push("NoBlockMeta");
-                                                    }
-                                                    if !slot_messages.entries_received {
-                                                        reasons.push("MissedEntries");
-                                                        let msg_entries_count = slot_messages.messages.iter().filter(|x| matches!(x, Some(Message::Entry(_)))).count();
-                                                        error!("failed reconstruct #{slot} -- entries: {msg_entries_count}");
                                                     }
                                                     let reason = reasons.join(",");
 
@@ -898,20 +912,9 @@ impl GrpcService {
                                 slot_messages.accounts_dedup.insert(msg.account.pubkey, (write_version, msg_index));
                             }
                         }
-                        // Entries can come after block meta or last transaction
-                        Message::Entry(msg) if !slot_messages.entries_parent_updated => {
-                            slot_messages.entries_parent_updated = true;
-
-                            let mut iter = messages.iter_mut().peekable();
-                            while let Some((_slot, slot_messages)) = iter.next() {
-                                if let Some((slot_peek, _slot_messages)) = iter.peek() {
-                                    if **slot_peek == msg.slot {
-                                        slot_messages.entries_received = true;
-                                        sealed_block_msg = slot_messages.try_seal();
-                                        break;
-                                    }
-                                }
-                            }
+                        Message::Entry(msg) => {
+                            slot_messages.entries.push(msg.clone());
+                            sealed_block_msg = slot_messages.try_seal();
                         }
                         _ => {}
                     }

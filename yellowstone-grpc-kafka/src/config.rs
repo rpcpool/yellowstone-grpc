@@ -1,7 +1,10 @@
 use {
     crate::dedup::{KafkaDedup, KafkaDedupMemory},
     anyhow::Context,
-    serde::{Deserialize, Serialize},
+    serde::{
+        de::{self, Deserializer},
+        Deserialize, Serialize,
+    },
     std::{
         collections::{HashMap, HashSet},
         net::SocketAddr,
@@ -25,6 +28,7 @@ pub trait GrpcRequestToProto<T> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub prometheus: Option<SocketAddr>,
     pub kafka: HashMap<String, String>,
     pub dedup: Option<ConfigDedup>,
     pub grpc2kafka: Option<ConfigGrpc2Kafka>,
@@ -32,12 +36,18 @@ pub struct Config {
 }
 
 impl Config {
-    pub async fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub async fn load(path: impl AsRef<Path> + Copy) -> anyhow::Result<Self> {
         let text = fs::read_to_string(path)
             .await
             .context("failed to read config from file")?;
 
-        serde_json::from_str(&text).context("failed to parse config from file")
+        match path.as_ref().extension().and_then(|e| e.to_str()) {
+            Some("yaml") | Some("yml") => {
+                serde_yaml::from_str(&text).context("failed to parse config from file")
+            }
+            Some("json") => serde_yaml::from_str(&text).context("failed to parse config from file"),
+            value => anyhow::bail!("unknown config extension: {value:?}"),
+        }
     }
 }
 
@@ -47,6 +57,10 @@ pub struct ConfigDedup {
     pub kafka: HashMap<String, String>,
     pub kafka_input: String,
     pub kafka_output: String,
+    #[serde(
+        default = "ConfigGrpc2Kafka::default_kafka_queue_size",
+        deserialize_with = "ConfigGrpc2Kafka::deserialize_usize_str"
+    )]
     pub kafka_queue_size: usize,
     pub backend: ConfigDedupBackend,
 }
@@ -73,7 +87,37 @@ pub struct ConfigGrpc2Kafka {
     #[serde(default)]
     pub kafka: HashMap<String, String>,
     pub kafka_topic: String,
+    #[serde(
+        default = "ConfigGrpc2Kafka::default_kafka_queue_size",
+        deserialize_with = "ConfigGrpc2Kafka::deserialize_usize_str"
+    )]
     pub kafka_queue_size: usize,
+}
+
+impl ConfigGrpc2Kafka {
+    const fn default_kafka_queue_size() -> usize {
+        10_000
+    }
+
+    fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Integer(usize),
+            String(String),
+        }
+
+        match Value::deserialize(deserializer)? {
+            Value::Integer(value) => Ok(value),
+            Value::String(value) => value
+                .replace('_', "")
+                .parse::<usize>()
+                .map_err(de::Error::custom),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

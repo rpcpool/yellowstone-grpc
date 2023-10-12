@@ -8,6 +8,8 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 
 ### Validator
 
+Current plugin version (`+solana.1.16.x`) use validator with backported `ReplicaBlockInfoV3` to Geyser interface — https://github.com/solana-labs/solana/pull/33359. As result it's not compatible with original validator from Solana Labs and would not work. You need to compile validator from the source code and can find patched releases in `Triton One` Solana fork: https://github.com/rpcpool/solana-public/tree/v1.16.16-geyser-block-v3.
+
 ```bash
 $ solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 ```
@@ -101,6 +103,46 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    - [Go](examples/golang)
    - [Rust](examples/rust)
    - [TypeScript](examples/typescript)
+
+### Kafka producer / consumer
+
+In addition to gRPC Geyser Plugin we provide Kafka tool. This tool can works in 3 modes:
+
+- `grpc2kafka` — connect to gRPC with specified filter and sent all incoming messages to the Kafka
+- `dedup` — consume messages from Kafka and sent deduplicated messages to another topic (right now only support `memory` as deduplication backend)
+- `kafka2grpc` — provide gRPC endpoint with sending messages from Kafka
+
+```bash
+$ cargo run --bin grpc-kafka -- --help
+Yellowstone gRPC Kafka Producer/Dedup/Consumer
+
+Usage: grpc-kafka [OPTIONS] --config <CONFIG> <COMMAND>
+
+Commands:
+  dedup       Receive data from Kafka, deduplicate and send them back to Kafka
+  grpc2kafka  Receive data from gRPC and send them to the Kafka
+  kafka2grpc  Receive data from Kafka and send them over gRPC
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -c, --config <CONFIG>          Path to config file
+      --prometheus <PROMETHEUS>  Prometheus listen address
+  -h, --help                     Print help
+  -V, --version                  Print version
+```
+
+#### Development
+
+```bash
+# run kafka locally
+docker-compose -f ./yellowstone-grpc-kafka/docker-kafka.yml up
+# create topic
+kafka_2.13-3.5.0/bin/kafka-topics.sh --bootstrap-server localhost:29092 --create --topic grpc1
+# send messages from gRPC to Kafka
+cargo run --bin grpc-kafka -- --config yellowstone-grpc-kafka/config.json --prometheus 127.0.0.1:8873 grpc2kafka
+# read messages from Kafka
+kafka_2.13-3.5.0/bin/kafka-console-consumer.sh --bootstrap-server localhost:29092 --topic grpc1
+```
 
 ### License
 

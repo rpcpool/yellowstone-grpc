@@ -1,6 +1,8 @@
 {
+    "prometheus": "127.0.0.1:8873",
     "kafka": {
-        "bootstrap.servers": "localhost:29092"
+        "bootstrap.servers": "localhost:29092",
+        "statistics.interval.ms": "1000"
     },
     "dedup": {
         "kafka": {
@@ -9,14 +11,14 @@
         },
         "kafka_input": "grpc1",
         "kafka_output": "grpc2",
-        "kafka_queue_size": 10000,
+        "kafka_queue_size": "10_000",
         "backend": {
             "type": "memory"
         }
     },
     "grpc2kafka": {
         "endpoint": "http://127.0.0.1:10000",
-        "x_token": "",
+        "x_token": null,
         "request": {
             "slots": ["client"],
             "blocks": {
@@ -30,7 +32,7 @@
         },
         "kafka": {},
         "kafka_topic": "grpc1",
-        "kafka_queue_size": 10000
+        "kafka_queue_size": "10_000"
     },
     "kafka2grpc": {
         "kafka": {
