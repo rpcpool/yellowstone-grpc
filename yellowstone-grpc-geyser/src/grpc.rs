@@ -702,7 +702,7 @@ impl GrpcService {
         )?;
 
         // Snapshot channel
-        let (snapshot_tx, snapshot_rx) = match config.snapshot_capacity {
+        let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
             Some(cap) => {
                 let (tx, rx) = crossbeam_channel::bounded(cap);
                 (Some(tx), Some(rx))
@@ -1178,7 +1178,12 @@ impl Geyser for GrpcService {
             &self.config.filters,
         )
         .expect("empty filter");
-        let (stream_tx, stream_rx) = mpsc::channel(self.config.channel_capacity);
+        let snapshot_rx = self.snapshot_rx.lock().await.take();
+        let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
+            self.config.snapshot_client_channel_capacity
+        } else {
+            self.config.channel_capacity
+        });
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let notify_exit1 = Arc::new(Notify::new());
         let notify_exit2 = Arc::new(Notify::new());
@@ -1261,7 +1266,7 @@ impl Geyser for GrpcService {
             filter,
             stream_tx,
             client_rx,
-            self.snapshot_rx.lock().await.take(),
+            snapshot_rx,
             self.broadcast_tx.subscribe(),
             move || {
                 notify_exit1.notify_one();

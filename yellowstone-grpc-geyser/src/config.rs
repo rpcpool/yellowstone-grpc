@@ -67,10 +67,16 @@ pub struct ConfigGrpc {
     /// Capacity of the channel used for accounts from snapshot,
     /// on reaching the limit Sender block validator startup.
     #[serde(
-        default = "ConfigGrpc::snapshot_capacity_default",
+        default = "ConfigGrpc::snapshot_plugin_channel_capacity_default",
         deserialize_with = "deserialize_usize_str_maybe"
     )]
-    pub snapshot_capacity: Option<usize>,
+    pub snapshot_plugin_channel_capacity: Option<usize>,
+    /// Capacity of the client channel, applicable only with snapshot
+    #[serde(
+        default = "ConfigGrpc::snapshot_client_channel_capacity_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub snapshot_client_channel_capacity: usize,
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
@@ -92,8 +98,12 @@ pub struct ConfigGrpc {
 }
 
 impl ConfigGrpc {
-    const fn snapshot_capacity_default() -> Option<usize> {
+    const fn snapshot_plugin_channel_capacity_default() -> Option<usize> {
         None
+    }
+
+    const fn snapshot_client_channel_capacity_default() -> usize {
+        50_000_000
     }
 
     const fn channel_capacity_default() -> usize {
