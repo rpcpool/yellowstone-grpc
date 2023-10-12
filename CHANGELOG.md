@@ -14,9 +14,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: support snapshot data ([#182](https://github.com/rpcpool/yellowstone-grpc/pull/182)).
-
 ### Breaking
+
+## 2023-10-12
+
+- yellowstone-grpc-geyser-1.10.0+solana.1.16.16
+
+### Features
+
+- geyser: support snapshot data ([#182](https://github.com/rpcpool/yellowstone-grpc/pull/182)).
 
 ## 2023-10-10
 
