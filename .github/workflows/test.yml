@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'v1.16'
   workflow_dispatch:
 
 env:

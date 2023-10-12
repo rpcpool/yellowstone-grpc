@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'v1.16'
     tags:
       - 'v*'
       - 'geyser-v*'
