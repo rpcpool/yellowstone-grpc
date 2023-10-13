@@ -19,15 +19,15 @@ use {
         util::SubscriberInitExt,
     },
     yellowstone_grpc_client::GeyserGrpcClient,
-    yellowstone_grpc_kafka::{
+    yellowstone_grpc_proto::{
+        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
+        prost::Message as _,
+    },
+    yellowstone_grpc_tools::{
         config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
         dedup::KafkaDedup,
         grpc::GrpcService,
         prom,
-    },
-    yellowstone_grpc_proto::{
-        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
-        prost::Message as _,
     },
 };
 
