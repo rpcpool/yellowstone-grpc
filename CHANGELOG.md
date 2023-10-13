@@ -16,6 +16,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+- kafka: rename to tools ([#203](https://github.com/rpcpool/yellowstone-grpc/pull/203)).
+
 ## 2023-10-12
 
 - yellowstone-grpc-geyser-1.10.0+solana.1.16.16
