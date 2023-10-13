@@ -4689,7 +4689,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.3+solana.1.17.1"
+version = "1.0.0-rc.4+solana.1.17.1"
 dependencies = [
  "anyhow",
  "async-trait",
