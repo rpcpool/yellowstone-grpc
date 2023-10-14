@@ -1,9 +1,9 @@
 [package]
-name = "yellowstone-grpc-kafka"
-version = "1.0.0-rc.3+solana.1.17.1"
+name = "yellowstone-grpc-tools"
+version = "1.0.0-rc.4+solana.1.17.1"
 authors = ["Triton One"]
 edition = "2021"
-description = "Yellowstone gRPC Kafka Producer/Dedup/Consumer"
+description = "Yellowstone gRPC Tools"
 publish = false
 
 [dependencies]
