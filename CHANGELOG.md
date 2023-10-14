@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- solana: update to 1.16.17 ([#205](https://github.com/rpcpool/yellowstone-grpc/pull/205)).
+
 ### Breaking
 
 ## 2023-10-12
