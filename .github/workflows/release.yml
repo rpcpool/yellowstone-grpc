@@ -10,7 +10,7 @@ on:
       - 'v1.16'
     tags:
       - 'v*'
-      - 'kafka-v*'
+      - 'tools-v*'
   workflow_dispatch:
 
 env:

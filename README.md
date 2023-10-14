@@ -104,7 +104,9 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    - [Rust](examples/rust)
    - [TypeScript](examples/typescript)
 
-### Kafka producer / consumer
+### gRPC Tools
+
+#### Kafka
 
 In addition to gRPC Geyser Plugin we provide Kafka tool. This tool can works in 3 modes:
 
@@ -114,7 +116,7 @@ In addition to gRPC Geyser Plugin we provide Kafka tool. This tool can works in 
 
 ```bash
 $ cargo run --bin grpc-kafka -- --help
-Yellowstone gRPC Kafka Producer/Dedup/Consumer
+Yellowstone gRPC Kafka Tool
 
 Usage: grpc-kafka [OPTIONS] --config <CONFIG> <COMMAND>
 
@@ -126,7 +128,6 @@ Commands:
 
 Options:
   -c, --config <CONFIG>          Path to config file
-      --prometheus <PROMETHEUS>  Prometheus listen address
   -h, --help                     Print help
   -V, --version                  Print version
 ```
@@ -135,11 +136,11 @@ Options:
 
 ```bash
 # run kafka locally
-docker-compose -f ./yellowstone-grpc-kafka/docker-kafka.yml up
+docker-compose -f ./yellowstone-grpc-tools/docker-kafka.yml up
 # create topic
 kafka_2.13-3.5.0/bin/kafka-topics.sh --bootstrap-server localhost:29092 --create --topic grpc1
 # send messages from gRPC to Kafka
-cargo run --bin grpc-kafka -- --config yellowstone-grpc-kafka/config.json --prometheus 127.0.0.1:8873 grpc2kafka
+cargo run --bin grpc-kafka -- --config yellowstone-grpc-tools/config-kafka.json grpc2kafka
 # read messages from Kafka
 kafka_2.13-3.5.0/bin/kafka-console-consumer.sh --bootstrap-server localhost:29092 --topic grpc1
 ```
