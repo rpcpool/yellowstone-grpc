@@ -7,11 +7,9 @@ concurrency:
 on:
   push:
     branches:
-      - 'master'
       - 'v1.16'
     tags:
       - 'v*'
-      - 'geyser-v*'
       - 'kafka-v*'
   workflow_dispatch:
 
@@ -85,7 +83,10 @@ jobs:
 
       - name: Deleteing directories to avoid upload conflict
         run: |
-          rm -rf target/release/client.d target/release/config-check.d 
+          rm -rf \
+            target/release/client.d \
+            target/release/config-check.d \
+            target/release/grpc-kafka.d
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
