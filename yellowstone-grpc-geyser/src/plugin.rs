@@ -174,6 +174,13 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
+        // if plugin run on genesis of network, notify_end_of_startup will not be triggered, and slot 0 will not
+        // come through this function.
+        if parent == Some(0) {
+            inner
+                .startup_status
+                .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
+        }
         if inner.startup_status.load(Ordering::SeqCst) == STARTUP_END_OF_RECEIVED
             && status == SlotStatus::Processed
         {
