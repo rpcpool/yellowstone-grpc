@@ -1,5 +1,5 @@
 use {
-    crate::dedup::{KafkaDedup, KafkaDedupMemory},
+    super::dedup::{KafkaDedup, KafkaDedupMemory},
     anyhow::Context,
     serde::{
         de::{self, Deserializer},

@@ -16,6 +16,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+- kafka: rename to tools ([#209](https://github.com/rpcpool/yellowstone-grpc/pull/209)).
+
 ## 2023-10-14
 
 - yellowstone-grpc-client-1.11.1+solana.1.16.17

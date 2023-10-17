@@ -7,7 +7,7 @@ use {
     },
     rdkafka::{config::ClientConfig, consumer::Consumer, message::Message, producer::FutureRecord},
     sha2::{Digest, Sha256},
-    std::{net::SocketAddr, sync::Arc, time::Duration},
+    std::{sync::Arc, time::Duration},
     tokio::{
         signal::unix::{signal, SignalKind},
         task::JoinSet,
@@ -19,28 +19,27 @@ use {
         util::SubscriberInitExt,
     },
     yellowstone_grpc_client::GeyserGrpcClient,
-    yellowstone_grpc_kafka::{
-        config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
-        dedup::KafkaDedup,
-        grpc::GrpcService,
-        prom,
-    },
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
         prost::Message as _,
     },
+    yellowstone_grpc_tools::{
+        kafka::{
+            config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
+            dedup::KafkaDedup,
+            grpc::GrpcService,
+            prom,
+        },
+        prom::run_server as prometheus_run_server,
+    },
 };
 
 #[derive(Debug, Clone, Parser)]
-#[clap(author, version, about)]
+#[clap(author, version, about = "Yellowstone gRPC Kafka Tool")]
 struct Args {
     /// Path to config file
     #[clap(short, long)]
     config: String,
-
-    /// [DEPRECATED: use config] Prometheus listen address
-    #[clap(long)]
-    prometheus: Option<SocketAddr>,
 
     #[command(subcommand)]
     action: ArgsAction,
@@ -97,12 +96,12 @@ impl ArgsAction {
         }
 
         // input
-        let consumer = prom::kafka::StatsContext::create_stream_consumer(&kafka_config)
+        let consumer = prom::StatsContext::create_stream_consumer(&kafka_config)
             .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_input])?;
 
         // output
-        let kafka = prom::kafka::StatsContext::create_future_producer(&kafka_config)
+        let kafka = prom::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         // dedup
@@ -126,7 +125,7 @@ impl ArgsAction {
                 },
                 message = consumer.recv() => message,
             }?;
-            prom::kafka::recv_inc();
+            prom::recv_inc();
             trace!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -167,13 +166,13 @@ impl ArgsAction {
                             debug!("kafka send message with key: {key}, result: {result:?}");
 
                             result?.map_err(|(error, _message)| error)?;
-                            prom::kafka::sent_inc(prom::kafka::GprcMessageKind::Unknown);
+                            prom::sent_inc(prom::GprcMessageKind::Unknown);
                             Ok::<(), anyhow::Error>(())
                         }
                         Err(error) => Err(error.0.into()),
                     }
                 } else {
-                    prom::kafka::dedup_inc();
+                    prom::dedup_inc();
                     Ok(())
                 }
             });
@@ -205,7 +204,7 @@ impl ArgsAction {
         }
 
         // Connect to kafka
-        let kafka = prom::kafka::StatsContext::create_future_producer(&kafka_config)
+        let kafka = prom::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         // Create gRPC client & subscribe
@@ -257,7 +256,7 @@ impl ArgsAction {
                     };
                     let hash = Sha256::digest(&payload);
                     let key = format!("{slot}_{}", const_hex::encode(hash));
-                    let prom_kind = prom::kafka::GprcMessageKind::from(message);
+                    let prom_kind = prom::GprcMessageKind::from(message);
 
                     let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
@@ -270,7 +269,7 @@ impl ArgsAction {
                                 debug!("kafka send message with key: {key}, result: {result:?}");
 
                                 let result = result?.map_err(|(error, _message)| error)?;
-                                prom::kafka::sent_inc(prom_kind);
+                                prom::sent_inc(prom_kind);
                                 Ok::<(i32, i64), anyhow::Error>(result)
                             });
                             if send_tasks.len() >= config.kafka_queue_size {
@@ -308,7 +307,7 @@ impl ArgsAction {
 
         let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
-        let consumer = prom::kafka::StatsContext::create_stream_consumer(&kafka_config)
+        let consumer = prom::StatsContext::create_stream_consumer(&kafka_config)
             .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_topic])?;
 
@@ -317,7 +316,7 @@ impl ArgsAction {
                 _ = &mut shutdown => break,
                 message = consumer.recv() => message?,
             };
-            prom::kafka::recv_inc();
+            prom::recv_inc();
             debug!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -358,8 +357,8 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(&args.config).await?;
 
     // Run prometheus server
-    if let Some(address) = config.prometheus.or(args.prometheus) {
-        prom::run_server(address)?;
+    if let Some(address) = config.prometheus {
+        prometheus_run_server(address)?;
     }
 
     // Create kafka config
