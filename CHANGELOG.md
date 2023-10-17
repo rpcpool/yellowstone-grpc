@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-10-17
+
+### Fixes
+
+- Trigger end of startup when parent slot 0 seen in `update_slot_status` notification because `notify_end_of_startup` is not triggered when cluster started from genesis ([#207](https://github.com/rpcpool/yellowstone-grpc/pull/207))
+
 ## 2023-10-12
 
 - yellowstone-grpc-geyser-1.10.0+solana.1.16.16
