@@ -4673,8 +4673,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "yellowstone-grpc-kafka"
-version = "1.0.0-rc.3+solana.1.17.1"
+name = "yellowstone-grpc-proto"
+version = "1.10.0+solana.1.17.1"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "prost",
+ "protobuf-src",
+ "solana-account-decoder",
+ "solana-sdk",
+ "solana-transaction-status",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
+name = "yellowstone-grpc-tools"
+version = "1.0.0-rc.4+solana.1.17.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4702,21 +4717,6 @@ dependencies = [
  "vergen",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
-]
-
-[[package]]
-name = "yellowstone-grpc-proto"
-version = "1.10.0+solana.1.17.1"
-dependencies = [
- "anyhow",
- "bincode",
- "prost",
- "protobuf-src",
- "solana-account-decoder",
- "solana-sdk",
- "solana-transaction-status",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]

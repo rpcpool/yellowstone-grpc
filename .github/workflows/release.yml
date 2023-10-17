@@ -10,8 +10,7 @@ on:
       - 'master'
     tags:
       - 'v*'
-      - 'geyser-v*'
-      - 'kafka-v*'
+      - 'tools-v*'
   workflow_dispatch:
 
 env:
@@ -84,7 +83,10 @@ jobs:
 
       - name: Deleteing directories to avoid upload conflict
         run: |
-          rm -rf target/release/client.d target/release/config-check.d 
+          rm -rf \
+            target/release/client.d \
+            target/release/config-check.d \
+            target/release/grpc-kafka.d
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')

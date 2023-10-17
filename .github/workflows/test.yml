@@ -74,10 +74,10 @@ jobs:
         run: cargo check -p yellowstone-grpc-client-simple --all-targets --tests
       - name: check features in `geyser`
         run: cargo check -p yellowstone-grpc-geyser --all-targets --tests
-      - name: check features in `kafka`
-        run: cargo check -p yellowstone-grpc-kafka --all-targets --tests
       - name: check features in `proto`
         run: cargo check -p yellowstone-grpc-proto --all-targets --tests
+      - name: check features in `tools`
+        run: cargo check -p yellowstone-grpc-tools --all-targets --tests
 
       - name: Build
         run: ./ci/cargo-build-test.sh
