@@ -133,7 +133,7 @@ Options:
 ```bash
 # export creds
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/google/project/creds.json
-# semd messages from gRPC to Google Pub/Sub
+# send messages from gRPC to Google Pub/Sub
 cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json grpc2pubsub
 ```
 
