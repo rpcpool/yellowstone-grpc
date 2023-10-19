@@ -119,8 +119,6 @@ impl ArgsAction {
             false,
         )
         .await?;
-        tracing::warn!("req: {:#?}", config.request);
-        tracing::warn!("req: {:#?}", config.request.clone().to_proto());
         let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
 
         // Receive-send loop
