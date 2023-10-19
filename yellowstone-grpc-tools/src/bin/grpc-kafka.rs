@@ -1,17 +1,11 @@
 use {
     anyhow::Context,
     clap::{Parser, Subcommand},
-    futures::{
-        future::{BoxFuture, FutureExt},
-        stream::StreamExt,
-    },
+    futures::{future::BoxFuture, stream::StreamExt},
     rdkafka::{config::ClientConfig, consumer::Consumer, message::Message, producer::FutureRecord},
     sha2::{Digest, Sha256},
-    std::{sync::Arc, time::Duration},
-    tokio::{
-        signal::unix::{signal, SignalKind},
-        task::JoinSet,
-    },
+    std::{net::SocketAddr, sync::Arc, time::Duration},
+    tokio::task::JoinSet,
     tracing::{debug, trace, warn},
     tracing_subscriber::{
         filter::{EnvFilter, LevelFilter},
@@ -24,13 +18,15 @@ use {
         prost::Message as _,
     },
     yellowstone_grpc_tools::{
+        config::{load as config_load, GrpcRequestToProto},
+        create_shutdown,
         kafka::{
-            config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc, GrpcRequestToProto},
+            config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc},
             dedup::KafkaDedup,
             grpc::GrpcService,
             prom,
         },
-        prom::run_server as prometheus_run_server,
+        prom::{run_server as prometheus_run_server, GprcMessageKind},
     },
 };
 
@@ -40,6 +36,10 @@ struct Args {
     /// Path to config file
     #[clap(short, long)]
     config: String,
+
+    /// Prometheus listen address
+    #[clap(long)]
+    prometheus: Option<SocketAddr>,
 
     #[command(subcommand)]
     action: ArgsAction,
@@ -58,12 +58,8 @@ enum ArgsAction {
 }
 
 impl ArgsAction {
-    async fn run(
-        self,
-        config: Config,
-        kafka_config: ClientConfig,
-        shutdown: BoxFuture<'static, ()>,
-    ) -> anyhow::Result<()> {
+    async fn run(self, config: Config, kafka_config: ClientConfig) -> anyhow::Result<()> {
+        let shutdown = create_shutdown()?;
         match self {
             ArgsAction::Dedup => {
                 let config = config.dedup.ok_or_else(|| {
@@ -166,7 +162,7 @@ impl ArgsAction {
                             debug!("kafka send message with key: {key}, result: {result:?}");
 
                             result?.map_err(|(error, _message)| error)?;
-                            prom::sent_inc(prom::GprcMessageKind::Unknown);
+                            prom::sent_inc(GprcMessageKind::Unknown);
                             Ok::<(), anyhow::Error>(())
                         }
                         Err(error) => Err(error.0.into()),
@@ -256,7 +252,7 @@ impl ArgsAction {
                     };
                     let hash = Sha256::digest(&payload);
                     let key = format!("{slot}_{}", const_hex::encode(hash));
-                    let prom_kind = prom::GprcMessageKind::from(message);
+                    let prom_kind = GprcMessageKind::from(message);
 
                     let record = FutureRecord::to(&config.kafka_topic)
                         .key(&key)
@@ -354,10 +350,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Parse args
     let args = Args::parse();
-    let config = Config::load(&args.config).await?;
+    let config = config_load::<Config>(&args.config).await?;
 
     // Run prometheus server
-    if let Some(address) = config.prometheus {
+    if let Some(address) = args.prometheus.or(config.prometheus) {
         prometheus_run_server(address)?;
     }
 
@@ -367,16 +363,5 @@ async fn main() -> anyhow::Result<()> {
         kafka_config.set(key, value);
     }
 
-    // Create shutdown signal
-    let mut sigint = signal(SignalKind::interrupt())?;
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let shutdown = async move {
-        tokio::select! {
-            _ = sigint.recv() => {},
-            _ = sigterm.recv() => {}
-        };
-    }
-    .boxed();
-
-    args.action.run(config, kafka_config, shutdown).await
+    args.action.run(config, kafka_config).await
 }

@@ -106,6 +106,51 @@ It's possible to add limits for filters in config. If `filters` field is omitted
 
 ### gRPC Tools
 
+#### Google Pub/Sub
+
+```bash
+$ cargo run --bin grpc-google-pubsub -- --help
+Yellowstone gRPC Google Pub/Sub Tool
+
+Usage: grpc-google-pubsub [OPTIONS] --config <CONFIG> <COMMAND>
+
+Commands:
+  grpc2pubsub        Receive data from gRPC and send them to the Pub/Sub
+  pubsub2stdout      Dev: subscribe to message from Pub/Sub and print them to Stdout
+  pubsubTopicCreate  Dev: create Pub/Sub topic
+  pubsubTopicDelete  Dev: delete Pub/Sub topic
+  help               Print this message or the help of the given subcommand(s)
+
+Options:
+  -c, --config <CONFIG>          Path to config file
+      --prometheus <PROMETHEUS>  Prometheus listen address
+  -h, --help                     Print help
+  -V, --version                  Print version
+```
+
+##### Development
+
+```bash
+# export creds
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/google/project/creds.json
+# semd messages from gRPC to Google Pub/Sub
+cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json grpc2pubsub
+```
+
+with emulator:
+
+```bash
+# retrive `USER_CONFIG_DIR`
+$ gcloud info --format='get(config.paths.global_config_dir)'
+# run emulator, data dir by default: `<USER_CONFIG_DIR>/emulators/pubsub`
+$ gcloud beta emulators pubsub start
+...
+# send serialized gRPC messages to Google Pub/Sub with PUBSUB_EMULATOR_HOST
+$ PUBSUB_EMULATOR_HOST=localhost:8085 cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json grpc2pubsub
+# print type of messages from Google Pub/Sub with PUBSUB_EMULATOR_HOST
+$ PUBSUB_EMULATOR_HOST=localhost:8085 cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json --prometheus 1 pubsub2stdout
+```
+
 #### Kafka
 
 In addition to gRPC Geyser Plugin we provide Kafka tool. This tool can works in 3 modes:
@@ -128,11 +173,12 @@ Commands:
 
 Options:
   -c, --config <CONFIG>          Path to config file
+      --prometheus <PROMETHEUS>  Prometheus listen address
   -h, --help                     Print help
   -V, --version                  Print version
 ```
 
-#### Development
+##### Development
 
 ```bash
 # run kafka locally
