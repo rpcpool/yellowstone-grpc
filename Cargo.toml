@@ -4,7 +4,7 @@ members = [
     "yellowstone-grpc-client", # 1.11.1+solana.1.17.1
     "yellowstone-grpc-geyser", # 1.10.0+solana.1.17.1
     "yellowstone-grpc-proto", # 1.10.0+solana.1.17.1
-    "yellowstone-grpc-tools", # 1.0.0-rc.4+solana.1.17.1
+    "yellowstone-grpc-tools", # 1.0.0-rc.5+solana.1.17.1
 ]
 
 [profile.release]

@@ -1,4 +1,5 @@
 use {
+    crate::prom::GprcMessageKind,
     prometheus::{GaugeVec, IntCounter, IntCounterVec, Opts},
     rdkafka::{
         client::ClientContext,
@@ -8,7 +9,6 @@ use {
         producer::FutureProducer,
         statistics::Statistics,
     },
-    yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
 };
 
 lazy_static::lazy_static! {
@@ -100,45 +100,6 @@ impl StatsContext {
 
     pub fn create_stream_consumer(config: &ClientConfig) -> KafkaResult<StreamConsumer<Self>> {
         StreamConsumer::from_config_and_context(config, Self)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum GprcMessageKind {
-    Account,
-    Slot,
-    Transaction,
-    Block,
-    BlockMeta,
-    Entry,
-    Unknown,
-}
-
-impl From<&UpdateOneof> for GprcMessageKind {
-    fn from(msg: &UpdateOneof) -> Self {
-        match msg {
-            UpdateOneof::Account(_) => Self::Account,
-            UpdateOneof::Slot(_) => Self::Slot,
-            UpdateOneof::Transaction(_) => Self::Transaction,
-            UpdateOneof::Block(_) => Self::Block,
-            UpdateOneof::Ping(_) => unreachable!(),
-            UpdateOneof::BlockMeta(_) => Self::BlockMeta,
-            UpdateOneof::Entry(_) => Self::Entry,
-        }
-    }
-}
-
-impl GprcMessageKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            GprcMessageKind::Account => "account",
-            GprcMessageKind::Slot => "slot",
-            GprcMessageKind::Transaction => "transaction",
-            GprcMessageKind::Block => "block",
-            GprcMessageKind::BlockMeta => "blockmeta",
-            GprcMessageKind::Entry => "entry",
-            GprcMessageKind::Unknown => "unknown",
-        }
     }
 }
 

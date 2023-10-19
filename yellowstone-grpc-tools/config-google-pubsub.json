@@ -1,0 +1,25 @@
+{
+    "prometheus": "127.0.0.1:8873",
+    "grpc2pubsub": {
+        "endpoint": "http://127.0.0.1:10000",
+        "x_token": null,
+        "request": {
+            "slots": ["client"],
+            "blocks": {
+                "client": {
+                    "account_include": [],
+                    "include_transactions": false,
+                    "include_accounts": false,
+                    "include_entries": false
+                }
+            }
+        },
+        "topic": "grpc",
+        "create_if_not_exists": true,
+        "workers": 3,
+        "flush_interval_ms": 100,
+        "bundle_size": 3,
+        "bulk_max_size": 10,
+        "bulk_max_wait_ms": 100
+    }
+}
