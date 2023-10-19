@@ -18,7 +18,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-- kafka: rename to tools ([#209](https://github.com/rpcpool/yellowstone-grpc/pull/209)).
+## 2023-10-19
+
+- yellowstone-grpc-tools-1.0.0-rc.5+solana.1.16.17
+
+### Features
+
+- tools: add Google Pub/Sub ([#211](https://github.com/rpcpool/yellowstone-grpc/pull/211)).
+
+### Breaking
+
+- kafka: rename to tools ([#203](https://github.com/rpcpool/yellowstone-grpc/pull/203)).
 
 ## 2023-10-14
 

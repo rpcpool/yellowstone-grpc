@@ -1,5 +1,6 @@
 use {
     crate::{
+        google_pubsub::prom::GOOGLE_PUBSUB_SENT_TOTAL,
         kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS},
         version::VERSION as VERSION_INFO,
     },
@@ -11,6 +12,7 @@ use {
     prometheus::{IntCounterVec, Opts, Registry, TextEncoder},
     std::{net::SocketAddr, sync::Once},
     tracing::{error, info},
+    yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
 };
 
 lazy_static::lazy_static! {
@@ -33,6 +35,7 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
             };
         }
         register!(VERSION);
+        register!(GOOGLE_PUBSUB_SENT_TOTAL);
         register!(KAFKA_STATS);
         register!(KAFKA_DEDUP_TOTAL);
         register!(KAFKA_RECV_TOTAL);
@@ -86,4 +89,43 @@ fn not_found_handler() -> Response<Body> {
         .status(StatusCode::NOT_FOUND)
         .body(Body::empty())
         .unwrap()
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GprcMessageKind {
+    Account,
+    Slot,
+    Transaction,
+    Block,
+    BlockMeta,
+    Entry,
+    Unknown,
+}
+
+impl From<&UpdateOneof> for GprcMessageKind {
+    fn from(msg: &UpdateOneof) -> Self {
+        match msg {
+            UpdateOneof::Account(_) => Self::Account,
+            UpdateOneof::Slot(_) => Self::Slot,
+            UpdateOneof::Transaction(_) => Self::Transaction,
+            UpdateOneof::Block(_) => Self::Block,
+            UpdateOneof::Ping(_) => unreachable!(),
+            UpdateOneof::BlockMeta(_) => Self::BlockMeta,
+            UpdateOneof::Entry(_) => Self::Entry,
+        }
+    }
+}
+
+impl GprcMessageKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            GprcMessageKind::Account => "account",
+            GprcMessageKind::Slot => "slot",
+            GprcMessageKind::Transaction => "transaction",
+            GprcMessageKind::Block => "block",
+            GprcMessageKind::BlockMeta => "blockmeta",
+            GprcMessageKind::Entry => "entry",
+            GprcMessageKind::Unknown => "unknown",
+        }
+    }
 }
