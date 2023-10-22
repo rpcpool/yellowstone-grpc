@@ -105,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
             commitment: Some(commitment as i32),
             accounts_data_slice: vec![],
             ping: None,
+            subsribe_banking_transaction_results: true,
         })
         .await?;
 

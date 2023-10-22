@@ -119,6 +119,7 @@ impl From<&UpdateOneof> for GprcMessageKind {
             UpdateOneof::Pong(_) => unreachable!(),
             UpdateOneof::BlockMeta(_) => Self::BlockMeta,
             UpdateOneof::Entry(_) => Self::Entry,
+            UpdateOneof::BankingTransactionErrors(_) => unreachable!(),
         }
     }
 }

@@ -1,3 +1,5 @@
+use yellowstone_grpc_proto::prelude::SubscribeUpdateBankingTransactionResults;
+
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
@@ -14,7 +16,8 @@ use {
         clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
         signature::Signature,
-        transaction::SanitizedTransaction,
+        slot_history::Slot,
+        transaction::{SanitizedTransaction, TransactionError},
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
@@ -299,6 +302,20 @@ impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
 }
 
 #[derive(Debug, Clone)]
+pub struct BankingStageAccount {
+    pub account: Pubkey,
+    pub is_writable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BankingTransactionMessage {
+    pub signature: Signature,
+    pub transaction_error: Option<TransactionError>,
+    pub slot: Slot,
+    pub accounts: Vec<BankingStageAccount>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Message {
     Slot(MessageSlot),
@@ -307,6 +324,7 @@ pub enum Message {
     Entry(MessageEntry),
     Block(MessageBlock),
     BlockMeta(MessageBlockMeta),
+    BankingTransactionResult(BankingTransactionMessage),
 }
 
 impl Message {
@@ -318,6 +336,7 @@ impl Message {
             Self::Entry(msg) => msg.slot,
             Self::Block(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
+            Self::BankingTransactionResult(msg) => msg.slot,
         }
     }
 
@@ -329,6 +348,7 @@ impl Message {
             Self::Entry(_) => "Entry",
             Self::Block(_) => "Block",
             Self::BlockMeta(_) => "BlockMeta",
+            Self::BankingTransactionResult(_) => "BankingTransactionResult",
         }
     }
 }
@@ -393,6 +413,7 @@ pub enum MessageRef<'a> {
     Entry(&'a MessageEntry),
     Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
+    BankingStageTransactionResult(&'a BankingTransactionMessage),
 }
 
 impl<'a> MessageRef<'a> {
@@ -450,6 +471,26 @@ impl<'a> MessageRef<'a> {
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
             }),
+            Self::BankingStageTransactionResult(message) => {
+                UpdateOneof::BankingTransactionErrors(SubscribeUpdateBankingTransactionResults {
+                    slot: message.slot,
+                    signature: message.signature.to_string(),
+                    error: message
+                        .transaction_error
+                        .as_ref()
+                        .map(|x| yellowstone_grpc_proto::prelude::TransactionError {
+                            err: bincode::serialize(&x).unwrap(),
+                        }),
+                    accounts: message
+                        .accounts
+                        .iter()
+                        .map(|x| yellowstone_grpc_proto::prelude::BankingStageAccount {
+                            account: x.account.to_string(),
+                            is_writable: x.is_writable,
+                        })
+                        .collect(),
+                })
+            }
         }
     }
 }
@@ -1204,6 +1245,7 @@ impl Geyser for GrpcService {
                 commitment: None,
                 accounts_data_slice: Vec::new(),
                 ping: None,
+                subsribe_banking_transaction_results: false,
             },
             &self.config.filters,
         )

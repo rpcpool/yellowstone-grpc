@@ -323,6 +323,7 @@ impl Action {
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
                         ping,
+                        subsribe_banking_transaction_results: true,
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -580,6 +581,7 @@ async fn geyser_subscribe(
                     commitment: None,
                     accounts_data_slice: Vec::default(),
                     ping: None,
+                    subsribe_banking_transaction_results: false,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;

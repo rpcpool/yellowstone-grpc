@@ -32,6 +32,7 @@ message SubscribeRequest {
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
+  bool subsribe_banking_transaction_results = 10;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -101,6 +102,7 @@ message SubscribeUpdate {
     SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
+    SubscribeUpdateBankingTransactionResults banking_transaction_errors = 10;
   }
 }
 
@@ -174,6 +176,19 @@ message SubscribeUpdateEntry {
   bytes hash = 4;
   uint64 executed_transaction_count = 5;
 }
+
+message SubscribeUpdateBankingTransactionResults {
+  uint64 slot = 1;
+  string signature = 2;
+  optional solana.storage.ConfirmedBlock.TransactionError error = 3;
+  repeated BankingStageAccount accounts = 4;
+}
+
+message BankingStageAccount {
+  string account = 1;
+  bool is_writable = 2;
+}
+
 
 message SubscribeUpdatePing {}
 

@@ -1,3 +1,7 @@
+use solana_sdk::transaction::SanitizedTransaction;
+
+use crate::grpc::{BankingStageAccount, BankingTransactionMessage};
+
 use {
     crate::{
         config::Config,
@@ -210,6 +214,35 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn notify_banking_stage_transaction_results(
+        &self,
+        transaction: &SanitizedTransaction,
+        error: Option<solana_sdk::transaction::TransactionError>,
+        slot: u64,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message = transaction.message();
+            let accounts = message
+                .account_keys()
+                .iter()
+                .enumerate()
+                .map(|(index, x)| BankingStageAccount {
+                    account: x.clone(),
+                    is_writable: message.is_writable(index),
+                })
+                .collect();
+
+            let message = Message::BankingTransactionResult(BankingTransactionMessage {
+                signature: transaction.signature().clone(),
+                transaction_error: error,
+                slot,
+                accounts,
+            });
+            inner.send_message(message);
+            Ok(())
+        })
+    }
+
     fn account_data_notifications_enabled(&self) -> bool {
         true
     }
@@ -219,6 +252,10 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn banking_transaction_results_notifications_enabled(&self) -> bool {
         true
     }
 }
