@@ -1,0 +1,32 @@
+all-features = true
+
+[advisories]
+ignore = [
+    # borsh 0.9.3
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2023-0033
+    # Affected versions of borsh cause undefined behavior when zero-sized-types (ZST) 
+    # are parsed and the Copy/Clone traits are not implemented/derived.
+    # For instance if 1000 instances of a ZST are deserialized, and the ZST is not copy 
+    # (this can be achieved through a singleton), then accessing/writing to deserialized 
+    # data will cause a segmentation fault.
+    # borsh 0.10.3
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2023-0033
+    # Affected versions of borsh cause undefined behavior when zero-sized-types (ZST) 
+    # are parsed and the Copy/Clone traits are not implemented/derived.
+    # For instance if 1000 instances of a ZST are deserialized, and the ZST is not copy 
+    # (this can be achieved through a singleton), then accessing/writing to deserialized 
+    # data will cause a segmentation fault.
+    "RUSTSEC-2023-0033",
+
+    # ed25519-dalek 1.0.1
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2022-0093
+    # Versions of `ed25519-dalek` prior to v2.0 model private and public keys as
+    # separate types which can be assembled into a `Keypair`, and also provide APIs
+    # for serializing and deserializing 64-byte private/public keypairs.
+    "RUSTSEC-2022-0093",
+
+    # atty 0.2.14
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2021-0145
+    # On windows, `atty` dereferences a potentially unaligned pointer.
+    "RUSTSEC-2021-0145",
+]
