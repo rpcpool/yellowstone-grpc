@@ -65,6 +65,11 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check advisories
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --tests #-- --deny=warnings
 
