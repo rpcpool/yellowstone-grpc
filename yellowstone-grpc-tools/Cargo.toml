@@ -19,7 +19,7 @@ hyper = { version = "0.14.27", features = ["server"] }
 json5 = "0.4.1"
 lazy_static = "1.4.0"
 prometheus = "0.13.2"
-rdkafka = { version = "0.33.2", features = ["ssl", "sasl"] }
+rdkafka = { version = "0.34.0", features = ["ssl", "sasl"] }
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 serde_yaml = "0.9.25"

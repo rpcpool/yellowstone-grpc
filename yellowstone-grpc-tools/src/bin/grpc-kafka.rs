@@ -92,13 +92,17 @@ impl ArgsAction {
         }
 
         // input
-        let consumer = prom::StatsContext::create_stream_consumer(&kafka_config)
+        let (consumer, kafka_error_rx1) = prom::StatsContext::create_stream_consumer(&kafka_config)
             .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_input])?;
 
         // output
-        let kafka = prom::StatsContext::create_future_producer(&kafka_config)
+        let (kafka, kafka_error_rx2) = prom::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
+
+        let mut kafka_error = false;
+        let kafka_error_rx = futures::future::join(kafka_error_rx1, kafka_error_rx2);
+        tokio::pin!(kafka_error_rx);
 
         // dedup
         let dedup = config.backend.create().await?;
@@ -109,6 +113,10 @@ impl ArgsAction {
         loop {
             let message = tokio::select! {
                 _ = &mut shutdown => break,
+                _ = &mut kafka_error_rx => {
+                    kafka_error = true;
+                    break;
+                }
                 maybe_result = send_tasks.join_next() => match maybe_result {
                     Some(result) => {
                         result??;
@@ -116,6 +124,10 @@ impl ArgsAction {
                     }
                     None => tokio::select! {
                         _ = &mut shutdown => break,
+                        _ = &mut kafka_error_rx => {
+                            kafka_error = true;
+                            break;
+                        }
                         message = consumer.recv() => message,
                     }
                 },
@@ -175,6 +187,10 @@ impl ArgsAction {
             if send_tasks.len() >= config.kafka_queue_size {
                 tokio::select! {
                     _ = &mut shutdown => break,
+                    _ = &mut kafka_error_rx => {
+                        kafka_error = true;
+                        break;
+                    }
                     result = send_tasks.join_next() => {
                         if let Some(result) = result {
                             result??;
@@ -183,9 +199,17 @@ impl ArgsAction {
                 }
             }
         }
-        warn!("shutdown received...");
-        while let Some(result) = send_tasks.join_next().await {
-            result??;
+        if !kafka_error {
+            warn!("shutdown received...");
+            loop {
+                tokio::select! {
+                    _ = &mut kafka_error_rx => break,
+                    result = send_tasks.join_next() => match result {
+                        Some(result) => result??,
+                        None => break
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -200,8 +224,10 @@ impl ArgsAction {
         }
 
         // Connect to kafka
-        let kafka = prom::StatsContext::create_future_producer(&kafka_config)
+        let (kafka, kafka_error_rx) = prom::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
+        let mut kafka_error = false;
+        tokio::pin!(kafka_error_rx);
 
         // Create gRPC client & subscribe
         let mut client = GeyserGrpcClient::connect_with_timeout(
@@ -220,13 +246,21 @@ impl ArgsAction {
         loop {
             let message = tokio::select! {
                 _ = &mut shutdown => break,
+                _ = &mut kafka_error_rx => {
+                    kafka_error = true;
+                    break;
+                }
                 maybe_result = send_tasks.join_next() => match maybe_result {
                     Some(result) => {
-                        let _ = result??;
+                        result??;
                         continue;
                     }
                     None => tokio::select! {
                         _ = &mut shutdown => break,
+                        _ = &mut kafka_error_rx => {
+                            kafka_error = true;
+                            break;
+                        }
                         message = geyser.next() => message,
                     }
                 },
@@ -264,13 +298,17 @@ impl ArgsAction {
                                 let result = future.await;
                                 debug!("kafka send message with key: {key}, result: {result:?}");
 
-                                let result = result?.map_err(|(error, _message)| error)?;
+                                let _ = result?.map_err(|(error, _message)| error)?;
                                 prom::sent_inc(prom_kind);
-                                Ok::<(i32, i64), anyhow::Error>(result)
+                                Ok::<(), anyhow::Error>(())
                             });
                             if send_tasks.len() >= config.kafka_queue_size {
                                 tokio::select! {
                                     _ = &mut shutdown => break,
+                                    _ = &mut kafka_error_rx => {
+                                        kafka_error = true;
+                                        break;
+                                    }
                                     result = send_tasks.join_next() => {
                                         if let Some(result) = result {
                                             result??;
@@ -285,9 +323,17 @@ impl ArgsAction {
                 None => break,
             }
         }
-        warn!("shutdown received...");
-        while let Some(result) = send_tasks.join_next().await {
-            let _ = result??;
+        if !kafka_error {
+            warn!("shutdown received...");
+            loop {
+                tokio::select! {
+                    _ = &mut kafka_error_rx => break,
+                    result = send_tasks.join_next() => match result {
+                        Some(result) => result??,
+                        None => break
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -303,13 +349,19 @@ impl ArgsAction {
 
         let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
-        let consumer = prom::StatsContext::create_stream_consumer(&kafka_config)
+        let (consumer, kafka_error_rx) = prom::StatsContext::create_stream_consumer(&kafka_config)
             .context("failed to create kafka consumer")?;
+        let mut kafka_error = false;
+        tokio::pin!(kafka_error_rx);
         consumer.subscribe(&[&config.kafka_topic])?;
 
         loop {
             let message = tokio::select! {
                 _ = &mut shutdown => break,
+                _ = &mut kafka_error_rx => {
+                    kafka_error = true;
+                    break
+                },
                 message = consumer.recv() => message?,
             };
             prom::recv_inc();
@@ -330,7 +382,9 @@ impl ArgsAction {
             }
         }
 
-        warn!("shutdown received...");
+        if !kafka_error {
+            warn!("shutdown received...");
+        }
         Ok(grpc_shutdown.await??)
     }
 }
