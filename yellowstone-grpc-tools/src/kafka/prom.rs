@@ -2,13 +2,15 @@ use {
     crate::prom::GprcMessageKind,
     prometheus::{GaugeVec, IntCounter, IntCounterVec, Opts},
     rdkafka::{
-        client::ClientContext,
-        config::{ClientConfig, FromClientConfigAndContext},
+        client::{ClientContext, DefaultClientContext},
+        config::{ClientConfig, FromClientConfigAndContext, RDKafkaLogLevel},
         consumer::{ConsumerContext, StreamConsumer},
-        error::KafkaResult,
+        error::{KafkaError, KafkaResult},
         producer::FutureProducer,
         statistics::Statistics,
     },
+    std::sync::Mutex,
+    tokio::sync::oneshot,
 };
 
 lazy_static::lazy_static! {
@@ -31,8 +33,30 @@ lazy_static::lazy_static! {
     ).unwrap();
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct StatsContext;
+#[derive(Debug)]
+pub struct StatsContext {
+    default: DefaultClientContext,
+    error_tx: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl StatsContext {
+    fn new() -> (Self, oneshot::Receiver<()>) {
+        let (error_tx, error_rx) = oneshot::channel();
+        (
+            Self {
+                default: DefaultClientContext,
+                error_tx: Mutex::new(Some(error_tx)),
+            },
+            error_rx,
+        )
+    }
+
+    fn send_error(&self) {
+        if let Some(error_tx) = self.error_tx.lock().expect("alive mutex").take() {
+            let _ = error_tx.send(());
+        }
+    }
+}
 
 impl ClientContext for StatsContext {
     fn stats(&self, statistics: Statistics) {
@@ -89,17 +113,43 @@ impl ClientContext for StatsContext {
             }
         }
     }
+
+    fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+        self.default.log(level, fac, log_message);
+        if matches!(
+            level,
+            RDKafkaLogLevel::Emerg
+                | RDKafkaLogLevel::Alert
+                | RDKafkaLogLevel::Critical
+                | RDKafkaLogLevel::Error
+        ) {
+            self.send_error()
+        }
+    }
+
+    fn error(&self, error: KafkaError, reason: &str) {
+        self.default.error(error, reason);
+        self.send_error()
+    }
 }
 
 impl ConsumerContext for StatsContext {}
 
 impl StatsContext {
-    pub fn create_future_producer(config: &ClientConfig) -> KafkaResult<FutureProducer<Self>> {
-        FutureProducer::from_config_and_context(config, Self)
+    pub fn create_future_producer(
+        config: &ClientConfig,
+    ) -> KafkaResult<(FutureProducer<Self>, oneshot::Receiver<()>)> {
+        let (context, error_rx) = Self::new();
+        FutureProducer::from_config_and_context(config, context)
+            .map(|producer| (producer, error_rx))
     }
 
-    pub fn create_stream_consumer(config: &ClientConfig) -> KafkaResult<StreamConsumer<Self>> {
-        StreamConsumer::from_config_and_context(config, Self)
+    pub fn create_stream_consumer(
+        config: &ClientConfig,
+    ) -> KafkaResult<(StreamConsumer<Self>, oneshot::Receiver<()>)> {
+        let (context, error_rx) = Self::new();
+        StreamConsumer::from_config_and_context(config, context)
+            .map(|consumer| (consumer, error_rx))
     }
 }
 
