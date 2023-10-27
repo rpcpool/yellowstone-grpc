@@ -55,7 +55,7 @@ impl Plugin {
     {
         // Full block reconstruction will fail before first processed slot received
         let inner = self.inner.as_ref().expect("initialized");
-        if inner.startup_status.load(Ordering::SeqCst)
+        if inner.startup_status.load(Ordering::Relaxed)
             == STARTUP_END_OF_RECEIVED | STARTUP_PROCESSED_RECEIVED
         {
             f(inner)
@@ -153,16 +153,16 @@ impl GeyserPlugin for Plugin {
     fn notify_end_of_startup(&self) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
 
+        inner
+            .startup_status
+            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::Relaxed);
+
         if let Some(channel) = &inner.snapshot_channel {
             match channel.send(None) {
                 Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
                 Err(_) => panic!("failed to send message to startup queue: channel closed"),
             }
         }
-
-        inner
-            .startup_status
-            .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
 
         Ok(())
     }
@@ -179,14 +179,15 @@ impl GeyserPlugin for Plugin {
         if parent == Some(0) {
             inner
                 .startup_status
-                .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::SeqCst);
+                .fetch_or(STARTUP_END_OF_RECEIVED, Ordering::Relaxed);
         }
-        if inner.startup_status.load(Ordering::SeqCst) == STARTUP_END_OF_RECEIVED
-            && status == SlotStatus::Processed
-        {
-            inner
-                .startup_status
-                .fetch_or(STARTUP_PROCESSED_RECEIVED, Ordering::SeqCst);
+        if status == SlotStatus::Processed {
+            let _ = inner.startup_status.compare_exchange(
+                STARTUP_END_OF_RECEIVED,
+                STARTUP_END_OF_RECEIVED | STARTUP_PROCESSED_RECEIVED,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
         }
 
         self.with_inner(|inner| {
