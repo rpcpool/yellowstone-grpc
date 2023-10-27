@@ -129,6 +129,10 @@ struct ActionSubscribe {
     #[clap(long)]
     slots: bool,
 
+    /// Filter slots by commitment
+    #[clap(long)]
+    slots_filter_by_commitment: bool,
+
     /// Subscribe on transactions updates
     #[clap(long)]
     transactions: bool,
@@ -241,7 +245,12 @@ impl Action {
 
                 let mut slots: SlotsFilterMap = HashMap::new();
                 if args.slots {
-                    slots.insert("client".to_owned(), SubscribeRequestFilterSlots {});
+                    slots.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterSlots {
+                            filter_by_commitment: Some(args.slots_filter_by_commitment),
+                        },
+                    );
                 }
 
                 let mut transactions: TransactionsFilterMap = HashMap::new();
@@ -550,7 +559,7 @@ async fn geyser_subscribe(
         counter += 1;
         if counter == resub {
             let mut new_slots: SlotsFilterMap = HashMap::new();
-            new_slots.insert("client".to_owned(), SubscribeRequestFilterSlots {});
+            new_slots.insert("client".to_owned(), SubscribeRequestFilterSlots::default());
 
             subscribe_tx
                 .send(SubscribeRequest {

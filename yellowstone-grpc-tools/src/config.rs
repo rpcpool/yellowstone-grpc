@@ -12,7 +12,7 @@ use {
         CommitmentLevel, SubscribeRequest, SubscribeRequestAccountsDataSlice,
         SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
         SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterTransactions,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
 };
 
@@ -40,7 +40,7 @@ pub trait GrpcRequestToProto<T> {
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ConfigGrpcRequest {
-    pub slots: HashSet<String>,
+    pub slots: HashMap<String, ConfigGrpcRequestSlots>,
     pub accounts: HashMap<String, ConfigGrpcRequestAccounts>,
     pub transactions: HashMap<String, ConfigGrpcRequestTransactions>,
     pub entries: HashSet<String>,
@@ -67,7 +67,7 @@ impl ConfigGrpcRequest {
 impl GrpcRequestToProto<SubscribeRequest> for ConfigGrpcRequest {
     fn to_proto(self) -> SubscribeRequest {
         SubscribeRequest {
-            slots: ConfigGrpcRequest::set_to_proto(self.slots),
+            slots: ConfigGrpcRequest::map_to_proto(self.slots),
             accounts: ConfigGrpcRequest::map_to_proto(self.accounts),
             transactions: ConfigGrpcRequest::map_to_proto(self.transactions),
             entry: ConfigGrpcRequest::set_to_proto(self.entries),
@@ -75,6 +75,20 @@ impl GrpcRequestToProto<SubscribeRequest> for ConfigGrpcRequest {
             blocks_meta: ConfigGrpcRequest::set_to_proto(self.blocks_meta),
             commitment: self.commitment.map(|v| v.to_proto() as i32),
             accounts_data_slice: ConfigGrpcRequest::vec_to_proto(self.accounts_data_slice),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ConfigGrpcRequestSlots {
+    filter_by_commitment: Option<bool>,
+}
+
+impl GrpcRequestToProto<SubscribeRequestFilterSlots> for ConfigGrpcRequestSlots {
+    fn to_proto(self) -> SubscribeRequestFilterSlots {
+        SubscribeRequestFilterSlots {
+            filter_by_commitment: self.filter_by_commitment,
         }
     }
 }
