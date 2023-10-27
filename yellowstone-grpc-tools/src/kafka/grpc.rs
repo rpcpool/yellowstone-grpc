@@ -103,7 +103,7 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
-        let id = self.subscribe_id.fetch_add(1, Ordering::SeqCst);
+        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
         let (stream_tx, stream_rx) = mpsc::channel(self.channel_capacity);
         let notify_client = Arc::new(Notify::new());
         let notify_exit1 = Arc::new(Notify::new());
