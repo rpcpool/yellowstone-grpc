@@ -18,6 +18,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: add optional field `filter_by_commitment` to Slots filter ([#223](https://github.com/rpcpool/yellowstone-grpc/pull/223))
+
 ### Breaking
 
 ## 2023-10-19

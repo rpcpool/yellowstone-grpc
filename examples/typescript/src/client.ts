@@ -128,7 +128,9 @@ async function subscribeCommand(client, args) {
   }
 
   if (args.slots) {
-    request.slots.client = {};
+    request.slots.client = {
+      filterByCommitment: args.slotsFilterByCommitment,
+    };
   }
 
   if (args.transactions) {
@@ -270,6 +272,11 @@ function parseCommandLineArgs() {
         slots: {
           default: false,
           describe: "subscribe on slots updates",
+          type: "boolean",
+        },
+        "slots-filter-by-commitment": {
+          default: false,
+          describe: "filter slot messages by commitment",
           type: "boolean",
         },
         transactions: {

@@ -1082,7 +1082,7 @@ impl GrpcService {
                     }
                 };
 
-                for message in filter.get_update(&message) {
+                for message in filter.get_update(&message, None) {
                     if stream_tx.send(Ok(message)).await.is_err() {
                         error!("client #{id}: stream closed");
                         is_alive = false;
@@ -1126,7 +1126,7 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for message in messages.iter() {
-                                for message in filter.get_update(message) {
+                                for message in filter.get_update(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
