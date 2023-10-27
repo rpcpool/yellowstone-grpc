@@ -56,7 +56,9 @@ message SubscribeRequestFilterAccountsFilterMemcmp {
   }
 }
 
-message SubscribeRequestFilterSlots {}
+message SubscribeRequestFilterSlots {
+  optional bool filter_by_commitment = 1;
+}
 
 message SubscribeRequestFilterTransactions {
   optional bool vote = 1;
