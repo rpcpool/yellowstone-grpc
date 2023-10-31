@@ -23,7 +23,7 @@ use {
         SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
         SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate,
+        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
     },
 };
 
@@ -190,6 +190,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
         commitment: Option<CommitmentLevel>,
         accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
+        ping: Option<SubscribeRequestPing>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         self.subscribe_once2(SubscribeRequest {
             slots,
@@ -200,6 +201,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             blocks_meta,
             commitment: commitment.map(|value| value as i32),
             accounts_data_slice,
+            ping,
         })
         .await
     }
