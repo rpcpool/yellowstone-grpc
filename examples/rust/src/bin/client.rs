@@ -21,7 +21,8 @@ use {
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateTransaction,
+            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
+            SubscribeUpdateTransaction,
         },
         tonic::service::Interceptor,
     },
@@ -188,6 +189,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
+    /// Send ping in subscribe request
+    #[clap(long)]
+    ping: Option<i32>,
+
     // Resubscribe (only to slots) after
     #[clap(long)]
     resub: Option<usize>,
@@ -305,6 +310,8 @@ impl Action {
                     }
                 }
 
+                let ping = args.ping.map(|id| SubscribeRequestPing { id });
+
                 Some((
                     SubscribeRequest {
                         slots,
@@ -315,6 +322,7 @@ impl Action {
                         blocks_meta,
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
+                        ping,
                     },
                     args.resub.unwrap_or(0),
                 ))
@@ -571,6 +579,7 @@ async fn geyser_subscribe(
                     blocks_meta: HashMap::default(),
                     commitment: None,
                     accounts_data_slice: Vec::default(),
+                    ping: None,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;
