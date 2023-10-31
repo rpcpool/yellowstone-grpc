@@ -1049,18 +1049,29 @@ impl GrpcService {
             info!("client #{id}: going to receive snapshot data");
 
             // we start with default filter, for snapshot we need wait actual filter first
-            match client_rx.recv().await {
-                Some(Some(filter_new)) => {
-                    filter = filter_new;
-                    info!("client #{id}: filter updated");
-                }
-                Some(None) => {
-                    is_alive = false;
-                }
-                None => {
-                    is_alive = false;
-                }
-            };
+            while is_alive {
+                match client_rx.recv().await {
+                    Some(Some(filter_new)) => {
+                        if let Some(msg) = filter_new.get_pong_msg() {
+                            if stream_tx.send(Ok(msg)).await.is_err() {
+                                error!("client #{id}: stream closed");
+                                is_alive = false;
+                                break;
+                            }
+                            continue;
+                        }
+
+                        filter = filter_new;
+                        info!("client #{id}: filter updated");
+                    }
+                    Some(None) => {
+                        is_alive = false;
+                    }
+                    None => {
+                        is_alive = false;
+                    }
+                };
+            }
 
             while is_alive {
                 let message = match snapshot_rx.try_recv() {
@@ -1098,6 +1109,14 @@ impl GrpcService {
                     message = client_rx.recv() => {
                         match message {
                             Some(Some(filter_new)) => {
+                                if let Some(msg) = filter_new.get_pong_msg() {
+                                    if stream_tx.send(Ok(msg)).await.is_err() {
+                                        error!("client #{id}: stream closed");
+                                        break 'outer;
+                                    }
+                                    continue;
+                                }
+
                                 filter = filter_new;
                                 info!("client #{id}: filter updated");
                             }
@@ -1174,6 +1193,7 @@ impl Geyser for GrpcService {
                 entry: HashMap::new(),
                 commitment: None,
                 accounts_data_slice: Vec::new(),
+                ping: None,
             },
             &self.config.filters,
         )

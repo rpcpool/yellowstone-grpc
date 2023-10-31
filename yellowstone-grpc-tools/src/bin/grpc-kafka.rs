@@ -281,6 +281,7 @@ impl ArgsAction {
                         UpdateOneof::Transaction(msg) => msg.slot,
                         UpdateOneof::Block(msg) => msg.slot,
                         UpdateOneof::Ping(_) => continue,
+                        UpdateOneof::Pong(_) => continue,
                         UpdateOneof::BlockMeta(msg) => msg.slot,
                         UpdateOneof::Entry(msg) => msg.slot,
                     };

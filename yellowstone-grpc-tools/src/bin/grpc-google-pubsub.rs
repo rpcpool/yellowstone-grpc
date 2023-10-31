@@ -164,6 +164,7 @@ impl ArgsAction {
                     UpdateOneof::Transaction(msg) => msg.slot,
                     UpdateOneof::Block(msg) => msg.slot,
                     UpdateOneof::Ping(_) => continue,
+                    UpdateOneof::Pong(_) => continue,
                     UpdateOneof::BlockMeta(msg) => msg.slot,
                     UpdateOneof::Entry(msg) => msg.slot,
                 };
@@ -241,6 +242,7 @@ impl ArgsAction {
                     }
                     Some(UpdateOneof::Block(msg)) => info!("#{}, block", msg.slot),
                     Some(UpdateOneof::Ping(_)) => {}
+                    Some(UpdateOneof::Pong(_)) => {}
                     Some(UpdateOneof::BlockMeta(msg)) => info!("#{}, blockmeta", msg.slot),
                     Some(UpdateOneof::Entry(msg)) => info!("#{}, entry", msg.slot),
                     None => {}

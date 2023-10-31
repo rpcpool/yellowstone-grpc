@@ -31,6 +31,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterEntry> entry = 8;
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
+  optional SubscribeRequestPing ping = 9;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -85,6 +86,10 @@ message SubscribeRequestAccountsDataSlice {
   uint64 length = 2;
 }
 
+message SubscribeRequestPing {
+  int32 id = 1;
+}
+
 message SubscribeUpdate {
   repeated string filters = 1;
   oneof update_oneof {
@@ -93,6 +98,7 @@ message SubscribeUpdate {
     SubscribeUpdateTransaction transaction = 4;
     SubscribeUpdateBlock block = 5;
     SubscribeUpdatePing ping = 6;
+    SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
   }
@@ -170,6 +176,10 @@ message SubscribeUpdateEntry {
 }
 
 message SubscribeUpdatePing {}
+
+message SubscribeUpdatePong {
+  int32 id = 1;
+}
 
 // non-streaming methods
 

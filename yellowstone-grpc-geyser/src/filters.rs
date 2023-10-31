@@ -21,11 +21,11 @@ use {
     yellowstone_grpc_proto::prelude::{
         subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
         subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        CommitmentLevel, SubscribeRequest, SubscribeRequestAccountsDataSlice,
-        SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate,
+        subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
     },
 };
 
@@ -39,6 +39,7 @@ pub struct Filter {
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
     accounts_data_slice: Vec<FilterAccountsDataSlice>,
+    ping: Option<i32>,
 }
 
 impl Filter {
@@ -52,6 +53,7 @@ impl Filter {
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
             commitment: Self::decode_commitment(config.commitment)?,
             accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
+            ping: config.ping.as_ref().map(|msg| msg.id),
         })
     }
 
@@ -115,6 +117,13 @@ impl Filter {
                 }
             })
             .collect()
+    }
+
+    pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
+        self.ping.map(|id| SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
+        })
     }
 }
 
@@ -836,6 +845,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit);
@@ -864,6 +874,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
@@ -897,6 +908,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -929,6 +941,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -967,6 +980,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1009,6 +1023,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1051,6 +1066,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1099,6 +1115,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1149,6 +1166,7 @@ mod tests {
             entry: HashMap::new(),
             commitment: None,
             accounts_data_slice: Vec::new(),
+            ping: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();

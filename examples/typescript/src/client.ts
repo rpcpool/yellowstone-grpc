@@ -92,6 +92,7 @@ async function subscribeCommand(client, args) {
     blocks: {},
     blocksMeta: {},
     accountsDataSlice: [],
+    ping: undefined,
   };
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
@@ -176,6 +177,10 @@ async function subscribeCommand(client, args) {
         length,
       });
     }
+  }
+
+  if (args.ping) {
+    request.ping = { id: args.ping };
   }
 
   // Send subscribe request
@@ -346,6 +351,11 @@ function parseCommandLineArgs() {
           description: "subscribe on block meta updates (without transactions)",
           type: "boolean",
         },
+        ping: {
+          default: undefined,
+          description: "send ping request in subscribe",
+          type: "number"
+        }
       });
     })
     .demandCommand(1)
