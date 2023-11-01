@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.5+solana.1.17.1"
+version = "1.0.0-rc.6+solana.1.17.1"
 authors = ["Triton One"]
 edition = "2021"
 description = "Yellowstone gRPC Tools"
