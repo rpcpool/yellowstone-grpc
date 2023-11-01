@@ -30,7 +30,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - tools: correctly handle SIGINT in kafka ([#219](https://github.com/rpcpool/yellowstone-grpc/pull/219))
 - geyser: use Ordering::Relaxed instead of SeqCst ([#221](https://github.com/rpcpool/yellowstone-grpc/pull/221))
 - proto: add optional field `ping` to `SubscribeRequest` ([#227](https://github.com/rpcpool/yellowstone-grpc/pull/227))
-- geyser: remove startup_status (allow reload plugin)  ([#229](https://github.com/rpcpool/yellowstone-grpc/pull/229))
+- geyser: remove startup_status (allow reload plugin)  ([#230](https://github.com/rpcpool/yellowstone-grpc/pull/230))
 
 ### Features
 
