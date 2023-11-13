@@ -1,20 +1,20 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "1.11.0+solana.1.17.1"
-authors = ["Triton One"]
-edition = "2021"
+version = "1.11.0+solana.1.17.4"
+authors = { workspace = true }
+edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
-homepage = "https://triton.one"
-repository = "https://github.com/rpcpool/yellowstone-grpc"
-license = "Apache-2.0"
-keywords = ["solana"]
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
 
 [dependencies]
 bincode = "1.3.3"
 prost = "0.12.1"
-solana-account-decoder = "=1.17.1"
-solana-sdk = "=1.17.1"
-solana-transaction-status = "=1.17.1"
+solana-account-decoder = { workspace = true }
+solana-sdk = { workspace = true }
+solana-transaction-status = { workspace = true }
 tonic = "0.10.2"
 
 [build-dependencies]

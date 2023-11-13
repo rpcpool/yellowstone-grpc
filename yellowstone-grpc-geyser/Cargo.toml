@@ -1,9 +1,13 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "1.11.0+solana.1.17.1"
-authors = ["Triton One"]
-edition = "2021"
+version = "1.11.0+solana.1.17.4"
+authors = { workspace = true }
+edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
 publish = false
 
 [lib]
@@ -26,10 +30,10 @@ log = "0.4.17"
 prometheus = "0.13.2"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
-solana-geyser-plugin-interface = "=1.17.1"
-solana-logger = "=1.17.1"
-solana-sdk = "=1.17.1"
-solana-transaction-status = "=1.17.1"
+solana-geyser-plugin-interface = { workspace = true }
+solana-logger = { workspace = true }
+solana-sdk = { workspace = true }
+solana-transaction-status = { workspace = true }
 spl-token-2022 = { version = "0.9.0", features = ["no-entrypoint"] }
 tokio = { version = "1.32.0", features = ["rt-multi-thread", "macros", "time", "fs"] }
 tokio-stream = "0.1.11"

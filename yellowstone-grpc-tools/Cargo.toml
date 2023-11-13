@@ -1,9 +1,13 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.6+solana.1.17.1"
-authors = ["Triton One"]
-edition = "2021"
+version = "1.0.0-rc.6+solana.1.17.4"
+authors = { workspace = true }
+edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
 publish = false
 
 [dependencies]
