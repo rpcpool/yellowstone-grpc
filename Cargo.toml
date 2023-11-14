@@ -5,7 +5,7 @@ members = [
     "yellowstone-grpc-client", # 1.12.0+solana.1.17.5
     "yellowstone-grpc-geyser", # 1.11.0+solana.1.17.5
     "yellowstone-grpc-proto", # 1.11.0+solana.1.17.5
-    "yellowstone-grpc-tools", # 1.0.0-rc.6+solana.1.17.5
+    "yellowstone-grpc-tools", # 1.0.0-rc.7+solana.1.17.5
 ]
 
 [workspace.package]
@@ -31,6 +31,7 @@ clap = { version = "4.3.0", features = ["cargo", "derive"] }
 const-hex = "1.6.2"
 crossbeam-channel = "0.5.8"
 env_logger = "0.10.0"
+flatbuffers = "23.1.21"
 futures = "0.3.24"
 git-version = "0.3.5"
 google-cloud-googleapis = "0.11.0"
@@ -42,6 +43,8 @@ json5 = "0.4.1"
 lazy_static = "1.4.0"
 log = "0.4.17"
 maplit = "1.0.2"
+plerkle_messenger = { git = "https://github.com/rpcpool/digital-asset-validator-plugin", branch = "grpc-1.17", version = "1.6.0", features = ["redis"] }
+plerkle_serialization = { git = "https://github.com/rpcpool/digital-asset-validator-plugin", branch = "grpc-1.17", version = "1.6.0" }
 prometheus = "0.13.2"
 prost = "0.12.1"
 protobuf-src = "1.1.0"

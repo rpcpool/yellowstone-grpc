@@ -6,11 +6,6 @@ use {
     std::{net::SocketAddr, time::Duration},
     tokio::{task::JoinSet, time::sleep},
     tracing::{info, warn},
-    tracing_subscriber::{
-        filter::{EnvFilter, LevelFilter},
-        layer::SubscriberExt,
-        util::SubscriberInitExt,
-    },
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -24,6 +19,7 @@ use {
             prom,
         },
         prom::{run_server as prometheus_run_server, GprcMessageKind},
+        setup_tracing,
     },
 };
 
@@ -259,16 +255,7 @@ impl ArgsAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Setup tracing
-    let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
-    let io_layer = tracing_subscriber::fmt::layer().with_ansi(is_atty);
-    let level_layer = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::registry()
-        .with(io_layer)
-        .with(level_layer)
-        .try_init()?;
+    setup_tracing()?;
 
     // Parse args
     let args = Args::parse();

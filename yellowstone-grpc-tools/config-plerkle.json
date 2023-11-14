@@ -1,0 +1,31 @@
+{
+    "prometheus": "127.0.0.1:8873",
+    "endpoint": "http://127.0.0.1:10000",
+    "x_token": null,
+    "accounts": [{
+        "owner": [
+            "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        ]
+    }],
+    "transactions": [{
+        "account_include": [
+            "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY"
+        ]
+    }],
+    "commitment": "processed",
+    "num_workers": 4,
+    "account_stream_size": "100_000_000",
+    "slot_stream_size": "100_000",
+    "transaction_stream_size": "10_000_000",
+    "block_stream_size": "100_000",
+    "messenger_config": {
+        "messenger_type": "Redis",
+        "connection_config": {
+            "redis_connection_str": "redis://localhost:6379",
+            "batch_size": 1000,
+            "message_wait_timeout": 5,
+            "retries": 5
+        }
+    }
+}

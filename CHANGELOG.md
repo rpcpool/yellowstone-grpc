@@ -18,6 +18,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-11-??
+
+- yellowstone-grpc-tools-1.0.0-rc.7+solana.1.17.5
+
+### Features
+
+- tools: add plerkle plugin replacement ([#236](https://github.com/rpcpool/yellowstone-grpc/pull/236))
+
 ## 2023-11-14
 
 - yellowstone-grpc-client-1.12.0+solana.1.17.5

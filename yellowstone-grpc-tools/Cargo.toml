@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.6+solana.1.17.5"
+version = "1.0.0-rc.7+solana.1.17.5"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
@@ -18,23 +18,33 @@ required-features = ["google-pubsub"]
 name = "grpc-kafka"
 required-features = ["kafka"]
 
+[[bin]]
+name = "grpc-plerkle"
+required-features = ["plerkle"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
+chrono = { workspace = true, optional = true }
 clap = { workspace = true }
 const-hex = { workspace = true, optional = true }
+flatbuffers = { workspace = true, optional = true }
 futures = { workspace = true }
 google-cloud-googleapis = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
 hyper = { workspace = true }
 json5 = { workspace = true }
 lazy_static = { workspace = true }
+maplit = { workspace = true, optional = true }
+plerkle_messenger = { workspace = true, optional = true }
+plerkle_serialization = { workspace = true, optional = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
+solana-sdk = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
@@ -57,6 +67,7 @@ git-version = { workspace = true }
 vergen = { workspace = true }
 
 [features]
-default = ["google-pubsub", "kafka"]
+default = ["google-pubsub", "kafka", "plerkle"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
+plerkle = ["chrono", "flatbuffers", "maplit", "plerkle_messenger", "plerkle_serialization", "solana-sdk"]
