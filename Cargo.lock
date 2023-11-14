@@ -3510,9 +3510,9 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5010de925850388b045a6d88e88f62944906f4f436ff48436b110f543f254ad6"
+checksum = "7592d5226a565440a367de95128b34e031752483ca0552e18d5601661f9e52f8"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
@@ -3534,9 +3534,9 @@ dependencies = [
 
 [[package]]
 name = "solana-config-program"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fa1a537ec5fc4ba3c3951d2a010809721c240a2cfaab6d6da95a5f0b2f4797c"
+checksum = "eab6e41a3149615cc208fcbbb09f23a4fb721c867b93695ce9affe2427d64263"
 dependencies = [
  "bincode",
  "chrono",
@@ -3548,9 +3548,9 @@ dependencies = [
 
 [[package]]
 name = "solana-frozen-abi"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80447a64ba88aff4ab1fe70c646b9a0ee65f190aa2977b1e7360066445f8ed34"
+checksum = "358b2e42869ebb34c6cafc89ca7cda381817b5bd781fa33302d335c6feaa04b6"
 dependencies = [
  "ahash 0.8.3",
  "blake3",
@@ -3578,9 +3578,9 @@ dependencies = [
 
 [[package]]
 name = "solana-frozen-abi-macro"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28b7325d40b3b3fef0db6917972e8121bec05fa2b59904212b25478c85924cd"
+checksum = "ea690497947bc9cc8bcf7985b3c4c539b199e56c28f250746026797b681ea291"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3590,9 +3590,9 @@ dependencies = [
 
 [[package]]
 name = "solana-geyser-plugin-interface"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8621cb833793d8b276be8247099bbdad5453cde36b557f7613467b0ed7f14944"
+checksum = "3e15a6eb2b41056a4ed98b3de12d37af553e8ddb22cb3726a7801ca15f2a5c0a"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3602,9 +3602,9 @@ dependencies = [
 
 [[package]]
 name = "solana-logger"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a224a0a87196c940472515838630e0ed6a49f97ea0d01d9dbeed0bb57390447"
+checksum = "e679b49d07fa6a140e194cb453322b265fb48993e4ae6225a9524a7a6e28f27b"
 dependencies = [
  "env_logger 0.9.3",
  "lazy_static",
@@ -3613,9 +3613,9 @@ dependencies = [
 
 [[package]]
 name = "solana-measure"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbf3d86eec20d13830a3c692e1428570d1e02dca750812ef58532dbda062e79b"
+checksum = "d8d4e3d96aa286a70626b3e6ec1fd1373b4ffe687eaaa8db2f2105538dd771ad"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3623,9 +3623,9 @@ dependencies = [
 
 [[package]]
 name = "solana-metrics"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80b9e646b0d429c661500f3acc1a52adb292157a2f57fc855b298b437f07c9de"
+checksum = "096528fd079d6be74488629477d06b8ce0575ffe60bd9616538924e5a6846e8c"
 dependencies = [
  "crossbeam-channel",
  "gethostname",
@@ -3638,9 +3638,9 @@ dependencies = [
 
 [[package]]
 name = "solana-program"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1fe4a811ec2c4b0c3773e5661ecfaff81f822c9e18866097caeba6be9338dab"
+checksum = "926ca88c8b0d0815ce4336092379eb0b61aebaab8ba984784c029a559200527f"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -3692,9 +3692,9 @@ dependencies = [
 
 [[package]]
 name = "solana-program-runtime"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41841bee09d81bed82ffebe1fb7fdebe3003d0fca5f3a6d03e3cb01ac5aed979"
+checksum = "14a0118d5aa0cd97530b2225e7ebb4d89f6cc589b86298a1052a01b7c58d4f1e"
 dependencies = [
  "base64 0.21.4",
  "bincode",
@@ -3720,9 +3720,9 @@ dependencies = [
 
 [[package]]
 name = "solana-sdk"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c79894240bad61135a9ec86cd7709dcbc9e69eec8ebcc0b4066bccde6615600"
+checksum = "d55719c5a4fdcf7651120ba6650cf4eba5f2b1eb30b06d2d53aec7237146d1f9"
 dependencies = [
  "assert_matches",
  "base64 0.21.4",
@@ -3774,9 +3774,9 @@ dependencies = [
 
 [[package]]
 name = "solana-sdk-macro"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97dce8e347d73bcd9a6fe0b37bf830a20d0a4913ac58046c79959d5e15bbbed3"
+checksum = "b7985176f781b66c625070b413f48740fab2ec2dd330f7afd04563799dffec44"
 dependencies = [
  "bs58",
  "proc-macro2",
@@ -3787,9 +3787,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e143ce053b0fe641f320c463c822c199d5b6849b0d844be009b8e7d6ecebf8e"
+checksum = "c6c9124cce810f23e04d51bc45c7b6b8ba4cd1abc13926a04c3d3e2893d9bb96"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
@@ -3812,9 +3812,9 @@ dependencies = [
 
 [[package]]
 name = "solana-zk-token-sdk"
-version = "1.17.4"
+version = "1.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48f33d2ce508c9e70aa7d2f1948f3a9df56ee66423252785c608b4023e0c01a"
+checksum = "a1d5f912154350af6318043ff857198914fbaaa88338f57bfff5f0ba5cf0da62"
 dependencies = [
  "aes-gcm-siv",
  "base64 0.21.4",
@@ -4948,7 +4948,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.12.0+solana.1.17.4"
+version = "1.12.0+solana.1.17.5"
 dependencies = [
  "bytes",
  "futures",
@@ -4962,7 +4962,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.11.0+solana.1.17.4"
+version = "1.11.0+solana.1.17.5"
 dependencies = [
  "anyhow",
  "backoff",
@@ -4985,7 +4985,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.11.0+solana.1.17.4"
+version = "1.11.0+solana.1.17.5"
 dependencies = [
  "anyhow",
  "base64 0.21.4",
@@ -5017,7 +5017,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.11.0+solana.1.17.4"
+version = "1.11.0+solana.1.17.5"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5032,7 +5032,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.6+solana.1.17.4"
+version = "1.0.0-rc.6+solana.1.17.5"
 dependencies = [
  "anyhow",
  "async-trait",
