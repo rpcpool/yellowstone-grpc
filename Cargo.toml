@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 1.11.0+solana.1.17.4
-    "yellowstone-grpc-client", # 1.12.0+solana.1.17.4
-    "yellowstone-grpc-geyser", # 1.11.0+solana.1.17.4
-    "yellowstone-grpc-proto", # 1.11.0+solana.1.17.4
-    "yellowstone-grpc-tools", # 1.0.0-rc.6+solana.1.17.4
+    "examples/rust", # 1.11.0+solana.1.17.5
+    "yellowstone-grpc-client", # 1.12.0+solana.1.17.5
+    "yellowstone-grpc-geyser", # 1.11.0+solana.1.17.5
+    "yellowstone-grpc-proto", # 1.11.0+solana.1.17.5
+    "yellowstone-grpc-tools", # 1.0.0-rc.6+solana.1.17.5
 ]
 
 [workspace.package]
@@ -17,11 +17,11 @@ license = "Apache-2.0"
 keywords = ["solana"]
 
 [workspace.dependencies]
-solana-account-decoder = "=1.17.4"
-solana-geyser-plugin-interface = "=1.17.4"
-solana-logger = "=1.17.4"
-solana-sdk = "=1.17.4"
-solana-transaction-status = "=1.17.4"
+solana-account-decoder = "=1.17.5"
+solana-geyser-plugin-interface = "=1.17.5"
+solana-logger = "=1.17.5"
+solana-sdk = "=1.17.5"
+solana-transaction-status = "=1.17.5"
 
 [profile.release]
 debug = true
