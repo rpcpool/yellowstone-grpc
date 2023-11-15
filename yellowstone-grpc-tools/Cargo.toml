@@ -23,7 +23,6 @@ hyper = { version = "0.14.27", features = ["server"] }
 json5 = "0.4.1"
 lazy_static = "1.4.0"
 prometheus = "0.13.2"
-rdkafka = { version = "0.34.0", features = ["ssl", "sasl"] }
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 serde_yaml = "0.9.25"
@@ -36,6 +35,12 @@ tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 yellowstone-grpc-client = { path = "../yellowstone-grpc-client" }
 yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto" }
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
+rdkafka = { version = "0.34.0", features = ["ssl", "sasl"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+rdkafka = { version = "0.34.0", features = ["ssl-vendored", "sasl"] }
 
 [build-dependencies]
 anyhow = "1.0.62"
