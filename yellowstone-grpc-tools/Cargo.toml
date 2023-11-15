@@ -36,10 +36,10 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 yellowstone-grpc-client = { path = "../yellowstone-grpc-client" }
 yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto" }
 
-[target.'cfg(not(all(target_os = "macos", target_arch = "arm")))'.dependencies]
+[target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
 rdkafka = { version = "0.34.0", features = ["ssl", "sasl"] }
 
-[target.'cfg(all(target_os = "macos", target_arch = "arm"))'.dependencies]
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 rdkafka = { version = "0.34.0", features = ["ssl-vendored", "sasl"] }
 
 [build-dependencies]
