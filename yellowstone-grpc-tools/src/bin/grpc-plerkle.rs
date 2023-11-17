@@ -13,6 +13,7 @@ use {
     yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
     yellowstone_grpc_tools::{
         config::load as config_load,
+        create_shutdown,
         plerkle::{
             config::Config,
             ser::{serialize_account, serialize_block, serialize_transaction},
@@ -102,7 +103,16 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
     let mut geyser = client.subscribe_once2(config.create_request()).await?;
-    while let Some(message) = geyser.next().await {
+    let mut shutdown = create_shutdown()?;
+    loop {
+        let message = tokio::select! {
+            _ = &mut shutdown => break,
+            message = geyser.next() => match message {
+                Some(message) => message,
+                None => break,
+            }
+        };
+
         let mut builder = FlatBufferBuilder::new();
         let stream = match message?
             .update_oneof
