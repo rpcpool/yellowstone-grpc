@@ -8,16 +8,17 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
+publish = true
 
 [dependencies]
-bincode = "1.3.3"
-prost = "0.12.1"
+bincode = { workspace = true }
+prost = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
-tonic = "0.10.2"
+tonic = { workspace = true }
 
 [build-dependencies]
-anyhow = "1.0.62"
-protobuf-src = "1.1.0"
-tonic-build = "0.10.2"
+anyhow = { workspace = true }
+protobuf-src = { workspace = true }
+tonic-build = { workspace = true }

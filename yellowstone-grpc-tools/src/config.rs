@@ -28,7 +28,7 @@ where
         Some("yaml") | Some("yml") => {
             serde_yaml::from_str(&text).context("failed to parse config from file")
         }
-        Some("json") => serde_yaml::from_str(&text).context("failed to parse config from file"),
+        Some("json") => json5::from_str(&text).context("failed to parse config from file"),
         value => anyhow::bail!("unknown config extension: {value:?}"),
     }
 }
