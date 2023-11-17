@@ -10,40 +10,53 @@ license = { workspace = true }
 keywords = { workspace = true }
 publish = false
 
+[[bin]]
+name = "grpc-google-pubsub"
+required-features = ["google-pubsub"]
+
+[[bin]]
+name = "grpc-kafka"
+required-features = ["kafka"]
+
 [dependencies]
-anyhow = "1.0.62"
-async-trait = "0.1.73"
-atty = "0.2.14"
-clap = { version = "4.3.0", features = ["cargo", "derive"] }
-const-hex = "1.6.2"
-futures = "0.3.24"
-google-cloud-googleapis = "0.11.0"
-google-cloud-pubsub = "0.21.0"
-hyper = { version = "0.14.27", features = ["server"] }
-json5 = "0.4.1"
-lazy_static = "1.4.0"
-prometheus = "0.13.2"
-serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.86"
-serde_yaml = "0.9.25"
-sha2 = "0.10.7"
-tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time", "fs", "signal"] }
-tokio-stream = "0.1.11"
-tonic = { version = "0.10.2", features = ["gzip", "tls", "tls-roots"] }
-tonic-health = "0.10.2"
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-yellowstone-grpc-client = { path = "../yellowstone-grpc-client" }
-yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+atty = { workspace = true }
+clap = { workspace = true }
+const-hex = { workspace = true, optional = true }
+futures = { workspace = true }
+google-cloud-googleapis = { workspace = true, optional = true }
+google-cloud-pubsub = { workspace = true, optional = true }
+hyper = { workspace = true }
+json5 = { workspace = true }
+lazy_static = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true, optional = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
-rdkafka = { version = "0.34.0", features = ["ssl", "sasl"] }
+rdkafka = { workspace = true, features = ["ssl"], optional = true }
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-rdkafka = { version = "0.34.0", features = ["ssl-vendored", "sasl"] }
+rdkafka = { workspace = true, features = ["ssl-vendored"], optional = true }
 
 [build-dependencies]
-anyhow = "1.0.62"
-cargo-lock = "9.0.0"
-git-version = "0.3.5"
-vergen = { version = "8.2.1", features = ["build", "rustc"] }
+anyhow = { workspace = true }
+cargo-lock = { workspace = true }
+git-version = { workspace = true }
+vergen = { workspace = true }
+
+[features]
+default = ["google-pubsub", "kafka"]
+google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
+kafka = ["const-hex", "rdkafka", "sha2"]
