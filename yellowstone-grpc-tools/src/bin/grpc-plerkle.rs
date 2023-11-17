@@ -141,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
         tx.send(message)
             .context("failed to send message to workers")?;
     }
+    drop(tx);
 
     // Wait messenger woekers
     try_join_all(workers)

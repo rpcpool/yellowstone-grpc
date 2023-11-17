@@ -1,9 +1,9 @@
+#[cfg(feature = "google-pubsub")]
+use crate::google_pubsub::prom::GOOGLE_PUBSUB_SENT_TOTAL;
+#[cfg(feature = "kafka")]
+use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
 use {
-    crate::{
-        google_pubsub::prom::GOOGLE_PUBSUB_SENT_TOTAL,
-        kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS},
-        version::VERSION as VERSION_INFO,
-    },
+    crate::version::VERSION as VERSION_INFO,
     hyper::{
         server::conn::AddrStream,
         service::{make_service_fn, service_fn},
@@ -35,11 +35,17 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
             };
         }
         register!(VERSION);
-        register!(GOOGLE_PUBSUB_SENT_TOTAL);
-        register!(KAFKA_STATS);
-        register!(KAFKA_DEDUP_TOTAL);
-        register!(KAFKA_RECV_TOTAL);
-        register!(KAFKA_SENT_TOTAL);
+        #[cfg(feature = "google-pubsub")]
+        {
+            register!(GOOGLE_PUBSUB_SENT_TOTAL);
+        }
+        #[cfg(feature = "kafka")]
+        {
+            register!(KAFKA_STATS);
+            register!(KAFKA_DEDUP_TOTAL);
+            register!(KAFKA_RECV_TOTAL);
+            register!(KAFKA_SENT_TOTAL);
+        }
 
         VERSION
             .with_label_values(&[
