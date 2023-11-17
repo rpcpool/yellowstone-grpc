@@ -1,6 +1,7 @@
 /target
 /test-ledger
 
+dump.rdb
 yellowstone-grpc-geyser/config-test.json
 *.sw?
 .idea/
