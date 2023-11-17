@@ -2,6 +2,8 @@
 use crate::google_pubsub::prom::GOOGLE_PUBSUB_SENT_TOTAL;
 #[cfg(feature = "kafka")]
 use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
+#[cfg(feature = "plerkle")]
+use crate::plerkle::prom::{PLERKLE_MESSAGE_QUEUE_SIZE, PLERKLE_SENT_TOTAL};
 use {
     crate::version::VERSION as VERSION_INFO,
     hyper::{
@@ -45,6 +47,11 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
             register!(KAFKA_DEDUP_TOTAL);
             register!(KAFKA_RECV_TOTAL);
             register!(KAFKA_SENT_TOTAL);
+        }
+        #[cfg(feature = "plerkle")]
+        {
+            register!(PLERKLE_MESSAGE_QUEUE_SIZE);
+            register!(PLERKLE_SENT_TOTAL);
         }
 
         VERSION

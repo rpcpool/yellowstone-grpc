@@ -2758,7 +2758,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plerkle_messenger"
 version = "1.6.0"
-source = "git+https://github.com/rpcpool/digital-asset-validator-plugin?branch=grpc-1.17#fc490af8018d344f3acd289e9e4f8dd68ad6da56"
+source = "git+https://github.com/rpcpool/digital-asset-validator-plugin?branch=grpc-1.17#32fac477118dee9d12c140fdb40c9fdfdbe0c560"
 dependencies = [
  "async-mutex",
  "async-trait",
@@ -2776,7 +2776,7 @@ dependencies = [
 [[package]]
 name = "plerkle_serialization"
 version = "1.6.0"
-source = "git+https://github.com/rpcpool/digital-asset-validator-plugin?branch=grpc-1.17#fc490af8018d344f3acd289e9e4f8dd68ad6da56"
+source = "git+https://github.com/rpcpool/digital-asset-validator-plugin?branch=grpc-1.17#32fac477118dee9d12c140fdb40c9fdfdbe0c560"
 dependencies = [
  "bs58",
  "chrono",
