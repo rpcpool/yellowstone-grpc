@@ -24,7 +24,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- tools: add plerkle plugin replacement ([#236](https://github.com/rpcpool/yellowstone-grpc/pull/236))
+- tools: add plerkle plugin replacement ([#239](https://github.com/rpcpool/yellowstone-grpc/pull/239))
 
 ## 2023-11-14
 
