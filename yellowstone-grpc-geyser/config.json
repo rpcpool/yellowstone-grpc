@@ -1,5 +1,5 @@
 {
-    "libpath": "../target/debug/libyellowstone_grpc_geyser.so",
+    "libpath": "../target/release/libyellowstone_grpc_geyser.so",
     "log": {
         "level": "info"
     },
