@@ -3,7 +3,9 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 
 pub mod config;
+#[cfg(feature = "google-pubsub")]
 pub mod google_pubsub;
+#[cfg(feature = "kafka")]
 pub mod kafka;
 pub mod prom;
 pub mod version;
