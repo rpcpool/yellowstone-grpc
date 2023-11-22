@@ -14,9 +14,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- use workspace for dependencies ([#240](https://github.com/rpcpool/yellowstone-grpc/pull/240))
-
 ### Breaking
+
+## 2023-11-21
+
+- yellowstone-grpc-client-1.12.0+solana.1.17.6
+- yellowstone-grpc-geyser-1.11.0+solana.1.17.6
+- yellowstone-grpc-proto-1.11.0+solana.1.17.6
+- yellowstone-grpc-tools-1.0.0-rc.7+solana.1.17.6
+
+### Fixes
+
+- tools: fixes openssl link problem (macos+aarch64) ([#236](https://github.com/rpcpool/yellowstone-grpc/pull/236))
+
+### Features
+
+- use workspace for dependencies ([#240](https://github.com/rpcpool/yellowstone-grpc/pull/240))
+- solana: update to 1.17.6 ([#244](https://github.com/rpcpool/yellowstone-grpc/pull/244))
 
 ## 2023-11-14
 
