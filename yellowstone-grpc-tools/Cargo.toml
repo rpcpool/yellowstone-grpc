@@ -22,7 +22,7 @@ required-features = ["kafka"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
 futures = { workspace = true }
 google-cloud-googleapis = { workspace = true, optional = true }
@@ -35,26 +35,26 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["gzip"] }
 tonic-health = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
-rdkafka = { workspace = true, features = ["ssl"], optional = true }
+rdkafka = { workspace = true, features = ["sasl", "ssl"], optional = true }
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-rdkafka = { workspace = true, features = ["ssl-vendored"], optional = true }
+rdkafka = { workspace = true, features = ["sasl", "ssl-vendored"], optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
-vergen = { workspace = true }
+vergen = { workspace = true, features = ["build", "rustc"] }
 
 [features]
 default = ["google-pubsub", "kafka"]
