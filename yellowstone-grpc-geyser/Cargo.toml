@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "1.11.0+solana.1.17.6"
+version = "1.11.1+solana.1.17.6"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -21,7 +21,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
@@ -34,10 +34,10 @@ solana-geyser-plugin-interface = { workspace = true }
 solana-logger = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
-spl-token-2022 = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-stream = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["gzip", "tls", "tls-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
@@ -45,4 +45,4 @@ yellowstone-grpc-proto = { workspace = true }
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
-vergen = { workspace = true }
+vergen = { workspace = true, features = ["build", "rustc"] }

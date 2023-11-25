@@ -806,7 +806,6 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap_lex",
- "once_cell",
  "strsim",
 ]
 
@@ -4995,7 +4994,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.11.0+solana.1.17.6"
+version = "1.11.1+solana.1.17.6"
 dependencies = [
  "anyhow",
  "base64 0.21.4",
