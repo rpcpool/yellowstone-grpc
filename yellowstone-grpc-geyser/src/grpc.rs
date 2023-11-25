@@ -636,6 +636,7 @@ struct SlotMessages {
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
     entries: Vec<MessageEntry>,
     sealed: bool,
+    entries_count: usize,
     confirmed_at: Option<usize>,
     finalized_at: Option<usize>,
 }
@@ -644,11 +645,19 @@ impl SlotMessages {
     pub fn try_seal(&mut self) -> Option<Message> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
-                if self.transactions.len() == block_meta.executed_transaction_count as usize
-                    && self.entries.len() == block_meta.entries_count as usize
+                let executed_transaction_count = block_meta.executed_transaction_count as usize;
+                let entries_count = block_meta.entries_count as usize;
+
+                // Additional check `entries_count == 0` due to bug of zero entries on block produced by validator
+                // See GitHub issue: https://github.com/solana-labs/solana/issues/33823
+                if self.transactions.len() == executed_transaction_count
+                    && (entries_count == 0 || self.entries.len() == entries_count)
                 {
                     let transactions = std::mem::take(&mut self.transactions);
-                    let entries = std::mem::take(&mut self.entries);
+                    let mut entries = std::mem::take(&mut self.entries);
+                    if entries_count == 0 {
+                        entries.clear();
+                    }
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
@@ -663,6 +672,7 @@ impl SlotMessages {
                     self.messages.push(Some(message.clone()));
 
                     self.sealed = true;
+                    self.entries_count = entries_count;
                     return Some(message);
                 }
             }
@@ -865,7 +875,7 @@ impl GrpcService {
                         slot_messages.messages.push(Some(message.clone()));
 
                         // If we already build Block message, new message will be a problem
-                        if slot_messages.sealed {
+                        if slot_messages.sealed && !(matches!(message, Message::Entry(_)) && slot_messages.entries_count == 0) {
                             prom::update_invalid_blocks(format!("unexpected message {}", message.kind()));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
