@@ -6,6 +6,10 @@ It provides the ability to get slots, blocks, transactions, and account update n
 
 For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
 
+#### Known bugs
+
+Block reconstruction inside gRPC plugin based on information provided by BlockMeta, unfortunately number of entries for blocks generated on validators always equal to zero. These blocks always will have zero entries. See issue on GitHub: https://github.com/solana-labs/solana/issues/33823
+
 ### Validator
 
 Current plugin version (`+solana.1.16.x`) use validator with backported `ReplicaBlockInfoV3` to Geyser interface — https://github.com/solana-labs/solana/pull/33359. As result it's not compatible with original validator from Solana Labs and would not work. You need to compile validator from the source code and can find patched releases in `Triton One` Solana fork: https://github.com/rpcpool/solana-public/tree/v1.16.16-geyser-block-v3.

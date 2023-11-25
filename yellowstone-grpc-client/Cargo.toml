@@ -15,9 +15,9 @@ bytes = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 thiserror ={ workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls", "tls-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

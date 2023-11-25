@@ -14,9 +14,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- use workspace for dependencies ([#240](https://github.com/rpcpool/yellowstone-grpc/pull/240))
-
 ### Breaking
+
+## 2023-11-24
+
+- yellowstone-grpc-geyser-1.11.1+solana.1.16.19
+
+### Fixes
+
+- geyser: reconstruct blocks with zero entries ([#245](https://github.com/rpcpool/yellowstone-grpc/pull/245))
+
+### Features
+
+- use workspace for dependencies ([#240](https://github.com/rpcpool/yellowstone-grpc/pull/240))
 
 ## 2023-11-15
 
