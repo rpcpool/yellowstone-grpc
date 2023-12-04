@@ -1,3 +1,5 @@
+use http::request;
+
 use {
     bytes::Bytes,
     futures::{
@@ -173,7 +175,23 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         impl Sink<SubscribeRequest, Error = mpsc::SendError>,
         impl Stream<Item = Result<SubscribeUpdate, Status>>,
     )> {
-        let (subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        self.subscribe_with_request(None).await
+    }
+
+    pub async fn subscribe_with_request(
+        &mut self,
+        request: Option<SubscribeRequest>,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
         Ok((subscribe_tx, response.into_inner()))
