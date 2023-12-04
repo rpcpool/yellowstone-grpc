@@ -1,5 +1,3 @@
-use http::request;
-
 use {
     bytes::Bytes,
     futures::{
