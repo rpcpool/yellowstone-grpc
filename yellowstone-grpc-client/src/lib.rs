@@ -173,7 +173,23 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         impl Sink<SubscribeRequest, Error = mpsc::SendError>,
         impl Stream<Item = Result<SubscribeUpdate, Status>>,
     )> {
-        let (subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        self.subscribe_with_request(None).await
+    }
+
+    pub async fn subscribe_with_request(
+        &mut self,
+        request: Option<SubscribeRequest>,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
         Ok((subscribe_tx, response.into_inner()))
@@ -206,14 +222,13 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn subscribe_once2(
         &mut self,
         request: SubscribeRequest,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
-        let (mut subscribe_tx, response) = self.subscribe().await?;
-        subscribe_tx.send(request).await?;
-        Ok(response)
+        self.subscribe_with_request(Some(request))
+            .await
+            .map(|(_sink, stream)| stream)
     }
 
     pub async fn ping(&mut self, count: i32) -> GeyserGrpcClientResult<PongResponse> {

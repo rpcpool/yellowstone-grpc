@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- client: include request in initial subscribe to gRPC endpoint to fix LB connection delay ([#252](https://github.com/rpcpool/yellowstone-grpc/pull/252))
+
 ### Features
 
 ### Breaking
