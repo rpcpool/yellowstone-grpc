@@ -524,7 +524,8 @@ async fn geyser_subscribe(
     request: SubscribeRequest,
     resub: usize,
 ) -> anyhow::Result<()> {
-    let (mut subscribe_tx, mut stream) = client.subscribe_with_request(Some(request)).await?;
+    let (mut subscribe_tx, mut stream) =
+        client.subscribe_with_request(Some(request.clone())).await?;
 
     info!("stream opened");
     let mut counter = 0;
@@ -548,6 +549,23 @@ async fn geyser_subscribe(
                             msg.filters, tx
                         );
                         continue;
+                    }
+                    Some(UpdateOneof::Ping(_)) => {
+                        // This is necessary to keep load balancers that expect client pings alive. If your load balancer doesn't
+                        // require periodic client pings then this is unnecessary
+                        subscribe_tx
+                            .send(SubscribeRequest {
+                                ping: Some(SubscribeRequestPing { id: 1 }),
+                                slots: request.slots.clone(),
+                                accounts: request.accounts.clone(),
+                                transactions: request.transactions.clone(),
+                                entry: request.entry.clone(),
+                                blocks: request.blocks.clone(),
+                                blocks_meta: request.blocks_meta.clone(),
+                                commitment: request.commitment.clone(),
+                                accounts_data_slice: request.accounts_data_slice.clone(),
+                            })
+                            .await?;
                     }
                     _ => {}
                 }
