@@ -524,11 +524,7 @@ async fn geyser_subscribe(
     request: SubscribeRequest,
     resub: usize,
 ) -> anyhow::Result<()> {
-    let (mut subscribe_tx, mut stream) = client.subscribe().await?;
-    subscribe_tx
-        .send(request)
-        .await
-        .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+    let (mut subscribe_tx, mut stream) = client.subscribe_with_request(Some(request)).await?;
 
     info!("stream opened");
     let mut counter = 0;
