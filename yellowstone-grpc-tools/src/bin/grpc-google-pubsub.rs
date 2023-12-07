@@ -119,8 +119,6 @@ impl ArgsAction {
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
-        let mut msg_slot = 0;
-        let mut msg_id = 0;
         'outer: loop {
             let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
             tokio::pin!(sleep);
@@ -154,25 +152,9 @@ impl ArgsAction {
                     Some(value) => value,
                     None => unreachable!("Expect valid message"),
                 };
-                let slot = match message {
-                    UpdateOneof::Account(msg) => msg.slot,
-                    UpdateOneof::Slot(msg) => msg.slot,
-                    UpdateOneof::Transaction(msg) => msg.slot,
-                    UpdateOneof::Block(msg) => msg.slot,
-                    UpdateOneof::Ping(_) => continue,
-                    UpdateOneof::Pong(_) => continue,
-                    UpdateOneof::BlockMeta(msg) => msg.slot,
-                    UpdateOneof::Entry(msg) => msg.slot,
-                };
-                if msg_slot != slot {
-                    msg_slot = slot;
-                    msg_id = 0;
-                }
-                msg_id += 1;
 
                 messages.push(PubsubMessage {
                     data: payload,
-                    ordering_key: format!("{msg_slot}-{msg_id}"),
                     ..Default::default()
                 });
                 prom_kind.push(GprcMessageKind::from(message));
