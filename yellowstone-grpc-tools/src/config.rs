@@ -184,9 +184,10 @@ impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigGrpcRequestBlock
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigGrpcRequestCommitment {
+    #[default]
     Processed,
     Confirmed,
     Finalized,
