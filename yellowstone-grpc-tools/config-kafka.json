@@ -20,7 +20,11 @@
         "endpoint": "http://127.0.0.1:10000",
         "x_token": null,
         "request": {
-            "slots": ["client"],
+            "slots": {
+                "client": {
+                    "filter_by_commitment": null
+                }
+            },
             "blocks": {
                 "client": {
                     "account_include": [],
