@@ -16,6 +16,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-12-06
+
+- yellowstone-grpc-tools-1.0.0-rc.8+solana.1.16.21
+
+### Fixes
+
+- client: include request in initial subscribe to gRPC endpoint to fix LB connection delay ([#252](https://github.com/rpcpool/yellowstone-grpc/pull/252))
+- tools: remove `ordering_key` from `PubsubMessage` ([#257](https://github.com/rpcpool/yellowstone-grpc/pull/257))
+
 ## 2023-12-04
 
 - yellowstone-grpc-client-1.12.0+solana.1.16.21

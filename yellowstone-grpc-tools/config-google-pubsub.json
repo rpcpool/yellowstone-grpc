@@ -1,10 +1,16 @@
 {
     "prometheus": "127.0.0.1:8873",
+    // "with_auth": true, // Auth with DefaultTokenSourceProvider
+    // "with_credentials": "path_to_json_file_with_creds", // or use envs: GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_APPLICATION_CREDENTIALS_JSON
     "grpc2pubsub": {
         "endpoint": "http://127.0.0.1:10000",
         "x_token": null,
         "request": {
-            "slots": ["client"],
+            "slots": {
+                "client": {
+                    "filter_by_commitment": null
+                }
+            },
             "blocks": {
                 "client": {
                     "account_include": [],
