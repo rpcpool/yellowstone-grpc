@@ -147,17 +147,17 @@ impl ArgsAction {
                     None => break 'outer,
                 };
 
-                let payload = message.encode_to_vec();
-                let message = match &message.update_oneof {
-                    Some(value) => value,
+                match &message.update_oneof {
+                    Some(UpdateOneof::Ping(_)) => continue,
+                    Some(UpdateOneof::Pong(_)) => continue,
+                    Some(value) => prom_kind.push(GprcMessageKind::from(value)),
                     None => unreachable!("Expect valid message"),
                 };
 
                 messages.push(PubsubMessage {
-                    data: payload,
+                    data: message.encode_to_vec(),
                     ..Default::default()
                 });
-                prom_kind.push(GprcMessageKind::from(message));
             }
             if messages.is_empty() {
                 continue;
