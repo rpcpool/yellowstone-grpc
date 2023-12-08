@@ -3501,7 +3501,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
@@ -3525,7 +3525,7 @@ dependencies = [
 [[package]]
 name = "solana-address-lookup-table-program"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -3545,7 +3545,7 @@ dependencies = [
 [[package]]
 name = "solana-config-program"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "bincode",
  "chrono",
@@ -3558,7 +3558,7 @@ dependencies = [
 [[package]]
 name = "solana-frozen-abi"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "ahash 0.8.3",
  "blake3",
@@ -3590,7 +3590,7 @@ dependencies = [
 [[package]]
 name = "solana-frozen-abi-macro"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3601,7 +3601,7 @@ dependencies = [
 [[package]]
 name = "solana-geyser-plugin-interface"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3612,7 +3612,7 @@ dependencies = [
 [[package]]
 name = "solana-logger"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "env_logger 0.9.3",
  "lazy_static",
@@ -3622,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "solana-measure"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "log",
  "solana-sdk",
@@ -3631,7 +3631,7 @@ dependencies = [
 [[package]]
 name = "solana-metrics"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "crossbeam-channel",
  "gethostname",
@@ -3644,7 +3644,7 @@ dependencies = [
 [[package]]
 name = "solana-program"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -3698,7 +3698,7 @@ dependencies = [
 [[package]]
 name = "solana-program-runtime"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "base64 0.21.4",
  "bincode",
@@ -3725,7 +3725,7 @@ dependencies = [
 [[package]]
 name = "solana-sdk"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "assert_matches",
  "base64 0.21.4",
@@ -3777,7 +3777,7 @@ dependencies = [
 [[package]]
 name = "solana-sdk-macro"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "bs58",
  "proc-macro2",
@@ -3789,7 +3789,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status"
 version = "1.16.21"
-source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3#751ab236d651abf1b93411e37f847c0562c5fc86"
+source = "git+https://github.com/rpcpool/solana-public.git?tag=v1.16.21-geyser-block-v3-mango#b43758d531107c615bfdc7e2d0883e27e2eeb7b1"
 dependencies = [
  "Inflector",
  "base64 0.21.4",
