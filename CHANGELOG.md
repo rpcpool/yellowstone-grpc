@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2023-12-08
+
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.6
+
+### Fixes
+
+- tools: fix panic on Ping/Pong messages in google pubsub ([#261](https://github.com/rpcpool/yellowstone-grpc/pull/261))
+
 ## 2023-12-06
 
 - yellowstone-grpc-tools-1.0.0-rc.8+solana.1.17.6
