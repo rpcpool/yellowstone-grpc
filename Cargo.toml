@@ -50,11 +50,13 @@ serde = "1.0.145"
 serde_json = "1.0.86"
 serde_yaml = "0.9.25"
 sha2 = "0.10.7"
-solana-account-decoder = "=1.16.19"
-solana-geyser-plugin-interface = "=1.16.19"
-solana-logger = "=1.16.19"
-solana-sdk = "=1.16.19"
-solana-transaction-status = "=1.16.19"
+
+solana-account-decoder = { path = "../solana/account-decoder" }  #"=1.18.0"
+solana-geyser-plugin-interface = { path = "../solana/geyser-plugin-interface" }
+solana-logger = { path = "../solana/logger" }
+solana-sdk = { path = "../solana/sdk" }
+solana-transaction-status = { path = "../solana/transaction-status" }
+
 spl-token-2022 = "0.9.0"
 thiserror = "1.0"
 tokio = "1.21.2"
@@ -74,9 +76,7 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-solana-account-decoder = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
-solana-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
-solana-logger = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
-solana-program = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
-solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v1.16.19-geyser-block-v3" }
+solana-program = { path = "../solana/sdk/program" }
+solana-zk-token-sdk = { path = "../solana/zk-token-sdk" }
+solana-sdk = { path = "../solana/sdk" }
+

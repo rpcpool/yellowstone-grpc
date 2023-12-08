@@ -7,8 +7,8 @@ use {
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
-        SlotStatus,
+        ReplicaAccountInfoV3, ReplicaAccountInfoV4, ReplicaBlockInfoV2, ReplicaEntryInfo,
+        ReplicaTransactionInfoV2, SlotStatus,
     },
     solana_sdk::{
         clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
@@ -50,10 +50,36 @@ use {
             IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdatePreviousAccountInfo, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo,
         },
     },
 };
+
+#[derive(Debug, Clone)]
+pub struct MessagePreviousAccountInfo {
+    pub lamports: u64,
+    pub owner: Pubkey,
+    pub executable: bool,
+    pub rent_epoch: u64,
+    pub data: Vec<u8>,
+}
+
+impl MessagePreviousAccountInfo {
+    fn to_proto(
+        &self,
+        accounts_data_slice: &[FilterAccountsDataSlice],
+    ) -> SubscribeUpdatePreviousAccountInfo {
+        let data = FilterAccountsDataSlice::filter_data(accounts_data_slice, &self.data);
+        SubscribeUpdatePreviousAccountInfo {
+            lamports: self.lamports,
+            owner: self.owner.as_ref().into(),
+            executable: self.executable,
+            rent_epoch: self.rent_epoch,
+            data,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MessageAccountInfo {
@@ -101,6 +127,7 @@ pub struct MessageAccount {
     pub account: MessageAccountInfo,
     pub slot: u64,
     pub is_startup: bool,
+    pub previous_account_state: Option<MessagePreviousAccountInfo>,
 }
 
 impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
@@ -116,6 +143,34 @@ impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
                 write_version: account.write_version,
                 txn_signature: account.txn.map(|txn| *txn.signature()),
             },
+            slot,
+            is_startup,
+            previous_account_state: None,
+        }
+    }
+}
+impl<'a> From<(&'a ReplicaAccountInfoV4<'a>, u64, bool)> for MessageAccount {
+    fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV4<'a>, u64, bool)) -> Self {
+        Self {
+            account: MessageAccountInfo {
+                pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
+                lamports: account.lamports,
+                owner: Pubkey::try_from(account.owner).expect("valid Pubkey"),
+                executable: account.executable,
+                rent_epoch: account.rent_epoch,
+                data: account.data.into(),
+                write_version: account.write_version,
+                txn_signature: account.txn.map(|txn| *txn.signature()),
+            },
+            previous_account_state: account.previous_account_state.as_ref().map(
+                |previous_account| MessagePreviousAccountInfo {
+                    lamports: previous_account.lamports,
+                    owner: Pubkey::try_from(previous_account.owner).expect("valid Pubkey"),
+                    executable: previous_account.executable,
+                    rent_epoch: previous_account.rent_epoch,
+                    data: previous_account.data.into(),
+                },
+            ),
             slot,
             is_startup,
         }
@@ -279,11 +334,10 @@ pub struct MessageBlockMeta {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
-    pub entries_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
+impl<'a> From<&'a ReplicaBlockInfoV2<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV2<'a>) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
@@ -293,7 +347,6 @@ impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
-            entries_count: blockinfo.entry_count,
         }
     }
 }
@@ -407,6 +460,10 @@ impl<'a> MessageRef<'a> {
                 account: Some(message.account.to_proto(accounts_data_slice)),
                 slot: message.slot,
                 is_startup: message.is_startup,
+                previous_account_state: message
+                    .previous_account_state
+                    .as_ref()
+                    .map(|acc| acc.to_proto(accounts_data_slice)),
             }),
             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
                 transaction: Some(message.transaction.to_proto()),
@@ -646,18 +703,13 @@ impl SlotMessages {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
                 let executed_transaction_count = block_meta.executed_transaction_count as usize;
-                let entries_count = block_meta.entries_count as usize;
 
                 // Additional check `entries_count == 0` due to bug of zero entries on block produced by validator
                 // See GitHub issue: https://github.com/solana-labs/solana/issues/33823
-                if self.transactions.len() == executed_transaction_count
-                    && (entries_count == 0 || self.entries.len() == entries_count)
-                {
+                if self.transactions.len() == executed_transaction_count {
                     let transactions = std::mem::take(&mut self.transactions);
                     let mut entries = std::mem::take(&mut self.entries);
-                    if entries_count == 0 {
-                        entries.clear();
-                    }
+                    entries.clear();
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
@@ -672,7 +724,6 @@ impl SlotMessages {
                     self.messages.push(Some(message.clone()));
 
                     self.sealed = true;
-                    self.entries_count = entries_count;
                     return Some(message);
                 }
             }
@@ -837,12 +888,6 @@ impl GrpcService {
                                                         if block_txn_count != msg_txn_count {
                                                             reasons.push("InvalidTxnCount");
                                                             error!("failed to reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
-                                                        }
-                                                        let block_entries_count = block_meta.entries_count as usize;
-                                                        let msg_entries_count = slot_messages.entries.len();
-                                                        if block_entries_count != msg_entries_count {
-                                                            reasons.push("InvalidEntriesCount");
-                                                            error!("failed to reconstruct #{slot} -- entries count: {block_entries_count} vs {msg_entries_count}");
                                                         }
                                                     } else {
                                                         reasons.push("NoBlockMeta");

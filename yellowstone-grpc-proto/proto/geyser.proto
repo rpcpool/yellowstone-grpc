@@ -108,6 +108,7 @@ message SubscribeUpdateAccount {
   SubscribeUpdateAccountInfo account = 1;
   uint64 slot = 2;
   bool is_startup = 3;
+  optional SubscribeUpdatePreviousAccountInfo previous_account_state = 4;
 }
 
 message SubscribeUpdateAccountInfo {
@@ -119,6 +120,14 @@ message SubscribeUpdateAccountInfo {
   bytes data = 6;
   uint64 write_version = 7;
   optional bytes txn_signature = 8;
+}
+
+message SubscribeUpdatePreviousAccountInfo {
+  uint64 lamports = 1;
+  bytes owner = 2;
+  bool executable = 3;
+  uint64 rent_epoch = 4;
+  bytes data = 5;
 }
 
 message SubscribeUpdateSlot {

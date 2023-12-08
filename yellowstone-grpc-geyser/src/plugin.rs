@@ -112,10 +112,11 @@ impl GeyserPlugin for Plugin {
                 ReplicaAccountInfoVersions::V0_0_2(_info) => {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
                 }
-                ReplicaAccountInfoVersions::V0_0_3(info) => info,
+                ReplicaAccountInfoVersions::V0_0_3(info) => (info, slot, is_startup).into(),
+                ReplicaAccountInfoVersions::V0_0_4(info) => (info, slot, is_startup).into(),
             };
 
-            let message = Message::Account((account, slot, is_startup).into());
+            let message = Message::Account(account);
             if is_startup {
                 if let Some(channel) = &inner.snapshot_channel {
                     match channel.send(Some(message)) {
@@ -197,10 +198,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaBlockInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaBlockInfoVersions::V0_0_2(_info) => {
-                    unreachable!("ReplicaBlockInfoVersions::V0_0_2 is not supported")
-                }
-                ReplicaBlockInfoVersions::V0_0_3(info) => info,
+                ReplicaBlockInfoVersions::V0_0_2(info) => info,
             };
 
             let message = Message::BlockMeta(blockinfo.into());
@@ -221,6 +219,10 @@ impl GeyserPlugin for Plugin {
     fn entry_notifications_enabled(&self) -> bool {
         true
     }
+
+    // fn enable_pre_trasaction_execution_accounts_data(&self) -> bool {
+    //     true
+    // }
 }
 
 #[no_mangle]

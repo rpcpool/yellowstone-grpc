@@ -195,6 +195,11 @@ impl FilterAccounts {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
+        if let Some(ref previous_account) = message.previous_account_state {
+            if message.account.owner != previous_account.owner {
+                filter.match_owner(&previous_account.owner);
+            }
+        }
         filter.match_data(&message.account.data);
         vec![(filter.get_filters(), MessageRef::Account(message))]
     }
@@ -764,6 +769,20 @@ impl FilterAccountsDataSlice {
         }
 
         Ok(slices)
+    }
+    pub fn filter_data(accounts_data_slice: &[FilterAccountsDataSlice], data: &[u8]) -> Vec<u8> {
+        if accounts_data_slice.is_empty() {
+            data.to_vec()
+        } else {
+            let mut new_data =
+                Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+            for data_slice in accounts_data_slice {
+                if data.len() >= data_slice.end {
+                    new_data.extend_from_slice(&data[data_slice.start..data_slice.end]);
+                }
+            }
+            new_data
+        }
     }
 }
 
