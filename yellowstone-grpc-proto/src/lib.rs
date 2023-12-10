@@ -56,11 +56,7 @@ pub mod convert_to {
         match message {
             SanitizedMessage::Legacy(LegacyMessage { message, .. }) => proto::Message {
                 header: Some(create_header(&message.header)),
-                account_keys: message
-                    .account_keys
-                    .iter()
-                    .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
-                    .collect(),
+                account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
                 instructions: message
                     .instructions
@@ -72,23 +68,11 @@ pub mod convert_to {
             },
             SanitizedMessage::V0(LoadedMessage { message, .. }) => proto::Message {
                 header: Some(create_header(&message.header)),
-                account_keys: message
-                    .account_keys
-                    .iter()
-                    .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
-                    .collect(),
+                account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
-                instructions: message
-                    .instructions
-                    .iter()
-                    .map(create_instruction)
-                    .collect(),
+                instructions: create_instructions(&message.instructions),
                 versioned: true,
-                address_table_lookups: message
-                    .address_table_lookups
-                    .iter()
-                    .map(create_lookup)
-                    .collect(),
+                address_table_lookups: create_lookups(&message.address_table_lookups),
             },
         }
     }
@@ -101,12 +85,29 @@ pub mod convert_to {
         }
     }
 
+    pub fn create_pubkeys(pubkeys: &[Pubkey]) -> Vec<Vec<u8>> {
+        pubkeys
+            .iter()
+            .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
+            .collect()
+    }
+
+    pub fn create_instructions(ixs: &[CompiledInstruction]) -> Vec<proto::CompiledInstruction> {
+        ixs.iter().map(create_instruction).collect()
+    }
+
     pub fn create_instruction(ix: &CompiledInstruction) -> proto::CompiledInstruction {
         proto::CompiledInstruction {
             program_id_index: ix.program_id_index as u32,
             accounts: ix.accounts.clone(),
             data: ix.data.clone(),
         }
+    }
+
+    pub fn create_lookups(
+        lookups: &[MessageAddressTableLookup],
+    ) -> Vec<proto::MessageAddressTableLookup> {
+        lookups.iter().map(create_lookup).collect()
     }
 
     pub fn create_lookup(lookup: &MessageAddressTableLookup) -> proto::MessageAddressTableLookup {
@@ -140,33 +141,22 @@ pub mod convert_to {
         };
         let inner_instructions_none = inner_instructions.is_none();
         let inner_instructions = inner_instructions
-            .as_ref()
-            .map(|v| v.iter().map(create_inner_instructions).collect())
+            .as_deref()
+            .map(create_inner_instructions_vec)
             .unwrap_or_default();
         let log_messages_none = log_messages.is_none();
         let log_messages = log_messages.clone().unwrap_or_default();
         let pre_token_balances = pre_token_balances
-            .as_ref()
-            .map(|v| v.iter().map(create_token_balance).collect())
+            .as_deref()
+            .map(create_token_balances)
             .unwrap_or_default();
         let post_token_balances = post_token_balances
-            .as_ref()
-            .map(|v| v.iter().map(create_token_balance).collect())
+            .as_deref()
+            .map(create_token_balances)
             .unwrap_or_default();
-        let rewards = rewards
-            .as_ref()
-            .map(|vec| vec.iter().map(create_reward).collect())
-            .unwrap_or_default();
-        let loaded_writable_addresses = loaded_addresses
-            .writable
-            .iter()
-            .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
-            .collect();
-        let loaded_readonly_addresses = loaded_addresses
-            .readonly
-            .iter()
-            .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(key).into())
-            .collect();
+        let rewards = rewards.as_deref().map(create_rewards).unwrap_or_default();
+        let loaded_writable_addresses = create_pubkeys(&loaded_addresses.writable);
+        let loaded_readonly_addresses = create_pubkeys(&loaded_addresses.readonly);
 
         proto::TransactionStatusMeta {
             err,
@@ -188,15 +178,21 @@ pub mod convert_to {
         }
     }
 
+    pub fn create_inner_instructions_vec(
+        ixs: &[InnerInstructions],
+    ) -> Vec<proto::InnerInstructions> {
+        ixs.iter().map(create_inner_instructions).collect()
+    }
+
     pub fn create_inner_instructions(instructions: &InnerInstructions) -> proto::InnerInstructions {
         proto::InnerInstructions {
             index: instructions.index as u32,
-            instructions: instructions
-                .instructions
-                .iter()
-                .map(create_inner_instruction)
-                .collect(),
+            instructions: create_inner_instruction_vec(&instructions.instructions),
         }
+    }
+
+    pub fn create_inner_instruction_vec(ixs: &[InnerInstruction]) -> Vec<proto::InnerInstruction> {
+        ixs.iter().map(create_inner_instruction).collect()
     }
 
     pub fn create_inner_instruction(instruction: &InnerInstruction) -> proto::InnerInstruction {
@@ -206,6 +202,10 @@ pub mod convert_to {
             data: instruction.instruction.data.clone(),
             stack_height: instruction.stack_height,
         }
+    }
+
+    pub fn create_token_balances(balances: &[TransactionTokenBalance]) -> Vec<proto::TokenBalance> {
+        balances.iter().map(create_token_balance).collect()
     }
 
     pub fn create_token_balance(balance: &TransactionTokenBalance) -> proto::TokenBalance {
@@ -221,6 +221,16 @@ pub mod convert_to {
             owner: balance.owner.clone(),
             program_id: balance.program_id.clone(),
         }
+    }
+
+    pub fn create_rewards_obj(rewards: &[Reward]) -> proto::Rewards {
+        proto::Rewards {
+            rewards: create_rewards(rewards),
+        }
+    }
+
+    pub fn create_rewards(rewards: &[Reward]) -> Vec<proto::Reward> {
+        rewards.iter().map(create_reward).collect()
     }
 
     pub fn create_reward(reward: &Reward) -> proto::Reward {
@@ -246,12 +256,6 @@ pub mod convert_to {
         }
     }
 
-    pub fn create_rewards(rewards: &[Reward]) -> proto::Rewards {
-        proto::Rewards {
-            rewards: rewards.iter().map(create_reward).collect(),
-        }
-    }
-
     pub const fn create_block_height(block_height: u64) -> proto::BlockHeight {
         proto::BlockHeight { block_height }
     }
@@ -266,6 +270,7 @@ pub mod convert_from {
         super::prelude as proto,
         solana_account_decoder::parse_token::UiTokenAmount,
         solana_sdk::{
+            account::Account,
             hash::{Hash, HASH_BYTES},
             instruction::CompiledInstruction,
             message::{
@@ -348,7 +353,7 @@ pub mod convert_from {
         })
     }
 
-    fn create_message(message: proto::Message) -> Result<VersionedMessage, String> {
+    pub fn create_message(message: proto::Message) -> Result<VersionedMessage, String> {
         let header = ensure_some(message.header, "failed to get MessageHeader")?;
         let header = MessageHeader {
             num_required_signatures: ensure_some(
@@ -369,18 +374,6 @@ pub mod convert_from {
             return Err("failed to parse hash".to_owned());
         }
 
-        let mut instructions = Vec::with_capacity(message.instructions.len());
-        for ix in message.instructions {
-            instructions.push(CompiledInstruction {
-                program_id_index: ensure_some(
-                    ix.program_id_index.try_into().ok(),
-                    "failed to decode CompiledInstruction.program_id_index)",
-                )?,
-                accounts: ix.accounts,
-                data: ix.data,
-            });
-        }
-
         Ok(if message.versioned {
             let mut address_table_lookups = Vec::with_capacity(message.address_table_lookups.len());
             for table in message.address_table_lookups {
@@ -398,7 +391,7 @@ pub mod convert_from {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
                 recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
-                instructions,
+                instructions: create_message_instructions(message.instructions)?,
                 address_table_lookups,
             })
         } else {
@@ -406,8 +399,27 @@ pub mod convert_from {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
                 recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
-                instructions,
+                instructions: create_message_instructions(message.instructions)?,
             })
+        })
+    }
+
+    pub fn create_message_instructions(
+        ixs: Vec<proto::CompiledInstruction>,
+    ) -> Result<Vec<CompiledInstruction>, String> {
+        ixs.into_iter().map(create_message_instruction).collect()
+    }
+
+    pub fn create_message_instruction(
+        ix: proto::CompiledInstruction,
+    ) -> Result<CompiledInstruction, String> {
+        Ok(CompiledInstruction {
+            program_id_index: ensure_some(
+                ix.program_id_index.try_into().ok(),
+                "failed to decode CompiledInstruction.program_id_index)",
+            )?,
+            accounts: ix.accounts,
+            data: ix.data,
         })
     }
 
@@ -418,21 +430,18 @@ pub mod convert_from {
             Some(err) => Err(err),
             None => Ok(()),
         };
-        let mut meta_inner_instructions = vec![];
-        for ix in meta.inner_instructions {
-            meta_inner_instructions.push(create_inner_instruction(ix)?);
-        }
-        let mut meta_rewards = vec![];
-        for reward in meta.rewards {
-            meta_rewards.push(create_reward(reward)?);
-        }
+        let meta_rewards = meta
+            .rewards
+            .into_iter()
+            .map(create_reward)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(TransactionStatusMeta {
             status: meta_status,
             fee: meta.fee,
             pre_balances: meta.pre_balances,
             post_balances: meta.post_balances,
-            inner_instructions: Some(meta_inner_instructions),
+            inner_instructions: Some(create_meta_inner_instructions(meta.inner_instructions)?),
             log_messages: Some(meta.log_messages),
             pre_token_balances: Some(create_token_balances(meta.pre_token_balances)?),
             post_token_balances: Some(create_token_balances(meta.post_token_balances)?),
@@ -468,7 +477,15 @@ pub mod convert_from {
         )
     }
 
-    fn create_inner_instruction(ix: proto::InnerInstructions) -> Result<InnerInstructions, String> {
+    pub fn create_meta_inner_instructions(
+        ixs: Vec<proto::InnerInstructions>,
+    ) -> Result<Vec<InnerInstructions>, String> {
+        ixs.into_iter().map(create_meta_inner_instruction).collect()
+    }
+
+    pub fn create_meta_inner_instruction(
+        ix: proto::InnerInstructions,
+    ) -> Result<InnerInstructions, String> {
         let mut instructions = vec![];
         for ix in ix.instructions {
             instructions.push(InnerInstruction {
@@ -518,7 +535,7 @@ pub mod convert_from {
         })
     }
 
-    fn create_token_balances(
+    pub fn create_token_balances(
         balances: Vec<proto::TokenBalance>,
     ) -> Result<Vec<TransactionTokenBalance>, String> {
         let mut vec = Vec::with_capacity(balances.len());
@@ -546,7 +563,7 @@ pub mod convert_from {
         Ok(vec)
     }
 
-    fn create_loaded_addresses(
+    pub fn create_loaded_addresses(
         writable: Vec<Vec<u8>>,
         readonly: Vec<Vec<u8>>,
     ) -> Result<LoadedAddresses, String> {
@@ -556,14 +573,28 @@ pub mod convert_from {
         })
     }
 
-    fn create_pubkey_vec(pubkeys: Vec<Vec<u8>>) -> Result<Vec<Pubkey>, String> {
-        let mut vec = Vec::with_capacity(pubkeys.len());
-        for pubkey in pubkeys {
-            vec.push(ensure_some(
-                Pubkey::try_from(pubkey.as_slice()).ok(),
-                "failed to parse Pubkey",
-            )?)
-        }
-        Ok(vec)
+    pub fn create_pubkey_vec(pubkeys: Vec<Vec<u8>>) -> Result<Vec<Pubkey>, String> {
+        pubkeys
+            .iter()
+            .map(|pubkey| create_pubkey(pubkey.as_slice()))
+            .collect()
+    }
+
+    pub fn create_pubkey(pubkey: &[u8]) -> Result<Pubkey, String> {
+        ensure_some(Pubkey::try_from(pubkey).ok(), "failed to parse Pubkey")
+    }
+
+    pub fn create_account(
+        account: proto::SubscribeUpdateAccountInfo,
+    ) -> Result<(Pubkey, Account), String> {
+        let pubkey = create_pubkey(&account.pubkey)?;
+        let account = Account {
+            lamports: account.lamports,
+            data: account.data,
+            owner: create_pubkey(&account.owner)?,
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+        };
+        Ok((pubkey, account))
     }
 }
