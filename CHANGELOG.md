@@ -14,8 +14,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Breaking
+
+## 2024-01-10
+
+- yellowstone-grpc-client-1.12.0+solana.1.16.27
+- yellowstone-grpc-geyser-1.11.2+solana.1.16.27
+- yellowstone-grpc-proto-1.11.0+solana.1.16.27
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.16.27
+
+### Features
+
 - geyser: add name to tokio threads ([#267](https://github.com/rpcpool/yellowstone-grpc/pull/267))
 - geyser: change plugin name to `{name}-{version}` ([#270](https://github.com/rpcpool/yellowstone-grpc/pull/270))
+- proto: add more convert functions ([#264](https://github.com/rpcpool/yellowstone-grpc/pull/264))
 
 ### Breaking
 

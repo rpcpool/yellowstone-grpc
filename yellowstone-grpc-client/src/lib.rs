@@ -28,11 +28,11 @@ use {
 };
 
 #[derive(Debug, Clone)]
-struct InterceptorFn {
+pub struct InterceptorXToken {
     x_token: Option<AsciiMetadataValue>,
 }
 
-impl Interceptor for InterceptorFn {
+impl Interceptor for InterceptorXToken {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         if let Some(x_token) = self.x_token.clone() {
             request.metadata_mut().insert("x-token", x_token);
@@ -65,11 +65,15 @@ pub struct GeyserGrpcClient<F> {
 }
 
 impl GeyserGrpcClient<()> {
+    pub const fn max_decoding_message_size() -> usize {
+        64 * 1024 * 1024 // 64 MiB
+    }
+
     fn connect2<E, T>(
         endpoint: E,
         tls_config: Option<ClientTlsConfig>,
         x_token: Option<T>,
-    ) -> GeyserGrpcClientResult<(Endpoint, InterceptorFn)>
+    ) -> GeyserGrpcClientResult<(Endpoint, InterceptorXToken)>
     where
         E: Into<Bytes>,
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
@@ -91,7 +95,7 @@ impl GeyserGrpcClient<()> {
             }
             _ => {}
         }
-        let interceptor = InterceptorFn { x_token };
+        let interceptor = InterceptorXToken { x_token };
 
         Ok((endpoint, interceptor))
     }
@@ -107,11 +111,11 @@ impl GeyserGrpcClient<()> {
     {
         let (endpoint, interceptor) = Self::connect2(endpoint, tls_config, x_token)?;
         let channel = endpoint.connect_lazy();
-        Ok(GeyserGrpcClient {
-            health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            geyser: GeyserClient::with_interceptor(channel, interceptor)
-                .max_decoding_message_size(64 * 1024 * 1024), // 64 MiB
-        })
+        Ok(GeyserGrpcClient::new(
+            HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
+            GeyserClient::with_interceptor(channel, interceptor)
+                .max_decoding_message_size(Self::max_decoding_message_size()),
+        ))
     }
 
     pub async fn connect_with_timeout<E, T>(
@@ -140,15 +144,22 @@ impl GeyserGrpcClient<()> {
             endpoint.connect().await?
         };
 
-        Ok(GeyserGrpcClient {
-            health: HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            geyser: GeyserClient::with_interceptor(channel, interceptor)
-                .max_decoding_message_size(64 * 1024 * 1024), // 64 MiB
-        })
+        Ok(GeyserGrpcClient::new(
+            HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
+            GeyserClient::with_interceptor(channel, interceptor)
+                .max_decoding_message_size(Self::max_decoding_message_size()),
+        ))
     }
 }
 
 impl<F: Interceptor> GeyserGrpcClient<F> {
+    pub fn new(
+        health: HealthClient<InterceptedService<Channel, F>>,
+        geyser: GeyserClient<InterceptedService<Channel, F>>,
+    ) -> Self {
+        Self { health, geyser }
+    }
+
     pub async fn health_check(&mut self) -> GeyserGrpcClientResult<HealthCheckResponse> {
         let request = HealthCheckRequest {
             service: "geyser.Geyser".to_owned(),
