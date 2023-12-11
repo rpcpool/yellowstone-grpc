@@ -167,6 +167,7 @@ impl ArgsAction {
                     UpdateOneof::Pong(_) => continue,
                     UpdateOneof::BlockMeta(msg) => msg.slot,
                     UpdateOneof::Entry(msg) => msg.slot,
+                    UpdateOneof::ClusterInfo(_) => continue, //no slot for Cluster info.
                 };
                 if msg_slot != slot {
                     msg_slot = slot;
@@ -245,6 +246,9 @@ impl ArgsAction {
                     Some(UpdateOneof::Pong(_)) => {}
                     Some(UpdateOneof::BlockMeta(msg)) => info!("#{}, blockmeta", msg.slot),
                     Some(UpdateOneof::Entry(msg)) => info!("#{}, entry", msg.slot),
+                    Some(UpdateOneof::ClusterInfo(msg)) => {
+                        info!("#{}, ClusterInfo", msg.pubkey)
+                    }
                     None => {}
                 },
                 Err(error) => {

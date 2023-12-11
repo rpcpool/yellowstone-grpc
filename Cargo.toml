@@ -16,14 +16,19 @@ repository = "https://github.com/rpcpool/yellowstone-grpc"
 license = "Apache-2.0"
 keywords = ["solana"]
 
+
 [workspace.dependencies]
-solana-account-decoder = "=1.17.5"
-solana-geyser-plugin-interface = "=1.17.5"
-solana-logger = "=1.17.5"
-solana-sdk = "=1.17.5"
-solana-transaction-status = "=1.17.5"
+solana-account-decoder = { path = "../solana-geyzer-cluster/account-decoder" }
+solana-geyser-plugin-interface = { path = "../solana-geyzer-cluster/geyser-plugin-interface" }
+solana-logger = { path = "../solana-geyzer-cluster/logger" }
+solana-sdk = { path = "../solana-geyzer-cluster/sdk" }
+solana-transaction-status = { path = "../solana-geyzer-cluster/transaction-status" }
 
 [profile.release]
 debug = true
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+solana-program = { path = "../solana-geyzer-cluster/sdk/program" }
+solana-zk-token-sdk = { path = "../solana-geyzer-cluster/zk-token-sdk" }
