@@ -99,6 +99,7 @@ pub enum GprcMessageKind {
     Block,
     BlockMeta,
     Entry,
+    ClusterInfo,
     Unknown,
 }
 
@@ -113,6 +114,7 @@ impl From<&UpdateOneof> for GprcMessageKind {
             UpdateOneof::Pong(_) => unreachable!(),
             UpdateOneof::BlockMeta(_) => Self::BlockMeta,
             UpdateOneof::Entry(_) => Self::Entry,
+            UpdateOneof::ClusterInfo(_) => Self::ClusterInfo,
         }
     }
 }
@@ -126,6 +128,7 @@ impl GprcMessageKind {
             GprcMessageKind::Block => "block",
             GprcMessageKind::BlockMeta => "blockmeta",
             GprcMessageKind::Entry => "entry",
+            GprcMessageKind::ClusterInfo => "clusterinfo",
             GprcMessageKind::Unknown => "unknown",
         }
     }

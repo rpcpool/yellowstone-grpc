@@ -1,3 +1,4 @@
+use solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaClusterInfoNode;
 use {
     crate::{
         config::Config,
@@ -96,6 +97,16 @@ impl GeyserPlugin for Plugin {
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
         }
+    }
+
+    /// Called when a cluster info is updated on gossip network.
+    fn update_cluster_info(&self, cluster_info: &ReplicaClusterInfoNode) -> PluginResult<()> {
+        log::info!("grpc update_cluster_info id:{} ", cluster_info.id);
+        self.with_inner(|inner| {
+            let message = Message::ClusterInfo(cluster_info.into());
+            inner.send_message(message);
+            Ok(())
+        })
     }
 
     fn update_account(

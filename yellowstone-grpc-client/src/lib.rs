@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use {
     bytes::Bytes,
     futures::{
@@ -191,6 +192,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         commitment: Option<CommitmentLevel>,
         accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
         ping: Option<SubscribeRequestPing>,
+        cluster_info: Option<HashSet<String>>,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         self.subscribe_once2(SubscribeRequest {
             slots,
@@ -202,6 +204,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             commitment: commitment.map(|value| value as i32),
             accounts_data_slice,
             ping,
+            cluster_info: cluster_info.unwrap_or(HashSet::new()).into_iter().collect(),
         })
         .await
     }

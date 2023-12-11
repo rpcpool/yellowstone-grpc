@@ -1,3 +1,6 @@
+use solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaClusterInfoNode;
+use std::net::SocketAddr;
+use yellowstone_grpc_proto::prelude::SubscribeUpdateClusterInfo;
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
@@ -56,6 +59,75 @@ use {
 };
 
 #[derive(Debug, Clone)]
+pub struct MessageClusterInfo {
+    pub id: Pubkey,
+    /// gossip address
+    pub gossip: Option<SocketAddr>,
+    /// address to connect to for replication
+    pub tvu: Option<SocketAddr>,
+    /// TVU over QUIC protocol.
+    pub tvu_quic: Option<SocketAddr>,
+    /// repair service over QUIC protocol.
+    pub serve_repair_quic: Option<SocketAddr>,
+    /// transactions address
+    pub tpu: Option<SocketAddr>,
+    /// address to forward unprocessed transactions to
+    pub tpu_forwards: Option<SocketAddr>,
+    /// address to which to send bank state requests
+    pub tpu_vote: Option<SocketAddr>,
+    /// address to which to send JSON-RPC requests
+    pub rpc: Option<SocketAddr>,
+    /// websocket for JSON-RPC push notifications
+    pub rpc_pubsub: Option<SocketAddr>,
+    /// address to send repair requests to
+    pub serve_repair: Option<SocketAddr>,
+    /// latest wallclock picked
+    pub wallclock: u64,
+    /// node shred version
+    pub shred_version: u16,
+}
+
+impl MessageClusterInfo {
+    fn to_proto(&self) -> SubscribeUpdateClusterInfo {
+        SubscribeUpdateClusterInfo {
+            pubkey: self.id.to_string(),
+            gossip: self.gossip.map(|addr| addr.to_string()),
+            tvu: self.tvu.map(|addr| addr.to_string()),
+            tvu_quic: self.tvu_quic.map(|addr| addr.to_string()),
+            serve_repair_quic: self.serve_repair_quic.map(|addr| addr.to_string()),
+            tpu: self.tpu.map(|addr| addr.to_string()),
+            tpu_forwards: self.tpu_forwards.map(|addr| addr.to_string()),
+            tpu_vote: self.tpu_vote.map(|addr| addr.to_string()),
+            rpc: self.rpc.map(|addr| addr.to_string()),
+            rpc_pubsub: self.rpc_pubsub.map(|addr| addr.to_string()),
+            serve_repair: self.serve_repair.map(|addr| addr.to_string()),
+            wallclock: self.wallclock,
+            shred_version: self.shred_version as u32,
+        }
+    }
+}
+
+impl<'a> From<&'a ReplicaClusterInfoNode> for MessageClusterInfo {
+    fn from(cluster_info: &'a ReplicaClusterInfoNode) -> Self {
+        Self {
+            id: cluster_info.id,
+            gossip: cluster_info.gossip,
+            tvu: cluster_info.tvu,
+            tvu_quic: cluster_info.tvu_quic,
+            serve_repair_quic: cluster_info.serve_repair_quic,
+            tpu: cluster_info.tpu,
+            tpu_forwards: cluster_info.tpu_forwards,
+            tpu_vote: cluster_info.tpu_vote,
+            rpc: cluster_info.rpc,
+            rpc_pubsub: cluster_info.rpc_pubsub,
+            serve_repair: cluster_info.serve_repair,
+            wallclock: cluster_info.wallclock,
+            shred_version: cluster_info.shred_version,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MessageAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
@@ -105,6 +177,7 @@ pub struct MessageAccount {
 
 impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
     fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV3<'a>, u64, bool)) -> Self {
+        //log::info!("ReplicaAccountInfoV3 from {:?}", account.owner);
         Self {
             account: MessageAccountInfo {
                 pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
@@ -307,6 +380,7 @@ pub enum Message {
     Entry(MessageEntry),
     Block(MessageBlock),
     BlockMeta(MessageBlockMeta),
+    ClusterInfo(MessageClusterInfo),
 }
 
 impl Message {
@@ -318,6 +392,7 @@ impl Message {
             Self::Entry(msg) => msg.slot,
             Self::Block(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
+            Self::ClusterInfo(_) => 0, //no slot for cluster info.
         }
     }
 
@@ -329,6 +404,7 @@ impl Message {
             Self::Entry(_) => "Entry",
             Self::Block(_) => "Block",
             Self::BlockMeta(_) => "BlockMeta",
+            Self::ClusterInfo(_) => "ClusterInfo",
         }
     }
 }
@@ -393,6 +469,7 @@ pub enum MessageRef<'a> {
     Entry(&'a MessageEntry),
     Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
+    ClusterInfo(&'a MessageClusterInfo),
 }
 
 impl<'a> MessageRef<'a> {
@@ -450,6 +527,7 @@ impl<'a> MessageRef<'a> {
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
             }),
+            Self::ClusterInfo(message) => UpdateOneof::ClusterInfo(message.to_proto()),
         }
     }
 }
@@ -1194,6 +1272,7 @@ impl Geyser for GrpcService {
                 commitment: None,
                 accounts_data_slice: Vec::new(),
                 ping: None,
+                cluster_info: Vec::new(),
             },
             &self.config.filters,
         )

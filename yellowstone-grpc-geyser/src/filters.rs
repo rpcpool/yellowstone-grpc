@@ -6,8 +6,8 @@ use {
             ConfigGrpcFiltersTransactions,
         },
         grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
-            MessageSlot, MessageTransaction,
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageClusterInfo,
+            MessageEntry, MessageRef, MessageSlot, MessageTransaction,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -31,6 +31,7 @@ use {
 
 #[derive(Debug, Clone)]
 pub struct Filter {
+    cluster_info: FilterClusterInfo,
     accounts: FilterAccounts,
     slots: FilterSlots,
     transactions: FilterTransactions,
@@ -45,6 +46,7 @@ pub struct Filter {
 impl Filter {
     pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
         Ok(Self {
+            cluster_info: FilterClusterInfo::default(), //no config for now
             accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
@@ -96,6 +98,7 @@ impl Filter {
             Message::Entry(message) => self.entry.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
+            Message::ClusterInfo(message) => self.cluster_info.get_filters(message),
         }
     }
 
@@ -124,6 +127,25 @@ impl Filter {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
         })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct FilterClusterInfo {
+    filter_cluster_info: HashSet<String>,
+}
+
+impl FilterClusterInfo {
+    fn get_filters<'a>(
+        &self,
+        message: &'a MessageClusterInfo,
+    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        let subscriptions = self
+            .filter_cluster_info
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        vec![(subscriptions, MessageRef::ClusterInfo(message))]
     }
 }
 

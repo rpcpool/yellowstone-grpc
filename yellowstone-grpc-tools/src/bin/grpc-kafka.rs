@@ -284,6 +284,7 @@ impl ArgsAction {
                         UpdateOneof::Pong(_) => continue,
                         UpdateOneof::BlockMeta(msg) => msg.slot,
                         UpdateOneof::Entry(msg) => msg.slot,
+                        UpdateOneof::ClusterInfo(_) => continue,
                     };
                     let hash = Sha256::digest(&payload);
                     let key = format!("{slot}_{}", const_hex::encode(hash));

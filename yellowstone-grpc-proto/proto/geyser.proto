@@ -32,6 +32,7 @@ message SubscribeRequest {
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
+  repeated string cluster_info = 10;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -101,7 +102,24 @@ message SubscribeUpdate {
     SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
+    SubscribeUpdateClusterInfo cluster_info = 10;
   }
+}
+
+message SubscribeUpdateClusterInfo {
+    string pubkey = 1;
+    optional string gossip = 2;
+    optional string tvu = 3;
+    optional string tvu_quic = 4;
+    optional string serve_repair_quic = 5;
+    optional string tpu = 6;
+    optional string tpu_forwards = 7;
+    optional string tpu_vote = 8;
+    optional string rpc = 9;
+    optional string rpc_pubsub = 10;
+    optional string serve_repair = 11;
+    uint64 wallclock = 12;
+    uint32 shred_version = 13;
 }
 
 message SubscribeUpdateAccount {
