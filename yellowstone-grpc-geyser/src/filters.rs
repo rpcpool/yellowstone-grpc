@@ -46,7 +46,7 @@ pub struct Filter {
 impl Filter {
     pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
         Ok(Self {
-            cluster_info: FilterClusterInfo::default(), //no config for now
+            cluster_info: FilterClusterInfo::new(&config.cluster_info)?, //no config for now
             accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
@@ -132,10 +132,16 @@ impl Filter {
 
 #[derive(Debug, Default, Clone)]
 struct FilterClusterInfo {
-    filter_cluster_info: HashSet<String>,
+    filter_cluster_info: Vec<String>,
 }
 
 impl FilterClusterInfo {
+    fn new(configs: &[String]) -> anyhow::Result<Self> {
+        Ok(Self {
+            filter_cluster_info: configs.iter().map(|name| name.to_string()).collect(),
+        })
+    }
+
     fn get_filters<'a>(
         &self,
         message: &'a MessageClusterInfo,
@@ -868,6 +874,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit);
@@ -897,6 +904,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
@@ -931,6 +939,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -964,6 +973,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -1003,6 +1013,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1046,6 +1057,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1089,6 +1101,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1138,6 +1151,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1189,6 +1203,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            cluster_info: vec![],
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
