@@ -101,7 +101,6 @@ impl GeyserPlugin for Plugin {
 
     /// Called when a cluster info is updated on gossip network.
     fn update_cluster_info(&self, cluster_info: &ReplicaClusterInfoNode) -> PluginResult<()> {
-        log::info!("grpc update_cluster_info id:{} ", cluster_info.id);
         self.with_inner(|inner| {
             let message = Message::ClusterInfo(cluster_info.into());
             inner.send_message(message);
@@ -230,6 +229,9 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+    fn clusterinfo_notifications_enabled(&self) -> bool {
         true
     }
 }

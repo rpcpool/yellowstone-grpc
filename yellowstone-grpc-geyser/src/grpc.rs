@@ -723,7 +723,8 @@ impl SlotMessages {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
                 if self.transactions.len() == block_meta.executed_transaction_count as usize
-                    && self.entries.len() == block_meta.entries_count as usize
+                //removed from teh cluster info poc.
+                //                    && self.entries.len() == block_meta.entries_count as usize
                 {
                     let transactions = std::mem::take(&mut self.transactions);
                     let entries = std::mem::take(&mut self.entries);
@@ -906,12 +907,13 @@ impl GrpcService {
                                                             reasons.push("InvalidTxnCount");
                                                             error!("failed to reconstruct #{slot} -- tx count: {block_txn_count} vs {msg_txn_count}");
                                                         }
-                                                        let block_entries_count = block_meta.entries_count as usize;
-                                                        let msg_entries_count = slot_messages.entries.len();
-                                                        if block_entries_count != msg_entries_count {
-                                                            reasons.push("InvalidEntriesCount");
-                                                            error!("failed to reconstruct #{slot} -- entries count: {block_entries_count} vs {msg_entries_count}");
-                                                        }
+                                                        //Entry count has been removed for the Cluster info POC
+                                                        // let block_entries_count = block_meta.entries_count as usize;
+                                                        // let msg_entries_count = slot_messages.entries.len();
+                                                        // if block_entries_count != msg_entries_count {
+                                                        //     reasons.push("InvalidEntriesCount");
+                                                        //     error!("failed to reconstruct #{slot} -- entries count: {block_entries_count} vs {msg_entries_count}");
+                                                        // }
                                                     } else {
                                                         reasons.push("NoBlockMeta");
                                                     }
@@ -1172,6 +1174,9 @@ impl GrpcService {
                 };
 
                 for message in filter.get_update(&message, None) {
+                    if let Some(UpdateOneof::ClusterInfo(ref msg)) = message.update_oneof {
+                        log::info!("send cluster_info filter1:{msg:?} ");
+                    }
                     if stream_tx.send(Ok(message)).await.is_err() {
                         error!("client #{id}: stream closed");
                         is_alive = false;
