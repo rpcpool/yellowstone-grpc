@@ -1,6 +1,7 @@
 use solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaClusterInfoNode;
 use std::net::SocketAddr;
 use yellowstone_grpc_proto::prelude::SubscribeUpdateClusterInfo;
+use yellowstone_grpc_proto::prelude::SubscribeUpdateClusterInfoUpdate;
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
@@ -58,8 +59,15 @@ use {
     },
 };
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
-pub struct MessageClusterInfo {
+pub enum MessageClusterInfo {
+    Update(MessageClusterInfoUpdate),
+    Remove(Pubkey),
+}
+
+#[derive(Debug, Clone)]
+pub struct MessageClusterInfoUpdate {
     pub id: Pubkey,
     /// gossip address
     pub gossip: Option<SocketAddr>,
@@ -89,25 +97,42 @@ pub struct MessageClusterInfo {
 
 impl MessageClusterInfo {
     fn to_proto(&self) -> SubscribeUpdateClusterInfo {
-        SubscribeUpdateClusterInfo {
-            pubkey: self.id.to_string(),
-            gossip: self.gossip.map(|addr| addr.to_string()),
-            tvu: self.tvu.map(|addr| addr.to_string()),
-            tvu_quic: self.tvu_quic.map(|addr| addr.to_string()),
-            serve_repair_quic: self.serve_repair_quic.map(|addr| addr.to_string()),
-            tpu: self.tpu.map(|addr| addr.to_string()),
-            tpu_forwards: self.tpu_forwards.map(|addr| addr.to_string()),
-            tpu_vote: self.tpu_vote.map(|addr| addr.to_string()),
-            rpc: self.rpc.map(|addr| addr.to_string()),
-            rpc_pubsub: self.rpc_pubsub.map(|addr| addr.to_string()),
-            serve_repair: self.serve_repair.map(|addr| addr.to_string()),
-            wallclock: self.wallclock,
-            shred_version: self.shred_version as u32,
+        match self {
+            MessageClusterInfo::Update(update) => SubscribeUpdateClusterInfo {
+                data: Some(
+                    yellowstone_grpc_proto::geyser::subscribe_update_cluster_info::Data::Update(
+                        SubscribeUpdateClusterInfoUpdate {
+                            pubkey: update.id.to_string(),
+                            gossip: update.gossip.map(|addr| addr.to_string()),
+                            tvu: update.tvu.map(|addr| addr.to_string()),
+                            tvu_quic: update.tvu_quic.map(|addr| addr.to_string()),
+                            serve_repair_quic: update
+                                .serve_repair_quic
+                                .map(|addr| addr.to_string()),
+                            tpu: update.tpu.map(|addr| addr.to_string()),
+                            tpu_forwards: update.tpu_forwards.map(|addr| addr.to_string()),
+                            tpu_vote: update.tpu_vote.map(|addr| addr.to_string()),
+                            rpc: update.rpc.map(|addr| addr.to_string()),
+                            rpc_pubsub: update.rpc_pubsub.map(|addr| addr.to_string()),
+                            serve_repair: update.serve_repair.map(|addr| addr.to_string()),
+                            wallclock: update.wallclock,
+                            shred_version: update.shred_version as u32,
+                        },
+                    ),
+                ),
+            },
+            MessageClusterInfo::Remove(pk) => SubscribeUpdateClusterInfo {
+                data: Some(
+                    yellowstone_grpc_proto::geyser::subscribe_update_cluster_info::Data::Remove(
+                        pk.to_string(),
+                    ),
+                ),
+            },
         }
     }
 }
 
-impl<'a> From<&'a ReplicaClusterInfoNode> for MessageClusterInfo {
+impl<'a> From<&'a ReplicaClusterInfoNode> for MessageClusterInfoUpdate {
     fn from(cluster_info: &'a ReplicaClusterInfoNode) -> Self {
         Self {
             id: cluster_info.id,
