@@ -107,6 +107,13 @@ message SubscribeUpdate {
 }
 
 message SubscribeUpdateClusterInfo {
+  oneof data {
+    SubscribeUpdateClusterInfoUpdate update = 1;
+    string remove = 2;
+  }
+}
+
+message SubscribeUpdateClusterInfoUpdate {
     string pubkey = 1;
     optional string gossip = 2;
     optional string tvu = 3;

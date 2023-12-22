@@ -1,4 +1,6 @@
+use crate::grpc::MessageClusterInfo;
 use solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaClusterInfoNode;
+use solana_sdk::pubkey::Pubkey;
 use {
     crate::{
         config::Config,
@@ -102,7 +104,17 @@ impl GeyserPlugin for Plugin {
     /// Called when a cluster info is updated on gossip network.
     fn update_cluster_info(&self, cluster_info: &ReplicaClusterInfoNode) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::ClusterInfo(cluster_info.into());
+            let message = Message::ClusterInfo(MessageClusterInfo::Update(cluster_info.into()));
+            inner.send_message(message);
+            Ok(())
+        })
+    }
+
+    /// Called when a cluster info is removed on gossip network.
+    #[allow(unused_variables)]
+    fn notify_clusterinfo_remove(&self, pubkey: &Pubkey) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message = Message::ClusterInfo(MessageClusterInfo::Remove(*pubkey));
             inner.send_message(message);
             Ok(())
         })

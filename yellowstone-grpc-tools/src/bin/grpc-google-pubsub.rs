@@ -1,3 +1,4 @@
+use yellowstone_grpc_proto::prelude::subscribe_update_cluster_info;
 use {
     clap::{Parser, Subcommand},
     futures::{future::BoxFuture, stream::StreamExt},
@@ -246,9 +247,15 @@ impl ArgsAction {
                     Some(UpdateOneof::Pong(_)) => {}
                     Some(UpdateOneof::BlockMeta(msg)) => info!("#{}, blockmeta", msg.slot),
                     Some(UpdateOneof::Entry(msg)) => info!("#{}, entry", msg.slot),
-                    Some(UpdateOneof::ClusterInfo(msg)) => {
-                        info!("#{}, ClusterInfo", msg.pubkey)
-                    }
+                    Some(UpdateOneof::ClusterInfo(msg)) => match msg.data {
+                        Some(subscribe_update_cluster_info::Data::Update(msg)) => {
+                            info!("#{}, ClusterInfo update", msg.pubkey)
+                        }
+                        Some(subscribe_update_cluster_info::Data::Remove(pk)) => {
+                            info!("#{}, ClusterInfo remove", pk)
+                        }
+                        None => {}
+                    },
                     None => {}
                 },
                 Err(error) => {
