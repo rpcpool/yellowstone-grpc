@@ -9,9 +9,15 @@ use {
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
-    std::{sync::Arc, time::Duration},
+    std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    },
     tokio::{
-        runtime::Runtime,
+        runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
     },
 };
@@ -60,7 +66,15 @@ impl GeyserPlugin for Plugin {
         solana_logger::setup_with_default(&config.log.level);
 
         // Create inner
-        let runtime = Runtime::new().map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+        let runtime = Builder::new_multi_thread()
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
+                format!("solGeyserGrpc{id:02}")
+            })
+            .enable_all()
+            .build()
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
         let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
             runtime.block_on(async move {
