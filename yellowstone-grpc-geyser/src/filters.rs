@@ -15,7 +15,6 @@ use {
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
-        iter::FromIterator,
         str::FromStr,
     },
     yellowstone_grpc_proto::prelude::{
@@ -64,20 +63,24 @@ impl Filter {
         })
     }
 
-    fn decode_pubkeys<T: FromIterator<Pubkey>>(
+    fn decode_pubkeys<'a>(
+        pubkeys: &'a [String],
+        limit: &'a HashSet<Pubkey>,
+    ) -> impl Iterator<Item = anyhow::Result<Pubkey>> + 'a {
+        pubkeys.iter().map(|value| match Pubkey::from_str(value) {
+            Ok(pubkey) => {
+                ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
+                Ok::<Pubkey, anyhow::Error>(pubkey)
+            }
+            Err(error) => Err(error.into()),
+        })
+    }
+
+    fn decode_pubkeys_into_set(
         pubkeys: &[String],
         limit: &HashSet<Pubkey>,
-    ) -> anyhow::Result<T> {
-        pubkeys
-            .iter()
-            .map(|value| match Pubkey::from_str(value) {
-                Ok(pubkey) => {
-                    ConfigGrpcFilters::check_pubkey_reject(&pubkey, limit)?;
-                    Ok(pubkey)
-                }
-                Err(error) => Err(error.into()),
-            })
-            .collect::<_>()
+    ) -> anyhow::Result<HashSet<Pubkey>> {
+        Self::decode_pubkeys(pubkeys, limit).collect()
     }
 
     pub const fn get_commitment_level(&self) -> CommitmentLevel {
@@ -156,15 +159,15 @@ impl FilterAccounts {
                 &mut this.account,
                 &mut this.account_required,
                 name,
-                Filter::decode_pubkeys(&filter.account, &limit.account_reject)?,
-            );
+                Filter::decode_pubkeys(&filter.account, &limit.account_reject),
+            )?;
 
             Self::set(
                 &mut this.owner,
                 &mut this.owner_required,
                 name,
-                Filter::decode_pubkeys(&filter.owner, &limit.owner_reject)?,
-            );
+                Filter::decode_pubkeys(&filter.owner, &limit.owner_reject),
+            )?;
 
             this.filters
                 .push((name.clone(), FilterAccountsData::new(&filter.filters)?));
@@ -176,11 +179,11 @@ impl FilterAccounts {
         map: &mut HashMap<Pubkey, HashSet<String>>,
         map_required: &mut HashSet<String>,
         name: &str,
-        keys: Vec<Pubkey>,
-    ) -> bool {
+        keys: impl Iterator<Item = anyhow::Result<Pubkey>>,
+    ) -> anyhow::Result<bool> {
         let mut required = false;
-        for key in keys.into_iter() {
-            if map.entry(key).or_default().insert(name.to_string()) {
+        for maybe_key in keys {
+            if map.entry(maybe_key?).or_default().insert(name.to_string()) {
                 required = true;
             }
         }
@@ -188,7 +191,7 @@ impl FilterAccounts {
         if required {
             map_required.insert(name.to_string());
         }
-        required
+        Ok(required)
     }
 
     fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
@@ -305,9 +308,7 @@ impl<'a> FilterAccountsMatch<'a> {
     fn extend(set: &mut HashSet<&'a str>, map: &'a HashMap<Pubkey, HashSet<String>>, key: &Pubkey) {
         if let Some(names) = map.get(key) {
             for name in names {
-                if !set.contains(name.as_str()) {
-                    set.insert(name);
-                }
+                set.insert(name);
             }
         }
     }
@@ -466,15 +467,15 @@ impl FilterTransactions {
                                 .map_err(|error| anyhow::anyhow!("invalid signature: {error}"))
                         })
                         .transpose()?,
-                    account_include: Filter::decode_pubkeys(
+                    account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limit.account_include_reject,
                     )?,
-                    account_exclude: Filter::decode_pubkeys(
+                    account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
                         &HashSet::new(),
                     )?,
-                    account_required: Filter::decode_pubkeys(
+                    account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &HashSet::new(),
                     )?,
@@ -629,7 +630,7 @@ impl FilterBlocks {
             this.filters.insert(
                 name.clone(),
                 FilterBlocksInner {
-                    account_include: Filter::decode_pubkeys(
+                    account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limit.account_include_reject,
                     )?,

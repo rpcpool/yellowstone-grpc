@@ -531,7 +531,6 @@ async fn geyser_subscribe(
     while let Some(message) = stream.next().await {
         match message {
             Ok(msg) => {
-                #[allow(clippy::single_match)]
                 match msg.update_oneof {
                     Some(UpdateOneof::Account(account)) => {
                         let account: AccountPretty = account.into();
