@@ -8,6 +8,7 @@ use {
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestFilterSlots, SubscribeRequestPing, SubscribeUpdatePong,
+        SubscribeUpdateSlot,
     },
 };
 
@@ -41,7 +42,6 @@ async fn main() -> anyhow::Result<()> {
             .send(SubscribeRequest {
                 slots: maplit::hashmap! { "".to_owned() => SubscribeRequestFilterSlots { filter_by_commitment: Some(true) } },
                 commitment: Some(CommitmentLevel::Processed as i32),
-                ping: None,
                 ..Default::default()
             })
             .await?;
@@ -64,9 +64,8 @@ async fn main() -> anyhow::Result<()> {
         async move {
             while let Some(message) = stream.next().await {
                 match message?.update_oneof.expect("valid message") {
-                    UpdateOneof::Slot(slot) => {
-                        //
-                        info!("slot received: {slot:?}");
+                    UpdateOneof::Slot(SubscribeUpdateSlot { slot, .. }) => {
+                        info!("slot received: {slot}");
                     }
                     UpdateOneof::Ping(_msg) => {
                         info!("ping received");
