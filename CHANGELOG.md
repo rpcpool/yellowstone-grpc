@@ -19,6 +19,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+- geyser: change plugin name to `{name}-{version}` ([#270](https://github.com/rpcpool/yellowstone-grpc/pull/270))
+
 ## 2023-12-08
 
 - yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.6

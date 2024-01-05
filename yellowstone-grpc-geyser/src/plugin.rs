@@ -10,6 +10,7 @@ use {
         SlotStatus,
     },
     std::{
+        concat, env,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -56,7 +57,7 @@ impl Plugin {
 
 impl GeyserPlugin for Plugin {
     fn name(&self) -> &'static str {
-        "GeyserGrpcPublic"
+        concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"))
     }
 
     fn on_load(&mut self, config_file: &str) -> PluginResult<()> {
