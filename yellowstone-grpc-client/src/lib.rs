@@ -29,7 +29,7 @@ use {
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
-    x_token: Option<AsciiMetadataValue>,
+    pub x_token: Option<AsciiMetadataValue>,
 }
 
 impl Interceptor for InterceptorXToken {
