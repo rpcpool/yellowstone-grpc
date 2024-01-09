@@ -11,8 +11,8 @@ use {
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
-        SlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaEntryInfoV2,
+        ReplicaTransactionInfoV2, SlotStatus,
     },
     solana_sdk::{
         clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
@@ -294,6 +294,18 @@ pub struct MessageEntry {
 
 impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
     fn from(entry: &ReplicaEntryInfo) -> Self {
+        Self {
+            slot: entry.slot,
+            index: entry.index,
+            num_hashes: entry.num_hashes,
+            hash: entry.hash.into(),
+            executed_transaction_count: entry.executed_transaction_count,
+        }
+    }
+}
+
+impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
+    fn from(entry: &ReplicaEntryInfoV2) -> Self {
         Self {
             slot: entry.slot,
             index: entry.index,

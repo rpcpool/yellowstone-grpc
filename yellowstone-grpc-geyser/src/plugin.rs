@@ -56,7 +56,7 @@ impl GeyserPlugin for Plugin {
         "GeyserGrpcPublic"
     }
 
-    fn on_load(&mut self, config_file: &str) -> PluginResult<()> {
+    fn on_load(&mut self, config_file: &str, _is_reload: bool) -> PluginResult<()> {
         let config = Config::load_from_file(config_file)?;
 
         // Setup logger
@@ -203,7 +203,10 @@ impl GeyserPlugin for Plugin {
         self.with_inner(|inner| {
             #[allow(clippy::infallible_destructuring_match)]
             let entry = match entry {
-                ReplicaEntryInfoVersions::V0_0_1(entry) => entry,
+                ReplicaEntryInfoVersions::V0_0_1(_) => {
+                    unreachable!("ReplicaEntryInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaEntryInfoVersions::V0_0_2(entry) => entry,
             };
 
             let message = Message::Entry(entry.into());
