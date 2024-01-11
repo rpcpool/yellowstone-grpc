@@ -549,6 +549,16 @@ async fn geyser_subscribe(
                         );
                         continue;
                     }
+                    Some(UpdateOneof::Ping(_)) => {
+                        // This is necessary to keep load balancers that expect client pings alive. If your load balancer doesn't
+                        // require periodic client pings then this is unnecessary
+                        subscribe_tx
+                            .send(SubscribeRequest {
+                                ping: Some(SubscribeRequestPing { id: 1 }),
+                                ..Default::default()
+                            })
+                            .await?;
+                    }
                     _ => {}
                 }
                 info!("new message: {msg:?}")

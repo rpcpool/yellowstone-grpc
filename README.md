@@ -108,6 +108,11 @@ It's possible to add limits for filters in config. If `filters` field is omitted
    - [Rust](examples/rust)
    - [TypeScript](examples/typescript)
 
+**NOTE**: Some load balancers will terminate gRPC connections if there are no messages sent from the client for a period of time.
+In order to mitigate this you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.
+The gRPC server already sends pings to the client, so you can simply reply with a ping and your connection will remain open.
+You can see in the rust example how to reply to the ping from the server with the client.
+
 ### gRPC Tools
 
 #### Google Pub/Sub
