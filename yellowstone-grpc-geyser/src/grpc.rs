@@ -416,7 +416,7 @@ impl<'a> MessageRef<'a> {
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
@@ -443,7 +443,7 @@ impl<'a> MessageRef<'a> {
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards(message.rewards.as_slice())),
+                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,

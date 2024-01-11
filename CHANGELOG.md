@@ -12,11 +12,60 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- client: include request in initial subscribe to gRPC endpoint to fix LB connection delay ([#252](https://github.com/rpcpool/yellowstone-grpc/pull/252))
-
 ### Features
 
 ### Breaking
+
+## 2024-01-08
+
+- yellowstone-grpc-client-1.13.0+solana.1.17.15
+- yellowstone-grpc-geyser-1.12.0+solana.1.17.15
+- yellowstone-grpc-proto-1.12.0+solana.1.17.15
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.15
+
+### Features
+
+- proto: add more convert functions ([#264](https://github.com/rpcpool/yellowstone-grpc/pull/264))
+- geyser: set plugin name to `{name}-{version}` ([#270](https://github.com/rpcpool/yellowstone-grpc/pull/270))
+
+## 2023-12-22
+
+- yellowstone-grpc-client-1.12.0+solana.1.17.12
+- yellowstone-grpc-geyser-1.11.2+solana.1.17.12
+- yellowstone-grpc-proto-1.11.1+solana.1.17.12
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.12
+
+### Features
+
+- geyser: add name to tokio threads ([#267](https://github.com/rpcpool/yellowstone-grpc/pull/267))
+
+## 2023-12-19
+
+- yellowstone-grpc-client-1.12.0+solana.1.17.12
+- yellowstone-grpc-geyser-1.11.1+solana.1.17.12
+- yellowstone-grpc-proto-1.11.1+solana.1.17.12
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.12
+
+### Features
+
+- solana: update to 1.17.12 ([#266](https://github.com/rpcpool/yellowstone-grpc/pull/266))
+
+## 2023-12-08
+
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.6
+
+### Fixes
+
+- tools: fix panic on Ping/Pong messages in google pubsub ([#261](https://github.com/rpcpool/yellowstone-grpc/pull/261))
+
+## 2023-12-06
+
+- yellowstone-grpc-tools-1.0.0-rc.8+solana.1.17.6
+
+### Fixes
+
+- client: include request in initial subscribe to gRPC endpoint to fix LB connection delay ([#252](https://github.com/rpcpool/yellowstone-grpc/pull/252))
+- tools: remove `ordering_key` from `PubsubMessage` ([#257](https://github.com/rpcpool/yellowstone-grpc/pull/257))
 
 ## 2023-11-24
 

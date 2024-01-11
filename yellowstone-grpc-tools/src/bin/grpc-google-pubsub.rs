@@ -6,11 +6,6 @@ use {
     std::{net::SocketAddr, time::Duration},
     tokio::{task::JoinSet, time::sleep},
     tracing::{info, warn},
-    tracing_subscriber::{
-        filter::{EnvFilter, LevelFilter},
-        layer::SubscriberExt,
-        util::SubscriberInitExt,
-    },
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -24,6 +19,7 @@ use {
             prom,
         },
         prom::{run_server as prometheus_run_server, GprcMessageKind},
+        setup_tracing,
     },
 };
 
@@ -123,8 +119,6 @@ impl ArgsAction {
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
-        let mut msg_slot = 0;
-        let mut msg_id = 0;
         'outer: loop {
             let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
             tokio::pin!(sleep);
@@ -153,33 +147,17 @@ impl ArgsAction {
                     None => break 'outer,
                 };
 
-                let payload = message.encode_to_vec();
-                let message = match &message.update_oneof {
-                    Some(value) => value,
+                match &message.update_oneof {
+                    Some(UpdateOneof::Ping(_)) => continue,
+                    Some(UpdateOneof::Pong(_)) => continue,
+                    Some(value) => prom_kind.push(GprcMessageKind::from(value)),
                     None => unreachable!("Expect valid message"),
                 };
-                let slot = match message {
-                    UpdateOneof::Account(msg) => msg.slot,
-                    UpdateOneof::Slot(msg) => msg.slot,
-                    UpdateOneof::Transaction(msg) => msg.slot,
-                    UpdateOneof::Block(msg) => msg.slot,
-                    UpdateOneof::Ping(_) => continue,
-                    UpdateOneof::Pong(_) => continue,
-                    UpdateOneof::BlockMeta(msg) => msg.slot,
-                    UpdateOneof::Entry(msg) => msg.slot,
-                };
-                if msg_slot != slot {
-                    msg_slot = slot;
-                    msg_id = 0;
-                }
-                msg_id += 1;
 
                 messages.push(PubsubMessage {
-                    data: payload,
-                    ordering_key: format!("{msg_slot}-{msg_id}"),
+                    data: message.encode_to_vec(),
                     ..Default::default()
                 });
-                prom_kind.push(GprcMessageKind::from(message));
             }
             if messages.is_empty() {
                 continue;
@@ -259,16 +237,7 @@ impl ArgsAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Setup tracing
-    let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
-    let io_layer = tracing_subscriber::fmt::layer().with_ansi(is_atty);
-    let level_layer = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::registry()
-        .with(io_layer)
-        .with(level_layer)
-        .try_init()?;
+    setup_tracing()?;
 
     // Parse args
     let args = Args::parse();

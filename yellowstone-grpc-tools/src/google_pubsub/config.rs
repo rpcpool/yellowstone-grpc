@@ -12,14 +12,17 @@ use {
 #[serde(default)]
 pub struct Config {
     pub prometheus: Option<SocketAddr>,
-    pub auth: Option<String>,
+    pub with_auth: Option<bool>,
+    pub with_credentials: Option<String>,
     pub grpc2pubsub: Option<ConfigGrpc2PubSub>,
 }
 
 impl Config {
     pub async fn create_client(&self) -> anyhow::Result<Client> {
         let mut config = ClientConfig::default();
-        if let Some(creds) = match self.auth.clone() {
+        if matches!(self.with_auth, Some(true)) {
+            config = config.with_auth().await?;
+        } else if let Some(creds) = match self.with_credentials.clone() {
             Some(filepath) => CredentialsFile::new_from_file(filepath).await.map(Some),
             None => {
                 if std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").is_ok()
