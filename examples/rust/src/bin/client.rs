@@ -556,14 +556,7 @@ async fn geyser_subscribe(
                         subscribe_tx
                             .send(SubscribeRequest {
                                 ping: Some(SubscribeRequestPing { id: 1 }),
-                                slots: request.slots.clone(),
-                                accounts: request.accounts.clone(),
-                                transactions: request.transactions.clone(),
-                                entry: request.entry.clone(),
-                                blocks: request.blocks.clone(),
-                                blocks_meta: request.blocks_meta.clone(),
-                                commitment: request.commitment.clone(),
-                                accounts_data_slice: request.accounts_data_slice.clone(),
+                                ..Default::default()
                             })
                             .await?;
                     }
