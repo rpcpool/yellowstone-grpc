@@ -1,3 +1,5 @@
+use yellowstone_grpc_proto::geyser::SlotParallelization;
+
 use {
     anyhow::Context,
     serde::{de, Deserialize, Serialize},
@@ -171,6 +173,7 @@ pub struct ConfigGrpcRequestBlocks {
     pub include_transactions: Option<bool>,
     pub include_accounts: Option<bool>,
     pub include_entries: Option<bool>,
+    pub slot_parallization: Option<(i32, i32)>,
 }
 
 impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigGrpcRequestBlocks {
@@ -180,6 +183,10 @@ impl GrpcRequestToProto<SubscribeRequestFilterBlocks> for ConfigGrpcRequestBlock
             include_transactions: self.include_transactions,
             include_accounts: self.include_accounts,
             include_entries: self.include_entries,
+            slot_parallelization: self.slot_parallization.map(|parallelization| SlotParallelization {
+                filter_id: parallelization.0,
+                filter_size: parallelization.1,
+            })
         }
     }
 }

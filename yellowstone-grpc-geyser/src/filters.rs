@@ -26,6 +26,7 @@ use {
         SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
         SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
+        SlotParallelization,
     },
 };
 
@@ -583,12 +584,16 @@ impl FilterEntry {
     }
 }
 
+
+/// To filter block stream into multiple streams because a single stream could be very slow. 
+/// For example we want to split block stream into 8, so filter_id will go from 0..7 and filter size will be 8.
 #[derive(Debug, Clone)]
 pub struct FilterBlocksInner {
     account_include: HashSet<Pubkey>,
     include_transactions: Option<bool>,
     include_accounts: Option<bool>,
     include_entries: Option<bool>,
+    slot_parallelization: Option<SlotParallelization>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -636,6 +641,7 @@ impl FilterBlocks {
                     include_transactions: filter.include_transactions,
                     include_accounts: filter.include_accounts,
                     include_entries: filter.include_entries,
+                    slot_parallelization : filter.slot_parallelization.clone(),
                 },
             );
         }
@@ -645,7 +651,13 @@ impl FilterBlocks {
     fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
         self.filters
             .iter()
-            .map(|(filter, inner)| {
+            .filter_map(|(filter, inner)| {
+                if let Some(slot_parallelization) = &inner.slot_parallelization {
+                    if (message.slot as i32) % slot_parallelization.filter_size != slot_parallelization.filter_id {
+                        return None;
+                    }
+                }
+
                 #[allow(clippy::unnecessary_filter_map)]
                 let transactions = if matches!(inner.include_transactions, None | Some(true)) {
                     message
@@ -695,9 +707,10 @@ impl FilterBlocks {
                     vec![]
                 };
 
-                (
+                Some((
                     vec![filter.clone()],
-                    MessageRef::Block((message, transactions, accounts, entries).into()),
+                    MessageRef::Block((message, transactions, accounts, entries).into())
+                )
                 )
             })
             .collect()
@@ -769,6 +782,10 @@ impl FilterAccountsDataSlice {
 
 #[cfg(test)]
 mod tests {
+    use yellowstone_grpc_proto::geyser::{SubscribeRequestFilterBlocks, SlotParallelization};
+
+    use crate::grpc::MessageBlock;
+
     use {
         crate::{
             config::ConfigGrpcFilters,
@@ -831,6 +848,25 @@ mod tests {
             },
             slot: 100,
         }
+    }
+
+    fn create_message_block (slot: u64) -> Message {
+        let block = MessageBlock {
+            parent_slot: slot.saturating_sub(1),
+            slot,
+            parent_blockhash: Hash::new_unique().to_string(),
+            blockhash: Hash::new_unique().to_string(),
+            rewards: vec![],
+            block_time: None,
+            block_height: Some(slot),
+            executed_transaction_count: 0,
+            transactions: vec![],
+            updated_account_count: 0,
+            accounts: vec![],
+            entries_count: 0,
+            entries: vec![],
+        };
+        Message::Block(block)
     }
 
     #[test]
@@ -1176,6 +1212,67 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(filters.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_block_with_parallelization() {
+        let mut blocks = HashMap::new();
+
+        blocks.insert(
+            "serum".to_string(),
+            SubscribeRequestFilterBlocks {
+                account_include: vec![],
+                include_transactions: None,
+                include_accounts: None,
+                include_entries: None,
+                slot_parallelization: Some(SlotParallelization {
+                    filter_id: 3,
+                    filter_size: 8,
+                }),
+            },
+        );
+
+        let config = SubscribeRequest {
+            accounts: HashMap::new(),
+            slots: HashMap::new(),
+            transactions: HashMap::new(),
+            blocks,
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: None,
+            accounts_data_slice: Vec::new(),
+            ping: None,
+        };
+        let limit = ConfigGrpcFilters::default();
+        let filter = Filter::new(&config, &limit).unwrap();
+
+        for (filters, _message) in filter.get_filters( &create_message_block(8), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(9), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(10), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(11), None) {
+            assert_eq!(filters.len(), 1);
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(12), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(13), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(14), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(15), None) {
+            assert!(filters.is_empty());
+        }
+        for (filters, _message) in filter.get_filters( &create_message_block(19), None) {
+            assert_eq!(filters.len(), 1);
         }
     }
 }

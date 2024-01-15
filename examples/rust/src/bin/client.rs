@@ -1,3 +1,5 @@
+use yellowstone_grpc_proto::geyser::SlotParallelization;
+
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::{Parser, Subcommand, ValueEnum},
@@ -196,6 +198,13 @@ struct ActionSubscribe {
     // Resubscribe (only to slots) after
     #[clap(long)]
     resub: Option<usize>,
+
+    // To split block into multiple streams
+    #[clap(long)]
+    slot_parallelization_id: Option<i32>,
+
+    #[clap(long)]
+    slot_parallelization_limit: Option<i32>,
 }
 
 impl Action {
@@ -280,6 +289,10 @@ impl Action {
 
                 let mut blocks: BlocksFilterMap = HashMap::new();
                 if args.blocks {
+                    let slot_parallelization = args.slot_parallelization_id.map(|filter_id| SlotParallelization {
+                        filter_id,
+                        filter_size: args.slot_parallelization_limit.unwrap_or(1),
+                    });
                     blocks.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterBlocks {
@@ -287,6 +300,7 @@ impl Action {
                             include_transactions: args.blocks_include_transactions,
                             include_accounts: args.blocks_include_accounts,
                             include_entries: args.blocks_include_entries,
+                            slot_parallelization,
                         },
                     );
                 }
