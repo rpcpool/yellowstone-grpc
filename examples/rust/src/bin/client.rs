@@ -8,7 +8,10 @@ use {
     std::{
         collections::HashMap,
         env, fmt,
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
         time::Duration,
     },
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
@@ -413,14 +416,25 @@ impl From<SubscribeUpdateTransaction> for TransactionPretty {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env::set_var(
         env_logger::DEFAULT_FILTER_ENV,
         env::var_os(env_logger::DEFAULT_FILTER_ENV).unwrap_or_else(|| "info".into()),
     );
     env_logger::init();
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name_fn(|| {
+            static THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+            let id = THREAD_ID.fetch_add(1, Ordering::Relaxed);
+            format!("grpc-client-t{id:02}")
+        })
+        .build()?
+        .block_on(main_async())
+}
+
+async fn main_async() -> anyhow::Result<()> {
     let args = Args::parse();
     let zero_attempts = Arc::new(Mutex::new(true));
 
@@ -528,30 +542,36 @@ async fn geyser_subscribe(
 
     info!("stream opened");
     let mut counter = 0;
+    let mut msg_count = 0;
     while let Some(message) = stream.next().await {
         match message {
             Ok(msg) => {
-                #[allow(clippy::single_match)]
-                match msg.update_oneof {
-                    Some(UpdateOneof::Account(account)) => {
-                        let account: AccountPretty = account.into();
-                        info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
-                        );
-                        continue;
-                    }
-                    Some(UpdateOneof::Transaction(tx)) => {
-                        let tx: TransactionPretty = tx.into();
-                        info!(
-                            "new transaction update: filters {:?}, transaction: {:#?}",
-                            msg.filters, tx
-                        );
-                        continue;
-                    }
-                    _ => {}
+                // match msg.update_oneof {
+                //     Some(UpdateOneof::Account(account)) => {
+                //         let account: AccountPretty = account.into();
+                //         info!(
+                //             "new account update: filters {:?}, account: {:#?}",
+                //             msg.filters, account
+                //         );
+                //         continue;
+                //     }
+                //     Some(UpdateOneof::Transaction(tx)) => {
+                //         let tx: TransactionPretty = tx.into();
+                //         info!(
+                //             "new transaction update: filters {:?}, transaction: {:#?}",
+                //             msg.filters, tx
+                //         );
+                //         continue;
+                //     }
+                //     _ => {}
+                // }
+                // info!("new message: {msg:?}")
+
+                msg_count += 1;
+                if let Some(UpdateOneof::Slot(msg)) = msg.update_oneof {
+                    info!("new slot message: {msg:?}, received messages: {msg_count}");
+                    msg_count = 0;
                 }
-                info!("new message: {msg:?}")
             }
             Err(error) => {
                 error!("error: {error:?}");

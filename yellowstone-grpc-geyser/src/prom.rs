@@ -38,6 +38,11 @@ lazy_static::lazy_static! {
     pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
         "connections_total", "Total number of connections to GRPC service"
     ).unwrap();
+
+    pub static ref CONNECTION_INFO: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("connection_info", "processed finalized slot for client"),
+        &["id", "layer"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -61,6 +66,7 @@ impl PrometheusService {
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
+            register!(CONNECTION_INFO);
 
             VERSION
                 .with_label_values(&[

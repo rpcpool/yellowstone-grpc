@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
-        prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        prom::{self, CONNECTIONS_TOTAL, CONNECTION_INFO, MESSAGE_QUEUE_SIZE},
         version::VERSION,
     },
     log::{error, info},
@@ -29,7 +29,7 @@ use {
         sync::{broadcast, mpsc, Mutex, Notify, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
-    tokio_stream::wrappers::ReceiverStream,
+    // tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
         transport::{
@@ -1051,6 +1051,9 @@ impl GrpcService {
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
         drop_client: impl FnOnce(),
     ) {
+        let id_str = id.to_string();
+        CONNECTION_INFO.with_label_values(&[&id_str, "size"]).set(0);
+
         CONNECTIONS_TOTAL.inc();
         info!("client #{id}: new");
 
@@ -1155,9 +1158,16 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for message in messages.iter() {
+                                if let Message::Slot(msg) = message {
+                                    if msg.status == CommitmentLevel::Finalized {
+                                        CONNECTION_INFO.with_label_values(&[&id_str, "push"]).set(msg.slot as i64);
+                                    }
+                                }
                                 for message in filter.get_update(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {
-                                        Ok(()) => {}
+                                        Ok(()) => {
+                                            CONNECTION_INFO.with_label_values(&[&id_str, "size"]).inc();
+                                        }
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send update");
                                             tokio::spawn(async move {
@@ -1181,12 +1191,52 @@ impl GrpcService {
         info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
         drop_client();
+
+        // let _ = CONNECTION_INFO.remove_label_values(&[&id_str]);
+    }
+}
+
+pub struct ReceiverStream {
+    inner: mpsc::Receiver<TonicResult<SubscribeUpdate>>,
+    id: String,
+}
+
+impl ReceiverStream {
+    const fn new(inner: mpsc::Receiver<TonicResult<SubscribeUpdate>>, id: String) -> Self {
+        Self { inner, id }
+    }
+}
+
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+impl futures::stream::Stream for ReceiverStream {
+    type Item = TonicResult<SubscribeUpdate>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let msg = futures::ready!(self.inner.poll_recv(cx));
+        CONNECTION_INFO.with_label_values(&[&self.id, "size"]).dec();
+        if let Some(Ok(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot { slot, status, .. })),
+            ..
+        })) = &msg
+        {
+            if *status == CommitmentLevel::Finalized as i32 {
+                CONNECTION_INFO
+                    .with_label_values(&[&self.id, "ppop"])
+                    .set(*slot as i64);
+            }
+        }
+        Poll::Ready(msg)
     }
 }
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+    // type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+    type SubscribeStream = ReceiverStream;
 
     async fn subscribe(
         &self,
@@ -1307,7 +1357,10 @@ impl Geyser for GrpcService {
             },
         ));
 
-        Ok(Response::new(ReceiverStream::new(stream_rx)))
+        Ok(Response::new(ReceiverStream::new(
+            stream_rx,
+            id.to_string(),
+        )))
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {

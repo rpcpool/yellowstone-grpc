@@ -68,6 +68,7 @@ impl GeyserPlugin for Plugin {
 
         // Create inner
         let runtime = Builder::new_multi_thread()
+            .worker_threads(8)
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                 let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
