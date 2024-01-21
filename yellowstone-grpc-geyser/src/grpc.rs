@@ -1206,6 +1206,7 @@ impl Geyser for GrpcService {
                 ping: None,
             },
             &self.config.filters,
+            vec![],
         )
         .expect("empty filter");
         let snapshot_rx = self.snapshot_rx.lock().await.take();
@@ -1250,6 +1251,8 @@ impl Geyser for GrpcService {
         });
 
         let config_filters_limit = self.config.filters.clone();
+        let config_carpool_exclude: Vec<Pubkey> =
+            self.config.carpool_exclude.iter().copied().collect();
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
@@ -1264,7 +1267,7 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            if let Err(error) = match Filter::new(&request, &config_filters_limit) {
+                            if let Err(error) = match Filter::new(&request, &config_filters_limit, config_carpool_exclude.clone()) {
                                 Ok(filter) => match incoming_client_tx.send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
