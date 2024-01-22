@@ -1,4 +1,4 @@
-name: Build plugin
+name: Run tests
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'v1.16'
   workflow_dispatch:
 
 env:
