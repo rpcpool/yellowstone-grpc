@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- deps: make cargo-deny happy about openssl, unsafe-libyaml, h2, ahash ([#278](https://github.com/rpcpool/yellowstone-grpc/pull/278))
+
 ### Features
 
 ### Breaking
@@ -150,11 +152,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- tools: add Google Pub/Sub ([#211](https://github.com/rpcpool/yellowstone-grpc/pull/211)).
+- tools: add Google Pub/Sub ([#211](https://github.com/rpcpool/yellowstone-grpc/pull/211))
 
 ### Breaking
 
-- kafka: rename to tools ([#203](https://github.com/rpcpool/yellowstone-grpc/pull/203)).
+- kafka: rename to tools ([#203](https://github.com/rpcpool/yellowstone-grpc/pull/203))
 
 ## 2023-10-12
 
@@ -162,7 +164,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: support snapshot data ([#182](https://github.com/rpcpool/yellowstone-grpc/pull/182)).
+- geyser: support snapshot data ([#182](https://github.com/rpcpool/yellowstone-grpc/pull/182))
 
 ## 2023-10-10
 
@@ -173,11 +175,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- geyser: use `entry_count` from `ReplicaBlockInfoV3` ([#186](https://github.com/rpcpool/yellowstone-grpc/pull/186)).
+- geyser: use `entry_count` from `ReplicaBlockInfoV3` ([#186](https://github.com/rpcpool/yellowstone-grpc/pull/186))
 
 ### Features
 
-- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+- client: add `GeyserGrpcClient::subscribe_once2` ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195))
 
 ## 2023-10-09
 
@@ -185,9 +187,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- kafka: add metrics (stats, sent, recv) ([#196](https://github.com/rpcpool/yellowstone-grpc/pull/196)).
-- kafka: support YAML config ([#197](https://github.com/rpcpool/yellowstone-grpc/pull/197)).
-- kafka: support prometheus address in config ([#198](https://github.com/rpcpool/yellowstone-grpc/pull/198)).
+- kafka: add metrics (stats, sent, recv) ([#196](https://github.com/rpcpool/yellowstone-grpc/pull/196))
+- kafka: support YAML config ([#197](https://github.com/rpcpool/yellowstone-grpc/pull/197))
+- kafka: support prometheus address in config ([#198](https://github.com/rpcpool/yellowstone-grpc/pull/198))
 
 ## 2023-10-06
 
@@ -195,7 +197,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- kafka: fix message size for gRPC client ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195)).
+- kafka: fix message size for gRPC client ([#195](https://github.com/rpcpool/yellowstone-grpc/pull/195))
 
 ## 2023-10-05
 
@@ -206,8 +208,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
-- solana: update to 1.16.15 ([#193](https://github.com/rpcpool/yellowstone-grpc/pull/193)).
+- kafka: support strings for queue size ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191))
+- solana: update to 1.16.15 ([#193](https://github.com/rpcpool/yellowstone-grpc/pull/193))
 
 ## 2023-10-03
 
@@ -217,13 +219,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190)).
-- client: add tx pretty print to rust ([#189](https://github.com/rpcpool/yellowstone-grpc/pull/189)).
-- geyser: update deps, tokio=1.32.0 ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191)).
-
-### Fixes
-
-### Breaking
+- proto: add mod `convert_to`, `convert_from` ([#190](https://github.com/rpcpool/yellowstone-grpc/pull/190))
+- client: add tx pretty print to rust ([#189](https://github.com/rpcpool/yellowstone-grpc/pull/189))
+- geyser: update deps, tokio=1.32.0 ([#191](https://github.com/rpcpool/yellowstone-grpc/pull/191))
 
 ## 2023-10-02
 
@@ -234,15 +232,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add optional TLS to gRPC server config ([#183](https://github.com/rpcpool/yellowstone-grpc/pull/183)).
-- client: add timeout options to rust ([#187](https://github.com/rpcpool/yellowstone-grpc/pull/187)).
-- geyser: update solana =1.16.14 ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188)).
+- geyser: add optional TLS to gRPC server config ([#183](https://github.com/rpcpool/yellowstone-grpc/pull/183))
+- client: add timeout options to rust ([#187](https://github.com/rpcpool/yellowstone-grpc/pull/187))
+- geyser: update solana =1.16.14 ([#188](https://github.com/rpcpool/yellowstone-grpc/pull/188))
 
 ### Fixes
 
-- geyser: add `fs` feature to `tokio` dependencies in the plugin ([#184](https://github.com/rpcpool/yellowstone-grpc/pull/184)).
-
-### Breaking
+- geyser: add `fs` feature to `tokio` dependencies in the plugin ([#184](https://github.com/rpcpool/yellowstone-grpc/pull/184))
 
 ## 2023-08-28
 
@@ -250,7 +246,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170)).
+- kafka: init ([#170](https://github.com/rpcpool/yellowstone-grpc/pull/170))
 
 ## 2023-08-21
 
@@ -258,13 +254,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173)).
+- geyser: add package name to version info ([#173](https://github.com/rpcpool/yellowstone-grpc/pull/173))
 
 ### Fixes
 
-- geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171)).
-- geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176)).
-- geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yellowstone-grpc/pull/177)).
+- geyser: fix overflow for small slot number ([#171](https://github.com/rpcpool/yellowstone-grpc/pull/171))
+- geyser: use Notify instead of AtomicBool in send loop ([#176](https://github.com/rpcpool/yellowstone-grpc/pull/176))
+- geyser: update block reconstruction code ([#177](https://github.com/rpcpool/yellowstone-grpc/pull/177))
 
 ## 2023-08-10
 
@@ -275,7 +271,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: include entries to block message ([#169](https://github.com/rpcpool/yellowstone-grpc/pull/169)).
+- geyser: include entries to block message ([#169](https://github.com/rpcpool/yellowstone-grpc/pull/169))
 
 ## 2023-07-26
 
@@ -283,7 +279,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168)).
+- geyser: fix config example ([#168](https://github.com/rpcpool/yellowstone-grpc/pull/168))
 
 ## 2023-07-22
 
@@ -291,8 +287,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165)).
-- geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166)).
+- geyser: add panic config option on failed block reconstruction ([#165](https://github.com/rpcpool/yellowstone-grpc/pull/165))
+- geyser: allow to disable unary methods ([#166](https://github.com/rpcpool/yellowstone-grpc/pull/166))
 
 ## 2023-07-20
 
@@ -303,7 +299,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add `Entry` message ([#163](https://github.com/rpcpool/yellowstone-grpc/pull/163)).
+- geyser: add `Entry` message ([#163](https://github.com/rpcpool/yellowstone-grpc/pull/163))
 
 ## 2023-07-18
 
@@ -311,7 +307,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: reduce the amount of locks ([#161](https://github.com/rpcpool/yellowstone-grpc/pull/161)).
+- geyser: reduce the amount of locks ([#161](https://github.com/rpcpool/yellowstone-grpc/pull/161))
 
 ## 2023-07-17
 
@@ -322,7 +318,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add `accounts` to Block message ([#160](https://github.com/rpcpool/yellowstone-grpc/pull/160)).
+- geyser: add `accounts` to Block message ([#160](https://github.com/rpcpool/yellowstone-grpc/pull/160))
 
 ## 2023-07-07
 
@@ -333,7 +329,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add `account_include` to Blocks filter ([#155](https://github.com/rpcpool/yellowstone-grpc/pull/155)).
+- geyser: add `account_include` to Blocks filter ([#155](https://github.com/rpcpool/yellowstone-grpc/pull/155))
 
 ## 2023-06-29
 
@@ -344,7 +340,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: support TokenAccountState in accounts filter ([#154](https://github.com/rpcpool/yellowstone-grpc/pull/154)).
+- geyser: support TokenAccountState in accounts filter ([#154](https://github.com/rpcpool/yellowstone-grpc/pull/154))
 
 ## 2023-06-29
 
@@ -355,13 +351,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: support data_slice for accounts ([#150](https://github.com/rpcpool/yellowstone-grpc/pull/150)).
-- client: add TypeScript client ([#142](https://github.com/rpcpool/yellowstone-grpc/pull/142)).
+- geyser: support data_slice for accounts ([#150](https://github.com/rpcpool/yellowstone-grpc/pull/150))
+- client: add TypeScript client ([#142](https://github.com/rpcpool/yellowstone-grpc/pull/142))
 
 ### Fixes
 
-- client: set max message size for decode ([#151](https://github.com/rpcpool/yellowstone-grpc/pull/151)).
-- geyser: remove duplicated account updates for confirmed/finalized ([#152](https://github.com/rpcpool/yellowstone-grpc/pull/152)).
+- client: set max message size for decode ([#151](https://github.com/rpcpool/yellowstone-grpc/pull/151))
+- geyser: remove duplicated account updates for confirmed/finalized ([#152](https://github.com/rpcpool/yellowstone-grpc/pull/152))
 
 ## 2023-06-16
 
@@ -371,7 +367,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: update solana =1.16.1 ([#146](https://github.com/rpcpool/yellowstone-grpc/pull/146)).
+- geyser: update solana =1.16.1 ([#146](https://github.com/rpcpool/yellowstone-grpc/pull/146))
 
 ## 2023-06-15
 
@@ -384,8 +380,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: Update `tonic`, `0.8.2` => `0.9.2` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145)).
-- geyser: Add methods `health_check` and `health_watch` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145)).
-- geyser: Add prometheus metric `message_queue_size` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145)).
-- geyser: Send task per connection ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145)).
-- geyser: Send processed immediately without `Slot` message ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145)).
+- geyser: Update `tonic`, `0.8.2` => `0.9.2` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145))
+- geyser: Add methods `health_check` and `health_watch` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145))
+- geyser: Add prometheus metric `message_queue_size` ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145))
+- geyser: Send task per connection ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145))
+- geyser: Send processed immediately without `Slot` message ([#145](https://github.com/rpcpool/yellowstone-grpc/pull/145))

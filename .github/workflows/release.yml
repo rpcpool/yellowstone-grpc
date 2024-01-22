@@ -1,4 +1,4 @@
-name: Release plugin
+name: Create release
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'v1.16'
     tags:
       - 'v*'
       - 'tools-v*'
