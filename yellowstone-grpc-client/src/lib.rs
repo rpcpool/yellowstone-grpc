@@ -60,8 +60,8 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 pub struct GeyserGrpcClient<F> {
-    health: HealthClient<InterceptedService<Channel, F>>,
-    geyser: GeyserClient<InterceptedService<Channel, F>>,
+    pub health: HealthClient<InterceptedService<Channel, F>>,
+    pub geyser: GeyserClient<InterceptedService<Channel, F>>,
 }
 
 impl GeyserGrpcClient<()> {

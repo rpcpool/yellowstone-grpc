@@ -1,7 +1,10 @@
 {
     "prometheus": "127.0.0.1:8873",
-    // "with_auth": true, // Auth with DefaultTokenSourceProvider
-    // "with_credentials": "path_to_json_file_with_creds", // or use envs: GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_APPLICATION_CREDENTIALS_JSON
+    "client": {
+        // "with_auth": true, // Auth with DefaultTokenSourceProvider
+        // "with_credentials": "path_to_json_file_with_creds", // or use envs: GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_APPLICATION_CREDENTIALS_JSON
+        "pool_size": 4
+    },
     "grpc2pubsub": {
         "endpoint": "http://127.0.0.1:10000",
         "x_token": null,
@@ -20,12 +23,22 @@
                 }
             }
         },
+        "max_message_size": "536_870_912", // 512MiB
+
         "topic": "grpc",
         "create_if_not_exists": true,
-        "workers": 3,
-        "flush_interval_ms": 100,
-        "bundle_size": 3,
-        "bulk_max_size": 10,
-        "bulk_max_wait_ms": 100
+
+        "publisher": {
+            "workers": 3,
+            "flush_interval_ms": 100,
+            "bundle_size": 3
+        },
+
+        "batch": {
+            "max_messages": 10,
+            "max_size_bytes": "9_500_000",
+            "max_wait_ms": 100,
+            "max_in_progress": 100
+        }
     }
 }
