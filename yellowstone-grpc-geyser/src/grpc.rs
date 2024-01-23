@@ -41,17 +41,21 @@ use {
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         convert_to,
-        prelude::{
+        geyser_custom::{
             geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
-            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            VecWrap,
         },
+        prelude::{
+            subscribe_update::UpdateOneof, CommitmentLevel, GetBlockHeightRequest,
+            GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+            GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
+            IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
+            SubscribeRequest, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
+            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo,
+        },
+        prost::Message as _,
     },
 };
 
@@ -1045,7 +1049,7 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         mut filter: Filter,
-        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        stream_tx: mpsc::Sender<TonicResult<VecWrap>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
@@ -1055,7 +1059,7 @@ impl GrpcService {
         CONNECTION_INFO.with_label_values(&[&id_str, "size"]).set(0);
 
         CONNECTIONS_TOTAL.inc();
-        info!("client #{id}: new");
+        info!("client #{id}: new, total: {}", CONNECTIONS_TOTAL.get());
 
         let mut is_alive = true;
         if let Some(snapshot_rx) = snapshot_rx.take() {
@@ -1066,7 +1070,11 @@ impl GrpcService {
                 match client_rx.recv().await {
                     Some(Some(filter_new)) => {
                         if let Some(msg) = filter_new.get_pong_msg() {
-                            if stream_tx.send(Ok(msg)).await.is_err() {
+                            if stream_tx
+                                .send(Ok((msg.encode_to_vec(), None).into()))
+                                .await
+                                .is_err()
+                            {
                                 error!("client #{id}: stream closed");
                                 is_alive = false;
                                 break;
@@ -1107,7 +1115,11 @@ impl GrpcService {
                 };
 
                 for message in filter.get_update(&message, None) {
-                    if stream_tx.send(Ok(message)).await.is_err() {
+                    if stream_tx
+                        .send(Ok((message.encode_to_vec(), None).into()))
+                        .await
+                        .is_err()
+                    {
                         error!("client #{id}: stream closed");
                         is_alive = false;
                         break;
@@ -1123,7 +1135,7 @@ impl GrpcService {
                         match message {
                             Some(Some(filter_new)) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
-                                    if stream_tx.send(Ok(msg)).await.is_err() {
+                                    if stream_tx.send(Ok((msg.encode_to_vec(), None).into())).await.is_err() {
                                         error!("client #{id}: stream closed");
                                         break 'outer;
                                     }
@@ -1158,12 +1170,15 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for message in messages.iter() {
+                                let mut finalized_slot = None;
                                 if let Message::Slot(msg) = message {
                                     if msg.status == CommitmentLevel::Finalized {
                                         CONNECTION_INFO.with_label_values(&[&id_str, "push"]).set(msg.slot as i64);
+                                        finalized_slot = Some(msg.slot);
                                     }
                                 }
                                 for message in filter.get_update(message, Some(commitment)) {
+                                    let message: VecWrap = (message.encode_to_vec(), finalized_slot).into();
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {
                                             CONNECTION_INFO.with_label_values(&[&id_str, "size"]).inc();
@@ -1197,12 +1212,12 @@ impl GrpcService {
 }
 
 pub struct ReceiverStream {
-    inner: mpsc::Receiver<TonicResult<SubscribeUpdate>>,
+    inner: mpsc::Receiver<TonicResult<VecWrap>>,
     id: String,
 }
 
 impl ReceiverStream {
-    const fn new(inner: mpsc::Receiver<TonicResult<SubscribeUpdate>>, id: String) -> Self {
+    const fn new(inner: mpsc::Receiver<TonicResult<VecWrap>>, id: String) -> Self {
         Self { inner, id }
     }
 }
@@ -1213,20 +1228,27 @@ use std::{
 };
 
 impl futures::stream::Stream for ReceiverStream {
-    type Item = TonicResult<SubscribeUpdate>;
+    type Item = TonicResult<VecWrap>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let msg = futures::ready!(self.inner.poll_recv(cx));
         CONNECTION_INFO.with_label_values(&[&self.id, "size"]).dec();
-        if let Some(Ok(SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot { slot, status, .. })),
-            ..
-        })) = &msg
-        {
-            if *status == CommitmentLevel::Finalized as i32 {
+        // if let Some(Ok(SubscribeUpdate {
+        //     update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot { slot, status, .. })),
+        //     ..
+        // })) = &msg
+        // {
+        //     if *status == CommitmentLevel::Finalized as i32 {
+        //         CONNECTION_INFO
+        //             .with_label_values(&[&self.id, "ppop"])
+        //             .set(*slot as i64);
+        //     }
+        // }
+        if let Some(Ok(msg)) = &msg {
+            if let Some(slot) = msg.finalized_slot {
                 CONNECTION_INFO
                     .with_label_values(&[&self.id, "ppop"])
-                    .set(*slot as i64);
+                    .set(slot as i64);
             }
         }
         Poll::Ready(msg)
@@ -1287,7 +1309,7 @@ impl Geyser for GrpcService {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
+                        match ping_stream_tx.try_send(Ok((ping_msg.clone().encode_to_vec(), None).into())) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {

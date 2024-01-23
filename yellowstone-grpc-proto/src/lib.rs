@@ -4,6 +4,189 @@ pub mod geyser {
     tonic::include_proto!("geyser");
 }
 
+pub mod geyser_custom {
+    tonic::include_proto!("geyser.Geyser");
+
+    use {
+        bytes::buf::{Buf, BufMut},
+        prost::{
+            encoding::{DecodeContext, WireType},
+            DecodeError, Message,
+        },
+        std::marker::PhantomData,
+        tonic::{
+            codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder},
+            Code, Status,
+        },
+    };
+
+    enum ProstVecKind {
+        Prost,
+        Vec,
+    }
+
+    trait ProstVec: Message {
+        fn kind(&self) -> ProstVecKind;
+        fn encode2(self, _buf: &mut EncodeBuf<'_>);
+    }
+
+    impl ProstVec for super::geyser::SubscribeRequest {
+        fn kind(&self) -> ProstVecKind {
+            ProstVecKind::Prost
+        }
+
+        fn encode2(self, _buf: &mut EncodeBuf<'_>) {
+            todo!()
+        }
+    }
+
+    impl ProstVec for super::geyser::SubscribeUpdate {
+        fn kind(&self) -> ProstVecKind {
+            ProstVecKind::Prost
+        }
+
+        fn encode2(self, _buf: &mut EncodeBuf<'_>) {
+            todo!()
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct VecWrap {
+        pub vec: Vec<u8>,
+        #[allow(dead_code)]
+        pub finalized_slot: Option<u64>,
+    }
+
+    impl From<(Vec<u8>, Option<u64>)> for VecWrap {
+        fn from((vec, finalized_slot): (Vec<u8>, Option<u64>)) -> Self {
+            Self {
+                vec,
+                finalized_slot,
+            }
+        }
+    }
+
+    impl Message for VecWrap {
+        fn encode_raw<B>(&self, _buf: &mut B)
+        where
+            B: BufMut,
+            Self: Sized,
+        {
+            todo!()
+        }
+
+        fn merge_field<B>(
+            &mut self,
+            _tag: u32,
+            _wire_type: WireType,
+            _buf: &mut B,
+            _ctx: DecodeContext,
+        ) -> Result<(), DecodeError>
+        where
+            B: Buf,
+            Self: Sized,
+        {
+            todo!()
+        }
+
+        fn encoded_len(&self) -> usize {
+            todo!()
+        }
+
+        fn clear(&mut self) {
+            todo!()
+        }
+    }
+
+    impl ProstVec for VecWrap {
+        fn kind(&self) -> ProstVecKind {
+            ProstVecKind::Vec
+        }
+
+        fn encode2(self, buf: &mut EncodeBuf<'_>) {
+            let required = self.vec.len();
+            let remaining = buf.remaining_mut();
+            if required > remaining {
+                panic!("Message only errors if not enough space");
+            }
+
+            buf.put_slice(self.vec.as_ref());
+        }
+    }
+
+    pub struct SubscribeCodec<T, U> {
+        _pd: PhantomData<(T, U)>,
+    }
+
+    impl<T, U> Default for SubscribeCodec<T, U> {
+        fn default() -> Self {
+            Self { _pd: PhantomData }
+        }
+    }
+
+    impl<T, U> Codec for SubscribeCodec<T, U>
+    where
+        T: ProstVec + Send + 'static,
+        U: ProstVec + Default + Send + 'static,
+    {
+        type Encode = T;
+        type Decode = U;
+
+        type Encoder = SubscribeEncoder<T>;
+        type Decoder = ProstDecoder<U>;
+
+        fn encoder(&mut self) -> Self::Encoder {
+            SubscribeEncoder(PhantomData)
+        }
+
+        fn decoder(&mut self) -> Self::Decoder {
+            ProstDecoder(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SubscribeEncoder<T>(PhantomData<T>);
+
+    impl<T: ProstVec> Encoder for SubscribeEncoder<T> {
+        type Item = T;
+        type Error = Status;
+
+        fn encode(&mut self, item: Self::Item, buf: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
+            match item.kind() {
+                ProstVecKind::Prost => item
+                    .encode(buf)
+                    .expect("Message only errors if not enough space"),
+                ProstVecKind::Vec => item.encode2(buf),
+            }
+
+            Ok(())
+        }
+    }
+
+    /// A [`Decoder`] that knows how to decode `U`.
+    #[derive(Debug, Clone, Default)]
+    pub struct ProstDecoder<U>(PhantomData<U>);
+
+    impl<U: ProstVec + Default> Decoder for ProstDecoder<U> {
+        type Item = U;
+        type Error = Status;
+
+        fn decode(&mut self, buf: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
+            let item = Message::decode(buf)
+                .map(Option::Some)
+                .map_err(from_decode_error)?;
+
+            Ok(item)
+        }
+    }
+
+    fn from_decode_error(error: prost::DecodeError) -> Status {
+        // Map Protobuf parse errors to an INTERNAL status code, as per
+        // https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
+        Status::new(Code::Internal, error.to_string())
+    }
+}
+
 pub mod solana {
     pub mod storage {
         pub mod confirmed_block {

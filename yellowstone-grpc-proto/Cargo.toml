@@ -12,6 +12,7 @@ publish = true
 
 [dependencies]
 bincode = { workspace = true }
+bytes = { workspace = true }
 prost = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-sdk = { workspace = true }
