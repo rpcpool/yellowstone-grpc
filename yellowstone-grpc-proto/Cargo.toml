@@ -6,7 +6,7 @@ edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
 homepage = { workspace = true }
 repository = { workspace = true }
-license = { workspace = true }
+license = "Apache-2.0"
 keywords = { workspace = true }
 publish = true
 

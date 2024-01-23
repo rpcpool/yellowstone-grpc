@@ -5,7 +5,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
-license = { workspace = true }
+license = "Apache-2.0"
 keywords = { workspace = true }
 publish = false
 
