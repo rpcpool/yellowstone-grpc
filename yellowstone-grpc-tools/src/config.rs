@@ -4,6 +4,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         path::Path,
+        time::Duration,
     },
     tokio::fs,
     yellowstone_grpc_proto::prelude::{
@@ -236,6 +237,13 @@ where
             .parse::<usize>()
             .map_err(de::Error::custom),
     }
+}
+pub fn deserialize_duration_ms_str<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let ms = deserialize_usize_str(deserializer)?;
+    Ok(Duration::from_millis(ms as u64))
 }
 
 #[cfg(test)]

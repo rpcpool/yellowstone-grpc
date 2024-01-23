@@ -1,14 +1,18 @@
 use {
+    anyhow::Context,
     clap::{Parser, Subcommand},
-    futures::{future::BoxFuture, stream::StreamExt},
+    futures::{
+        future::{pending, BoxFuture, FutureExt},
+        stream::StreamExt,
+    },
     google_cloud_googleapis::pubsub::v1::PubsubMessage,
     google_cloud_pubsub::{client::Client, subscription::SubscriptionConfig},
     std::{net::SocketAddr, time::Duration},
     tokio::{task::JoinSet, time::sleep},
-    tracing::{info, warn},
+    tracing::{debug, error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
-        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
+        prelude::{subscribe_update::UpdateOneof, CommitmentLevel, SubscribeUpdate},
         prost::Message as _,
     },
     yellowstone_grpc_tools::{
@@ -62,7 +66,7 @@ enum ArgsAction {
 impl ArgsAction {
     async fn run(self, config: Config) -> anyhow::Result<()> {
         let shutdown = create_shutdown()?;
-        let client = config.create_client().await?;
+        let client = config.client.create_client().await?;
 
         match self {
             ArgsAction::Grpc2PubSub => {
@@ -95,18 +99,25 @@ impl ArgsAction {
     ) -> anyhow::Result<()> {
         // Connect to Pub/Sub and create topic if not exists
         let topic = client.topic(&config.topic);
-        if !topic.exists(None).await? {
+        if !topic
+            .exists(None)
+            .await
+            .with_context(|| format!("failed to get topic: {}", config.topic))?
+        {
             anyhow::ensure!(
                 config.create_if_not_exists,
                 "topic {} doesn't exists",
                 config.topic
             );
-            topic.create(None, None).await?;
+            topic
+                .create(None, None)
+                .await
+                .with_context(|| format!("failed to create topic: {}", config.topic))?;
         }
-        let publisher = topic.new_publisher(Some(config.get_publisher_config()));
+        let publisher = topic.new_publisher(Some(config.publisher.get_publisher_config()));
 
         // Create gRPC client & subscribe
-        let mut client = GeyserGrpcClient::connect_with_timeout(
+        let client = GeyserGrpcClient::connect_with_timeout(
             config.endpoint,
             config.x_token,
             None,
@@ -115,71 +126,124 @@ impl ArgsAction {
             false,
         )
         .await?;
+        let mut client = GeyserGrpcClient::new(
+            client.health,
+            client
+                .geyser
+                .max_decoding_message_size(config.max_message_size),
+        );
         let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
-        'outer: loop {
-            let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
+        let mut prefetched_message: Option<(PubsubMessage, GprcMessageKind)> = None;
+        'receive_send_loop: loop {
+            let sleep = sleep(config.batch.max_wait);
             tokio::pin!(sleep);
+
+            let mut messages_size = 0;
             let mut messages = vec![];
-            let mut prom_kind = vec![];
-            while messages.len() < config.bulk_max_size {
-                let message = tokio::select! {
-                    _ = &mut shutdown => break 'outer,
+            let mut prom_kinds = vec![];
+
+            loop {
+                if let Some((message, prom_kind)) = prefetched_message.take() {
+                    if messages.len() < config.batch.max_messages
+                        && messages_size + message.data.len() <= config.batch.max_size_bytes
+                    {
+                        messages_size += message.data.len();
+                        messages.push(message);
+                        prom_kinds.push(prom_kind);
+                    } else if message.data.len() > config.batch.max_size_bytes {
+                        prom::drop_oversized_inc(prom_kind);
+                        debug!("drop {prom_kind:?} message, size: {}", message.data.len());
+                    } else {
+                        prefetched_message = Some((message, prom_kind));
+                        break;
+                    }
+                }
+
+                let send_task_fut = if send_tasks.is_empty() {
+                    pending().boxed()
+                } else {
+                    send_tasks.join_next().boxed()
+                };
+
+                tokio::select! {
+                    _ = &mut shutdown => break 'receive_send_loop,
                     _ = &mut sleep => break,
-                    maybe_result = send_tasks.join_next() => match maybe_result {
+                    maybe_result = send_task_fut => match maybe_result {
                         Some(result) => {
-                            result??;
+                            prom::send_batches_dec();
+                            result?;
                             continue;
                         }
-                        None => tokio::select! {
-                            _ = &mut shutdown => break 'outer,
-                            _ = &mut sleep => break,
-                            message = geyser.next() => message,
-                        }
+                        None => unreachable!()
                     },
-                    message = geyser.next() => message,
-                }
-                .transpose()?;
-                let message = match message {
-                    Some(message) => message,
-                    None => break 'outer,
-                };
+                    message = geyser.next() => {
+                        let message = message
+                            .ok_or_else(|| anyhow::anyhow!("gRPC stream finished"))?
+                            .context("failed to get message from gRPC")?;
 
-                match &message.update_oneof {
-                    Some(UpdateOneof::Ping(_)) => continue,
-                    Some(UpdateOneof::Pong(_)) => continue,
-                    Some(value) => prom_kind.push(GprcMessageKind::from(value)),
-                    None => unreachable!("Expect valid message"),
-                };
+                        match &message {
+                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Ping(_)) } => prom::recv_inc(GprcMessageKind::Ping),
+                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Pong(_)) } => prom::recv_inc(GprcMessageKind::Pong),
+                            SubscribeUpdate { filters: _, update_oneof: Some(value) } => {
+                                if let UpdateOneof::Slot(slot) = value {
+                                    prom::set_slot_tip(
+                                        CommitmentLevel::try_from(slot.status).expect("valid commitment"),
+                                        slot.slot.try_into().expect("valid i64 slot"),
+                                    );
+                                }
 
-                messages.push(PubsubMessage {
-                    data: message.encode_to_vec(),
-                    ..Default::default()
-                });
+                                let message = PubsubMessage {
+                                    data: message.encode_to_vec(),
+                                    ..Default::default()
+                                };
+                                let prom_kind = GprcMessageKind::from(value);
+                                prefetched_message = Some((message, prom_kind));
+
+                                prom::recv_inc(prom_kind);
+                            },
+                            SubscribeUpdate { filters: _, update_oneof: None } => anyhow::bail!("received empty updat emessage"),
+                        };
+                    }
+                };
             }
             if messages.is_empty() {
                 continue;
             }
 
-            for (awaiter, prom_kind) in publisher
-                .publish_bulk(messages)
-                .await
-                .into_iter()
-                .zip(prom_kind.into_iter())
-            {
-                send_tasks.spawn(async move {
-                    awaiter.get().await?;
-                    prom::sent_inc(prom_kind);
-                    Ok::<(), anyhow::Error>(())
-                });
+            while send_tasks.len() >= config.batch.max_in_progress {
+                if let Some(result) = send_tasks.join_next().await {
+                    prom::send_batches_dec();
+                    result?;
+                }
             }
+
+            let awaiters = publisher.publish_bulk(messages).await;
+            for prom_kind in prom_kinds.iter().copied() {
+                prom::send_awaiters_inc(prom_kind);
+            }
+            send_tasks.spawn(async move {
+                for (awaiter, prom_kind) in awaiters.into_iter().zip(prom_kinds.into_iter()) {
+                    let status = if let Err(error) = awaiter.get().await {
+                        error!("failed to send message {prom_kind:?}, error: {error:?}");
+                        Err(())
+                    } else {
+                        Ok(())
+                    };
+                    prom::sent_inc(prom_kind, status);
+                    prom::send_awaiters_dec(prom_kind);
+                }
+            });
+            prom::send_batches_inc();
         }
+
         warn!("shutdown received...");
         while let Some(result) = send_tasks.join_next().await {
-            result??;
+            result?;
         }
+
         Ok(())
     }
 
@@ -241,11 +305,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Parse args
     let args = Args::parse();
-    let config = config_load::<Config>(&args.config).await?;
+    let config = config_load::<Config>(&args.config)
+        .await
+        .with_context(|| format!("failed to load config from file: {}", args.config))?;
 
     // Run prometheus server
     if let Some(address) = args.prometheus.or(config.prometheus) {
-        prometheus_run_server(address)?;
+        prometheus_run_server(address)
+            .with_context(|| format!("failed to run server at: {:?}", address))?;
     }
 
     args.action.run(config).await
