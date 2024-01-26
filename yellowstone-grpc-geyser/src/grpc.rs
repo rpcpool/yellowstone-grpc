@@ -449,6 +449,7 @@ impl<'a> MessageRef<'a> {
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
+                entries_count: message.entries_count,
             }),
         }
     }
