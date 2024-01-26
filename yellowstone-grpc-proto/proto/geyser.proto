@@ -165,6 +165,7 @@ message SubscribeUpdateBlockMeta {
   uint64 parent_slot = 6;
   string parent_blockhash = 7;
   uint64 executed_transaction_count = 8;
+  uint64 entries_count = 9;
 }
 
 message SubscribeUpdateEntry {
