@@ -279,7 +279,6 @@ pub struct MessageBlockMeta {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
-    pub updated_account_count: u64,
     pub entries_count: u64,
 }
 
@@ -294,7 +293,6 @@ impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
-            updated_account_count: 0,
             entries_count: blockinfo.entry_count,
         }
     }
