@@ -26,13 +26,17 @@ cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-geyser/co
 
 Geyser interface on block update do not provide detailed information about transactions and accounts updates. To provide this information with block message we need to collect all messages and expect specified order. By default if we failed to reconstruct full block we log error message and increase `invalid_full_blocks_total` counter in prometheus metrics. If you want to panic on invalid reconstruction you can change option `block_fail_action` in config to `panic` (default value is `log`).
 
-### Filters
+### Filters for streamed data
 
-See [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto).
+Please check [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto) for details.
+
+   - `commitment` — commitment level: `processed` / `confirmed` / `finalized`
+   - `accounts_data_slice` — array of objects `{ offset: uint64, length: uint64 }`, allow to receive only required data from accounts
+   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if client doesn't send anything during some time. As workaroud you can send same filter every N seconds, but this would be not optimal since you need to keep this filter. Instead, you can send subscribe request with `ping` field set to `true` and ignore rest of the fields in the request. Since we sent `Ping` message every 15s from the server, you can send subscribe request with `ping` as reply and receive `Pong` message.
 
 #### Slots
 
-Currently all slots are broadcasted.
+   - `filter_by_commitment` — by default slots sent for all commitment levels, but with this filter you can receive only selected commitment level
 
 #### Account
 
@@ -42,35 +46,37 @@ Accounts can be filtered by:
    - `owner` — account owner Pubkey, match to any Pubkey from the array
    - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
-If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR` (except values in `filters` which works as logical `AND`).
+If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
 
 #### Transactions
 
    - `vote` — enable/disable broadcast `vote` transactions
    - `failed` — enable/disable broadcast `failed` transactions
    - `signature` — match only specified transaction
-   - `account_include` — filter transactions which use any account
-   - `account_exclude` — filter transactions which do not use any account
-   - `account_required` — require all accounts used in transaction
+   - `account_include` — filter transactions that use any account from the list
+   - `account_exclude` — opposite to `account_include`
+   - `account_required` — require all accounts from the list to be used in transaction
 
 If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
 
+#### Entries
+
+Currently we do not have filters for the entries, all entries broadcasted.
+
 #### Blocks
 
-   - `account_include` — filter transactions and accounts which use any of listed accounts
+   - `account_include` — filter transactions and accounts that use any account from the list
    - `include_transactions` — include all transactions
    - `include_accounts` — include all accounts updates
    - `include_entries` — include all entries
 
-Currently all blocks are broadcasted.
-
 #### Blocks meta
 
-Same as `Blocks` but without `transactions`.
+Same as `Blocks` but without `transactions`, `accounts` and entries. Currently we do not have filters for block meta, all messages are broadcasted.
 
 ### Limit filters
 
-It's possible to add limits for filters in config. If `filters` field is omitted then filters doesn't have any limits.
+It's possible to add limits for filters in the config. If `filters` field is omitted then filters doesn't have any limits.
 
 ```json
 "grpc": {
@@ -91,14 +97,41 @@ It's possible to add limits for filters in config. If `filters` field is omitted
          "any": false,
          "account_include_max": 10,
          "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
-         "account_exclude_max": 10
+         "account_exclude_max": 10,
+         "account_required_max": 10
       },
       "blocks": {
+         "max": 1,
+         "account_include_max": 10,
+         "account_include_any": false,
+         "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+         "include_transactions": true,
+         "include_accounts" : false,
+         "include_entries" : false
+      },
+      "blocks_meta": {
+         "max": 1
+      },
+      "entry": {
          "max": 1
       }
    }
 }
 ```
+
+### Unary gRPC methods
+
+#### Ping
+
+#### GetLatestBlockhash
+
+#### GetBlockHeight
+
+#### GetSlot
+
+#### IsBlockhashValid
+
+#### GetVersion
 
 ### Examples
 

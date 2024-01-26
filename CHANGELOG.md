@@ -18,7 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-- tools: add metrics, new config for google-pubsub ([#279](https://github.com/rpcpool/yellowstone-grpc/pull/279))
+- tools: add metrics, new config for google-pubsub ([#280](https://github.com/rpcpool/yellowstone-grpc/pull/280))
 
 ## 2024-01-15
 
