@@ -17,6 +17,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - proto: add `entries_count` to block meta message ([#283](https://github.com/rpcpool/yellowstone-grpc/pull/283))
+- geyser: use `Vec::binary_search` instead of `HashSet::contains` in the filters ([#284](https://github.com/rpcpool/yellowstone-grpc/pull/284))
 
 ### Breaking
 
