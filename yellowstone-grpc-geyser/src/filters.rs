@@ -9,12 +9,14 @@ use {
             Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
             MessageSlot, MessageTransaction,
         },
+        util::{hash_hashmap, hash_hashmap_hashset, hash_hashset},
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
+        hash::{Hash, Hasher},
         str::FromStr,
     },
     yellowstone_grpc_proto::prelude::{
@@ -28,7 +30,7 @@ use {
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Filter {
     accounts: FilterAccounts,
     slots: FilterSlots,
@@ -133,7 +135,7 @@ impl Filter {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct FilterAccounts {
     filters: Vec<(String, FilterAccountsData)>,
     account: HashMap<Pubkey, HashSet<String>>,
@@ -206,7 +208,17 @@ impl FilterAccounts {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+impl Hash for FilterAccounts {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.filters.hash(state);
+        hash_hashmap_hashset(state, &self.account);
+        hash_hashset(state, &self.account_required);
+        hash_hashmap_hashset(state, &self.owner);
+        hash_hashset(state, &self.owner_required);
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 struct FilterAccountsData {
     memcmp: Vec<(usize, Vec<u8>)>,
     datasize: Option<usize>,
@@ -357,7 +369,7 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FilterSlotsInner {
     filter_by_commitment: bool,
 }
@@ -370,7 +382,7 @@ impl FilterSlotsInner {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct FilterSlots {
     filters: HashMap<String, FilterSlotsInner>,
 }
@@ -411,7 +423,13 @@ impl FilterSlots {
     }
 }
 
-#[derive(Debug, Clone)]
+impl Hash for FilterSlots {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_hashmap(state, &self.filters);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
@@ -421,7 +439,7 @@ pub struct FilterTransactionsInner {
     account_required: Vec<Pubkey>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FilterTransactions {
     filters: HashMap<String, FilterTransactionsInner>,
 }
@@ -569,7 +587,13 @@ impl FilterTransactions {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+impl Hash for FilterTransactions {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_hashmap(state, &self.filters);
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 struct FilterEntry {
     filters: Vec<String>,
 }
@@ -595,7 +619,7 @@ impl FilterEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FilterBlocksInner {
     account_include: Vec<Pubkey>,
     include_transactions: Option<bool>,
@@ -603,7 +627,7 @@ pub struct FilterBlocksInner {
     include_entries: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct FilterBlocks {
     filters: HashMap<String, FilterBlocksInner>,
 }
@@ -719,7 +743,13 @@ impl FilterBlocks {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+impl Hash for FilterBlocks {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_hashmap(state, &self.filters);
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 struct FilterBlocksMeta {
     filters: Vec<String>,
 }
@@ -745,7 +775,7 @@ impl FilterBlocksMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FilterAccountsDataSlice {
     pub start: usize,
     pub end: usize,
