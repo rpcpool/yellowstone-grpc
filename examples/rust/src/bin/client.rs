@@ -8,6 +8,7 @@ use {
     std::{
         collections::HashMap,
         env, fmt,
+        fs::File,
         sync::{Arc, Mutex},
         time::Duration,
     },
@@ -105,6 +106,10 @@ struct ActionSubscribe {
     /// Filter by Account Pubkey
     #[clap(long)]
     accounts_account: Vec<String>,
+
+    ///  Path to a json array of account addresses
+    #[clap(long)]
+    accounts_accounts_path: Option<String>,
 
     /// Filter by Owner Pubkey
     #[clap(long)]
@@ -207,6 +212,13 @@ impl Action {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
                 if args.accounts {
+                    let mut accounts_account = args.accounts_account.clone();
+                    if let Some(path) = args.accounts_accounts_path.as_ref() {
+                        let file = File::open(path)?;
+                        let accounts: Vec<String> = serde_json::from_reader(file)?;
+                        accounts_account.extend(accounts);
+                    }
+
                     let mut filters = vec![];
                     for filter in args.accounts_memcmp.iter() {
                         match filter.split_once(',') {
@@ -241,7 +253,7 @@ impl Action {
                     accounts.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterAccounts {
-                            account: args.accounts_account.clone(),
+                            account: accounts_account,
                             owner: args.accounts_owner.clone(),
                             filters,
                         },
