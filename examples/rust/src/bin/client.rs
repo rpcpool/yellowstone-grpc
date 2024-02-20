@@ -107,9 +107,9 @@ struct ActionSubscribe {
     #[clap(long)]
     accounts_account: Vec<String>,
 
-    ///  Path to a json array of account addresses
+    /// Path to a JSON array of account addresses
     #[clap(long)]
-    accounts_accounts_path: Option<String>,
+    accounts_account_path: Option<String>,
 
     /// Filter by Owner Pubkey
     #[clap(long)]
@@ -204,7 +204,7 @@ struct ActionSubscribe {
 }
 
 impl Action {
-    fn get_subscribe_request(
+    async fn get_subscribe_request(
         &self,
         commitment: Option<CommitmentLevel>,
     ) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
@@ -213,9 +213,11 @@ impl Action {
                 let mut accounts: AccountFilterMap = HashMap::new();
                 if args.accounts {
                     let mut accounts_account = args.accounts_account.clone();
-                    if let Some(path) = args.accounts_accounts_path.as_ref() {
-                        let file = File::open(path)?;
-                        let accounts: Vec<String> = serde_json::from_reader(file)?;
+                    if let Some(path) = args.accounts_account_path.clone() {
+                        let accounts = tokio::task::block_in_place(move || {
+                            let file = File::open(path)?;
+                            Ok::<Vec<String>, anyhow::Error>(serde_json::from_reader(file)?)
+                        })?;
                         accounts_account.extend(accounts);
                     }
 
@@ -475,6 +477,7 @@ async fn main() -> anyhow::Result<()> {
                     let (request, resub) = args
                         .action
                         .get_subscribe_request(commitment)
+                        .await
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
