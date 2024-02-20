@@ -745,6 +745,7 @@ impl GrpcService {
         }
 
         // Create Server
+        let max_decoding_message_size = config.max_decoding_message_size;
         let service = GeyserServer::new(Self {
             config,
             blocks_meta,
@@ -753,7 +754,8 @@ impl GrpcService {
             broadcast_tx: broadcast_tx.clone(),
         })
         .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .send_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(max_decoding_message_size);
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();

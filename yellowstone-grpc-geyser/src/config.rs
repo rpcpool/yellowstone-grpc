@@ -64,6 +64,12 @@ pub struct ConfigGrpc {
     pub address: SocketAddr,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
+    /// Limits the maximum size of a decoded message, default is 4MiB
+    #[serde(
+        default = "ConfigGrpc::max_decoding_message_size_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub max_decoding_message_size: usize,
     /// Capacity of the channel used for accounts from snapshot,
     /// on reaching the limit Sender block validator startup.
     #[serde(
@@ -98,6 +104,10 @@ pub struct ConfigGrpc {
 }
 
 impl ConfigGrpc {
+    const fn max_decoding_message_size_default() -> usize {
+        4 * 1024 * 1024
+    }
+
     const fn snapshot_plugin_channel_capacity_default() -> Option<usize> {
         None
     }
