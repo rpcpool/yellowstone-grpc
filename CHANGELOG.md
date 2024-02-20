@@ -13,6 +13,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - deps: make cargo-deny happy about openssl, unsafe-libyaml, h2, ahash ([#278](https://github.com/rpcpool/yellowstone-grpc/pull/278))
+- geyser: allow to set custom filter size in the config ([#288](https://github.com/rpcpool/yellowstone-grpc/pull/288))
 
 ### Features
 
