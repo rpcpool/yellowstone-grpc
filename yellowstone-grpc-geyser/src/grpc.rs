@@ -7,7 +7,7 @@ use {
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfo, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
     solana_sdk::{
@@ -192,16 +192,18 @@ pub struct MessageEntry {
     pub num_hashes: u64,
     pub hash: Vec<u8>,
     pub executed_transaction_count: u64,
+    pub starting_transaction_index: usize,
 }
 
-impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
-    fn from(entry: &ReplicaEntryInfo) -> Self {
+impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
+    fn from(entry: &ReplicaEntryInfoV2) -> Self {
         Self {
             slot: entry.slot,
             index: entry.index,
             num_hashes: entry.num_hashes,
             hash: entry.hash.into(),
             executed_transaction_count: entry.executed_transaction_count,
+            starting_transaction_index: entry.starting_transaction_index,
         }
     }
 }
@@ -214,6 +216,7 @@ impl MessageEntry {
             num_hashes: self.num_hashes,
             hash: self.hash.clone(),
             executed_transaction_count: self.executed_transaction_count,
+            // starting_transaction_index: self.starting_transaction_index,
         }
     }
 }
@@ -696,6 +699,7 @@ impl GrpcService {
     pub async fn create(
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
+        is_reload: bool,
     ) -> Result<
         (
             Option<crossbeam_channel::Sender<Option<Message>>>,
@@ -713,11 +717,11 @@ impl GrpcService {
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
-            Some(cap) => {
+            Some(cap) if !is_reload => {
                 let (tx, rx) = crossbeam_channel::bounded(cap);
                 (Some(tx), Some(rx))
             }
-            None => (None, None),
+            _ => (None, None),
         };
 
         // Blocks meta storage

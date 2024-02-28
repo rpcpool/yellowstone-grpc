@@ -173,6 +173,8 @@ message SubscribeUpdateEntry {
   uint64 num_hashes = 3;
   bytes hash = 4;
   uint64 executed_transaction_count = 5;
+  // TODO: bump version
+  // uint32 starting_transaction_index = 6;
 }
 
 message SubscribeUpdatePing {}
