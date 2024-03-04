@@ -192,6 +192,7 @@ pub struct MessageEntry {
     pub num_hashes: u64,
     pub hash: Vec<u8>,
     pub executed_transaction_count: u64,
+    pub starting_transaction_index: u64,
 }
 
 impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
@@ -202,6 +203,7 @@ impl From<&ReplicaEntryInfo<'_>> for MessageEntry {
             num_hashes: entry.num_hashes,
             hash: entry.hash.into(),
             executed_transaction_count: entry.executed_transaction_count,
+            starting_transaction_index: 0,
         }
     }
 }
@@ -214,6 +216,7 @@ impl MessageEntry {
             num_hashes: self.num_hashes,
             hash: self.hash.clone(),
             executed_transaction_count: self.executed_transaction_count,
+            starting_transaction_index: self.starting_transaction_index,
         }
     }
 }
