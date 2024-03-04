@@ -8,6 +8,7 @@ use {
     std::{
         collections::HashMap,
         env, fmt,
+        fs::File,
         sync::{Arc, Mutex},
         time::Duration,
     },
@@ -106,6 +107,10 @@ struct ActionSubscribe {
     #[clap(long)]
     accounts_account: Vec<String>,
 
+    /// Path to a JSON array of account addresses
+    #[clap(long)]
+    accounts_account_path: Option<String>,
+
     /// Filter by Owner Pubkey
     #[clap(long)]
     accounts_owner: Vec<String>,
@@ -199,7 +204,7 @@ struct ActionSubscribe {
 }
 
 impl Action {
-    fn get_subscribe_request(
+    async fn get_subscribe_request(
         &self,
         commitment: Option<CommitmentLevel>,
     ) -> anyhow::Result<Option<(SubscribeRequest, usize)>> {
@@ -207,6 +212,15 @@ impl Action {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
                 if args.accounts {
+                    let mut accounts_account = args.accounts_account.clone();
+                    if let Some(path) = args.accounts_account_path.clone() {
+                        let accounts = tokio::task::block_in_place(move || {
+                            let file = File::open(path)?;
+                            Ok::<Vec<String>, anyhow::Error>(serde_json::from_reader(file)?)
+                        })?;
+                        accounts_account.extend(accounts);
+                    }
+
                     let mut filters = vec![];
                     for filter in args.accounts_memcmp.iter() {
                         match filter.split_once(',') {
@@ -241,7 +255,7 @@ impl Action {
                     accounts.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterAccounts {
-                            account: args.accounts_account.clone(),
+                            account: accounts_account,
                             owner: args.accounts_owner.clone(),
                             filters,
                         },
@@ -463,6 +477,7 @@ async fn main() -> anyhow::Result<()> {
                     let (request, resub) = args
                         .action
                         .get_subscribe_request(commitment)
+                        .await
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
