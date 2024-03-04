@@ -20,3 +20,27 @@ pub const VERSION: Version = Version {
     rustc: env!("VERGEN_RUSTC_SEMVER"),
     buildts: env!("VERGEN_BUILD_TIMESTAMP"),
 };
+
+#[derive(Debug, Serialize)]
+pub struct GrpcVersionInfoExtra {
+    hostname: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GrpcVersionInfo {
+    version: Version,
+    extra: GrpcVersionInfoExtra,
+}
+
+impl Default for GrpcVersionInfo {
+    fn default() -> Self {
+        Self {
+            version: VERSION,
+            extra: GrpcVersionInfoExtra {
+                hostname: hostname::get()
+                    .ok()
+                    .and_then(|name| name.into_string().ok()),
+            },
+        }
+    }
+}

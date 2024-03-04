@@ -24,6 +24,7 @@ bs58 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
+hostname = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }

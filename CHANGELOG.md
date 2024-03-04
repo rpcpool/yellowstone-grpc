@@ -20,6 +20,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: add `entries_count` to block meta message ([#283](https://github.com/rpcpool/yellowstone-grpc/pull/283))
 - geyser: use `Vec::binary_search` instead of `HashSet::contains` in the filters ([#284](https://github.com/rpcpool/yellowstone-grpc/pull/284))
 - proto: add `starting_transaction_index` to entry message ([#289](https://github.com/rpcpool/yellowstone-grpc/pull/289))
+- geyser: add `hostname` to version response ([#291](https://github.com/rpcpool/yellowstone-grpc/pull/291))
 
 ### Breaking
 
