@@ -3,7 +3,7 @@ use {
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
         prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
-        version::VERSION,
+        version::GrpcVersionInfo,
     },
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -1398,7 +1398,7 @@ impl Geyser for GrpcService {
         _request: Request<GetVersionRequest>,
     ) -> Result<Response<GetVersionResponse>, Status> {
         Ok(Response::new(GetVersionResponse {
-            version: serde_json::to_string(&VERSION).unwrap(),
+            version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))
     }
 }
