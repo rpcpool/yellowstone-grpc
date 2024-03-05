@@ -12,6 +12,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## 2024-03-04
+
+- yellowstone-grpc-client-1.14.0+solana.1.17.22
+- yellowstone-grpc-geyser-1.13.0+solana.1.17.22
+- yellowstone-grpc-proto-1.13.0+solana.1.17.22
+- yellowstone-grpc-tools-1.0.0-rc.10+solana.1.17.22
+
+### Fixes
+
 - deps: make cargo-deny happy about openssl, unsafe-libyaml, h2, ahash ([#278](https://github.com/rpcpool/yellowstone-grpc/pull/278))
 - geyser: allow to set custom filter size in the config ([#288](https://github.com/rpcpool/yellowstone-grpc/pull/288))
 
@@ -21,10 +34,40 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: use `Vec::binary_search` instead of `HashSet::contains` in the filters ([#284](https://github.com/rpcpool/yellowstone-grpc/pull/284))
 - proto: add `starting_transaction_index` to entry message ([#289](https://github.com/rpcpool/yellowstone-grpc/pull/289))
 - geyser: add `hostname` to version response ([#291](https://github.com/rpcpool/yellowstone-grpc/pull/291))
+- solana: update to 1.17.22 ([#292](https://github.com/rpcpool/yellowstone-grpc/pull/292))
 
 ### Breaking
 
 - tools: add metrics, new config for google-pubsub ([#280](https://github.com/rpcpool/yellowstone-grpc/pull/280))
+
+## 2024-02-06
+
+- yellowstone-grpc-client-1.13.0+solana.1.17.20
+- yellowstone-grpc-geyser-1.12.0+solana.1.17.20
+- yellowstone-grpc-proto-1.12.0+solana.1.17.20
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.20
+
+## 2024-01-26
+
+- yellowstone-grpc-client-1.13.0+solana.1.17.18
+- yellowstone-grpc-geyser-1.12.0+solana.1.17.18
+- yellowstone-grpc-proto-1.12.0+solana.1.17.18
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.18
+
+### Features
+
+- solana: update to 1.17.18
+
+## 2024-01-26
+
+- yellowstone-grpc-client-1.13.0+solana.1.17.17
+- yellowstone-grpc-geyser-1.12.0+solana.1.17.17
+- yellowstone-grpc-proto-1.12.0+solana.1.17.17
+- yellowstone-grpc-tools-1.0.0-rc.9+solana.1.17.17
+
+### Features
+
+- solana: update to 1.17.17
 
 ## 2024-01-15
 

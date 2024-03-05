@@ -9,6 +9,7 @@ on:
     branches:
       - 'master'
       - 'v1.16'
+      - 'v1.17'
     tags:
       - 'v*'
       - 'tools-v*'
