@@ -60,7 +60,7 @@ impl GeyserPlugin for Plugin {
         concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"))
     }
 
-    fn on_load(&mut self, config_file: &str) -> PluginResult<()> {
+    fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
         let config = Config::load_from_file(config_file)?;
 
         // Setup logger
@@ -80,7 +80,7 @@ impl GeyserPlugin for Plugin {
         let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
             runtime.block_on(async move {
                 let (snapshot_channel, grpc_channel, grpc_shutdown) =
-                    GrpcService::create(config.grpc, config.block_fail_action)
+                    GrpcService::create(config.grpc, config.block_fail_action, is_reload)
                         .await
                         .map_err(GeyserPluginError::Custom)?;
                 let prometheus = PrometheusService::new(config.prometheus)
@@ -196,7 +196,10 @@ impl GeyserPlugin for Plugin {
         self.with_inner(|inner| {
             #[allow(clippy::infallible_destructuring_match)]
             let entry = match entry {
-                ReplicaEntryInfoVersions::V0_0_1(entry) => entry,
+                ReplicaEntryInfoVersions::V0_0_1(_entry) => {
+                    unreachable!("ReplicaEntryInfoVersions::V0_0_1 is not supported")
+                }
+                ReplicaEntryInfoVersions::V0_0_2(entry) => entry,
             };
 
             let message = Message::Entry(entry.into());
