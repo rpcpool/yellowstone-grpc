@@ -5,13 +5,8 @@ use {
     log::{error, info},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
-    std::{
-        collections::HashMap,
-        env, fmt,
-        fs::File,
-        sync::{Arc, Mutex},
-        time::Duration,
-    },
+    std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
+    tokio::sync::Mutex,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::{
         prelude::{
@@ -446,12 +441,13 @@ async fn main() -> anyhow::Result<()> {
         let zero_attempts = Arc::clone(&zero_attempts);
 
         async move {
-            let mut zero_attempts = zero_attempts.lock().unwrap();
+            let mut zero_attempts = zero_attempts.lock().await;
             if *zero_attempts {
                 *zero_attempts = false;
             } else {
                 info!("Retry to connect to the server");
             }
+            drop(zero_attempts);
 
             let commitment = args.get_commitment();
             let mut client = GeyserGrpcClient::connect_with_timeout(
