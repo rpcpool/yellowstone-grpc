@@ -1,11 +1,21 @@
 use {
     backoff::{future::retry, ExponentialBackoff},
     clap::{Parser, Subcommand, ValueEnum},
+    env_logger::TimestampPrecision,
     futures::{future::TryFutureExt, sink::SinkExt, stream::StreamExt},
-    log::{error, info},
+    log::{error, info, warn},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
-    std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
+    std::{
+        collections::HashMap,
+        env, fmt,
+        fs::File,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
+        time::{Duration, Instant},
+    },
     tokio::sync::Mutex,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
     yellowstone_grpc_proto::{
@@ -428,7 +438,9 @@ async fn main() -> anyhow::Result<()> {
         env_logger::DEFAULT_FILTER_ENV,
         env::var_os(env_logger::DEFAULT_FILTER_ENV).unwrap_or_else(|| "info".into()),
     );
-    env_logger::init();
+    env_logger::builder()
+        .format_timestamp(Some(TimestampPrecision::Micros))
+        .init();
 
     let args = Args::parse();
     let zero_attempts = Arc::new(Mutex::new(true));
@@ -530,12 +542,43 @@ async fn geyser_health_watch(mut client: GeyserGrpcClient<impl Interceptor>) -> 
     Ok(())
 }
 
+struct RateHandle {
+    instant: Instant,
+    data_len: usize,
+    accounts: usize,
+}
+
+impl RateHandle {
+    fn update(&mut self, added_data_len: usize) {
+        self.data_len += added_data_len;
+        self.accounts += 1;
+        let elapsed = self.instant.elapsed();
+        if elapsed > Duration::from_secs(10) {
+            println!(
+                "Rate: {elapsed:?}, data_len: {}, accounts: {}",
+                self.data_len, self.accounts
+            );
+            self.data_len = 0;
+            self.accounts = 0;
+            self.instant = Instant::now();
+        }
+    }
+}
+
 async fn geyser_subscribe(
     mut client: GeyserGrpcClient<impl Interceptor>,
     request: SubscribeRequest,
     resub: usize,
 ) -> anyhow::Result<()> {
     let (mut subscribe_tx, mut stream) = client.subscribe_with_request(Some(request)).await?;
+
+    let mut rate_handle = RateHandle {
+        instant: Instant::now(),
+        data_len: 0,
+        accounts: 0,
+    };
+
+    let latest_slot = AtomicU64::new(0);
 
     info!("stream opened");
     let mut counter = 0;
@@ -544,11 +587,19 @@ async fn geyser_subscribe(
             Ok(msg) => {
                 match msg.update_oneof {
                     Some(UpdateOneof::Account(account)) => {
-                        let account: AccountPretty = account.into();
+                        let data_len = account.account.as_ref().unwrap().data.len();
+                        rate_handle.update(data_len);
+                        let AccountPretty { slot, .. } = account.into();
+                        // TODO: Add the too old bit here
                         info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
+                            "new account update: filters {:?}, slot: {slot}, data_len: {data_len}",
+                            msg.filters,
                         );
+                        let latest_slot = latest_slot.load(Ordering::Relaxed);
+                        let diff = latest_slot.saturating_sub(slot);
+                        if diff > 5 {
+                            warn!("Account old {diff}");
+                        }
                         continue;
                     }
                     Some(UpdateOneof::Transaction(tx)) => {
@@ -569,9 +620,16 @@ async fn geyser_subscribe(
                             })
                             .await?;
                     }
+                    Some(UpdateOneof::Slot(slot)) => {
+                        if slot.status() == CommitmentLevel::Processed {
+                            latest_slot.store(slot.slot, Ordering::Relaxed);
+                            info!("Processed slot: {}", slot.slot);
+                        }
+                        continue;
+                    }
                     _ => {}
                 }
-                info!("new message: {msg:?}")
+                info!("new message: {msg:?}");
             }
             Err(error) => {
                 error!("error: {error:?}");
