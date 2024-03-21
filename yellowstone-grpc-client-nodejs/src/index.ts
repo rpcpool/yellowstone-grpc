@@ -17,7 +17,12 @@ import {
   SubscribeRequestFilterTransactions,
 } from "./grpc/geyser";
 
-import { ChannelCredentials, credentials, Metadata } from "@grpc/grpc-js";
+import {
+  ChannelCredentials,
+  credentials,
+  ChannelOptions,
+  Metadata,
+} from "@grpc/grpc-js";
 
 // Reexport automatically generated types
 export {
@@ -51,7 +56,11 @@ export {
 export default class Client {
   _client: GeyserClient;
 
-  constructor(endpoint: string, xToken: string | undefined) {
+  constructor(
+    endpoint: string,
+    xToken: string | undefined,
+    channelOptions: ChannelOptions | undefined
+  ) {
     let creds: ChannelCredentials;
 
     const endpointURL = new URL(endpoint);
@@ -72,7 +81,7 @@ export default class Client {
       creds = ChannelCredentials.createInsecure();
     }
 
-    this._client = new GeyserClient(endpointURL.host, creds);
+    this._client = new GeyserClient(endpointURL.host, creds, channelOptions);
   }
 
   async subscribe() {

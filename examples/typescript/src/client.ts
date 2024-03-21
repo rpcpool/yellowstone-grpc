@@ -9,7 +9,9 @@ async function main() {
   const args = parseCommandLineArgs();
 
   // Open connection.
-  const client = new Client(args.endpoint, args.xToken);
+  const client = new Client(args.endpoint, args.xToken, {
+    'grpc.max_receive_message_length': 64 * 1024 * 1024 // 64MiB
+  });
 
   const commitment = parseCommitmentLevel(args.commitment);
 
