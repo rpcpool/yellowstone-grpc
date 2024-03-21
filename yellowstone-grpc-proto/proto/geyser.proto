@@ -70,11 +70,17 @@ message SubscribeRequestFilterTransactions {
   repeated string account_required = 6;
 }
 
+message SlotParallelization {
+  int32 filter_id = 1;
+  int32 filter_size = 2;
+}
+
 message SubscribeRequestFilterBlocks {
   repeated string account_include = 1;
   optional bool include_transactions = 2;
   optional bool include_accounts = 3;
   optional bool include_entries = 4;
+  optional SlotParallelization slot_parallelization = 5;
 }
 
 message SubscribeRequestFilterBlocksMeta {}
