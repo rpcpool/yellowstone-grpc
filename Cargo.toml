@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 1.12.0+solana.1.18.7
-    "yellowstone-grpc-client", # 1.14.0+solana.1.18.7
+    "examples/rust", # 1.13.0+solana.1.18.7
+    "yellowstone-grpc-client", # 1.15.0+solana.1.18.7
     "yellowstone-grpc-geyser", # 1.13.0+solana.1.18.7
     "yellowstone-grpc-proto", # 1.13.0+solana.1.18.7
     "yellowstone-grpc-tools", # 1.0.0-rc.10+solana.1.18.7
@@ -66,7 +66,7 @@ tonic-health = "0.10.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 vergen = "8.2.1"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "=1.14.0+solana.1.18.7" }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "=1.15.0+solana.1.18.7" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "=1.13.0+solana.1.18.7" }
 
 [profile.release]

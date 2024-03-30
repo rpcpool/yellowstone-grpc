@@ -83,7 +83,11 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let mut client = GeyserGrpcClient::connect(args.endpoint, args.x_token, None)?;
+    let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
+        .x_token(args.x_token)?
+        .connect()
+        .await?
+        .build()?;
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
 
     let commitment: CommitmentLevel = args.commitment.unwrap_or_default().into();
