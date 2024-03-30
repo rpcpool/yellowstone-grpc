@@ -91,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
         .send(SubscribeRequest {
             slots: HashMap::new(),
             accounts: HashMap::new(),
-            transactions: hashmap! { "".to_owned() => SubscribeRequestFilterTransactions {
+            transactions: HashMap::new(),
+            transactions_status: hashmap! { "".to_owned() => SubscribeRequestFilterTransactions {
                 vote: args.vote,
                 failed: args.failed,
                 signature: args.signature,
@@ -113,9 +114,9 @@ async fn main() -> anyhow::Result<()> {
         match message {
             Ok(msg) => {
                 match msg.update_oneof {
-                    Some(UpdateOneof::Transaction(tx)) => {
+                    Some(UpdateOneof::TransactionStatus(tx)) => {
                         let entry = messages.entry(tx.slot).or_default();
-                        let sig = Signature::try_from(tx.transaction.unwrap().signature.as_slice())
+                        let sig = Signature::try_from(tx.signature.as_slice())
                             .expect("valid signature from transaction")
                             .to_string();
                         if let Some(timestamp) = entry.0 {

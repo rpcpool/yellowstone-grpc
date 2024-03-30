@@ -282,6 +282,9 @@ impl ArgsAction {
                     Some(UpdateOneof::Transaction(msg)) => {
                         info!("#{}, transaction", msg.slot)
                     }
+                    Some(UpdateOneof::TransactionStatus(msg)) => {
+                        info!("#{}, transaction status", msg.slot)
+                    }
                     Some(UpdateOneof::Block(msg)) => info!("#{}, block", msg.slot),
                     Some(UpdateOneof::Ping(_)) => {}
                     Some(UpdateOneof::Pong(_)) => {}

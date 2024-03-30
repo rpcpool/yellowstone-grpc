@@ -27,6 +27,7 @@ use {
 type SlotsFilterMap = HashMap<String, SubscribeRequestFilterSlots>;
 type AccountFilterMap = HashMap<String, SubscribeRequestFilterAccounts>;
 type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
+type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
@@ -162,6 +163,34 @@ struct ActionSubscribe {
     #[clap(long)]
     transactions_account_required: Vec<String>,
 
+    /// Subscribe on transactions_status updates
+    #[clap(long)]
+    transactions_status: bool,
+
+    /// Filter vote transactions for transactions_status
+    #[clap(long)]
+    transactions_status_vote: Option<bool>,
+
+    /// Filter failed transactions for transactions_status
+    #[clap(long)]
+    transactions_status_failed: Option<bool>,
+
+    /// Filter by transaction signature for transactions_status
+    #[clap(long)]
+    transactions_status_signature: Option<String>,
+
+    /// Filter included account in transactions for transactions_status
+    #[clap(long)]
+    transactions_status_account_include: Vec<String>,
+
+    /// Filter excluded account in transactions for transactions_status
+    #[clap(long)]
+    transactions_status_account_exclude: Vec<String>,
+
+    /// Filter required account in transactions for transactions_status
+    #[clap(long)]
+    transactions_status_account_required: Vec<String>,
+
     #[clap(long)]
     entry: bool,
 
@@ -282,6 +311,21 @@ impl Action {
                     );
                 }
 
+                let mut transactions_status: TransactionsStatusFilterMap = HashMap::new();
+                if args.transactions_status {
+                    transactions_status.insert(
+                        "client".to_string(),
+                        SubscribeRequestFilterTransactions {
+                            vote: args.transactions_status_vote,
+                            failed: args.transactions_status_failed,
+                            signature: args.transactions_status_signature.clone(),
+                            account_include: args.transactions_status_account_include.clone(),
+                            account_exclude: args.transactions_status_account_exclude.clone(),
+                            account_required: args.transactions_status_account_required.clone(),
+                        },
+                    );
+                }
+
                 let mut entry: EntryFilterMap = HashMap::new();
                 if args.entry {
                     entry.insert("client".to_owned(), SubscribeRequestFilterEntry {});
@@ -326,6 +370,7 @@ impl Action {
                         slots,
                         accounts,
                         transactions,
+                        transactions_status,
                         entry,
                         blocks,
                         blocks_meta,
@@ -590,6 +635,7 @@ async fn geyser_subscribe(
                     slots: new_slots.clone(),
                     accounts: HashMap::default(),
                     transactions: HashMap::default(),
+                    transactions_status: HashMap::default(),
                     entry: HashMap::default(),
                     blocks: HashMap::default(),
                     blocks_meta: HashMap::default(),

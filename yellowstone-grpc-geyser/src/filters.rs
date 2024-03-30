@@ -33,6 +33,7 @@ pub struct Filter {
     accounts: FilterAccounts,
     slots: FilterSlots,
     transactions: FilterTransactions,
+    transactions_status: FilterTransactions,
     entry: FilterEntry,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
@@ -46,7 +47,16 @@ impl Filter {
         Ok(Self {
             accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
-            transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
+            transactions: FilterTransactions::new(
+                &config.transactions,
+                &limit.transactions,
+                FilterTransactionsType::Transaction,
+            )?,
+            transactions_status: FilterTransactions::new(
+                &config.transactions,
+                &limit.transactions,
+                FilterTransactionsType::TransactionStatus,
+            )?,
             entry: FilterEntry::new(&config.entry, &limit.entry)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
@@ -98,7 +108,11 @@ impl Filter {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => self.transactions.get_filters(message),
+            Message::Transaction(message) => {
+                let mut messages = self.transactions.get_filters(message);
+                messages.extend(self.transactions_status.get_filters(message));
+                messages
+            }
             Message::Entry(message) => self.entry.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
@@ -411,6 +425,12 @@ impl FilterSlots {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterTransactionsType {
+    Transaction,
+    TransactionStatus,
+}
+
 #[derive(Debug, Clone)]
 pub struct FilterTransactionsInner {
     vote: Option<bool>,
@@ -421,8 +441,9 @@ pub struct FilterTransactionsInner {
     account_required: Vec<Pubkey>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct FilterTransactions {
+    filter_type: FilterTransactionsType,
     filters: HashMap<String, FilterTransactionsInner>,
 }
 
@@ -430,10 +451,11 @@ impl FilterTransactions {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
         limit: &ConfigGrpcFiltersTransactions,
+        filter_type: FilterTransactionsType,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
-        let mut this = Self::default();
+        let mut filters = HashMap::new();
         for (name, filter) in configs {
             ConfigGrpcFilters::check_any(
                 filter.vote.is_none()
@@ -456,7 +478,7 @@ impl FilterTransactions {
                 limit.account_required_max,
             )?;
 
-            this.filters.insert(
+            filters.insert(
                 name.clone(),
                 FilterTransactionsInner {
                     vote: filter.vote,
@@ -485,7 +507,10 @@ impl FilterTransactions {
                 },
             );
         }
-        Ok(this)
+        Ok(Self {
+            filter_type,
+            filters,
+        })
     }
 
     pub fn get_filters<'a>(
@@ -565,7 +590,11 @@ impl FilterTransactions {
                 Some(name.clone())
             })
             .collect();
-        vec![(filters, MessageRef::Transaction(message))]
+        let message = match self.filter_type {
+            FilterTransactionsType::Transaction => MessageRef::Transaction(message),
+            FilterTransactionsType::TransactionStatus => MessageRef::TransactionStatus(message),
+        };
+        vec![(filters, message)]
     }
 }
 
@@ -855,6 +884,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -884,6 +914,7 @@ mod tests {
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -918,6 +949,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -951,6 +983,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -990,6 +1023,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1033,6 +1067,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1076,6 +1111,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1125,6 +1161,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1176,6 +1213,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
