@@ -57,8 +57,7 @@ impl Args {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(10))
             .connect()
-            .await?
-            .build()
+            .await
             .map_err(Into::into)
     }
 }

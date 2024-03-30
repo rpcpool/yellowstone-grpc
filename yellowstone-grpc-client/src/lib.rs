@@ -30,6 +30,12 @@ pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
 }
 
+impl From<Option<AsciiMetadataValue>> for InterceptorXToken {
+    fn from(x_token: Option<AsciiMetadataValue>) -> Self {
+        Self { x_token }
+    }
+}
+
 impl Interceptor for InterceptorXToken {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         if let Some(x_token) = self.x_token.clone() {
@@ -209,10 +215,7 @@ pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 #[derive(Debug)]
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
-    pub channel: Option<Channel>,
-
     pub x_token: Option<AsciiMetadataValue>,
-
     pub send_compressed: Option<CompressionEncoding>,
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
@@ -224,10 +227,7 @@ impl GeyserGrpcBuilder {
     fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
-            channel: None,
-
             x_token: None,
-
             send_compressed: None,
             accept_compressed: None,
             max_decoding_message_size: None,
@@ -244,14 +244,11 @@ impl GeyserGrpcBuilder {
     }
 
     // Create client
-    pub fn build(mut self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
-        let channel = self
-            .channel
-            .take()
-            .ok_or(GeyserGrpcBuilderError::EmptyChannel)?;
-        let interceptor = InterceptorXToken {
-            x_token: self.x_token,
-        };
+    fn build(
+        self,
+        channel: Channel,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let interceptor: InterceptorXToken = self.x_token.into();
 
         let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
         if let Some(encoding) = self.send_compressed {
@@ -271,6 +268,16 @@ impl GeyserGrpcBuilder {
             HealthClient::with_interceptor(channel, interceptor),
             geyser,
         ))
+    }
+
+    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let channel = self.endpoint.connect().await?;
+        self.build(channel)
+    }
+
+    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let channel = self.endpoint.connect_lazy();
+        self.build(channel)
     }
 
     // Set x-token
@@ -294,20 +301,6 @@ impl GeyserGrpcBuilder {
     }
 
     // Endpoint options
-    pub async fn connect(self) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self {
-            channel: Some(self.endpoint.connect().await?),
-            ..self
-        })
-    }
-
-    pub fn connect_lazy(self) -> Self {
-        Self {
-            channel: Some(self.endpoint.connect_lazy()),
-            ..self
-        }
-    }
-
     pub fn connect_timeout(self, dur: Duration) -> Self {
         Self {
             endpoint: self.endpoint.connect_timeout(dur),
@@ -437,7 +430,7 @@ mod tests {
         let res = res.unwrap().x_token(Some(x_token));
         assert!(res.is_ok());
 
-        let res = res.unwrap().connect_lazy().build();
+        let res = res.unwrap().connect_lazy();
         assert!(res.is_ok());
     }
 
@@ -452,7 +445,7 @@ mod tests {
         let res = res.unwrap().x_token(Some(x_token));
         assert!(res.is_ok());
 
-        let res = res.unwrap().connect_lazy().build();
+        let res = res.unwrap().connect_lazy();
         assert!(res.is_ok());
     }
 
@@ -481,7 +474,7 @@ mod tests {
         let res = res.unwrap().x_token::<String>(None);
         assert!(res.is_ok());
 
-        let res = res.unwrap().connect_lazy().build();
+        let res = res.unwrap().connect_lazy();
         assert!(res.is_ok());
     }
 

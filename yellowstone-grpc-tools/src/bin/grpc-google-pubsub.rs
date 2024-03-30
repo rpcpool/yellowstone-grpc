@@ -123,8 +123,7 @@ impl ArgsAction {
             .timeout(Duration::from_secs(5))
             .max_decoding_message_size(config.max_message_size)
             .connect()
-            .await?
-            .build()?;
+            .await?;
         let mut geyser = client.subscribe_once(config.request.to_proto()).await?;
 
         // Receive-send loop

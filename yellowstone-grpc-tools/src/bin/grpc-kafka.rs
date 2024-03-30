@@ -231,8 +231,7 @@ impl ArgsAction {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(5))
             .connect()
-            .await?
-            .build()?;
+            .await?;
         let mut geyser = client.subscribe_once(config.request.to_proto()).await?;
 
         // Receive-send loop

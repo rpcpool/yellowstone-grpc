@@ -36,8 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
         .connect()
-        .await?
-        .build()?;
+        .await?;
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
 
     futures::try_join!(
