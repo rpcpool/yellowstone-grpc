@@ -214,52 +214,101 @@ impl Action {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
                 if args.accounts {
-                    let mut accounts_account = args.accounts_account.clone();
-                    if let Some(path) = args.accounts_account_path.clone() {
-                        let accounts = tokio::task::block_in_place(move || {
-                            let file = File::open(path)?;
-                            Ok::<Vec<String>, anyhow::Error>(serde_json::from_reader(file)?)
-                        })?;
-                        accounts_account.extend(accounts);
-                    }
+                    // let mut accounts_account = args.accounts_account.clone();
+                    // if let Some(path) = args.accounts_account_path.clone() {
+                    //     let accounts = tokio::task::block_in_place(move || {
+                    //         let file = File::open(path)?;
+                    //         Ok::<Vec<String>, anyhow::Error>(serde_json::from_reader(file)?)
+                    //     })?;
+                    //     accounts_account.extend(accounts);
+                    // }
 
-                    let mut filters = vec![];
-                    for filter in args.accounts_memcmp.iter() {
-                        match filter.split_once(',') {
-                            Some((offset, data)) => {
-                                filters.push(SubscribeRequestFilterAccountsFilter {
-                                    filter: Some(AccountsFilterDataOneof::Memcmp(
-                                        SubscribeRequestFilterAccountsFilterMemcmp {
-                                            offset: offset
-                                                .parse()
-                                                .map_err(|_| anyhow::anyhow!("invalid offset"))?,
-                                            data: Some(AccountsFilterMemcmpOneof::Base58(
-                                                data.trim().to_string(),
-                                            )),
-                                        },
-                                    )),
-                                });
-                            }
-                            _ => anyhow::bail!("invalid memcmp"),
-                        }
-                    }
-                    if let Some(datasize) = args.accounts_datasize {
-                        filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
-                        });
-                    }
-                    if args.accounts_token_account_state {
-                        filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterDataOneof::TokenAccountState(true)),
-                        });
-                    }
+                    // let mut filters = vec![];
+                    // for filter in args.accounts_memcmp.iter() {
+                    //     match filter.split_once(',') {
+                    //         Some((offset, data)) => {
+                    //             filters.push(SubscribeRequestFilterAccountsFilter {
+                    //                 filter: Some(AccountsFilterDataOneof::Memcmp(
+                    //                     SubscribeRequestFilterAccountsFilterMemcmp {
+                    //                         offset: offset
+                    //                             .parse()
+                    //                             .map_err(|_| anyhow::anyhow!("invalid offset"))?,
+                    //                         data: Some(AccountsFilterMemcmpOneof::Base58(
+                    //                             data.trim().to_string(),
+                    //                         )),
+                    //                     },
+                    //                 )),
+                    //             });
+                    //         }
+                    //         _ => anyhow::bail!("invalid memcmp"),
+                    //     }
+                    // }
+                    // if let Some(datasize) = args.accounts_datasize {
+                    //     filters.push(SubscribeRequestFilterAccountsFilter {
+                    //         filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
+                    //     });
+                    // }
+                    // if args.accounts_token_account_state {
+                    //     filters.push(SubscribeRequestFilterAccountsFilter {
+                    //         filter: Some(AccountsFilterDataOneof::TokenAccountState(true)),
+                    //     });
+                    // }
 
+                    // accounts.insert(
+                    //     "client".to_owned(),
+                    //     SubscribeRequestFilterAccounts {
+                    //         account: accounts_account,
+                    //         owner: args.accounts_owner.clone(),
+                    //         filters,
+                    //     },
+                    // );
+
+                    //
+                    // accounts: {
+                    //     ray_amm: {
+                    //       account: [],
+                    //       owner: ["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"],
+                    //       filters: [{ datasize: "752" }],
+                    //     },
+                    //     ray_clmm: {
+                    //       account: [],
+                    //       owner: ["CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK"],
+                    //       filters: [{ datasize: "1544" }],
+                    //     },
+                    //     ray_stable: {
+                    //       account: [],
+                    //       owner: ["5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h"],
+                    //       filters: [{ datasize: "1232" }],
+                    //     },
+                    //   },
                     accounts.insert(
-                        "client".to_owned(),
+                        "ray_amm".to_owned(),
                         SubscribeRequestFilterAccounts {
-                            account: accounts_account,
-                            owner: args.accounts_owner.clone(),
-                            filters,
+                            account: vec![],
+                            owner: vec!["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_owned()],
+                            filters: vec![SubscribeRequestFilterAccountsFilter {
+                                filter: Some(AccountsFilterDataOneof::Datasize(752)),
+                            }],
+                        },
+                    );
+                    accounts.insert(
+                        "ray_clmm".to_owned(),
+                        SubscribeRequestFilterAccounts {
+                            account: vec![],
+                            owner: vec!["CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK".to_owned()],
+                            filters: vec![SubscribeRequestFilterAccountsFilter {
+                                filter: Some(AccountsFilterDataOneof::Datasize(1544)),
+                            }],
+                        },
+                    );
+                    accounts.insert(
+                        "ray_stable".to_owned(),
+                        SubscribeRequestFilterAccounts {
+                            account: vec![],
+                            owner: vec!["5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h".to_owned()],
+                            filters: vec![SubscribeRequestFilterAccountsFilter {
+                                filter: Some(AccountsFilterDataOneof::Datasize(1232)),
+                            }],
                         },
                     );
                 }
@@ -475,6 +524,7 @@ async fn main() -> anyhow::Result<()> {
                         .map_err(backoff::Error::Permanent)?
                         .expect("expect subscribe action");
 
+                    info!("request: {request:?}");
                     geyser_subscribe(client, request, resub).await
                 }
                 Action::Ping { count } => client
@@ -543,10 +593,18 @@ async fn geyser_subscribe(
                 match msg.update_oneof {
                     Some(UpdateOneof::Account(account)) => {
                         let account: AccountPretty = account.into();
+                        // info!(
+                        //     "new account update: filters {:?}, account: {:#?}",
+                        //     msg.filters, account
+                        // );
                         info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
+                            "new account update: filters {:?}, account {}",
+                            msg.filters, account.pubkey
                         );
+                        continue;
+                    }
+                    Some(UpdateOneof::BlockMeta(meta)) => {
+                        info!("new meta: {}", meta.slot);
                         continue;
                     }
                     Some(UpdateOneof::Transaction(tx)) => {
