@@ -101,42 +101,42 @@ impl Filter {
     }
 
     pub fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => {
-                let mut messages = self.transactions.get_filters(message);
-                messages.extend(self.transactions_status.get_filters(message));
-                messages
-            }
+            Message::Transaction(message) => Box::new(
+                self.transactions
+                    .get_filters(message)
+                    .chain(self.transactions_status.get_filters(message)),
+            ),
             Message::Entry(message) => self.entry.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 
-    pub fn get_update(
-        &self,
-        message: &Message,
+    pub fn get_update<'a>(
+        &'a self,
+        message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<SubscribeUpdate> {
-        self.get_filters(message, commitment)
-            .into_iter()
-            .filter_map(|(filters, message)| {
-                if filters.is_empty() {
-                    None
-                } else {
-                    Some(SubscribeUpdate {
-                        filters,
-                        update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
-                    })
-                }
-            })
-            .collect()
+    ) -> Box<dyn Iterator<Item = SubscribeUpdate> + Send + 'a> {
+        Box::new(
+            self.get_filters(message, commitment)
+                .filter_map(|(filters, message)| {
+                    if filters.is_empty() {
+                        None
+                    } else {
+                        Some(SubscribeUpdate {
+                            filters,
+                            update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+                        })
+                    }
+                }),
+        )
     }
 
     pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
@@ -211,12 +211,18 @@ impl FilterAccounts {
         Ok(required)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageAccount,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
-        vec![(filter.get_filters(), MessageRef::Account(message))]
+        Box::new(std::iter::once((
+            filter.get_filters(),
+            MessageRef::Account(message),
+        )))
     }
 }
 
@@ -405,11 +411,11 @@ impl FilterSlots {
     }
 
     fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
             self.filters
                 .iter()
                 .filter_map(|(name, inner)| {
@@ -421,7 +427,7 @@ impl FilterSlots {
                 })
                 .collect(),
             MessageRef::Slot(message),
-        )]
+        )))
     }
 }
 
@@ -514,9 +520,9 @@ impl FilterTransactions {
     }
 
     pub fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a MessageTransaction,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         let filters = self
             .filters
             .iter()
@@ -594,7 +600,7 @@ impl FilterTransactions {
             FilterTransactionsType::Transaction => MessageRef::Transaction(message),
             FilterTransactionsType::TransactionStatus => MessageRef::TransactionStatus(message),
         };
-        vec![(filters, message)]
+        Box::new(std::iter::once((filters, message)))
     }
 }
 
@@ -619,8 +625,14 @@ impl FilterEntry {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageEntry) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::Entry(message))]
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageEntry,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
+            self.filters.clone(),
+            MessageRef::Entry(message),
+        )))
     }
 }
 
@@ -683,68 +695,68 @@ impl FilterBlocks {
         Ok(this)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        self.filters
-            .iter()
-            .map(|(filter, inner)| {
-                #[allow(clippy::unnecessary_filter_map)]
-                let transactions =
-                    if matches!(inner.include_transactions, None | Some(true)) {
-                        message
-                            .transactions
-                            .iter()
-                            .filter_map(|tx| {
-                                if !inner.account_include.is_empty()
-                                    && tx.transaction.message().account_keys().iter().all(
-                                        |pubkey| {
-                                            inner.account_include.binary_search(pubkey).is_err()
-                                        },
-                                    )
-                                {
-                                    return None;
-                                }
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageBlock,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(self.filters.iter().map(move |(filter, inner)| {
+            #[allow(clippy::unnecessary_filter_map)]
+            let transactions = if matches!(inner.include_transactions, None | Some(true)) {
+                message
+                    .transactions
+                    .iter()
+                    .filter_map(|tx| {
+                        if !inner.account_include.is_empty()
+                            && tx
+                                .transaction
+                                .message()
+                                .account_keys()
+                                .iter()
+                                .all(|pubkey| inner.account_include.binary_search(pubkey).is_err())
+                        {
+                            return None;
+                        }
 
-                                Some(tx)
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
+                        Some(tx)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                #[allow(clippy::unnecessary_filter_map)]
-                let accounts = if inner.include_accounts == Some(true) {
-                    message
-                        .accounts
-                        .iter()
-                        .filter_map(|account| {
-                            if !inner.account_include.is_empty()
-                                && inner
-                                    .account_include
-                                    .binary_search(&account.pubkey)
-                                    .is_err()
-                            {
-                                return None;
-                            }
+            #[allow(clippy::unnecessary_filter_map)]
+            let accounts = if inner.include_accounts == Some(true) {
+                message
+                    .accounts
+                    .iter()
+                    .filter_map(|account| {
+                        if !inner.account_include.is_empty()
+                            && inner
+                                .account_include
+                                .binary_search(&account.pubkey)
+                                .is_err()
+                        {
+                            return None;
+                        }
 
-                            Some(account)
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
+                        Some(account)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                let entries = if inner.include_entries == Some(true) {
-                    message.entries.iter().collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
+            let entries = if inner.include_entries == Some(true) {
+                message.entries.iter().collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                (
-                    vec![filter.clone()],
-                    MessageRef::Block((message, transactions, accounts, entries).into()),
-                )
-            })
-            .collect()
+            (
+                vec![filter.clone()],
+                MessageRef::Block((message, transactions, accounts, entries).into()),
+            )
+        }))
     }
 }
 
@@ -769,8 +781,14 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlockMeta) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::BlockMeta(message))]
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageBlockMeta,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
+            self.filters.clone(),
+            MessageRef::BlockMeta(message),
+        )))
     }
 }
 
