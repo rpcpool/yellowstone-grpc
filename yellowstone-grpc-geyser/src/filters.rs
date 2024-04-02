@@ -53,8 +53,8 @@ impl Filter {
                 FilterTransactionsType::Transaction,
             )?,
             transactions_status: FilterTransactions::new(
-                &config.transactions,
-                &limit.transactions,
+                &config.transactions_status,
+                &limit.transactions_status,
                 FilterTransactionsType::TransactionStatus,
             )?,
             entry: FilterEntry::new(&config.entry, &limit.entry)?,
