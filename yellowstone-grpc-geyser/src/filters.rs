@@ -835,7 +835,7 @@ mod tests {
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
-            grpc::{Message, MessageTransaction, MessageTransactionInfo},
+            grpc::{Message, MessageRef, MessageTransaction, MessageTransactionInfo},
         },
         solana_sdk::{
             hash::Hash,
@@ -1055,9 +1055,12 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
@@ -1099,9 +1102,12 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
@@ -1195,9 +1201,12 @@ mod tests {
             vec![account_key_x, account_key_y, account_key_z],
         );
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
