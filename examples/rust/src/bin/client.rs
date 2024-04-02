@@ -3,7 +3,7 @@ use {
     clap::{Parser, Subcommand, ValueEnum},
     futures::{future::TryFutureExt, sink::SinkExt, stream::StreamExt},
     log::{error, info},
-    solana_sdk::{pubkey::Pubkey, signature::Signature},
+    solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::TransactionError},
     solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
     std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
     tokio::sync::Mutex,
@@ -18,7 +18,7 @@ use {
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
             SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
-            SubscribeUpdateTransaction,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionStatus,
         },
         tonic::service::Interceptor,
     },
@@ -467,6 +467,29 @@ impl From<SubscribeUpdateTransaction> for TransactionPretty {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct TransactionStatusPretty {
+    slot: u64,
+    signature: Signature,
+    is_vote: bool,
+    index: u64,
+    err: Option<TransactionError>,
+}
+
+impl From<SubscribeUpdateTransactionStatus> for TransactionStatusPretty {
+    fn from(status: SubscribeUpdateTransactionStatus) -> Self {
+        Self {
+            slot: status.slot,
+            signature: Signature::try_from(status.signature.as_slice()).expect("valid signature"),
+            is_vote: status.is_vote,
+            index: status.index,
+            err: yellowstone_grpc_proto::convert_from::create_tx_error(status.err.as_ref())
+                .expect("valid tx err"),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env::set_var(
@@ -601,6 +624,14 @@ async fn geyser_subscribe(
                         info!(
                             "new transaction update: filters {:?}, transaction: {:#?}",
                             msg.filters, tx
+                        );
+                        continue;
+                    }
+                    Some(UpdateOneof::TransactionStatus(status)) => {
+                        let status: TransactionStatusPretty = status.into();
+                        info!(
+                            "new transaction update: filters {:?}, transaction status: {:?}",
+                            msg.filters, status
                         );
                         continue;
                     }
