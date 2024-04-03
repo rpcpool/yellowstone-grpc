@@ -5,6 +5,7 @@ use {
         prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
     },
+    anyhow::Context,
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
@@ -721,20 +722,18 @@ impl GrpcService {
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
         is_reload: bool,
-    ) -> Result<
-        (
-            Option<crossbeam_channel::Sender<Option<Message>>>,
-            mpsc::UnboundedSender<Message>,
-            Arc<Notify>,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> anyhow::Result<(
+        Option<crossbeam_channel::Sender<Option<Message>>>,
+        mpsc::UnboundedSender<Message>,
+        Arc<Notify>,
+    )> {
         // Bind service address
         let incoming = TcpIncoming::new(
             config.address,
             true,                          // tcp_nodelay
             Some(Duration::from_secs(20)), // tcp_keepalive
-        )?;
+        )
+        .map_err(|error| anyhow::anyhow!(error))?;
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -763,9 +762,11 @@ impl GrpcService {
             let (cert, key) = tokio::try_join!(
                 fs::read(&tls_config.cert_path),
                 fs::read(&tls_config.key_path)
-            )?;
+            )
+            .context("failed to load tls_config files")?;
             server_builder = server_builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))?;
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
+                .context("failed to apply tls_config")?;
         }
 
         // Create Server
@@ -828,6 +829,11 @@ impl GrpcService {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
                     MESSAGE_QUEUE_SIZE.dec();
+
+                    // Update metrics
+                    if let Message::Slot(slot_message) = &message {
+                        prom::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                    }
 
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {

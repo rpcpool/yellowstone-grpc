@@ -82,7 +82,7 @@ impl GeyserPlugin for Plugin {
                 let (snapshot_channel, grpc_channel, grpc_shutdown) =
                     GrpcService::create(config.grpc, config.block_fail_action, is_reload)
                         .await
-                        .map_err(GeyserPluginError::Custom)?;
+                        .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
                 let prometheus = PrometheusService::new(config.prometheus)
                     .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
                 Ok::<_, GeyserPluginError>((
