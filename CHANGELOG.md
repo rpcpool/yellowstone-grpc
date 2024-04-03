@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- deps: update `h2` crate (`RUSTSEC-2024-0332`) ([#316](https://github.com/rpcpool/yellowstone-grpc/pull/316))
+
 ### Features
 
 - client: add gRPC channel options to Node.js ([#306](https://github.com/rpcpool/yellowstone-grpc/pull/306))
