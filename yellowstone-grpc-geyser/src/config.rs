@@ -138,6 +138,7 @@ pub struct ConfigGrpcFilters {
     pub accounts: ConfigGrpcFiltersAccounts,
     pub slots: ConfigGrpcFiltersSlots,
     pub transactions: ConfigGrpcFiltersTransactions,
+    pub transactions_status: ConfigGrpcFiltersTransactions,
     pub blocks: ConfigGrpcFiltersBlocks,
     pub blocks_meta: ConfigGrpcFiltersBlocksMeta,
     pub entry: ConfigGrpcFiltersEntry,
