@@ -11,6 +11,7 @@ use {
     solana_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
     std::sync::Once,
     tokio::sync::oneshot,
+    yellowstone_grpc_proto::prelude::CommitmentLevel,
 };
 
 lazy_static::lazy_static! {
@@ -22,7 +23,12 @@ lazy_static::lazy_static! {
     ).unwrap();
 
     pub static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("slot_status", "Last processed slot by plugin"),
+        Opts::new("slot_status", "Lastest received slot from Geyser"),
+        &["status"]
+    ).unwrap();
+
+    pub static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
         &["status"]
     ).unwrap();
 
@@ -58,6 +64,7 @@ impl PrometheusService {
             }
             register!(VERSION);
             register!(SLOT_STATUS);
+            register!(SLOT_STATUS_PLUGIN);
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
@@ -126,6 +133,16 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
             SlotStatus::Processed => "processed",
             SlotStatus::Confirmed => "confirmed",
             SlotStatus::Rooted => "finalized",
+        }])
+        .set(slot as i64);
+}
+
+pub fn update_slot_plugin_status(status: CommitmentLevel, slot: u64) {
+    SLOT_STATUS_PLUGIN
+        .with_label_values(&[match status {
+            CommitmentLevel::Processed => "processed",
+            CommitmentLevel::Confirmed => "confirmed",
+            CommitmentLevel::Finalized => "finalized",
         }])
         .set(slot as i64);
 }
