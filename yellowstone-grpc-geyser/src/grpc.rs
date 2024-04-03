@@ -51,6 +51,7 @@ use {
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
             SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
         },
     },
 };
@@ -396,6 +397,7 @@ pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),
     Transaction(&'a MessageTransaction),
+    TransactionStatus(&'a MessageTransaction),
     Entry(&'a MessageEntry),
     Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
@@ -418,6 +420,21 @@ impl<'a> MessageRef<'a> {
                 transaction: Some(message.transaction.to_proto()),
                 slot: message.slot,
             }),
+            Self::TransactionStatus(message) => {
+                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
+                    slot: message.slot,
+                    signature: message.transaction.signature.as_ref().into(),
+                    is_vote: message.transaction.is_vote,
+                    index: message.transaction.index as u64,
+                    err: match &message.transaction.meta.status {
+                        Ok(()) => None,
+                        Err(err) => Some(SubscribeUpdateTransactionError {
+                            err: bincode::serialize(&err)
+                                .expect("transaction error to serialize to bytes"),
+                        }),
+                    },
+                })
+            }
             Self::Entry(message) => UpdateOneof::Entry(message.to_proto()),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
@@ -1208,6 +1225,7 @@ impl Geyser for GrpcService {
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: HashMap::new(),
+                transactions_status: HashMap::new(),
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
                 entry: HashMap::new(),
