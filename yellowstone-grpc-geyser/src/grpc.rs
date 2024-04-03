@@ -1217,7 +1217,7 @@ impl GrpcService {
                             }
                         }
 
-                        if commitment == CommitmentLevel::Processed {
+                        if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
                             for message in messages.iter() {
                                 if let Message::Slot(slot_message) = message {
                                     DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
