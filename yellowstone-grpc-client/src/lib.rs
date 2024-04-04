@@ -5,12 +5,11 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
-    http::uri::InvalidUri,
-    std::{collections::HashMap, time::Duration},
+    std::time::Duration,
     tonic::{
-        codec::Streaming,
+        codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
-        service::{interceptor::InterceptedService, Interceptor},
+        service::interceptor::InterceptedService,
         transport::channel::{Channel, ClientTlsConfig, Endpoint},
         Request, Response, Status,
     },
@@ -20,16 +19,21 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
+        SubscribeRequest, SubscribeUpdate,
     },
 };
+
+pub use tonic::service::Interceptor;
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
+}
+
+impl From<Option<AsciiMetadataValue>> for InterceptorXToken {
+    fn from(x_token: Option<AsciiMetadataValue>) -> Self {
+        Self { x_token }
+    }
 }
 
 impl Interceptor for InterceptorXToken {
@@ -43,14 +47,6 @@ impl Interceptor for InterceptorXToken {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeyserGrpcClientError {
-    #[error("Invalid URI: {0}")]
-    InvalidUri(#[from] InvalidUri),
-    #[error("Failed to parse x-token: {0}")]
-    MetadataValueError(#[from] InvalidMetadataValue),
-    #[error("Invalid X-Token length: {0}, expected 28")]
-    InvalidXTokenLength(usize),
-    #[error("gRPC transport error: {0}")]
-    TonicError(#[from] tonic::transport::Error),
     #[error("gRPC status: {0}")]
     TonicStatus(#[from] Status),
     #[error("Failed to send subscribe request: {0}")]
@@ -65,90 +61,14 @@ pub struct GeyserGrpcClient<F> {
 }
 
 impl GeyserGrpcClient<()> {
-    pub const fn max_decoding_message_size() -> usize {
-        64 * 1024 * 1024 // 64 MiB
+    pub fn build_from_shared(
+        endpoint: impl Into<Bytes>,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcBuilder> {
+        Ok(GeyserGrpcBuilder::new(Endpoint::from_shared(endpoint)?))
     }
 
-    fn connect2<E, T>(
-        endpoint: E,
-        tls_config: Option<ClientTlsConfig>,
-        x_token: Option<T>,
-    ) -> GeyserGrpcClientResult<(Endpoint, InterceptorXToken)>
-    where
-        E: Into<Bytes>,
-        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
-    {
-        let mut endpoint = Channel::from_shared(endpoint)?;
-        if let Some(tls_config) = tls_config {
-            endpoint = endpoint.tls_config(tls_config)?;
-        } else if endpoint.uri().scheme_str() == Some("https") {
-            endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
-        }
-
-        let x_token: Option<AsciiMetadataValue> = match x_token {
-            Some(x_token) => Some(x_token.try_into()?),
-            None => None,
-        };
-        match x_token {
-            Some(token) if token.is_empty() => {
-                return Err(GeyserGrpcClientError::InvalidXTokenLength(token.len()));
-            }
-            _ => {}
-        }
-        let interceptor = InterceptorXToken { x_token };
-
-        Ok((endpoint, interceptor))
-    }
-
-    pub fn connect<E, T>(
-        endpoint: E,
-        x_token: Option<T>,
-        tls_config: Option<ClientTlsConfig>,
-    ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
-    where
-        E: Into<Bytes>,
-        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
-    {
-        let (endpoint, interceptor) = Self::connect2(endpoint, tls_config, x_token)?;
-        let channel = endpoint.connect_lazy();
-        Ok(GeyserGrpcClient::new(
-            HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            GeyserClient::with_interceptor(channel, interceptor)
-                .max_decoding_message_size(Self::max_decoding_message_size()),
-        ))
-    }
-
-    pub async fn connect_with_timeout<E, T>(
-        endpoint: E,
-        x_token: Option<T>,
-        tls_config: Option<ClientTlsConfig>,
-        connect_timeout: Option<Duration>,
-        request_timeout: Option<Duration>,
-        connect_lazy: bool,
-    ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
-    where
-        E: Into<Bytes>,
-        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
-    {
-        let (mut endpoint, interceptor) = Self::connect2(endpoint, tls_config, x_token)?;
-
-        if let Some(timeout) = connect_timeout {
-            endpoint = endpoint.connect_timeout(timeout);
-        }
-        if let Some(timeout) = request_timeout {
-            endpoint = endpoint.timeout(timeout);
-        }
-        let channel = if connect_lazy {
-            endpoint.connect_lazy()
-        } else {
-            endpoint.connect().await?
-        };
-
-        Ok(GeyserGrpcClient::new(
-            HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
-            GeyserClient::with_interceptor(channel, interceptor)
-                .max_decoding_message_size(Self::max_decoding_message_size()),
-        ))
+    pub fn build_from_static(endpoint: &'static str) -> GeyserGrpcBuilder {
+        GeyserGrpcBuilder::new(Endpoint::from_static(endpoint))
     }
 }
 
@@ -160,6 +80,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Self { health, geyser }
     }
 
+    // Health
     pub async fn health_check(&mut self) -> GeyserGrpcClientResult<HealthCheckResponse> {
         let request = HealthCheckRequest {
             service: "geyser.Geyser".to_owned(),
@@ -178,6 +99,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok(response.into_inner())
     }
 
+    // Subscribe
     pub async fn subscribe(
         &mut self,
     ) -> GeyserGrpcClientResult<(
@@ -206,36 +128,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok((subscribe_tx, response.into_inner()))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn subscribe_once(
-        &mut self,
-        slots: HashMap<String, SubscribeRequestFilterSlots>,
-        accounts: HashMap<String, SubscribeRequestFilterAccounts>,
-        transactions: HashMap<String, SubscribeRequestFilterTransactions>,
-        transactions_status: HashMap<String, SubscribeRequestFilterTransactions>,
-        entry: HashMap<String, SubscribeRequestFilterEntry>,
-        blocks: HashMap<String, SubscribeRequestFilterBlocks>,
-        blocks_meta: HashMap<String, SubscribeRequestFilterBlocksMeta>,
-        commitment: Option<CommitmentLevel>,
-        accounts_data_slice: Vec<SubscribeRequestAccountsDataSlice>,
-        ping: Option<SubscribeRequestPing>,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
-        self.subscribe_once2(SubscribeRequest {
-            slots,
-            accounts,
-            transactions,
-            transactions_status,
-            entry,
-            blocks,
-            blocks_meta,
-            commitment: commitment.map(|value| value as i32),
-            accounts_data_slice,
-            ping,
-        })
-        .await
-    }
-
-    pub async fn subscribe_once2(
         &mut self,
         request: SubscribeRequest,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
@@ -244,6 +137,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             .map(|(_sink, stream)| stream)
     }
 
+    // RPC calls
     pub async fn ping(&mut self, count: i32) -> GeyserGrpcClientResult<PongResponse> {
         let message = PingRequest { count };
         let request = tonic::Request::new(message);
@@ -304,49 +198,295 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum GeyserGrpcBuilderError {
+    #[error("Failed to parse x-token: {0}")]
+    MetadataValueError(#[from] InvalidMetadataValue),
+    #[error("Invalid X-Token length: {0}, expected 28")]
+    InvalidXTokenLength(usize),
+    #[error("gRPC transport error: {0}")]
+    TonicError(#[from] tonic::transport::Error),
+    #[error("tonic::transport::Channel should be created, use `connect` or `connect_lazy` first")]
+    EmptyChannel,
+}
+
+pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
+
+#[derive(Debug)]
+pub struct GeyserGrpcBuilder {
+    pub endpoint: Endpoint,
+    pub x_token: Option<AsciiMetadataValue>,
+    pub send_compressed: Option<CompressionEncoding>,
+    pub accept_compressed: Option<CompressionEncoding>,
+    pub max_decoding_message_size: Option<usize>,
+    pub max_encoding_message_size: Option<usize>,
+}
+
+impl GeyserGrpcBuilder {
+    // Create new builder
+    fn new(endpoint: Endpoint) -> Self {
+        Self {
+            endpoint,
+            x_token: None,
+            send_compressed: None,
+            accept_compressed: None,
+            max_decoding_message_size: None,
+            max_encoding_message_size: None,
+        }
+    }
+
+    pub fn from_shared(endpoint: impl Into<Bytes>) -> GeyserGrpcBuilderResult<Self> {
+        Ok(Self::new(Endpoint::from_shared(endpoint)?))
+    }
+
+    pub fn from_static(endpoint: &'static str) -> Self {
+        Self::new(Endpoint::from_static(endpoint))
+    }
+
+    // Create client
+    fn build(
+        self,
+        channel: Channel,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let interceptor: InterceptorXToken = self.x_token.into();
+
+        let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
+        if let Some(encoding) = self.send_compressed {
+            geyser = geyser.send_compressed(encoding);
+        }
+        if let Some(encoding) = self.accept_compressed {
+            geyser = geyser.accept_compressed(encoding);
+        }
+        if let Some(limit) = self.max_decoding_message_size {
+            geyser = geyser.max_decoding_message_size(limit);
+        }
+        if let Some(limit) = self.max_encoding_message_size {
+            geyser = geyser.max_encoding_message_size(limit);
+        }
+
+        Ok(GeyserGrpcClient::new(
+            HealthClient::with_interceptor(channel, interceptor),
+            geyser,
+        ))
+    }
+
+    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let channel = self.endpoint.connect().await?;
+        self.build(channel)
+    }
+
+    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+        let channel = self.endpoint.connect_lazy();
+        self.build(channel)
+    }
+
+    // Set x-token
+    pub fn x_token<T>(self, x_token: Option<T>) -> GeyserGrpcBuilderResult<Self>
+    where
+        T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
+    {
+        Ok(Self {
+            x_token: match x_token {
+                Some(x_token) => {
+                    let x_token = x_token.try_into()?;
+                    if x_token.is_empty() {
+                        return Err(GeyserGrpcBuilderError::InvalidXTokenLength(x_token.len()));
+                    }
+                    Some(x_token)
+                }
+                None => None,
+            },
+            ..self
+        })
+    }
+
+    // Endpoint options
+    pub fn connect_timeout(self, dur: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.connect_timeout(dur),
+            ..self
+        }
+    }
+
+    pub fn timeout(self, dur: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.timeout(dur),
+            ..self
+        }
+    }
+
+    pub fn tls_config(self, tls_config: ClientTlsConfig) -> GeyserGrpcBuilderResult<Self> {
+        Ok(Self {
+            endpoint: self.endpoint.tls_config(tls_config)?,
+            ..self
+        })
+    }
+
+    pub fn buffer_size(self, sz: impl Into<Option<usize>>) -> Self {
+        Self {
+            endpoint: self.endpoint.buffer_size(sz),
+            ..self
+        }
+    }
+
+    pub fn http2_adaptive_window(self, enabled: bool) -> Self {
+        Self {
+            endpoint: self.endpoint.http2_adaptive_window(enabled),
+            ..self
+        }
+    }
+
+    pub fn http2_keep_alive_interval(self, interval: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.http2_keep_alive_interval(interval),
+            ..self
+        }
+    }
+
+    pub fn initial_connection_window_size(self, sz: impl Into<Option<u32>>) -> Self {
+        Self {
+            endpoint: self.endpoint.initial_connection_window_size(sz),
+            ..self
+        }
+    }
+
+    pub fn initial_stream_window_size(self, sz: impl Into<Option<u32>>) -> Self {
+        Self {
+            endpoint: self.endpoint.initial_stream_window_size(sz),
+            ..self
+        }
+    }
+
+    pub fn keep_alive_timeout(self, duration: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.keep_alive_timeout(duration),
+            ..self
+        }
+    }
+
+    pub fn keep_alive_while_idle(self, enabled: bool) -> Self {
+        Self {
+            endpoint: self.endpoint.keep_alive_while_idle(enabled),
+            ..self
+        }
+    }
+
+    pub fn tcp_keepalive(self, tcp_keepalive: Option<Duration>) -> Self {
+        Self {
+            endpoint: self.endpoint.tcp_keepalive(tcp_keepalive),
+            ..self
+        }
+    }
+
+    pub fn tcp_nodelay(self, enabled: bool) -> Self {
+        Self {
+            endpoint: self.endpoint.tcp_nodelay(enabled),
+            ..self
+        }
+    }
+
+    // Geyser options
+    pub fn send_compressed(self, encoding: CompressionEncoding) -> Self {
+        Self {
+            send_compressed: Some(encoding),
+            ..self
+        }
+    }
+
+    pub fn accept_compressed(self, encoding: CompressionEncoding) -> Self {
+        Self {
+            accept_compressed: Some(encoding),
+            ..self
+        }
+    }
+
+    pub fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self {
+            max_decoding_message_size: Some(limit),
+            ..self
+        }
+    }
+
+    pub fn max_encoding_message_size(self, limit: usize) -> Self {
+        Self {
+            max_encoding_message_size: Some(limit),
+            ..self
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{GeyserGrpcClient, GeyserGrpcClientError};
+    use super::{GeyserGrpcBuilderError, GeyserGrpcClient};
 
     #[tokio::test]
     async fn test_channel_https_success() {
         let endpoint = "https://ams17.rpcpool.com:443";
         let x_token = "1000000000000000000000000007";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
-        assert!(res.is_ok())
+
+        let res = GeyserGrpcClient::build_from_shared(endpoint);
+        assert!(res.is_ok());
+
+        let res = res.unwrap().x_token(Some(x_token));
+        assert!(res.is_ok());
+
+        let res = res.unwrap().connect_lazy();
+        assert!(res.is_ok());
     }
 
     #[tokio::test]
     async fn test_channel_http_success() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
-        assert!(res.is_ok())
+
+        let res = GeyserGrpcClient::build_from_shared(endpoint);
+        assert!(res.is_ok());
+
+        let res = res.unwrap().x_token(Some(x_token));
+        assert!(res.is_ok());
+
+        let res = res.unwrap().connect_lazy();
+        assert!(res.is_ok());
     }
 
     #[tokio::test]
     async fn test_channel_invalid_token_some() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
+
+        let res = GeyserGrpcClient::build_from_shared(endpoint);
+        assert!(res.is_ok());
+
+        let res = res.unwrap().x_token(Some(x_token));
         assert!(matches!(
             res,
-            Err(GeyserGrpcClientError::InvalidXTokenLength(_))
+            Err(GeyserGrpcBuilderError::InvalidXTokenLength(_))
         ));
     }
 
     #[tokio::test]
     async fn test_channel_invalid_token_none() {
         let endpoint = "http://127.0.0.1:10000";
-        let res = GeyserGrpcClient::connect::<_, String>(endpoint, None, None);
+
+        let res = GeyserGrpcClient::build_from_shared(endpoint);
+        assert!(res.is_ok());
+
+        let res = res.unwrap().x_token::<String>(None);
+        assert!(res.is_ok());
+
+        let res = res.unwrap().connect_lazy();
         assert!(res.is_ok());
     }
 
     #[tokio::test]
     async fn test_channel_invalid_uri() {
         let endpoint = "sites/files/images/picture.png";
-        let x_token = "1234567891012141618202224268";
-        let res = GeyserGrpcClient::connect(endpoint, Some(x_token), None);
-        assert!(matches!(res, Err(GeyserGrpcClientError::InvalidUri(_))));
+
+        let res = GeyserGrpcClient::build_from_shared(endpoint);
+        assert_eq!(
+            format!("{:?}", res),
+            "Err(TonicError(tonic::transport::Error(InvalidUri, InvalidUri(InvalidFormat))))"
+                .to_owned()
+        );
     }
 }

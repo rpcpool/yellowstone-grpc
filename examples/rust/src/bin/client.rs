@@ -7,20 +7,17 @@ use {
     solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
     std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
     tokio::sync::Mutex,
-    yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError},
-    yellowstone_grpc_proto::{
-        prelude::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionStatus,
-        },
-        tonic::service::Interceptor,
+    yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
+    yellowstone_grpc_proto::prelude::{
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
+        SubscribeUpdateTransaction, SubscribeUpdateTransactionStatus,
     },
 };
 
@@ -53,6 +50,16 @@ struct Args {
 impl Args {
     fn get_commitment(&self) -> Option<CommitmentLevel> {
         Some(self.commitment.unwrap_or_default().into())
+    }
+
+    async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor>> {
+        GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
+            .x_token(self.x_token.clone())?
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(10))
+            .connect()
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -518,16 +525,7 @@ async fn main() -> anyhow::Result<()> {
             drop(zero_attempts);
 
             let commitment = args.get_commitment();
-            let mut client = GeyserGrpcClient::connect_with_timeout(
-                args.endpoint,
-                args.x_token,
-                None,
-                Some(Duration::from_secs(10)),
-                Some(Duration::from_secs(10)),
-                false,
-            )
-            .await
-            .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
+            let mut client = args.connect().await.map_err(backoff::Error::transient)?;
             info!("Connected");
 
             match &args.action {

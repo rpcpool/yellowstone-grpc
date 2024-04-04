@@ -117,22 +117,14 @@ impl ArgsAction {
         let publisher = topic.new_publisher(Some(config.publisher.get_publisher_config()));
 
         // Create gRPC client & subscribe
-        let client = GeyserGrpcClient::connect_with_timeout(
-            config.endpoint,
-            config.x_token,
-            None,
-            Some(Duration::from_secs(10)),
-            Some(Duration::from_secs(5)),
-            false,
-        )
-        .await?;
-        let mut client = GeyserGrpcClient::new(
-            client.health,
-            client
-                .geyser
-                .max_decoding_message_size(config.max_message_size),
-        );
-        let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
+        let mut client = GeyserGrpcClient::build_from_shared(config.endpoint)?
+            .x_token(config.x_token)?
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(5))
+            .max_decoding_message_size(config.max_message_size)
+            .connect()
+            .await?;
+        let mut geyser = client.subscribe_once(config.request.to_proto()).await?;
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();

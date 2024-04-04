@@ -12,6 +12,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## 2024-04-04
+
+- yellowstone-grpc-client-1.15.0+solana.1.18.9
+- yellowstone-grpc-geyser-1.14.0+solana.1.18.9
+- yellowstone-grpc-proto-1.14.0+solana.1.18.9
+- yellowstone-grpc-tools-1.0.0-rc.11+solana.1.18.9
+
+### Fixes
+
 - deps: update `h2` crate (`RUSTSEC-2024-0332`) ([#316](https://github.com/rpcpool/yellowstone-grpc/pull/316))
 
 ### Features
@@ -24,6 +37,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: wrap messages to `Arc` ([#315](https://github.com/rpcpool/yellowstone-grpc/pull/315))
 
 ### Breaking
+
+- client: add `GeyserGrpcBuilder` ([#309](https://github.com/rpcpool/yellowstone-grpc/pull/309))
 
 ## 2024-03-20
 

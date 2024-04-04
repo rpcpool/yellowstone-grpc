@@ -10,7 +10,7 @@ async function main() {
 
   // Open connection.
   const client = new Client(args.endpoint, args.xToken, {
-    'grpc.max_receive_message_length': 64 * 1024 * 1024 // 64MiB
+    "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
   });
 
   const commitment = parseCommitmentLevel(args.commitment);
@@ -90,6 +90,7 @@ async function subscribeCommand(client, args) {
     accounts: {},
     slots: {},
     transactions: {},
+    transactionsStatus: {},
     entry: {},
     blocks: {},
     blocksMeta: {},
@@ -144,6 +145,17 @@ async function subscribeCommand(client, args) {
       accountInclude: args.transactionsAccountInclude,
       accountExclude: args.transactionsAccountExclude,
       accountRequired: args.transactionsAccountRequired,
+    };
+  }
+
+  if (args.transactionsStatus) {
+    request.transactionsStatus.client = {
+      vote: args.transactionsStatusVote,
+      failed: args.transactionsStatusFailed,
+      signature: args.transactionsStatusSignature,
+      accountInclude: args.transactionsStatusAccountInclude,
+      accountExclude: args.transactionsStatusAccountExclude,
+      accountRequired: args.transactionsStatusAccountRequired,
     };
   }
 
@@ -318,6 +330,38 @@ function parseCommandLineArgs() {
           description: "filter required account in transactions",
           type: "array",
         },
+        "transactions-status": {
+          default: false,
+          describe: "subscribe on transactionsStatus updates",
+          type: "boolean",
+        },
+        "transactions-status-vote": {
+          description: "filter vote transactions",
+          type: "boolean",
+        },
+        "transactions-status-failed": {
+          description: "filter failed transactions",
+          type: "boolean",
+        },
+        "transactions-status-signature": {
+          description: "filter by transaction signature",
+          type: "string",
+        },
+        "transactions-status-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
+        },
+        "transactions-status-account-exclude": {
+          default: [],
+          description: "filter excluded account in transactions",
+          type: "array",
+        },
+        "transactions-status-account-required": {
+          default: [],
+          description: "filter required account in transactions",
+          type: "array",
+        },
         entry: {
           default: false,
           description: "subscribe on entry updates",
@@ -356,8 +400,8 @@ function parseCommandLineArgs() {
         ping: {
           default: undefined,
           description: "send ping request in subscribe",
-          type: "number"
-        }
+          type: "number",
+        },
       });
     })
     .demandCommand(1)
