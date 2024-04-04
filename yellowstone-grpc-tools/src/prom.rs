@@ -6,6 +6,11 @@ use crate::google_pubsub::prom::{
 };
 #[cfg(feature = "kafka")]
 use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
+#[cfg(feature = "scylla")]
+use crate::scylladb::prom::{
+    SCYLLADB_BATCHITEM_DELIVERED, SCYLLADB_BATCH_DELIVERED, SCYLLADB_BATCH_QUEUE,
+    SCYLLADB_BATCH_REQUEST_LAG, SCYLLADB_BATCH_SIZE, SCYLLADB_PEAK_BATCH_LINGER_SECONDS,
+};
 use {
     crate::version::VERSION as VERSION_INFO,
     hyper::{
@@ -38,6 +43,7 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
                     .expect("collector can't be registered");
             };
         }
+
         register!(VERSION);
         #[cfg(feature = "google-pubsub")]
         {
@@ -54,6 +60,16 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
             register!(KAFKA_DEDUP_TOTAL);
             register!(KAFKA_RECV_TOTAL);
             register!(KAFKA_SENT_TOTAL);
+        }
+
+        #[cfg(feature = "scylla")]
+        {
+            register!(SCYLLADB_PEAK_BATCH_LINGER_SECONDS);
+            register!(SCYLLADB_BATCH_DELIVERED);
+            register!(SCYLLADB_BATCHITEM_DELIVERED);
+            register!(SCYLLADB_BATCH_SIZE);
+            register!(SCYLLADB_BATCH_QUEUE);
+            register!(SCYLLADB_BATCH_REQUEST_LAG);
         }
 
         VERSION
