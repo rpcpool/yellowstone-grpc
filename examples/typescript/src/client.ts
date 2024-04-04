@@ -332,15 +332,15 @@ function parseCommandLineArgs() {
         },
         "transactions-status": {
           default: false,
-          describe: "subscribe on transactions_status updates",
+          describe: "subscribe on transactionsStatus updates",
           type: "boolean",
         },
         "transactions-status-vote": {
-          description: "filter vote transactions_status",
+          description: "filter vote transactions",
           type: "boolean",
         },
         "transactions-status-failed": {
-          description: "filter failed transactions_status",
+          description: "filter failed transactions",
           type: "boolean",
         },
         "transactions-status-signature": {
@@ -349,17 +349,17 @@ function parseCommandLineArgs() {
         },
         "transactions-status-account-include": {
           default: [],
-          description: "filter included account in transactions_status",
+          description: "filter included account in transactions",
           type: "array",
         },
         "transactions-status-account-exclude": {
           default: [],
-          description: "filter excluded account in transactions_status",
+          description: "filter excluded account in transactions",
           type: "array",
         },
         "transactions-status-account-required": {
           default: [],
-          description: "filter required account in transactions_status",
+          description: "filter required account in transactions",
           type: "array",
         },
         entry: {

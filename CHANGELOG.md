@@ -38,7 +38,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-- client: add `GeyserGrpcBuilder` ([#307](https://github.com/rpcpool/yellowstone-grpc/pull/307))
+- client: add `GeyserGrpcBuilder` ([#309](https://github.com/rpcpool/yellowstone-grpc/pull/309))
 
 ## 2024-03-20
 
