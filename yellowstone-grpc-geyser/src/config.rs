@@ -20,6 +20,9 @@ pub struct Config {
     /// Action on block re-construction error
     #[serde(default)]
     pub block_fail_action: ConfigBlockFailAction,
+    /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
+    #[serde(default)]
+    pub debug_clients_http: bool,
 }
 
 impl Config {
@@ -138,6 +141,7 @@ pub struct ConfigGrpcFilters {
     pub accounts: ConfigGrpcFiltersAccounts,
     pub slots: ConfigGrpcFiltersSlots,
     pub transactions: ConfigGrpcFiltersTransactions,
+    pub transactions_status: ConfigGrpcFiltersTransactions,
     pub blocks: ConfigGrpcFiltersBlocks,
     pub blocks_meta: ConfigGrpcFiltersBlocksMeta,
     pub entry: ConfigGrpcFiltersEntry,

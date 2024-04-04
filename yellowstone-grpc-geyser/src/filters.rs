@@ -33,6 +33,7 @@ pub struct Filter {
     accounts: FilterAccounts,
     slots: FilterSlots,
     transactions: FilterTransactions,
+    transactions_status: FilterTransactions,
     entry: FilterEntry,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
@@ -46,7 +47,16 @@ impl Filter {
         Ok(Self {
             accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
-            transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
+            transactions: FilterTransactions::new(
+                &config.transactions,
+                &limit.transactions,
+                FilterTransactionsType::Transaction,
+            )?,
+            transactions_status: FilterTransactions::new(
+                &config.transactions_status,
+                &limit.transactions_status,
+                FilterTransactionsType::TransactionStatus,
+            )?,
             entry: FilterEntry::new(&config.entry, &limit.entry)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
@@ -91,38 +101,42 @@ impl Filter {
     }
 
     pub fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => self.transactions.get_filters(message),
+            Message::Transaction(message) => Box::new(
+                self.transactions
+                    .get_filters(message)
+                    .chain(self.transactions_status.get_filters(message)),
+            ),
             Message::Entry(message) => self.entry.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 
-    pub fn get_update(
-        &self,
-        message: &Message,
+    pub fn get_update<'a>(
+        &'a self,
+        message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<SubscribeUpdate> {
-        self.get_filters(message, commitment)
-            .into_iter()
-            .filter_map(|(filters, message)| {
-                if filters.is_empty() {
-                    None
-                } else {
-                    Some(SubscribeUpdate {
-                        filters,
-                        update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
-                    })
-                }
-            })
-            .collect()
+    ) -> Box<dyn Iterator<Item = SubscribeUpdate> + Send + 'a> {
+        Box::new(
+            self.get_filters(message, commitment)
+                .filter_map(|(filters, message)| {
+                    if filters.is_empty() {
+                        None
+                    } else {
+                        Some(SubscribeUpdate {
+                            filters,
+                            update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+                        })
+                    }
+                }),
+        )
     }
 
     pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
@@ -197,12 +211,18 @@ impl FilterAccounts {
         Ok(required)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageAccount,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
-        vec![(filter.get_filters(), MessageRef::Account(message))]
+        Box::new(std::iter::once((
+            filter.get_filters(),
+            MessageRef::Account(message),
+        )))
     }
 }
 
@@ -391,11 +411,11 @@ impl FilterSlots {
     }
 
     fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
             self.filters
                 .iter()
                 .filter_map(|(name, inner)| {
@@ -407,8 +427,14 @@ impl FilterSlots {
                 })
                 .collect(),
             MessageRef::Slot(message),
-        )]
+        )))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterTransactionsType {
+    Transaction,
+    TransactionStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -421,8 +447,9 @@ pub struct FilterTransactionsInner {
     account_required: Vec<Pubkey>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct FilterTransactions {
+    filter_type: FilterTransactionsType,
     filters: HashMap<String, FilterTransactionsInner>,
 }
 
@@ -430,10 +457,11 @@ impl FilterTransactions {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
         limit: &ConfigGrpcFiltersTransactions,
+        filter_type: FilterTransactionsType,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
-        let mut this = Self::default();
+        let mut filters = HashMap::new();
         for (name, filter) in configs {
             ConfigGrpcFilters::check_any(
                 filter.vote.is_none()
@@ -456,7 +484,7 @@ impl FilterTransactions {
                 limit.account_required_max,
             )?;
 
-            this.filters.insert(
+            filters.insert(
                 name.clone(),
                 FilterTransactionsInner {
                     vote: filter.vote,
@@ -485,13 +513,16 @@ impl FilterTransactions {
                 },
             );
         }
-        Ok(this)
+        Ok(Self {
+            filter_type,
+            filters,
+        })
     }
 
     pub fn get_filters<'a>(
-        &self,
+        &'a self,
         message: &'a MessageTransaction,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         let filters = self
             .filters
             .iter()
@@ -565,7 +596,11 @@ impl FilterTransactions {
                 Some(name.clone())
             })
             .collect();
-        vec![(filters, MessageRef::Transaction(message))]
+        let message = match self.filter_type {
+            FilterTransactionsType::Transaction => MessageRef::Transaction(message),
+            FilterTransactionsType::TransactionStatus => MessageRef::TransactionStatus(message),
+        };
+        Box::new(std::iter::once((filters, message)))
     }
 }
 
@@ -590,8 +625,14 @@ impl FilterEntry {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageEntry) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::Entry(message))]
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageEntry,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
+            self.filters.clone(),
+            MessageRef::Entry(message),
+        )))
     }
 }
 
@@ -654,68 +695,68 @@ impl FilterBlocks {
         Ok(this)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        self.filters
-            .iter()
-            .map(|(filter, inner)| {
-                #[allow(clippy::unnecessary_filter_map)]
-                let transactions =
-                    if matches!(inner.include_transactions, None | Some(true)) {
-                        message
-                            .transactions
-                            .iter()
-                            .filter_map(|tx| {
-                                if !inner.account_include.is_empty()
-                                    && tx.transaction.message().account_keys().iter().all(
-                                        |pubkey| {
-                                            inner.account_include.binary_search(pubkey).is_err()
-                                        },
-                                    )
-                                {
-                                    return None;
-                                }
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageBlock,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(self.filters.iter().map(move |(filter, inner)| {
+            #[allow(clippy::unnecessary_filter_map)]
+            let transactions = if matches!(inner.include_transactions, None | Some(true)) {
+                message
+                    .transactions
+                    .iter()
+                    .filter_map(|tx| {
+                        if !inner.account_include.is_empty()
+                            && tx
+                                .transaction
+                                .message()
+                                .account_keys()
+                                .iter()
+                                .all(|pubkey| inner.account_include.binary_search(pubkey).is_err())
+                        {
+                            return None;
+                        }
 
-                                Some(tx)
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
+                        Some(tx)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                #[allow(clippy::unnecessary_filter_map)]
-                let accounts = if inner.include_accounts == Some(true) {
-                    message
-                        .accounts
-                        .iter()
-                        .filter_map(|account| {
-                            if !inner.account_include.is_empty()
-                                && inner
-                                    .account_include
-                                    .binary_search(&account.pubkey)
-                                    .is_err()
-                            {
-                                return None;
-                            }
+            #[allow(clippy::unnecessary_filter_map)]
+            let accounts = if inner.include_accounts == Some(true) {
+                message
+                    .accounts
+                    .iter()
+                    .filter_map(|account| {
+                        if !inner.account_include.is_empty()
+                            && inner
+                                .account_include
+                                .binary_search(&account.pubkey)
+                                .is_err()
+                        {
+                            return None;
+                        }
 
-                            Some(account)
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
+                        Some(account)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                let entries = if inner.include_entries == Some(true) {
-                    message.entries.iter().collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
+            let entries = if inner.include_entries == Some(true) {
+                message.entries.iter().collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
 
-                (
-                    vec![filter.clone()],
-                    MessageRef::Block((message, transactions, accounts, entries).into()),
-                )
-            })
-            .collect()
+            (
+                vec![filter.clone()],
+                MessageRef::Block((message, transactions, accounts, entries).into()),
+            )
+        }))
     }
 }
 
@@ -740,8 +781,14 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlockMeta) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::BlockMeta(message))]
+    fn get_filters<'a>(
+        &'a self,
+        message: &'a MessageBlockMeta,
+    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+        Box::new(std::iter::once((
+            self.filters.clone(),
+            MessageRef::BlockMeta(message),
+        )))
     }
 }
 
@@ -788,7 +835,7 @@ mod tests {
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
-            grpc::{Message, MessageTransaction, MessageTransactionInfo},
+            grpc::{Message, MessageRef, MessageTransaction, MessageTransactionInfo},
         },
         solana_sdk::{
             hash::Hash,
@@ -855,6 +902,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -884,6 +932,7 @@ mod tests {
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -918,6 +967,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -951,6 +1001,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -990,6 +1041,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1003,9 +1055,12 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
@@ -1033,6 +1088,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1046,9 +1102,12 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
@@ -1076,6 +1135,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1125,6 +1185,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
@@ -1140,9 +1201,12 @@ mod tests {
             vec![account_key_x, account_key_y, account_key_z],
         );
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(!filters.is_empty());
-        }
+        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, vec!["serum"]);
+        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
     }
 
     #[test]
@@ -1176,6 +1240,7 @@ mod tests {
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
+            transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),

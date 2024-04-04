@@ -26,6 +26,7 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterAccounts> accounts = 1;
   map<string, SubscribeRequestFilterSlots> slots = 2;
   map<string, SubscribeRequestFilterTransactions> transactions = 3;
+  map<string, SubscribeRequestFilterTransactions> transactions_status = 10;
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
   map<string, SubscribeRequestFilterEntry> entry = 8;
@@ -96,6 +97,7 @@ message SubscribeUpdate {
     SubscribeUpdateAccount account = 2;
     SubscribeUpdateSlot slot = 3;
     SubscribeUpdateTransaction transaction = 4;
+    SubscribeUpdateTransactionStatus transaction_status = 10;
     SubscribeUpdateBlock block = 5;
     SubscribeUpdatePing ping = 6;
     SubscribeUpdatePong pong = 9;
@@ -138,6 +140,14 @@ message SubscribeUpdateTransactionInfo {
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   solana.storage.ConfirmedBlock.TransactionStatusMeta meta = 4;
   uint64 index = 5;
+}
+
+message SubscribeUpdateTransactionStatus {
+  uint64 slot = 1;
+  bytes signature = 2;
+  bool is_vote = 3;
+  uint64 index = 4;
+  solana.storage.ConfirmedBlock.TransactionError err = 5;
 }
 
 message SubscribeUpdateBlock {

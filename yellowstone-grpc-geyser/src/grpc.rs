@@ -2,9 +2,10 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
-        prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
     },
+    anyhow::Context,
     log::{error, info},
     solana_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
@@ -51,6 +52,7 @@ use {
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
             SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
         },
     },
 };
@@ -396,6 +398,7 @@ pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),
     Transaction(&'a MessageTransaction),
+    TransactionStatus(&'a MessageTransaction),
     Entry(&'a MessageEntry),
     Block(MessageBlockRef<'a>),
     BlockMeta(&'a MessageBlockMeta),
@@ -418,6 +421,21 @@ impl<'a> MessageRef<'a> {
                 transaction: Some(message.transaction.to_proto()),
                 slot: message.slot,
             }),
+            Self::TransactionStatus(message) => {
+                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
+                    slot: message.slot,
+                    signature: message.transaction.signature.as_ref().into(),
+                    is_vote: message.transaction.is_vote,
+                    index: message.transaction.index as u64,
+                    err: match &message.transaction.meta.status {
+                        Ok(()) => None,
+                        Err(err) => Some(SubscribeUpdateTransactionError {
+                            err: bincode::serialize(&err)
+                                .expect("transaction error to serialize to bytes"),
+                        }),
+                    },
+                })
+            }
             Self::Entry(message) => UpdateOneof::Entry(message.to_proto()),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
@@ -637,7 +655,7 @@ impl BlockMetaStorage {
 
 #[derive(Debug, Default)]
 struct SlotMessages {
-    messages: Vec<Option<Message>>, // Option is used for accounts with low write_version
+    messages: Vec<Option<Arc<Message>>>, // Option is used for accounts with low write_version
     block_meta: Option<MessageBlockMeta>,
     transactions: Vec<MessageTransactionInfo>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
@@ -649,7 +667,7 @@ struct SlotMessages {
 }
 
 impl SlotMessages {
-    pub fn try_seal(&mut self) -> Option<Message> {
+    pub fn try_seal(&mut self) -> Option<Arc<Message>> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
                 let executed_transaction_count = block_meta.executed_transaction_count as usize;
@@ -668,15 +686,15 @@ impl SlotMessages {
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
-                        if let Message::Account(account) = item {
+                        if let Message::Account(account) = item.as_ref() {
                             accounts.push(account.account.clone());
                         }
                     }
 
-                    let message = Message::Block(
+                    let message = Arc::new(Message::Block(
                         (block_meta.clone(), transactions, accounts, entries).into(),
-                    );
-                    self.messages.push(Some(message.clone()));
+                    ));
+                    self.messages.push(Some(Arc::clone(&message)));
 
                     self.sealed = true;
                     self.entries_count = entries_count;
@@ -695,7 +713,8 @@ pub struct GrpcService {
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Option<Message>>>>,
-    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
+    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+    debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
 }
 
 impl GrpcService {
@@ -703,21 +722,20 @@ impl GrpcService {
     pub async fn create(
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
+        debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
-    ) -> Result<
-        (
-            Option<crossbeam_channel::Sender<Option<Message>>>,
-            mpsc::UnboundedSender<Message>,
-            Arc<Notify>,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> anyhow::Result<(
+        Option<crossbeam_channel::Sender<Option<Message>>>,
+        mpsc::UnboundedSender<Arc<Message>>,
+        Arc<Notify>,
+    )> {
         // Bind service address
         let incoming = TcpIncoming::new(
             config.address,
             true,                          // tcp_nodelay
             Some(Duration::from_secs(20)), // tcp_keepalive
-        )?;
+        )
+        .map_err(|error| anyhow::anyhow!(error))?;
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -746,9 +764,11 @@ impl GrpcService {
             let (cert, key) = tokio::try_join!(
                 fs::read(&tls_config.cert_path),
                 fs::read(&tls_config.key_path)
-            )?;
+            )
+            .context("failed to load tls_config files")?;
             server_builder = server_builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))?;
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
+                .context("failed to apply tls_config")?;
         }
 
         // Create Server
@@ -759,6 +779,7 @@ impl GrpcService {
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
+            debug_clients_tx,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip)
@@ -766,12 +787,12 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::geyser_loop(
+        tokio::spawn(tokio::task::unconstrained(Self::geyser_loop(
             messages_rx,
             blocks_meta_tx,
             broadcast_tx,
             block_fail_action,
-        ));
+        )));
 
         // Run Server
         let shutdown = Arc::new(Notify::new());
@@ -793,9 +814,9 @@ impl GrpcService {
     }
 
     async fn geyser_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Message>,
+        mut messages_rx: mpsc::UnboundedReceiver<Arc<Message>>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
-        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
+        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
         block_fail_action: ConfigBlockFailAction,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
@@ -812,15 +833,20 @@ impl GrpcService {
                 Some(message) = messages_rx.recv() => {
                     MESSAGE_QUEUE_SIZE.dec();
 
+                    // Update metrics
+                    if let Message::Slot(slot_message) = message.as_ref() {
+                        prom::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                    }
+
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                        if matches!(message, Message::Slot(_) | Message::BlockMeta(_)) {
-                            let _ = blocks_meta_tx.send(message.clone());
+                        if matches!(message.as_ref(), Message::Slot(_) | Message::BlockMeta(_)) {
+                            let _ = blocks_meta_tx.send(message.as_ref().clone());
                         }
                     }
 
                     // Remove outdated block reconstruction info
-                    match &message {
+                    match message.as_ref() {
                         // On startup we can receive few Confirmed/Finalized slots without BlockMeta message
                         // With saved first Processed slot we can ignore errors caused by startup process
                         Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
@@ -881,11 +907,11 @@ impl GrpcService {
 
                     // Update block reconstruction info
                     let slot_messages = messages.entry(message.get_slot()).or_default();
-                    if !matches!(message, Message::Slot(_)) {
-                        slot_messages.messages.push(Some(message.clone()));
+                    if !matches!(message.as_ref(), Message::Slot(_)) {
+                        slot_messages.messages.push(Some(Arc::clone(&message)));
 
                         // If we already build Block message, new message will be a problem
-                        if slot_messages.sealed && !(matches!(message, Message::Entry(_)) && slot_messages.entries_count == 0) {
+                        if slot_messages.sealed && !(matches!(message.as_ref(), Message::Entry(_)) && slot_messages.entries_count == 0) {
                             prom::update_invalid_blocks(format!("unexpected message {}", message.kind()));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
@@ -898,7 +924,7 @@ impl GrpcService {
                         }
                     }
                     let mut sealed_block_msg = None;
-                    match &message {
+                    match message.as_ref() {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
                                 prom::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
@@ -946,7 +972,7 @@ impl GrpcService {
                     }
 
                     for message in messages_vec {
-                        if let Message::Slot(slot) = message {
+                        if let Message::Slot(slot) = message.as_ref() {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
                                 CommitmentLevel::Processed => {
                                     (Vec::with_capacity(1), Vec::with_capacity(1))
@@ -980,7 +1006,7 @@ impl GrpcService {
                             };
 
                             // processed
-                            processed_messages.push(message.clone());
+                            processed_messages.push(Arc::clone(&message));
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
@@ -989,7 +1015,7 @@ impl GrpcService {
                                 .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                             // confirmed
-                            confirmed_messages.push(message.clone());
+                            confirmed_messages.push(Arc::clone(&message));
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
 
@@ -1000,7 +1026,7 @@ impl GrpcService {
                         } else {
                             let mut confirmed_messages = vec![];
                             let mut finalized_messages = vec![];
-                            if matches!(message, Message::Block(_)) {
+                            if matches!(message.as_ref(), Message::Block(_)) {
                                 if let Some(slot_messages) = messages.get(&message.get_slot()) {
                                     if let Some(confirmed_at) = slot_messages.confirmed_at {
                                         confirmed_messages.extend(
@@ -1052,16 +1078,22 @@ impl GrpcService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
         mut filter: Filter,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
-        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
+        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
         CONNECTIONS_TOTAL.inc();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
+            id,
+            filter: Box::new(filter.clone()),
+        });
         info!("client #{id}: new");
 
         let mut is_alive = true;
@@ -1138,6 +1170,7 @@ impl GrpcService {
                                 }
 
                                 filter = filter_new;
+                                DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
                             }
                             Some(None) => {
@@ -1183,13 +1216,22 @@ impl GrpcService {
                                 }
                             }
                         }
+
+                        if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
+                            for message in messages.iter() {
+                                if let Message::Slot(slot_message) = message.as_ref() {
+                                    DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
+        info!("client #{id}: removed");
         drop_client();
     }
 }
@@ -1208,6 +1250,7 @@ impl Geyser for GrpcService {
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: HashMap::new(),
+                transactions_status: HashMap::new(),
                 blocks: HashMap::new(),
                 blocks_meta: HashMap::new(),
                 entry: HashMap::new(),
@@ -1308,6 +1351,7 @@ impl Geyser for GrpcService {
             client_rx,
             snapshot_rx,
             self.broadcast_tx.subscribe(),
+            self.debug_clients_tx.clone(),
             move || {
                 notify_exit1.notify_one();
                 notify_exit2.notify_one();
