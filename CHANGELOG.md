@@ -18,6 +18,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2024-04-04
 
+- yellowstone-grpc-geyser-1.14.1+solana.1.18.9
+
+### Features
+
+- geyser: allow to skip fields in config for `grpc.filters` ([#319](https://github.com/rpcpool/yellowstone-grpc/pull/319))
+
+## 2024-04-04
+
 - yellowstone-grpc-client-1.15.0+solana.1.18.9
 - yellowstone-grpc-geyser-1.14.0+solana.1.18.9
 - yellowstone-grpc-proto-1.14.0+solana.1.18.9
