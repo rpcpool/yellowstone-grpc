@@ -88,8 +88,8 @@ impl Drop for DebugClientStatuses {
 
 impl DebugClientStatuses {
     fn new(clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>) -> Arc<Self> {
-        let (requests_tx, rx) = mpsc::unbounded_channel();
-        let jh = tokio::spawn(Self::run(clients_rx, rx));
+        let (requests_tx, requests_rx) = mpsc::unbounded_channel();
+        let jh = tokio::spawn(Self::run(clients_rx, requests_rx));
         Arc::new(Self { requests_tx, jh })
     }
 
@@ -129,12 +129,15 @@ impl DebugClientStatuses {
                     }).collect();
                     statuses.sort();
 
-                    let status = statuses.into_iter().fold(String::new(), |mut acc: String, (_id, status)| {
+                    let mut status = statuses.into_iter().fold(String::new(), |mut acc: String, (_id, status)| {
                         if !acc.is_empty() {
                             acc += "\n";
                         }
                         acc + &status
                     });
+                    if !status.is_empty() {
+                        status += "\n";
+                    }
 
                     let _ = tx.send(status);
                 },
@@ -148,20 +151,20 @@ impl DebugClientStatuses {
             .send(tx)
             .map_err(|_error| anyhow::anyhow!("failed to send request"))?;
         rx.await
-            .map_err(|_error| anyhow::anyhow!("failed to wait request"))
+            .map_err(|_error| anyhow::anyhow!("failed to wait response"))
     }
 }
 
 #[derive(Debug)]
 pub struct PrometheusService {
-    debug_client_statuses: Option<Arc<DebugClientStatuses>>,
+    debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
     shutdown_signal: oneshot::Sender<()>,
 }
 
 impl PrometheusService {
     pub fn new(
         config: Option<ConfigPrometheus>,
-        clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
+        debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
     ) -> hyper::Result<Self> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
@@ -193,25 +196,25 @@ impl PrometheusService {
         });
 
         let (shutdown_signal, shutdown) = oneshot::channel();
-        let mut debug_client_statuses = None;
+        let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
-            if let Some(clients_rx) = clients_rx {
-                debug_client_statuses = Some(DebugClientStatuses::new(clients_rx));
+            if let Some(debug_clients_rx) = debug_clients_rx {
+                debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
             }
-            let debug_client_statuses2 = debug_client_statuses.clone();
+            let debug_clients_statuses2 = debug_clients_statuses.clone();
             let make_service = make_service_fn(move |_: &AddrStream| {
-                let debug_client_statuses = debug_client_statuses2.clone();
+                let debug_clients_statuses = debug_clients_statuses2.clone();
                 async move {
-                    let debug_client_statuses = debug_client_statuses.clone();
+                    let debug_clients_statuses = debug_clients_statuses.clone();
                     Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
-                        let debug_client_statuses = debug_client_statuses.clone();
+                        let debug_clients_statuses = debug_clients_statuses.clone();
                         async move {
                             let response = match req.uri().path() {
                                 "/metrics" => metrics_handler(),
                                 "/debug_clients" => {
-                                    if let Some(debug_client_statuses) = &debug_client_statuses {
+                                    if let Some(debug_clients_statuses) = &debug_clients_statuses {
                                         let (status, body) =
-                                            match debug_client_statuses.get_statuses().await {
+                                            match debug_clients_statuses.get_statuses().await {
                                                 Ok(body) => (StatusCode::OK, body),
                                                 Err(error) => (
                                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -240,13 +243,13 @@ impl PrometheusService {
         }
 
         Ok(PrometheusService {
-            debug_client_statuses,
+            debug_clients_statuses,
             shutdown_signal,
         })
     }
 
     pub fn shutdown(self) {
-        drop(self.debug_client_statuses);
+        drop(self.debug_clients_statuses);
         let _ = self.shutdown_signal.send(());
     }
 }
