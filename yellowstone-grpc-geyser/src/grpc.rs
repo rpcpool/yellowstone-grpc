@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc},
         filters::{Filter, FilterAccountsDataSlice},
-        prom::{self, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
@@ -714,6 +714,7 @@ pub struct GrpcService {
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Option<Message>>>>,
     broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+    debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
 }
 
 impl GrpcService {
@@ -721,6 +722,7 @@ impl GrpcService {
     pub async fn create(
         config: ConfigGrpc,
         block_fail_action: ConfigBlockFailAction,
+        debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Option<Message>>>,
@@ -777,6 +779,7 @@ impl GrpcService {
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
+            debug_clients_tx,
         })
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip)
@@ -1075,6 +1078,7 @@ impl GrpcService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
         mut filter: Filter,
@@ -1082,9 +1086,14 @@ impl GrpcService {
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
         CONNECTIONS_TOTAL.inc();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
+            id,
+            filter: Box::new(filter.clone()),
+        });
         info!("client #{id}: new");
 
         let mut is_alive = true;
@@ -1161,6 +1170,7 @@ impl GrpcService {
                                 }
 
                                 filter = filter_new;
+                                DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
                             }
                             Some(None) => {
@@ -1206,13 +1216,22 @@ impl GrpcService {
                                 }
                             }
                         }
+
+                        if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
+                            for message in messages.iter() {
+                                if let Message::Slot(slot_message) = message.as_ref() {
+                                    DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        info!("client #{id}: removed");
         CONNECTIONS_TOTAL.dec();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
+        info!("client #{id}: removed");
         drop_client();
     }
 }
@@ -1332,6 +1351,7 @@ impl Geyser for GrpcService {
             client_rx,
             snapshot_rx,
             self.broadcast_tx.subscribe(),
+            self.debug_clients_tx.clone(),
             move || {
                 notify_exit1.notify_one();
                 notify_exit2.notify_one();

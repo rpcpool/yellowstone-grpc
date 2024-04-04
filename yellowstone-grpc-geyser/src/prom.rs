@@ -1,5 +1,5 @@
 use {
-    crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
+    crate::{config::ConfigPrometheus, filters::Filter, version::VERSION as VERSION_INFO},
     futures::future::FutureExt,
     hyper::{
         server::conn::AddrStream,
@@ -9,8 +9,15 @@ use {
     log::error,
     prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
     solana_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
-    std::sync::Once,
-    tokio::sync::oneshot,
+    solana_sdk::clock::Slot,
+    std::{
+        collections::{hash_map::Entry as HashMapEntry, HashMap},
+        sync::{Arc, Once},
+    },
+    tokio::{
+        sync::{mpsc, oneshot},
+        task::JoinHandle,
+    },
     yellowstone_grpc_proto::prelude::CommitmentLevel,
 };
 
@@ -47,12 +54,118 @@ lazy_static::lazy_static! {
 }
 
 #[derive(Debug)]
+pub enum DebugClientMessage {
+    UpdateFilter { id: usize, filter: Box<Filter> },
+    UpdateSlot { id: usize, slot: Slot },
+    Removed { id: usize },
+}
+
+impl DebugClientMessage {
+    pub fn maybe_send(tx: &Option<mpsc::UnboundedSender<Self>>, get_msg: impl FnOnce() -> Self) {
+        if let Some(tx) = tx {
+            let _ = tx.send(get_msg());
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DebugClientStatus {
+    filter: Box<Filter>,
+    processed_slot: Slot,
+}
+
+#[derive(Debug)]
+struct DebugClientStatuses {
+    requests_tx: mpsc::UnboundedSender<oneshot::Sender<String>>,
+    jh: JoinHandle<()>,
+}
+
+impl Drop for DebugClientStatuses {
+    fn drop(&mut self) {
+        self.jh.abort();
+    }
+}
+
+impl DebugClientStatuses {
+    fn new(clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>) -> Arc<Self> {
+        let (requests_tx, requests_rx) = mpsc::unbounded_channel();
+        let jh = tokio::spawn(Self::run(clients_rx, requests_rx));
+        Arc::new(Self { requests_tx, jh })
+    }
+
+    async fn run(
+        mut clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>,
+        mut requests_rx: mpsc::UnboundedReceiver<oneshot::Sender<String>>,
+    ) {
+        let mut clients = HashMap::<usize, DebugClientStatus>::new();
+        loop {
+            tokio::select! {
+                Some(message) = clients_rx.recv() => match message {
+                    DebugClientMessage::UpdateFilter { id, filter } => {
+                        match clients.entry(id) {
+                            HashMapEntry::Occupied(mut entry) => {
+                                entry.get_mut().filter = filter;
+                            }
+                            HashMapEntry::Vacant(entry) => {
+                                entry.insert(DebugClientStatus {
+                                    filter,
+                                    processed_slot: 0,
+                                });
+                            }
+                        }
+                    }
+                    DebugClientMessage::UpdateSlot { id, slot } => {
+                        if let Some(status) = clients.get_mut(&id) {
+                            status.processed_slot = slot;
+                        }
+                    }
+                    DebugClientMessage::Removed { id } => {
+                        clients.remove(&id);
+                    }
+                },
+                Some(tx) = requests_rx.recv() => {
+                    let mut statuses: Vec<(usize, String)> = clients.iter().map(|(id, status)| {
+                        (*id, format!("client#{id:06}, {}, {:?}", status.processed_slot, status.filter))
+                    }).collect();
+                    statuses.sort();
+
+                    let mut status = statuses.into_iter().fold(String::new(), |mut acc: String, (_id, status)| {
+                        if !acc.is_empty() {
+                            acc += "\n";
+                        }
+                        acc + &status
+                    });
+                    if !status.is_empty() {
+                        status += "\n";
+                    }
+
+                    let _ = tx.send(status);
+                },
+            }
+        }
+    }
+
+    async fn get_statuses(&self) -> anyhow::Result<String> {
+        let (tx, rx) = oneshot::channel();
+        self.requests_tx
+            .send(tx)
+            .map_err(|_error| anyhow::anyhow!("failed to send request"))?;
+        rx.await
+            .map_err(|_error| anyhow::anyhow!("failed to wait response"))
+    }
+}
+
+#[derive(Debug)]
 pub struct PrometheusService {
+    debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
     shutdown_signal: oneshot::Sender<()>,
 }
 
 impl PrometheusService {
-    pub fn new(config: Option<ConfigPrometheus>) -> hyper::Result<Self> {
+    pub fn new(
+        config: Option<ConfigPrometheus>,
+        debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
+    ) -> hyper::Result<Self> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             macro_rules! register {
@@ -83,15 +196,42 @@ impl PrometheusService {
         });
 
         let (shutdown_signal, shutdown) = oneshot::channel();
+        let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
-            let make_service = make_service_fn(move |_: &AddrStream| async move {
-                Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| async move {
-                    let response = match req.uri().path() {
-                        "/metrics" => metrics_handler(),
-                        _ => not_found_handler(),
-                    };
-                    Ok::<_, hyper::Error>(response)
-                }))
+            if let Some(debug_clients_rx) = debug_clients_rx {
+                debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
+            }
+            let debug_clients_statuses2 = debug_clients_statuses.clone();
+            let make_service = make_service_fn(move |_: &AddrStream| {
+                let debug_clients_statuses = debug_clients_statuses2.clone();
+                async move {
+                    let debug_clients_statuses = debug_clients_statuses.clone();
+                    Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+                        let debug_clients_statuses = debug_clients_statuses.clone();
+                        async move {
+                            let response = match req.uri().path() {
+                                "/metrics" => metrics_handler(),
+                                "/debug_clients" => {
+                                    if let Some(debug_clients_statuses) = &debug_clients_statuses {
+                                        let (status, body) =
+                                            match debug_clients_statuses.get_statuses().await {
+                                                Ok(body) => (StatusCode::OK, body),
+                                                Err(error) => (
+                                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                                    error.to_string(),
+                                                ),
+                                            };
+                                        build_http_response(status, Body::from(body))
+                                    } else {
+                                        not_found_handler()
+                                    }
+                                }
+                                _ => not_found_handler(),
+                            };
+                            Ok::<_, hyper::Error>(response)
+                        }
+                    }))
+                }
             });
             let server = Server::try_bind(&address)?.serve(make_service);
             let shutdown = shutdown.map(|_| Ok(()));
@@ -102,12 +242,20 @@ impl PrometheusService {
             });
         }
 
-        Ok(PrometheusService { shutdown_signal })
+        Ok(PrometheusService {
+            debug_clients_statuses,
+            shutdown_signal,
+        })
     }
 
     pub fn shutdown(self) {
+        drop(self.debug_clients_statuses);
         let _ = self.shutdown_signal.send(());
     }
+}
+
+fn build_http_response(status: StatusCode, body: Body) -> Response<Body> {
+    Response::builder().status(status).body(body).unwrap()
 }
 
 fn metrics_handler() -> Response<Body> {
@@ -117,14 +265,11 @@ fn metrics_handler() -> Response<Body> {
             error!("could not encode custom metrics: {}", error);
             String::new()
         });
-    Response::builder().body(Body::from(metrics)).unwrap()
+    build_http_response(StatusCode::OK, Body::from(metrics))
 }
 
 fn not_found_handler() -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Body::empty())
-        .unwrap()
+    build_http_response(StatusCode::NOT_FOUND, Body::empty())
 }
 
 pub fn update_slot_status(status: SlotStatus, slot: u64) {
