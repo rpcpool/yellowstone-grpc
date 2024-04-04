@@ -27,14 +27,14 @@ use {
 pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Option<crossbeam_channel::Sender<Option<Message>>>,
-    grpc_channel: mpsc::UnboundedSender<Message>,
+    grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
 }
 
 impl PluginInner {
     fn send_message(&self, message: Message) {
-        if self.grpc_channel.send(message).is_ok() {
+        if self.grpc_channel.send(Arc::new(message)).is_ok() {
             MESSAGE_QUEUE_SIZE.inc();
         }
     }
