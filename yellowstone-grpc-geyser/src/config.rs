@@ -136,7 +136,7 @@ pub struct ConfigGrpcServerTls {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFilters {
     pub accounts: ConfigGrpcFiltersAccounts,
     pub slots: ConfigGrpcFiltersSlots,
@@ -185,7 +185,7 @@ impl ConfigGrpcFilters {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersAccounts {
     pub max: usize,
     pub any: bool,
@@ -211,7 +211,7 @@ impl Default for ConfigGrpcFiltersAccounts {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersSlots {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
@@ -224,7 +224,7 @@ impl Default for ConfigGrpcFiltersSlots {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersTransactions {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
@@ -253,13 +253,12 @@ impl Default for ConfigGrpcFiltersTransactions {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersBlocks {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_include_max: usize,
-    #[serde(alias = "any")]
     pub account_include_any: bool,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
     pub account_include_reject: HashSet<Pubkey>,
@@ -283,7 +282,7 @@ impl Default for ConfigGrpcFiltersBlocks {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersBlocksMeta {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
@@ -296,7 +295,7 @@ impl Default for ConfigGrpcFiltersBlocksMeta {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConfigGrpcFiltersEntry {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
