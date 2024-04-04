@@ -784,12 +784,12 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::geyser_loop(
+        tokio::spawn(tokio::task::unconstrained(Self::geyser_loop(
             messages_rx,
             blocks_meta_tx,
             broadcast_tx,
             block_fail_action,
-        ));
+        )));
 
         // Run Server
         let shutdown = Arc::new(Notify::new());
