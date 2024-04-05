@@ -839,8 +839,7 @@ mod tests {
         },
         solana_sdk::{
             hash::Hash,
-            message::Message as SolMessage,
-            message::{v0::LoadedAddresses, MessageHeader},
+            message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
             pubkey::Pubkey,
             signer::{keypair::Keypair, Signer},
             transaction::{SanitizedTransaction, Transaction},

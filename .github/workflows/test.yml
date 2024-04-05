@@ -38,6 +38,13 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+          components: rustfmt
+
+      - uses: actions-rs/toolchain@v1
+        with:
           toolchain: ${{ env.RUST_STABLE }}
           override: true
           profile: minimal
@@ -65,7 +72,7 @@ jobs:
           cargo tree --frozen
 
       - name: cargo fmt
-        run: cargo fmt --all -- --check
+        run: cargo +nightly fmt --all -- --check
 
       - name: cargo deny check advisories
         uses: EmbarkStudios/cargo-deny-action@v1

@@ -1,3 +1,4 @@
+pub use tonic::service::Interceptor;
 use {
     bytes::Bytes,
     futures::{
@@ -22,8 +23,6 @@ use {
         SubscribeRequest, SubscribeUpdate,
     },
 };
-
-pub use tonic::service::Interceptor;
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
