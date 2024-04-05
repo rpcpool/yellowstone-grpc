@@ -13,12 +13,10 @@ pub mod solana {
 }
 
 pub mod prelude {
-    pub use super::geyser::*;
-    pub use super::solana::storage::confirmed_block::*;
+    pub use super::{geyser::*, solana::storage::confirmed_block::*};
 }
 
-pub use prost;
-pub use tonic;
+pub use {prost, tonic};
 
 pub mod convert_to {
     use {
