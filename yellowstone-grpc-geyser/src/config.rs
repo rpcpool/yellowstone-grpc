@@ -64,6 +64,7 @@ pub struct ConfigGrpc {
     pub address: SocketAddr,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
+
     /// Capacity of the channel used for accounts from snapshot,
     /// on reaching the limit Sender block validator startup.
     #[serde(
@@ -77,12 +78,28 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_usize_str"
     )]
     pub snapshot_client_channel_capacity: usize,
-    /// Capacity of the channel per connection
+
+    /// Capacity of the channel between plugin and filters.
+    /// Messages batched by commitment level, or in case of processed commitment
+    /// batch size limited by number of messages / waiting time.
     #[serde(
-        default = "ConfigGrpc::channel_capacity_default",
+        default = "ConfigGrpc::prefilters_channel_capacity_items_default",
         deserialize_with = "deserialize_usize_str"
     )]
-    pub channel_capacity: usize,
+    pub prefilters_channel_capacity_items: usize,
+    /// Max number of items in shared messages queue
+    #[serde(
+        default = "ConfigGrpc::client_channel_capacity_items_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub client_channel_capacity_items: usize,
+    /// Max size in bytes of all messages in shared messages queue
+    #[serde(
+        default = "ConfigGrpc::client_channel_capacity_bytes_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub client_channel_capacity_bytes: usize,
+
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -92,6 +109,7 @@ pub struct ConfigGrpc {
     /// Enable/disable unary methods
     #[serde(default)]
     pub unary_disabled: bool,
+
     /// Limits for possible filters
     #[serde(default)]
     pub filters: ConfigGrpcFilters,
@@ -106,8 +124,16 @@ impl ConfigGrpc {
         50_000_000
     }
 
-    const fn channel_capacity_default() -> usize {
-        250_000
+    const fn prefilters_channel_capacity_items_default() -> usize {
+        1_000_000 // 1M
+    }
+
+    const fn client_channel_capacity_items_default() -> usize {
+        100_000_000 // 100M
+    }
+
+    const fn client_channel_capacity_bytes_default() -> usize {
+        32 * 1024 * 1024 * 1024 // 32GiB
     }
 
     const fn unary_concurrency_limit_default() -> usize {

@@ -1,7 +1,9 @@
 use {
     crate::{
         config::Config,
-        grpc::{GrpcService, Message},
+        filters::Filters,
+        geyser::{geyser_loop, GeyserMessage},
+        grpc::{BlocksMetaStorage, GrpcService},
         prom::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
     },
     solana_geyser_plugin_interface::geyser_plugin_interface::{
@@ -19,22 +21,22 @@ use {
     },
     tokio::{
         runtime::{Builder, Runtime},
-        sync::{mpsc, Notify},
+        sync::{broadcast, mpsc, Notify},
     },
 };
 
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    snapshot_channel: Option<crossbeam_channel::Sender<Option<Message>>>,
-    grpc_channel: mpsc::UnboundedSender<Message>,
+    snapshot_channel: Option<crossbeam_channel::Sender<Option<GeyserMessage>>>,
+    geyser_messages_tx: mpsc::UnboundedSender<GeyserMessage>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
 }
 
 impl PluginInner {
-    fn send_message(&self, message: Message) {
-        if self.grpc_channel.send(message).is_ok() {
+    fn send_message(&self, message: GeyserMessage) {
+        if self.geyser_messages_tx.send(message).is_ok() {
             MESSAGE_QUEUE_SIZE.inc();
         }
     }
@@ -77,26 +79,47 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
-            runtime.block_on(async move {
-                let (snapshot_channel, grpc_channel, grpc_shutdown) =
-                    GrpcService::create(config.grpc, config.block_fail_action)
-                        .await
-                        .map_err(GeyserPluginError::Custom)?;
-                let prometheus = PrometheusService::new(config.prometheus)
-                    .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-                Ok::<_, GeyserPluginError>((
-                    snapshot_channel,
-                    grpc_channel,
-                    grpc_shutdown,
-                    prometheus,
-                ))
-            })?;
+        // Blocks meta storage
+        let (blocks_meta, blocks_meta_tx) = if config.grpc.unary_disabled {
+            (None, None)
+        } else {
+            let (blocks_meta, blocks_meta_tx) =
+                BlocksMetaStorage::new(config.grpc.unary_concurrency_limit);
+            (Some(blocks_meta), Some(blocks_meta_tx))
+        };
+
+        // Messages to filters combined by commitment
+        let (prefilters_broadcast_tx, _) =
+            broadcast::channel(config.grpc.prefilters_channel_capacity_items);
+        let filters = Arc::new(Filters::new(
+            prefilters_broadcast_tx.clone(),
+            config.grpc.client_channel_capacity_items,
+            config.grpc.client_channel_capacity_bytes,
+        ));
+
+        // Run geyser message loop
+        let (geyser_messages_tx, geyser_messages_rx) = mpsc::unbounded_channel();
+        tokio::spawn(geyser_loop(
+            geyser_messages_rx,
+            blocks_meta_tx,
+            prefilters_broadcast_tx,
+            config.block_fail_action,
+        ));
+
+        let (snapshot_channel, grpc_shutdown, prometheus) = runtime.block_on(async move {
+            let (snapshot_channel, grpc_shutdown) =
+                GrpcService::create(filters, blocks_meta, config.grpc)
+                    .await
+                    .map_err(GeyserPluginError::Custom)?;
+            let prometheus = PrometheusService::new(config.prometheus)
+                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_shutdown, prometheus))
+        })?;
 
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel,
-            grpc_channel,
+            geyser_messages_tx,
             grpc_shutdown,
             prometheus,
         });
@@ -107,7 +130,7 @@ impl GeyserPlugin for Plugin {
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
             inner.grpc_shutdown.notify_one();
-            drop(inner.grpc_channel);
+            drop(inner.geyser_messages_tx);
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
         }
@@ -130,7 +153,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Account((account, slot, is_startup).into());
+            let message = GeyserMessage::Account((account, slot, is_startup).into());
             if is_startup {
                 if let Some(channel) = &inner.snapshot_channel {
                     match channel.send(Some(message)) {
@@ -165,7 +188,7 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot((slot, parent, status).into());
+            let message = GeyserMessage::Slot((slot, parent, status).into());
             inner.send_message(message);
             prom::update_slot_status(status, slot);
             Ok(())
@@ -185,7 +208,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_2(info) => info,
             };
 
-            let message = Message::Transaction((transaction, slot).into());
+            let message = GeyserMessage::Transaction((transaction, slot).into());
             inner.send_message(message);
 
             Ok(())
@@ -199,7 +222,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaEntryInfoVersions::V0_0_1(entry) => entry,
             };
 
-            let message = Message::Entry(entry.into());
+            let message = GeyserMessage::Entry(entry.into());
             inner.send_message(message);
 
             Ok(())
@@ -218,7 +241,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::BlockMeta(blockinfo.into());
+            let message = GeyserMessage::BlockMeta(blockinfo.into());
             inner.send_message(message);
 
             Ok(())

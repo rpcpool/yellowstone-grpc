@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod filters;
+pub mod geyser;
 pub mod grpc;
 pub mod plugin;
 pub mod prom;

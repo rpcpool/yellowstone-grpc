@@ -5,30 +5,233 @@ use {
             ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
             ConfigGrpcFiltersTransactions,
         },
-        grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
-            MessageSlot, MessageTransaction,
+        geyser::{
+            GeyserMessage, GeyserMessageAccount, GeyserMessageBlock, GeyserMessageBlockMeta,
+            GeyserMessageEntry, GeyserMessageRef, GeyserMessageSlot, GeyserMessageTransaction,
         },
+        grpc::{GrpcClientId, GrpcMessage, GrpcMessageId, GrpcMessageWithId, GrpcMessages},
         util::{hash_hashmap, hash_hashmap_hashset, hash_hashset},
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
-        collections::{HashMap, HashSet},
+        collections::{hash_map::Entry as HashMapEntry, HashMap, HashSet},
         hash::{Hash, Hasher},
         str::FromStr,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc, Weak,
+        },
     },
-    yellowstone_grpc_proto::prelude::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
+    tokio::{
+        sync::{broadcast, Mutex},
+        task::JoinHandle,
+    },
+    tonic::{Result as TonicResult, Status},
+    yellowstone_grpc_proto::{
+        prelude::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+            SubscribeUpdatePong,
+        },
+        prost::Message as ProstMessage,
     },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilterIdRaw(u64);
+
+#[derive(Debug, Clone)]
+pub struct FilterId {
+    raw: FilterIdRaw,
+}
+
+impl Drop for FilterId {
+    fn drop(&mut self) {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct FilterTaskInfo {
+    id: FilterIdRaw,
+    jh: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+pub struct Filters {
+    filter_id: AtomicU64,
+    prefilters_broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<GeyserMessage>>)>,
+    filters: Arc<Mutex<HashMap<Filter, FilterTaskInfo>>>,
+    grpc_messages: Arc<Mutex<GrpcMessages>>,
+    grpc_messages_tx: broadcast::Sender<GrpcMessageWithId>,
+}
+
+impl Filters {
+    pub fn new(
+        prefilters_broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<GeyserMessage>>)>,
+        client_channel_capacity_items: usize,
+        client_channel_capacity_bytes: usize,
+    ) -> Self {
+        let (grpc_messages_tx, _) = broadcast::channel(client_channel_capacity_items);
+        Self {
+            filter_id: AtomicU64::new(0),
+            prefilters_broadcast_tx,
+            filters: Arc::new(Mutex::new(HashMap::new())),
+            grpc_messages: Arc::new(Mutex::new(GrpcMessages::new(
+                client_channel_capacity_items,
+                client_channel_capacity_bytes,
+            ))),
+            grpc_messages_tx,
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<GrpcMessageWithId> {
+        self.grpc_messages_tx.subscribe()
+    }
+
+    pub async fn add_filter(&self, client_id: GrpcClientId, filter: Filter) -> FilterId {
+        let raw_id = match self.filters.lock().await.entry(filter) {
+            HashMapEntry::Occupied(entry) => entry.get().id,
+            HashMapEntry::Vacant(entry) => {
+                let filter_id = FilterIdRaw(self.filter_id.fetch_add(1, Ordering::Relaxed));
+                let jh = tokio::spawn(Self::spawn_filter(
+                    filter_id,
+                    entry.key().clone(),
+                    Arc::clone(&self.filters),
+                    self.prefilters_broadcast_tx.subscribe(),
+                    Arc::clone(&self.grpc_messages),
+                    self.grpc_messages_tx.clone(),
+                ));
+
+                entry.insert(FilterTaskInfo { id: filter_id, jh });
+                filter_id
+            }
+        };
+
+        Self::send_message_raw(
+            &self.grpc_messages_tx,
+            GrpcMessageId::Client(client_id),
+            GrpcMessage::ClientNewFilter(raw_id),
+        );
+
+        FilterId { raw: raw_id }
+    }
+
+    async fn send_updates(
+        grpc_messages: &Mutex<GrpcMessages>,
+        grpc_messages_tx: &broadcast::Sender<GrpcMessageWithId>,
+        filter_id: FilterIdRaw,
+        messages: Vec<Arc<SubscribeUpdate>>,
+    ) {
+        let id = GrpcMessageId::Filter(filter_id);
+        let sizes = messages
+            .iter()
+            .map(|message| message.encoded_len())
+            .collect::<Vec<_>>();
+
+        let mut grpc_messages = grpc_messages.lock().await;
+        for (message, size) in messages.into_iter().zip(sizes.into_iter()) {
+            let grpc_message = GrpcMessage::Tonic(Ok(Arc::downgrade(&message)));
+            grpc_messages.push((message, size));
+            let _ = grpc_messages_tx.send(GrpcMessageWithId::new(id, grpc_message));
+        }
+    }
+
+    fn send_message_raw(
+        grpc_messages_tx: &broadcast::Sender<GrpcMessageWithId>,
+        id: GrpcMessageId,
+        message: GrpcMessage,
+    ) {
+        let _ = grpc_messages_tx.send(GrpcMessageWithId::new(id, message));
+    }
+
+    async fn spawn_filter(
+        filter_id: FilterIdRaw,
+        filter: Filter,
+        filters: Arc<Mutex<HashMap<Filter, FilterTaskInfo>>>,
+        mut prefilters_broadcast_rx: broadcast::Receiver<(
+            CommitmentLevel,
+            Arc<Vec<GeyserMessage>>,
+        )>,
+        grpc_messages: Arc<Mutex<GrpcMessages>>,
+        grpc_messages_tx: broadcast::Sender<GrpcMessageWithId>,
+    ) {
+        loop {
+            let (commitment, messages) = match prefilters_broadcast_rx.recv().await {
+                Ok(msg) => msg,
+                Err(error) => {
+                    let msg = match error {
+                        broadcast::error::RecvError::Closed => "filter: geyser channel closed",
+                        broadcast::error::RecvError::Lagged(_) => "filter: geyser channel lagged",
+                    };
+                    Self::send_message_raw(
+                        &grpc_messages_tx,
+                        GrpcMessageId::Filter(filter_id),
+                        GrpcMessage::Tonic(Err(Status::internal(msg))),
+                    );
+                    break;
+                }
+            };
+
+            if commitment == filter.get_commitment_level() {
+                let messages = messages
+                    .iter()
+                    .flat_map(|message| filter.get_update(message, Some(commitment)))
+                    .map(Arc::new)
+                    .collect::<Vec<_>>();
+
+                Self::send_updates(&grpc_messages, &grpc_messages_tx, filter_id, messages).await;
+            }
+        }
+
+        filters.lock().await.remove(&filter);
+    }
+}
+
+type FilterUpdate<'a> = (Vec<String>, GeyserMessageRef<'a>);
+
+pub enum FilterUpdates<'a> {
+    Once(Option<FilterUpdate<'a>>),
+    Vec(Vec<FilterUpdate<'a>>),
+}
+
+impl<'a> From<FilterUpdate<'a>> for FilterUpdates<'a> {
+    fn from(value: FilterUpdate<'a>) -> Self {
+        Self::Once(Some(value))
+    }
+}
+
+impl<'a> From<Vec<FilterUpdate<'a>>> for FilterUpdates<'a> {
+    fn from(value: Vec<FilterUpdate<'a>>) -> Self {
+        Self::Vec(value)
+    }
+}
+
+impl<'a> Iterator for FilterUpdates<'a> {
+    type Item = FilterUpdate<'a>;
+
+    fn next(&mut self) -> Option<FilterUpdate<'a>> {
+        match self {
+            Self::Once(value) => value.take(),
+            Self::Vec(value) => value.pop(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Once(Some(_)) => (1, Some(1)),
+            Self::Once(None) => (0, Some(0)),
+            Self::Vec(value) => (value.len(), Some(value.len())),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Filter {
@@ -94,26 +297,25 @@ impl Filter {
 
     pub fn get_filters<'a>(
         &self,
-        message: &'a Message,
+        message: &'a GeyserMessage,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    ) -> FilterUpdates<'a> {
         match message {
-            Message::Account(message) => self.accounts.get_filters(message),
-            Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => self.transactions.get_filters(message),
-            Message::Entry(message) => self.entry.get_filters(message),
-            Message::Block(message) => self.blocks.get_filters(message),
-            Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
+            GeyserMessage::Account(message) => self.accounts.get_filters(message),
+            GeyserMessage::Slot(message) => self.slots.get_filters(message, commitment),
+            GeyserMessage::Transaction(message) => self.transactions.get_filters(message),
+            GeyserMessage::Entry(message) => self.entry.get_filters(message),
+            GeyserMessage::Block(message) => self.blocks.get_filters(message),
+            GeyserMessage::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 
-    pub fn get_update(
-        &self,
-        message: &Message,
+    pub fn get_update<'a>(
+        &'a self,
+        message: &'a GeyserMessage,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<SubscribeUpdate> {
+    ) -> impl Iterator<Item = SubscribeUpdate> + 'a {
         self.get_filters(message, commitment)
-            .into_iter()
             .filter_map(|(filters, message)| {
                 if filters.is_empty() {
                     None
@@ -124,7 +326,6 @@ impl Filter {
                     })
                 }
             })
-            .collect()
     }
 
     pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
@@ -199,12 +400,12 @@ impl FilterAccounts {
         Ok(required)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    fn get_filters<'a>(&self, message: &'a GeyserMessageAccount) -> FilterUpdates<'a> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
-        vec![(filter.get_filters(), MessageRef::Account(message))]
+        (filter.get_filters(), GeyserMessageRef::Account(message)).into()
     }
 }
 
@@ -404,22 +605,21 @@ impl FilterSlots {
 
     fn get_filters<'a>(
         &self,
-        message: &'a MessageSlot,
+        message: &'a GeyserMessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(
-            self.filters
-                .iter()
-                .filter_map(|(name, inner)| {
-                    if !inner.filter_by_commitment || commitment == Some(message.status) {
-                        Some(name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            MessageRef::Slot(message),
-        )]
+    ) -> FilterUpdates<'a> {
+        let filters = self
+            .filters
+            .iter()
+            .filter_map(|(name, inner)| {
+                if !inner.filter_by_commitment || commitment == Some(message.status) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        (filters, GeyserMessageRef::Slot(message)).into()
     }
 }
 
@@ -506,10 +706,7 @@ impl FilterTransactions {
         Ok(this)
     }
 
-    pub fn get_filters<'a>(
-        &self,
-        message: &'a MessageTransaction,
-    ) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    pub fn get_filters<'a>(&self, message: &'a GeyserMessageTransaction) -> FilterUpdates<'a> {
         let filters = self
             .filters
             .iter()
@@ -583,7 +780,7 @@ impl FilterTransactions {
                 Some(name.clone())
             })
             .collect();
-        vec![(filters, MessageRef::Transaction(message))]
+        (filters, GeyserMessageRef::Transaction(message)).into()
     }
 }
 
@@ -614,8 +811,8 @@ impl FilterEntry {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageEntry) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::Entry(message))]
+    fn get_filters<'a>(&self, message: &'a GeyserMessageEntry) -> FilterUpdates<'a> {
+        (self.filters.clone(), GeyserMessageRef::Entry(message)).into()
     }
 }
 
@@ -654,11 +851,11 @@ impl FilterBlocks {
                 "`include_transactions` is not allowed"
             );
             anyhow::ensure!(
-                matches!(filter.include_accounts, None | Some(false)) || limit.include_accounts,
+                !filter.include_accounts.unwrap_or(false) || limit.include_accounts,
                 "`include_accounts` is not allowed"
             );
             anyhow::ensure!(
-                matches!(filter.include_entries, None | Some(false)) || limit.include_accounts,
+                !filter.include_entries.unwrap_or(false) || limit.include_accounts,
                 "`include_entries` is not allowed"
             );
 
@@ -678,13 +875,13 @@ impl FilterBlocks {
         Ok(this)
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlock) -> Vec<(Vec<String>, MessageRef<'a>)> {
+    fn get_filters<'a>(&self, message: &'a GeyserMessageBlock) -> FilterUpdates<'a> {
         self.filters
             .iter()
             .map(|(filter, inner)| {
                 #[allow(clippy::unnecessary_filter_map)]
                 let transactions =
-                    if matches!(inner.include_transactions, None | Some(true)) {
+                    if inner.include_transactions.unwrap_or(true) {
                         message
                             .transactions
                             .iter()
@@ -736,10 +933,11 @@ impl FilterBlocks {
 
                 (
                     vec![filter.clone()],
-                    MessageRef::Block((message, transactions, accounts, entries).into()),
+                    GeyserMessageRef::Block((message, transactions, accounts, entries).into()),
                 )
             })
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 }
 
@@ -770,8 +968,8 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters<'a>(&self, message: &'a MessageBlockMeta) -> Vec<(Vec<String>, MessageRef<'a>)> {
-        vec![(self.filters.clone(), MessageRef::BlockMeta(message))]
+    fn get_filters<'a>(&self, message: &'a GeyserMessageBlockMeta) -> FilterUpdates<'a> {
+        (self.filters.clone(), GeyserMessageRef::BlockMeta(message)).into()
     }
 }
 
@@ -818,7 +1016,7 @@ mod tests {
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
-            grpc::{Message, MessageTransaction, MessageTransactionInfo},
+            geyser::{GeyserMessage, GeyserMessageTransaction, GeyserMessageTransactionInfo},
         },
         solana_sdk::{
             hash::Hash,
@@ -838,7 +1036,7 @@ mod tests {
     fn create_message_transaction(
         keypair: &Keypair,
         account_keys: Vec<Pubkey>,
-    ) -> MessageTransaction {
+    ) -> GeyserMessageTransaction {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -866,8 +1064,8 @@ mod tests {
             compute_units_consumed: None,
         };
         let sig = sanitized_transaction.signature();
-        MessageTransaction {
-            transaction: MessageTransactionInfo {
+        GeyserMessageTransaction {
+            transaction: GeyserMessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: sanitized_transaction,
@@ -1032,7 +1230,7 @@ mod tests {
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
-        let message = Message::Transaction(message_transaction);
+        let message = GeyserMessage::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(!filters.is_empty());
         }
@@ -1075,7 +1273,7 @@ mod tests {
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
-        let message = Message::Transaction(message_transaction);
+        let message = GeyserMessage::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(!filters.is_empty());
         }
@@ -1118,7 +1316,7 @@ mod tests {
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
-        let message = Message::Transaction(message_transaction);
+        let message = GeyserMessage::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(filters.is_empty());
         }
@@ -1169,7 +1367,7 @@ mod tests {
             &keypair_x,
             vec![account_key_x, account_key_y, account_key_z],
         );
-        let message = Message::Transaction(message_transaction);
+        let message = GeyserMessage::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(!filters.is_empty());
         }
@@ -1218,7 +1416,7 @@ mod tests {
 
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);
-        let message = Message::Transaction(message_transaction);
+        let message = GeyserMessage::Transaction(message_transaction);
         for (filters, _message) in filter.get_filters(&message, None) {
             assert!(filters.is_empty());
         }
