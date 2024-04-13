@@ -112,13 +112,12 @@ impl ArgsAction {
 
                     match message {
                         UpdateOneof::Account(msg) => {
-                            let pubkey_opt: &Option<&[u8]> =
-                                &msg.account.as_ref().map(|acc| acc.pubkey.as_ref());
-                            trace!(
-                                "Received an account update slot={:?}, pubkey={:?}",
-                                msg.slot,
-                                pubkey_opt
-                            );
+                            // let pubkey_opt: &Option<&[u8]> =
+                            //     &msg.account.as_ref().map(|acc| acc.pubkey.as_ref());
+                            // trace!(
+                            //     "Received an account update slot={:?}, pubkey={:?}",
+                            //     msg.slot, pubkey_opt
+                            // );
                             let acc_update = msg.try_into();
                             if acc_update.is_err() {
                                 // Drop the message if invalid

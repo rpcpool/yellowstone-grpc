@@ -62,3 +62,8 @@ pub fn scylladb_batch_request_lag_inc() {
 pub fn scylladb_batch_request_lag_sub(amount: i64) {
     SCYLLADB_BATCH_REQUEST_LAG.sub(amount)
 }
+
+
+pub fn get() -> i64 {
+    SCYLLADB_BATCH_REQUEST_LAG.get()
+}

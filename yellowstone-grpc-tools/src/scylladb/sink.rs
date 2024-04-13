@@ -1,36 +1,25 @@
 use {
+    crate::scylladb::agents::{AgentSystem, Timer, Ticker},
     super::prom::{
-        scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc,
-        scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe,
-        scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe,
-    },
-    crate::scylladb::types::AccountUpdate,
-    futures::future::pending,
-    scylla::{
-        batch::{Batch, BatchStatement},
-        frame::response::result::ColumnType,
-        prepared_statement::PreparedStatement,
+        get, scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe
+    }, crate::scylladb::types::AccountUpdate, futures::{channel::mpsc, future::pending, SinkExt, TryFutureExt}, google_cloud_pubsub::client::google_cloud_auth::token_source::service_account_token_source::ServiceAccountTokenSource, scylla::{
+        batch::{self, Batch, BatchStatement},
+        frame::{request::{query, Query}, response::result::ColumnType, Compression},
+        prepared_statement::{PreparedStatement, TokenCalculationError},
         routing::Token,
         serialize::{
             batch::{BatchValues, BatchValuesIterator},
             row::{RowSerializationContext, SerializedValues},
         },
-        transport::errors::QueryError,
+        transport::{errors::QueryError, Node},
         Session, SessionBuilder,
-    },
-    std::{
-        cmp::Reverse,
-        collections::{BinaryHeap, HashMap},
-        sync::Arc,
-        time::Duration,
-    },
-    tokio::{
-        sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    }, sha2::digest::HashMarker, std::{
+        cmp::Reverse, collections::{BinaryHeap, HashMap}, hash::Hash, num, sync::Arc, time::Duration
+    }, tokio::{
+        sync::mpsc::{channel, error::{SendError, TryRecvError, TrySendError}, Receiver, Sender, UnboundedReceiver, UnboundedSender},
         task::{JoinError, JoinHandle, JoinSet},
         time::{self, Instant},
-    },
-    tonic::async_trait,
-    tracing::{debug, info, trace, warn},
+    }, tonic::async_trait, tracing::{debug, info, trace, warn}
 };
 
 const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
@@ -126,19 +115,6 @@ pub trait ScyllaBatcher {
 
 type NodeUuid = u128;
 
-/// This batcher is aware of the current partitioning scheme of scylla and build different
-/// batch for different endpoint
-pub struct TokenAwareBatcher<B: BatchSender + Send + Sync, TT: TokenTopology> {
-    config: ScyllaSinkConfig,
-    batch_sender: B,
-    token_topology: TT,
-    inner: UnboundedReceiver<BatchRequest>,
-    batch_map: HashMap<NodeUuid, (Batch, Vec<SerializedValues>)>,
-    batch_schedule: BinaryHeap<Reverse<(Instant, NodeUuid)>>,
-    inflight_deliveries: JoinSet<Result<(), QueryError>>,
-    batch_last_consumed_map: HashMap<NodeUuid, Instant>,
-}
-
 struct PreSerializedBatchValuesIterator<'a> {
     inner: &'a [SerializedValues],
     i: usize,
@@ -226,63 +202,386 @@ pub trait BatchSender: Send + Sync + Clone {
         serialized_rows: Vec<SerializedValues>,
     ) -> Result<(), QueryError>;
 }
+struct LiveBatchSender2 {
+    receiver: Receiver<(Batch, Vec<SerializedValues>)>,
+    session: Arc<Session>,
+    js: JoinSet<Result<(), BatchSenderError>>,
+    max_inflight: usize,
+}
 
-#[derive(Clone)]
-struct LiveBatchSender(Arc<Session>);
+#[derive(Debug)]
+enum BatchSenderError {
+    ScyllaError(QueryError),
+    ChannelClosed,
+}
 
-// Session is Send so is LiveBatchSender
-unsafe impl Send for LiveBatchSender {}
+impl LiveBatchSender2 {
 
-unsafe impl Sync for LiveBatchSender {}
+    async fn forever(&mut self) -> Result<(), BatchSenderError> {
+        loop {
+            let now = Instant::now();
+            let result = self.tick2(now).await;
+            if result.is_err() {
+                return result;
+            }
+        }
+    }
 
-#[async_trait]
-impl BatchSender for LiveBatchSender {
-    async fn send_batch(
-        self,
-        batch: Batch,
-        serialized_rows: Vec<SerializedValues>,
-    ) -> Result<(), QueryError> {
-        let before = Instant::now();
-        scylladb_batch_size_observe(batch.statements.len());
+    async fn tick2(&mut self, now: Instant) -> Result<(), BatchSenderError> {
+        if let Some((batch, serialized_rows)) = self.receiver.recv().await {
+            scylladb_batch_size_observe(batch.statements.len());
+            let session = Arc::clone(&self.session);
 
-        let result = self
-            .0
-            .batch(&batch, PreSerializedBatchValues(serialized_rows))
-            .await
-            .map(|_| ());
 
-        let after = Instant::now();
-        info!(
-            "Batch sent: size={:?}, latency={:?}",
-            batch.statements.len(),
-            after - before
-        );
-        if result.is_ok() {
+            while self.js.len() >= self.max_inflight {
+                let result = self.js.join_next().await.unwrap();
+                if result.is_err() {
+                    return Err(BatchSenderError::ChannelClosed);
+                }
+            }
+
+            self.js.spawn(async move {
+                 let result =session
+                    .batch(&batch, PreSerializedBatchValues(serialized_rows))
+                    .await
+                    .map(|_| ());
+
+                let after = Instant::now();
+                info!(
+                    "Batch sent: size={:?}, latency={:?}",
+                    batch.statements.len() as i64,
+                    after - now
+                );
+                
+                scylladb_batch_sent_inc();
+                scylladb_batchitem_sent_inc_by(batch.statements.len() as u64);
+                scylladb_batch_request_lag_sub(batch.statements.len() as i64);
+                result.map_err(|query_error| BatchSenderError::ScyllaError(query_error))
+            });
+            Ok(())
+        } else {
+            Err(BatchSenderError::ChannelClosed)
+        }        
+    }
+
+    async fn tick(&mut self, now: Instant) -> Result<(), BatchSenderError> {
+        if let Some((batch, serialized_rows)) = self.receiver.recv().await {
+
+            scylladb_batch_size_observe(batch.statements.len());
+
+            let result = self
+                .session
+                .batch(&batch, PreSerializedBatchValues(serialized_rows))
+                .await
+                .map(|_| ());
+
+            let after = Instant::now();
+            info!(
+                "Batch sent: size={:?}, latency={:?}",
+                batch.statements.len() as i64,
+                after - now
+            );
+            
             scylladb_batch_sent_inc();
             scylladb_batchitem_sent_inc_by(batch.statements.len() as u64);
-            scylladb_batch_request_lag_sub(batch.statements.len() as i64)
-        }
-        result
+            scylladb_batch_request_lag_sub(batch.statements.len() as i64);
+            result.map_err(|query_error| BatchSenderError::ScyllaError(query_error))
+        } else {
+            Err(BatchSenderError::ChannelClosed)
+        }        
     }
 }
+
+#[derive(Clone)]
+struct BatchSenderHandle {
+    sender: Sender<(Batch, Vec<SerializedValues>)>,
+    batch_sender_ref: Arc<JoinHandle<Result<(), BatchSenderError>>>
+}
+
+impl BatchSenderHandle {
+    async fn send(&self, msg: (Batch, Vec<SerializedValues>)) -> Result<(), ()> {
+        self.sender.send(msg).await.map_err(|_err| ())
+    }
+}
+
+
+fn spawn_live_batch_sender2(session: Arc<Session>, max_inflight: usize, num_worker: usize) -> BatchSenderHandle {
+
+    let (sender, mut receiver) = channel(max_inflight);
+    let mut batch_sender = LiveBatchSender2 {
+        receiver: receiver,
+        session: Arc::clone(&session),
+        js: JoinSet::new(),
+        max_inflight,
+    };
+    
+    let h = tokio::spawn(async move {
+        batch_sender.forever().await
+    });
+    BatchSenderHandle {
+        sender,
+        batch_sender_ref: Arc::new(h),
+    }
+    
+}
+
+// fn spawn_live_batch_sender(session: Arc<Session>, max_inflight: usize, num_worker: usize) -> BatchSenderHandle {
+//     let (sender, mut receiver) = channel(max_inflight);
+
+//     let mut batch_sender_mailboxes = Vec::with_capacity(4);
+//     for _ in 0..num_worker {
+//         let (sender2, receiver2) = channel(1);
+//         let mut lbs = LiveBatchSender2 {
+//             receiver: receiver2,
+//             session: Arc::clone(&session),
+//         };
+
+//         let h = tokio::spawn(async move {
+//             loop {
+//                 match lbs.tick(Instant::now()).await {
+//                     Err(e) => break,
+//                     _ => continue
+//                 }   
+//             }
+//         });
+//         batch_sender_mailboxes.push((h, sender2));
+//     }
+    
+//     let h = tokio::spawn(async move {
+//         'outer: loop {
+            
+//             match receiver.recv().await {
+//                 Some(msg) => {
+//                     let mut msg = msg;
+
+//                     'inner: for (_h, sender) in batch_sender_mailboxes.iter().cycle() {
+                        
+//                         match sender.try_send(msg) {
+//                             Ok(_) => break 'inner,
+//                             Err(TrySendError::Full(msg2)) => msg = msg2,
+//                             Err(TrySendError::Closed(msg2)) => msg = msg2,
+//                         }
+//                     }   
+//                 },
+//                 //Err(TryRecvError::Empty) => continue,
+//                 //Err(TryRecvError::Disconnected) => break 'outer,
+//                 None => break 'outer
+//             }
+//         }
+//     });
+//     BatchSenderHandle {
+//         sender,
+//         batch_sender_ref: Arc::new(h),
+//     }
+// }
 
 #[derive(Debug, PartialEq)]
 enum TickError {
     DeliveryError,
     Timeout,
+    IsClosed,
+}
+
+struct TimedBatcher {
+    deadline: Instant,
+    linger_duration: Duration,
+    mailbox: Receiver<BatchRequest>,
+    batch_size_limit: usize,
+    batch: Vec<(Batch, Vec<SerializedValues>)>,
+    curr_batch_size: usize,
+    batch_sender_handle: BatchSenderHandle,
+}
+
+impl TimedBatcher {
+    fn new(
+        linger_duration: Duration, 
+        mailbox: Receiver<BatchRequest>, 
+        batch_size_limit: usize,
+        batch_sender_handle: BatchSenderHandle,
+    ) -> Self {
+        TimedBatcher {
+            deadline: Instant::now() + linger_duration,
+            mailbox,
+            linger_duration,
+            batch_size_limit,
+            batch: Vec::new(),
+            curr_batch_size: 0,
+            batch_sender_handle,
+        }
+    }
+
+    async fn forever(&mut self) -> Result<(), TickError> {
+        loop {
+            let now = Instant::now();
+            let res = self.tick(now).await;
+            if res.is_err() {
+                return res
+            }
+        }
+    }
+
+    fn get_batch_mut(&mut self) -> &mut (Batch, Vec<SerializedValues>) {
+        if self.batch.is_empty() {
+            self.batch.push((Batch::default(), Vec::with_capacity(self.batch_size_limit)));
+        }
+        self.batch.get_mut(0).unwrap()
+    }
+
+    async fn tick(&mut self, now: Instant) -> Result<(), TickError> {
+        tokio::select! {
+            _ = time::sleep_until(self.deadline) => self.flush(now).await.map_err(|_e| TickError::DeliveryError),
+            msg = self.mailbox.recv() => {
+                match msg {
+                    Some(br) => {
+                        {
+                            let ser_row = br.item.serialize();
+                            let ref mut mybatch = self.get_batch_mut();
+                            mybatch.0.append_statement(br.stmt);
+                            mybatch.1.push(ser_row);
+                            self.curr_batch_size += 1;
+                        }
+                        if self.curr_batch_size >= self.batch_size_limit {
+                            self.flush(now).map_err(|_e| TickError::DeliveryError).await
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    None => { 
+                        Err(
+                            self.flush(now)
+                                .await
+                                .map_err(|_e| TickError::DeliveryError)
+                                .err()
+                                .unwrap_or(TickError::IsClosed)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    async fn flush(&mut self, now: Instant) -> Result<(), ()> {
+        self.curr_batch_size = 0;
+        if let Some(batch) = self.batch.pop() {
+            if !batch.1.is_empty() {
+                return self.batch_sender_handle.send(batch).await
+            }
+        }
+        self.deadline = now + self.linger_duration;
+        Ok(())
+    }
 }
 
 struct BatcherHandle {
-    inner: JoinHandle<()>,
-    sender: UnboundedSender<BatchRequest>,
+    sender: Sender<BatchRequest>,
+    handle: JoinHandle<Result<(), TickError>>
 }
 
 impl BatcherHandle {
-    fn send(
+    async fn send(&self, msg: BatchRequest) -> Result<(), SendError<BatchRequest>> {
+        self.sender.send(msg).await
+    }
+}
+
+
+struct BatcherFactory {
+    spawner: Box<dyn Fn() -> BatcherHandle>,
+}
+
+impl BatcherFactory {
+    fn spawn(&self) -> BatcherHandle {
+        (self.spawner)()
+    }
+}
+
+struct TokenAwareBatchRouter {
+    mailbox: Receiver<BatchRequest>,
+    token_topology: LiveTokenTopology,
+    batchers: Vec<BatcherHandle>,
+}
+
+impl TokenAwareBatchRouter {
+
+    async fn tick(&mut self, now: Instant) -> Result<(), TickError> {
+        match self.mailbox.recv().await {
+            Some(br) => {
+                let token = br.item.resolve_token(&self.token_topology);
+                let node_uuid = self.token_topology.get_node_uuid_for_token(token);
+                let i = (node_uuid % u128::from(self.batchers.len() as u64)) as u64;
+                let batcher = self.batchers.get(i as usize).unwrap();
+                batcher.send(br).await.map_err(|_e| TickError::DeliveryError)
+            }
+            None => Err(TickError::DeliveryError)
+        }
+    }
+}
+
+
+fn nbuild_timed_batcher(
+    n: usize,
+    buffer: usize, 
+    linger_duration: Duration, 
+    batch_size_limit: usize, 
+    batch_sender_handle: BatchSenderHandle
+) -> Vec<BatcherHandle> {
+    let mut res = Vec::with_capacity(n);
+    for i in 1..(n + 1) {
+        let (sender, receiver) = channel(buffer);
+
+        let mut batcher = TimedBatcher::new(
+            linger_duration,
+            receiver,
+            batch_size_limit,
+            batch_sender_handle.clone(),
+        );
+
+        let h = tokio::spawn(async move {
+            batcher.forever().await
+        });
+        let bh = BatcherHandle {
+            sender,
+            handle: h,
+        };
+        res.push(bh);
+    }
+    res
+}
+
+fn spawn_token_aware_router(token_topology: LiveTokenTopology, buffer: usize, batchers: Vec<BatcherHandle>) -> BatchRouterHandle {
+    let (sender, receiver) = channel(buffer);
+    let mut router = TokenAwareBatchRouter {
+        mailbox: receiver,
+        token_topology,
+        batchers,
+    };
+
+    let h = tokio::spawn(async move {
+        loop {
+            let now = Instant::now();
+            let result = router.tick(now).await;
+            if result.is_err() {
+               break
+            }
+        }
+    });
+
+    BatchRouterHandle {
+        sender,
+        inner: h,
+    }
+}
+
+struct BatchRouterHandle {
+    inner: JoinHandle<()>,
+    sender: Sender<BatchRequest>,
+}
+
+impl BatchRouterHandle {
+    async fn send(
         &self,
         br: BatchRequest,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<BatchRequest>> {
-        let res = self.sender.send(br);
+        let res = self.sender.send(br).await;
         if res.is_ok() {
             scylladb_batch_request_lag_inc();
         }
@@ -298,147 +597,9 @@ impl BatcherHandle {
     }
 }
 
-impl<B: BatchSender + 'static, TT: TokenTopology> TokenAwareBatcher<B, TT> {
-    /// Tick allow the Batcher to "step foward" into its state.
-    /// At each tick, it concurrently handles one of: batch request, batch delivery or throttling.
-    async fn tick(&mut self, now: Instant) -> Result<(), TickError> {
-        let tick_timeout = now + self.config.linger;
-        let deadline: Instant = self
-            .batch_schedule
-            .peek()
-            .map(|rev| rev.0 .0)
-            .unwrap_or(tick_timeout);
-        tokio::select! {
-            _ = time::sleep_until(deadline), if !self.need_throttling() => {
-                let old_value = self.consume_next_in_schedule(now);
-                if let Some((batch, ser_values)) = old_value {
-                    if !batch.statements.is_empty() {
-                        let bs = self.batch_sender.clone();
-                        let fut = bs.send_batch(batch, ser_values);
-                        self.inflight_deliveries.spawn(fut);
-                    }
-                }
-            },
-            // recv is cancel safe, so no data will be lost if the other branch finish first or if branch pre-condition is false
-            Some(BatchRequest { stmt, item }) = self.inner.recv(), if !self.need_throttling() && deadline > now => {
-                let token = item.resolve_token(&self.token_topology);
-                let (node_uuid, current_batch_size) = {
-                    let (node_uuid, (batch, ser_values)) = self.get_batch_for_token(token);
-                    let serialized_row = item.serialize();
-                    batch.append_statement(stmt);
-                    ser_values.push(serialized_row);
-                    (node_uuid, ser_values.len())
-                };
-
-                if current_batch_size >= self.config.batch_size_limit {
-                    self.batch_schedule.push(Reverse((now, node_uuid)));
-                }
-            },
-            Some(Err(_join_err)) = self.inflight_deliveries.join_next() => return Err(TickError::DeliveryError),
-
-            _ = time::sleep_until(tick_timeout) => return Err(TickError::Timeout)
-        }
-        Ok(())
-    }
-
-    fn need_throttling(&self) -> bool {
-        let res = self.inflight_deliveries.len() >= self.config.max_inflight_batch_delivery;
-        res
-    }
-
-    fn get_batch_for_token(
-        &mut self,
-        token: Token,
-    ) -> (NodeUuid, &mut (Batch, Vec<SerializedValues>)) {
-        let node_uuid = self.token_topology.get_node_uuid_for_token(token);
-        if !self.batch_map.contains_key(&node_uuid) {
-            self.refresh_schedule_for_node(Instant::now(), node_uuid);
-            scylladb_batch_queue_inc();
-        }
-        (node_uuid, self.batch_map.entry(node_uuid).or_default())
-    }
-
-    fn refresh_schedule_for_node(&mut self, from: Instant, node_uuid: NodeUuid) {
-        let next_instant = from.checked_add(self.config.linger).unwrap();
-        self.batch_schedule.push(Reverse((next_instant, node_uuid)));
-    }
-
-    fn consume_next_in_schedule(
-        &mut self,
-        consumed_at: Instant,
-    ) -> Option<(Batch, Vec<SerializedValues>)> {
-        if let Some(Reverse((instant, node_uuid))) = self.batch_schedule.pop() {
-            // This block of code is here to avoid double sending the same batch within the same linger period
-            if let Some(last_consumed_instant) = self.batch_last_consumed_map.get(&node_uuid) {
-                let time_delta = consumed_at.duration_since(*last_consumed_instant);
-                if time_delta < self.config.linger {
-                    let additional_wait_time = self.config.linger - time_delta;
-                    // Reschedule
-                    self.batch_schedule
-                        .push(Reverse((instant + additional_wait_time, node_uuid)));
-                    return None;
-                }
-            }
-
-            scylladb_peak_batch_linger_observe(instant.elapsed());
-            self.batch_last_consumed_map.insert(node_uuid, consumed_at);
-            let ret = self.batch_map.remove(&node_uuid);
-            if ret.is_some() {
-                scylladb_batch_queue_dec();
-            }
-            ret
-        } else {
-            None
-        }
-    }
-
-    fn new<B2: BatchSender + Send + 'static, TT2: TokenTopology + Send + 'static>(
-        config: ScyllaSinkConfig,
-        batch_sender: B2,
-        token_topology: TT2,
-    ) -> (TokenAwareBatcher<B2, TT2>, UnboundedSender<BatchRequest>) {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let batcher = TokenAwareBatcher {
-            config,
-            batch_sender,
-            token_topology,
-            inner: receiver,
-            batch_map: HashMap::default(),
-            batch_schedule: BinaryHeap::default(),
-            inflight_deliveries: JoinSet::new(),
-            batch_last_consumed_map: HashMap::default(),
-        };
-        (batcher, sender)
-    }
-
-    ///
-    /// Runs a TokenAwareBatcher in background task and returns a channel to send batch request and the underlying
-    /// background task handle.
-    fn spawn<B2: BatchSender + Send + 'static, TT2: TokenTopology + Send + 'static>(
-        config: ScyllaSinkConfig,
-        batch_sender: B2,
-        token_topology: TT2,
-    ) -> BatcherHandle {
-        let (batcher, sender) =
-            TokenAwareBatcher::<B2, TT2>::new(config, batch_sender, token_topology);
-
-        // Background process handling the batcher
-        let h = tokio::spawn(async move {
-            let mut my_batcher = batcher;
-            loop {
-                let now = Instant::now();
-                if let Err(TickError::DeliveryError) = my_batcher.tick(now).await {
-                    break;
-                }
-            }
-        });
-        BatcherHandle { inner: h, sender }
-    }
-}
-
 pub struct ScyllaSink {
     insert_account_update_ps: PreparedStatement,
-    batcher_handle: BatcherHandle,
+    batch_router_handle: BatchRouterHandle,
 }
 
 #[derive(Debug)]
@@ -456,6 +617,7 @@ impl ScyllaSink {
         let session: Session = SessionBuilder::new()
             .known_node(hostname)
             .user(username, password)
+            .compression(Some(Compression::Lz4))
             .use_keyspace(config.keyspace.clone(), false)
             .build()
             .await
@@ -467,17 +629,21 @@ impl ScyllaSink {
             .await
             .unwrap();
 
-        let batch_sender = LiveBatchSender(Arc::clone(&session));
         let token_topology = LiveTokenTopology(Arc::clone(&session));
-        let batcher_handle = TokenAwareBatcher::<LiveBatchSender, LiveTokenTopology>::spawn(
-            config.clone(),
-            batch_sender,
-            token_topology,
+        let batch_sender_handle = spawn_live_batch_sender2(session, config.max_inflight_batch_delivery, 160);
+        let batchers = nbuild_timed_batcher(
+            3,
+            10000, 
+            config.linger, 
+            config.batch_size_limit, 
+            batch_sender_handle
         );
+        let router = spawn_token_aware_router(token_topology, 30000, batchers);
 
+        //let batch_sender_handle = spawn_live_batch_sender(Arc::clone(&session), config.batch_size_limit, 2300);
         ScyllaSink {
             insert_account_update_ps,
-            batcher_handle,
+            batch_router_handle: router,
         }
     }
 
@@ -489,320 +655,9 @@ impl ScyllaSink {
             stmt: BatchStatement::PreparedStatement(self.insert_account_update_ps.clone()),
             item: BatchItem::Account(update),
         };
-        self.batcher_handle
+        self.batch_router_handle
             .send(br)
+            .await
             .map_err(|_e| ScyllaSinkError::SinkClose)
-    }
-}
-
-mod tests {
-    use {
-        super::*,
-        scylla::query::Query,
-        std::{cell::RefCell, iter::repeat},
-        tokio::sync::mpsc::error::TryRecvError,
-    };
-
-    type BatchSenderCallback = UnboundedReceiver<(Batch, Vec<SerializedValues>)>;
-
-    #[derive(Clone)]
-    struct NullBatchSender {
-        callback: UnboundedSender<(Batch, Vec<SerializedValues>)>,
-    }
-
-    #[derive(Clone)]
-    struct StuckedBatchSender;
-    unsafe impl Sync for StuckedBatchSender {}
-    unsafe impl Send for StuckedBatchSender {}
-
-    #[async_trait]
-    impl BatchSender for StuckedBatchSender {
-        async fn send_batch(
-            self,
-            batch: Batch,
-            serialized_rows: Vec<SerializedValues>,
-        ) -> Result<(), QueryError> {
-            pending().await
-        }
-    }
-
-    #[derive(Clone)]
-    struct ConstTokenTopology {
-        node_uuid: RefCell<NodeUuid>,
-        token: RefCell<Token>,
-        is_node_exists: RefCell<bool>,
-    }
-
-    impl Default for ConstTokenTopology {
-        fn default() -> Self {
-            Self {
-                node_uuid: Default::default(),
-                token: RefCell::new(Token {
-                    value: Default::default(),
-                }),
-                is_node_exists: RefCell::new(true),
-            }
-        }
-    }
-    unsafe impl Sync for NullBatchSender {}
-    unsafe impl Send for NullBatchSender {}
-
-    #[async_trait]
-    impl BatchSender for NullBatchSender {
-        async fn send_batch(
-            self,
-            batch: Batch,
-            serialized_rows: Vec<SerializedValues>,
-        ) -> Result<(), QueryError> {
-            self.callback.send((batch, serialized_rows)).unwrap();
-            Ok(())
-        }
-    }
-
-    impl TokenTopology for ConstTokenTopology {
-        fn get_node_uuid_for_token(&self, token: Token) -> NodeUuid {
-            self.node_uuid.borrow().clone()
-        }
-
-        fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool {
-            self.is_node_exists.borrow().clone()
-        }
-
-        fn compute_token(&self, table: &str, serialized_values: &SerializedValues) -> Token {
-            self.token.borrow().clone()
-        }
-    }
-
-    fn stucked_batcher(
-        config: ScyllaSinkConfig,
-    ) -> (
-        TokenAwareBatcher<StuckedBatchSender, ConstTokenTopology>,
-        UnboundedSender<BatchRequest>,
-    ) {
-        let (batcher, sender) = TokenAwareBatcher::<StuckedBatchSender, ConstTokenTopology>::new(
-            config,
-            StuckedBatchSender {},
-            ConstTokenTopology::default(),
-        );
-        (batcher, sender)
-    }
-
-    fn manual_test_batcher(
-        config: ScyllaSinkConfig,
-    ) -> (
-        TokenAwareBatcher<NullBatchSender, ConstTokenTopology>,
-        UnboundedSender<BatchRequest>,
-        BatchSenderCallback,
-    ) {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let (batcher, sender2) = TokenAwareBatcher::<NullBatchSender, ConstTokenTopology>::new(
-            config,
-            NullBatchSender { callback: sender },
-            ConstTokenTopology::default(),
-        );
-        (batcher, sender2, receiver)
-    }
-
-    fn spawn_test_batcher(config: ScyllaSinkConfig) -> (BatcherHandle, BatchSenderCallback) {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        (
-            TokenAwareBatcher::<NullBatchSender, ConstTokenTopology>::spawn(
-                config,
-                NullBatchSender { callback: sender },
-                ConstTokenTopology::default(),
-            ),
-            receiver,
-        )
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn it_should_send_one_batch() {
-        let (bh, mut cb) = spawn_test_batcher(Default::default());
-        let _ = bh
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        let res = cb.recv().await;
-        assert!(res.is_some());
-    }
-
-    #[tokio::test]
-    async fn it_should_batch_related_item_within_the_lingering_limit() {
-        let (mut batcher, sender, mut cb) = manual_test_batcher(Default::default());
-
-        let now = Instant::now();
-
-        // 1st item to batch
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        batcher.tick(now).await.unwrap();
-
-        // 2nd item to batch
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        batcher.tick(now).await.unwrap();
-
-        // It should send the batch since we reach the lingering limit
-        let now = now + batcher.config.linger;
-        batcher.tick(now).await.unwrap();
-
-        let res = cb.recv().await.unwrap();
-
-        assert_eq!(res.0.statements.len(), 2);
-        assert_eq!(res.1.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn it_should_throttle_if_we_reach_the_maximum_inflight() {
-        let config = ScyllaSinkConfig {
-            batch_size_limit: 1,
-            linger: Duration::from_millis(10),
-            keyspace: String::from("solana"),
-            // We put a very limited amount of inflight batch delivery
-            max_inflight_batch_delivery: 1,
-        };
-        let (mut batcher, sender) = stucked_batcher(config.clone());
-
-        let now = Instant::now();
-
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        // 1st tick: start the batch
-        batcher.tick(now).await.unwrap();
-
-        let now = now + config.linger;
-
-        // 2nd tick: send it to the BatchSender
-        batcher.tick(now).await.unwrap();
-
-        // 3rd tick: should cause tick timeout
-
-        let now = now + config.linger;
-        let tick_result = batcher.tick(now).await;
-
-        assert_eq!(tick_result, Err(TickError::Timeout));
-
-        // Any subsequent send, should still not be batched, since we are stucked and we have a maximum of a one inflight delivery
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-        let now = now + config.linger;
-        let tick_result2 = batcher.tick(now).await;
-        assert_eq!(tick_result2, Err(TickError::Timeout));
-    }
-
-    #[tokio::test]
-    async fn it_should_handle_orphan_batch_when_token_topology_changes() {
-        let (mut batcher, sender, mut cb) = manual_test_batcher(Default::default());
-
-        let now = Instant::now();
-
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        // 1st tick = create a new batch for a a given node_uuid
-        batcher.tick(now).await.unwrap();
-
-        // This will create a topology change where a specific token range is now assigned to another node.
-        // This should create an orphan batch in the tokenbatcher
-        batcher.token_topology.node_uuid.replace(100);
-
-        // 2nd item to batch
-        let _ = sender
-            .send(BatchRequest {
-                stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                item: BatchItem::Account(AccountUpdate::zero_account()),
-            })
-            .unwrap();
-
-        // 2nd tick = create a new batch since we changed the topology
-        batcher.tick(now).await.unwrap();
-
-        let now = now + batcher.config.linger;
-        // consume 1st orphan batch
-        batcher.tick(now).await.unwrap();
-        let now = now + batcher.config.linger;
-        // consume 2nd batch
-        batcher.tick(now).await.unwrap();
-
-        let res1 = cb.recv().await.unwrap();
-        let res2 = cb.recv().await.unwrap();
-        assert_eq!(res1.0.statements.len(), 1);
-        assert_eq!(res1.1.len(), 1);
-        assert_eq!(res2.0.statements.len(), 1);
-        assert_eq!(res2.1.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn it_should_send_batch_when_batch_limit_size_is_reached() {
-        let sink_config = ScyllaSinkConfig {
-            batch_size_limit: 10,
-            linger: Duration::from_millis(10),
-            keyspace: String::from("default"),
-            max_inflight_batch_delivery: 10,
-        };
-
-        let (mut batcher, sender, mut cb) = manual_test_batcher(sink_config.clone());
-
-        let mut now = Instant::now();
-
-        for _ in repeat(()).take(19) {
-            let _ = sender
-                .send(BatchRequest {
-                    stmt: BatchStatement::Query(Query::new(SCYLLADB_INSERT_ACCOUNT_UPDATE)),
-                    item: BatchItem::Account(AccountUpdate::zero_account()),
-                })
-                .unwrap();
-        }
-
-        // Batch 10 requests (size limit)
-        for _ in repeat(()).take(10) {
-            batcher.tick(now).await.unwrap();
-        }
-        now = now + Duration::from_millis(1);
-        // Should trigger batch send
-        batcher.tick(now).await.unwrap();
-
-        let res1 = cb.recv().await.unwrap();
-        assert_eq!(res1.0.statements.len(), 10);
-        assert_eq!(res1.1.len(), 10);
-
-        for _ in repeat(()).take(9) {
-            batcher.tick(now).await.unwrap();
-        }
-        // Should trigger batch send
-        now = now + sink_config.linger;
-        batcher.tick(now).await.unwrap();
-        let res2 = cb.recv().await.unwrap();
-        assert_eq!(res2.0.statements.len(), 9);
-        assert_eq!(res2.1.len(), 9);
-
-        let try_recv_result = cb.try_recv();
-        assert_eq!(try_recv_result.err().unwrap(), TryRecvError::Empty);
     }
 }
