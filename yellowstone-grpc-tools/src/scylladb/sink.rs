@@ -1,9 +1,24 @@
 use {
-    super::{agent::{AgentHandler, Nothing, Ticker}, prom::{
-        get, scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe
-    }}, crate::scylladb::{agent::AgentSystem, types::AccountUpdate}, futures::{channel::mpsc, future::pending, Future, FutureExt, SinkExt, TryFutureExt}, google_cloud_pubsub::client::google_cloud_auth::{token, token_source::service_account_token_source::ServiceAccountTokenSource}, scylla::{
+    super::{
+        agent::{AgentHandler, Nothing, Ticker},
+        prom::{
+            scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc,
+            scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe,
+            scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe,
+        },
+    },
+    crate::scylladb::{agent::AgentSystem, types::AccountUpdate},
+    futures::{channel::mpsc, future::pending, Future, FutureExt, SinkExt, TryFutureExt},
+    google_cloud_pubsub::client::google_cloud_auth::{
+        token, token_source::service_account_token_source::ServiceAccountTokenSource,
+    },
+    scylla::{
         batch::{self, Batch, BatchStatement},
-        frame::{request::{query, Query}, response::result::ColumnType, Compression},
+        frame::{
+            request::{query, Query},
+            response::result::ColumnType,
+            Compression,
+        },
         prepared_statement::{PreparedStatement, TokenCalculationError},
         routing::Token,
         serialize::{
@@ -12,13 +27,28 @@ use {
         },
         transport::{errors::QueryError, Node},
         Session, SessionBuilder,
-    }, sha2::digest::HashMarker, std::{
-        cmp::Reverse, collections::{BinaryHeap, HashMap}, hash::Hash, num, pin::Pin, sync::Arc, time::Duration
-    }, tokio::{
-        sync::mpsc::{channel, error::{SendError, TryRecvError, TrySendError}, Receiver, Sender, UnboundedReceiver, UnboundedSender},
+    },
+    sha2::digest::HashMarker,
+    std::{
+        cmp::Reverse,
+        collections::{BinaryHeap, HashMap},
+        hash::Hash,
+        num,
+        pin::Pin,
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::{
+        sync::mpsc::{
+            channel,
+            error::{SendError, TryRecvError, TrySendError},
+            Receiver, Sender, UnboundedReceiver, UnboundedSender,
+        },
         task::{JoinError, JoinHandle, JoinSet},
         time::{self, Instant, Sleep},
-    }, tonic::async_trait, tracing::{debug, info, trace, warn}
+    },
+    tonic::async_trait,
+    tracing::{debug, info, trace, warn},
 };
 
 const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
@@ -57,21 +87,26 @@ pub struct BatchRequest {
     item: BatchItem,
 }
 
-impl Into<SerializedValues> for AccountUpdate {
-    fn into(self) -> SerializedValues {
+impl From<AccountUpdate> for SerializedValues {
+    fn from(account_update: AccountUpdate) -> Self {
         let mut row = SerializedValues::new();
-        row.add_value(&self.slot, &ColumnType::BigInt).unwrap();
-        row.add_value(&self.pubkey, &ColumnType::Blob).unwrap();
-        row.add_value(&self.lamports, &ColumnType::BigInt).unwrap();
-        row.add_value(&self.owner, &ColumnType::Blob).unwrap();
-        row.add_value(&self.executable, &ColumnType::Boolean)
+        row.add_value(&account_update.slot, &ColumnType::BigInt)
             .unwrap();
-        row.add_value(&self.rent_epoch, &ColumnType::BigInt)
+        row.add_value(&account_update.pubkey, &ColumnType::Blob)
             .unwrap();
-        row.add_value(&self.write_version, &ColumnType::BigInt)
+        row.add_value(&account_update.lamports, &ColumnType::BigInt)
             .unwrap();
-        row.add_value(&self.data, &ColumnType::Blob).unwrap();
-        row.add_value(&self.txn_signature, &ColumnType::Blob)
+        row.add_value(&account_update.owner, &ColumnType::Blob)
+            .unwrap();
+        row.add_value(&account_update.executable, &ColumnType::Boolean)
+            .unwrap();
+        row.add_value(&account_update.rent_epoch, &ColumnType::BigInt)
+            .unwrap();
+        row.add_value(&account_update.write_version, &ColumnType::BigInt)
+            .unwrap();
+        row.add_value(&account_update.data, &ColumnType::Blob)
+            .unwrap();
+        row.add_value(&account_update.txn_signature, &ColumnType::Blob)
             .unwrap();
         row
     }
@@ -187,7 +222,12 @@ impl TokenTopology for LiveTokenTopology {
     }
 
     fn get_node_uuids(&self) -> Vec<NodeUuid> {
-        self.0.get_cluster_data().get_nodes_info().iter().map(|node| node.host_id.as_u128()).collect()
+        self.0
+            .get_cluster_data()
+            .get_nodes_info()
+            .iter()
+            .map(|node| node.host_id.as_u128())
+            .collect()
     }
 
     fn compute_token(&self, table: &str, partition_key: &SerializedValues) -> Token {
@@ -214,12 +254,11 @@ struct LiveBatchSender {
 }
 
 impl LiveBatchSender {
-
     fn new(session: Arc<Session>, max_inflight: usize) -> Self {
         LiveBatchSender {
             session,
             js: JoinSet::new(),
-            max_inflight
+            max_inflight,
         }
     }
 }
@@ -232,15 +271,17 @@ enum BatchSenderError {
 
 #[async_trait]
 impl Ticker for LiveBatchSender {
-
     type Input = (Batch, Vec<SerializedValues>);
     type Error = BatchSenderError;
 
-    async fn tick(&mut self, now: Instant, msg: (Batch, Vec<SerializedValues>)) -> Result<Nothing, BatchSenderError> {
+    async fn tick(
+        &mut self,
+        now: Instant,
+        msg: (Batch, Vec<SerializedValues>),
+    ) -> Result<Nothing, BatchSenderError> {
         let (batch, ser_values) = msg;
         scylladb_batch_size_observe(batch.statements.len());
         let session = Arc::clone(&self.session);
-
 
         while self.js.len() >= self.max_inflight {
             let result = self.js.join_next().await.unwrap();
@@ -250,7 +291,7 @@ impl Ticker for LiveBatchSender {
         }
 
         self.js.spawn(async move {
-                let result =session
+            let result = session
                 .batch(&batch, PreSerializedBatchValues(ser_values))
                 .await
                 .map(|_| ());
@@ -261,7 +302,7 @@ impl Ticker for LiveBatchSender {
                 batch.statements.len() as i64,
                 after - now
             );
-            
+
             scylladb_batch_sent_inc();
             scylladb_batchitem_sent_inc_by(batch.statements.len() as u64);
             scylladb_batch_request_lag_sub(batch.statements.len() as i64);
@@ -269,13 +310,11 @@ impl Ticker for LiveBatchSender {
         });
         Ok(())
     }
-
 }
-
 
 struct Timer {
     deadline: Instant,
-    linger: Duration
+    linger: Duration,
 }
 
 impl Timer {
@@ -320,7 +359,8 @@ impl TimedBatcher {
 
     fn get_batch_mut(&mut self) -> &mut (Batch, Vec<SerializedValues>) {
         if self.batch.is_empty() {
-            self.batch.push((Batch::default(), Vec::with_capacity(self.batch_size_limit)));
+            self.batch
+                .push((Batch::default(), Vec::with_capacity(self.batch_size_limit)));
         }
         self.batch.get_mut(0).unwrap()
     }
@@ -329,7 +369,7 @@ impl TimedBatcher {
         self.curr_batch_size = 0;
         if let Some(batch) = self.batch.pop() {
             if !batch.1.is_empty() {
-                return self.batch_sender_handle.send(batch).await
+                return self.batch_sender_handle.send(batch).await;
             }
         }
         Ok(())
@@ -338,7 +378,6 @@ impl TimedBatcher {
 
 #[async_trait]
 impl Ticker for TimedBatcher {
-
     type Input = BatchRequest;
     type Error = Nothing;
 
@@ -349,7 +388,7 @@ impl Ticker for TimedBatcher {
     async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Nothing> {
         self.timer.restart();
         self.flush(now).await
-    } 
+    }
 
     async fn terminate(&mut self, now: Instant) -> Result<Nothing, Nothing> {
         self.flush(now).await
@@ -377,9 +416,11 @@ struct TokenAwareBatchRouter {
     node2batcher: HashMap<NodeUuid, usize>,
 }
 
-
 impl TokenAwareBatchRouter {
-    pub fn new(token_topology: LiveTokenTopology, batchers: Vec<AgentHandler<BatchRequest>>) -> Self {
+    pub fn new(
+        token_topology: LiveTokenTopology,
+        batchers: Vec<AgentHandler<BatchRequest>>,
+    ) -> Self {
         let mut res = TokenAwareBatchRouter {
             token_topology,
             batchers,
@@ -389,20 +430,15 @@ impl TokenAwareBatchRouter {
         res
     }
 
-
     fn compute_batcher_assignments(&mut self) {
         let node_uuids = self.token_topology.get_node_uuids();
         let cycle_iter = self.batchers.iter().enumerate().map(|(i, _)| i).cycle();
         self.node2batcher = node_uuids.into_iter().zip(cycle_iter).collect();
     }
-
 }
-
-
 
 #[async_trait]
 impl Ticker for TokenAwareBatchRouter {
-
     type Input = BatchRequest;
     type Error = Nothing;
 
@@ -427,7 +463,6 @@ impl Ticker for TokenAwareBatchRouter {
         result
     }
 }
-
 
 pub struct ScyllaSink {
     insert_account_update_ps: PreparedStatement,
@@ -461,34 +496,21 @@ impl ScyllaSink {
             .await
             .unwrap();
 
-    
         let token_topology = LiveTokenTopology(Arc::clone(&session));
 
         let system = AgentSystem::new(10000);
 
-
-        let lbs = LiveBatchSender::new(
-        Arc::clone(&session),
-        160
-        );
+        let lbs = LiveBatchSender::new(Arc::clone(&session), 160);
         let lbs_handler = system.spawn(lbs);
 
         let mut batchers = vec![];
         for _ in 1..4 {
-            let tb = TimedBatcher::new(
-                config.batch_size_limit,
-                lbs_handler.clone(),
-                config.linger,
-            );
+            let tb = TimedBatcher::new(config.batch_size_limit, lbs_handler.clone(), config.linger);
             let ah = system.spawn(tb);
             batchers.push(ah)
         }
-        
 
-        let router = TokenAwareBatchRouter::new(
-            token_topology,
-            batchers
-        );
+        let router = TokenAwareBatchRouter::new(token_topology, batchers);
 
         let router_handle = system.spawn(router);
 

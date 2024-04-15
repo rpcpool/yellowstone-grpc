@@ -1,25 +1,27 @@
-use std::{fmt, future::pending, pin::Pin, sync::Arc, time::Duration};
-
-use futures::{Future, FutureExt};
-use tokio::{sync::{self, mpsc::{channel, Receiver}}, task::JoinHandle, time::{self, Instant}};
-use tonic::async_trait;
-use tracing::error;
+use {
+    futures::{Future, FutureExt},
+    std::{fmt, future::pending, pin::Pin, sync::Arc},
+    tokio::{
+        sync::{self, mpsc::channel},
+        task::JoinHandle,
+        time::{self, Instant},
+    },
+    tonic::async_trait,
+    tracing::error,
+};
 
 pub type Nothing = ();
 
-
-
 #[async_trait]
 pub trait Ticker {
-
     type Input: Send + 'static;
     type Error: Send + fmt::Debug + 'static;
 
     fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
         pending().boxed()
     }
-    
-    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Self::Error> { 
+
+    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Self::Error> {
         Ok(())
     }
 
@@ -30,13 +32,11 @@ pub trait Ticker {
     }
 }
 
-
 #[derive(Debug)]
 pub enum AgentHandlerError {
     Closed,
     AgentError,
 }
-
 
 #[derive(Clone)]
 pub struct AgentHandler<I> {
@@ -44,28 +44,24 @@ pub struct AgentHandler<I> {
     handle: Arc<JoinHandle<Result<Nothing, AgentHandlerError>>>,
 }
 
-
 impl<I> AgentHandler<I> {
     pub async fn send(&self, msg: I) -> Result<(), ()> {
         self.sender.send(msg).await.map_err(|_err| ())
     }
 }
 
-
 pub struct AgentSystem {
-    pub agent_buffer_size: usize
+    pub agent_buffer_size: usize,
 }
 
-
 impl AgentSystem {
-
     pub fn spawn<T>(&self, mut ticker: T) -> AgentHandler<T::Input>
-        where T: Ticker + Send + 'static {
+    where
+        T: Ticker + Send + 'static,
+    {
         let (sender, mut receiver) = channel(self.agent_buffer_size);
         let h = tokio::spawn(async move {
-
             loop {
-
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
                         let res = ticker.on_timeout(Instant::now()).await;
@@ -90,18 +86,20 @@ impl AgentSystem {
                         }
                     }
                 };
-                
+
                 if result.is_err() {
                     error!("{:?}", result.err().unwrap());
                     return Err(AgentHandlerError::AgentError);
                 }
             }
         });
-        AgentHandler { sender, handle: Arc::new(h) }
+        AgentHandler {
+            sender,
+            handle: Arc::new(h),
+        }
     }
 
-
-    pub fn new(agent_buffer_size: usize) -> AgentSystem {
+    pub const fn new(agent_buffer_size: usize) -> AgentSystem {
         AgentSystem { agent_buffer_size }
     }
 }
