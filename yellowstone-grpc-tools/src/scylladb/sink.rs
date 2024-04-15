@@ -1,7 +1,7 @@
 use {
-    super::{agents::{AgentHandler, Nothing}, prom::{
+    super::{agent::{AgentHandler, Nothing, Ticker}, prom::{
         get, scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe
-    }}, crate::scylladb::{agents::{AgentSystem, Ticker, Timer}, types::AccountUpdate}, futures::{channel::mpsc, future::pending, SinkExt, TryFutureExt}, google_cloud_pubsub::client::google_cloud_auth::{token, token_source::service_account_token_source::ServiceAccountTokenSource}, scylla::{
+    }}, crate::scylladb::{agent::AgentSystem, types::AccountUpdate}, futures::{channel::mpsc, future::pending, Future, FutureExt, SinkExt, TryFutureExt}, google_cloud_pubsub::client::google_cloud_auth::{token, token_source::service_account_token_source::ServiceAccountTokenSource}, scylla::{
         batch::{self, Batch, BatchStatement},
         frame::{request::{query, Query}, response::result::ColumnType, Compression},
         prepared_statement::{PreparedStatement, TokenCalculationError},
@@ -13,11 +13,11 @@ use {
         transport::{errors::QueryError, Node},
         Session, SessionBuilder,
     }, sha2::digest::HashMarker, std::{
-        cmp::Reverse, collections::{BinaryHeap, HashMap}, hash::Hash, num, sync::Arc, time::Duration
+        cmp::Reverse, collections::{BinaryHeap, HashMap}, hash::Hash, num, pin::Pin, sync::Arc, time::Duration
     }, tokio::{
         sync::mpsc::{channel, error::{SendError, TryRecvError, TrySendError}, Receiver, Sender, UnboundedReceiver, UnboundedSender},
         task::{JoinError, JoinHandle, JoinSet},
-        time::{self, Instant},
+        time::{self, Instant, Sleep},
     }, tonic::async_trait, tracing::{debug, info, trace, warn}
 };
 
@@ -159,6 +159,8 @@ pub trait TokenTopology {
 
     fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool;
 
+    fn get_node_uuids(&self) -> Vec<NodeUuid>;
+
     fn compute_token(&self, table: &str, serialized_values: &SerializedValues) -> Token;
 }
 
@@ -182,6 +184,10 @@ impl TokenTopology for LiveTokenTopology {
             .get_nodes_info()
             .iter()
             .any(|node| node.host_id.as_u128() == node_uuid)
+    }
+
+    fn get_node_uuids(&self) -> Vec<NodeUuid> {
+        self.0.get_cluster_data().get_nodes_info().iter().map(|node| node.host_id.as_u128()).collect()
     }
 
     fn compute_token(&self, table: &str, partition_key: &SerializedValues) -> Token {
@@ -225,8 +231,12 @@ enum BatchSenderError {
 }
 
 #[async_trait]
-impl Ticker<(Batch, Vec<SerializedValues>), Nothing, BatchSenderError> for LiveBatchSender {
-    async fn tick(&mut self, now: Instant, msg: (Batch, Vec<SerializedValues>)) -> Result<(), BatchSenderError> {
+impl Ticker for LiveBatchSender {
+
+    type Input = (Batch, Vec<SerializedValues>);
+    type Error = BatchSenderError;
+
+    async fn tick(&mut self, now: Instant, msg: (Batch, Vec<SerializedValues>)) -> Result<Nothing, BatchSenderError> {
         let (batch, ser_values) = msg;
         scylladb_batch_size_observe(batch.statements.len());
         let session = Arc::clone(&self.session);
@@ -262,23 +272,49 @@ impl Ticker<(Batch, Vec<SerializedValues>), Nothing, BatchSenderError> for LiveB
 
 }
 
+
+struct Timer {
+    deadline: Instant,
+    linger: Duration
+}
+
+impl Timer {
+    fn new(linger: Duration) -> Self {
+        Timer {
+            deadline: Instant::now(),
+            linger,
+        }
+    }
+
+    fn restart(&mut self) {
+        self.deadline = Instant::now();
+    }
+
+    fn sleep(&self) -> Sleep {
+        time::sleep_until(self.deadline)
+    }
+}
+
 struct TimedBatcher {
     batch_size_limit: usize,
     batch: Vec<(Batch, Vec<SerializedValues>)>,
     curr_batch_size: usize,
     batch_sender_handle: AgentHandler<(Batch, Vec<SerializedValues>)>,
+    timer: Timer,
 }
 
 impl TimedBatcher {
     fn new(
         batch_size_limit: usize,
         batch_sender_handle: AgentHandler<(Batch, Vec<SerializedValues>)>,
+        batch_linger: Duration,
     ) -> Self {
         TimedBatcher {
             batch_size_limit,
             batch: Vec::new(),
             curr_batch_size: 0,
             batch_sender_handle,
+            timer: Timer::new(batch_linger),
         }
     }
 
@@ -301,7 +337,19 @@ impl TimedBatcher {
 }
 
 #[async_trait]
-impl Ticker<BatchRequest, Nothing, Nothing> for TimedBatcher {
+impl Ticker for TimedBatcher {
+
+    type Input = BatchRequest;
+    type Error = Nothing;
+
+    fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
+        self.timer.sleep().map(|_| ()).boxed()
+    }
+
+    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Nothing> {
+        self.timer.restart();
+        self.flush(now).await
+    } 
 
     async fn terminate(&mut self, now: Instant) -> Result<Nothing, Nothing> {
         self.flush(now).await
@@ -323,27 +371,55 @@ impl Ticker<BatchRequest, Nothing, Nothing> for TimedBatcher {
     }
 }
 
-#[async_trait]
-impl Timer<BatchRequest, Nothing, Nothing> for TimedBatcher {
-    async fn timeout(&mut self, now: Instant) -> Result<Nothing, Nothing> {
-        self.flush(now).await
-    } 
-}
-
-
 struct TokenAwareBatchRouter {
     token_topology: LiveTokenTopology,
     batchers: Vec<AgentHandler<BatchRequest>>,
+    node2batcher: HashMap<NodeUuid, usize>,
 }
 
+
+impl TokenAwareBatchRouter {
+    pub fn new(token_topology: LiveTokenTopology, batchers: Vec<AgentHandler<BatchRequest>>) -> Self {
+        let mut res = TokenAwareBatchRouter {
+            token_topology,
+            batchers,
+            node2batcher: Default::default(),
+        };
+        res.compute_batcher_assignments();
+        res
+    }
+
+
+    fn compute_batcher_assignments(&mut self) {
+        let node_uuids = self.token_topology.get_node_uuids();
+        let cycle_iter = self.batchers.iter().enumerate().map(|(i, _)| i).cycle();
+        self.node2batcher = node_uuids.into_iter().zip(cycle_iter).collect();
+    }
+
+}
+
+
+
 #[async_trait]
-impl Ticker<BatchRequest, Nothing, Nothing> for TokenAwareBatchRouter {
+impl Ticker for TokenAwareBatchRouter {
+
+    type Input = BatchRequest;
+    type Error = Nothing;
 
     async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
         let token = msg.item.resolve_token(&self.token_topology);
         let node_uuid = self.token_topology.get_node_uuid_for_token(token);
-        let i = (node_uuid % u128::from(self.batchers.len() as u64)) as u64;
-        let batcher = self.batchers.get(i as usize).unwrap();
+
+        if !self.node2batcher.contains_key(&node_uuid) {
+            self.compute_batcher_assignments();
+            warn!("Recomputing node to batcher assignments -- Token Topology got changed");
+        }
+
+        // It should be safe to unwrap otherwise we need to crash fast and investigate.
+        // If it panic, this would mean we got a node uuid that does not exists anymore.
+        let batcher_idx = *self.node2batcher.get(&node_uuid).unwrap();
+
+        let batcher = self.batchers.get(batcher_idx).unwrap();
         let result = batcher.send(msg).await;
         if result.is_ok() {
             scylladb_batch_request_lag_inc();
@@ -402,16 +478,17 @@ impl ScyllaSink {
             let tb = TimedBatcher::new(
                 config.batch_size_limit,
                 lbs_handler.clone(),
+                config.linger,
             );
-            let ah = system.spawn_timer(tb, config.linger);
+            let ah = system.spawn(tb);
             batchers.push(ah)
         }
         
 
-        let router = TokenAwareBatchRouter {
+        let router = TokenAwareBatchRouter::new(
             token_topology,
             batchers
-        };
+        );
 
         let router_handle = system.spawn(router);
 
