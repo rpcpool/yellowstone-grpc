@@ -1,8 +1,13 @@
 use {
-    anyhow::anyhow, core::fmt, deepsize::DeepSizeOf, scylla::{serialize::{row::SerializeRow, value::SerializeCql}, SerializeCql, SerializeRow}, std::{convert::Infallible, iter::repeat}, yellowstone_grpc_proto::{
+    anyhow::anyhow,
+    core::fmt,
+    deepsize::DeepSizeOf,
+    scylla::{SerializeCql, SerializeRow},
+    std::iter::repeat,
+    yellowstone_grpc_proto::{
         geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
         solana::storage::confirmed_block,
-    }
+    },
 };
 
 type Pubkey = [u8; 32];
@@ -108,20 +113,14 @@ pub struct InnerInstr {
     pub stack_height: Option<i64>,
 }
 
-impl TryFrom<confirmed_block::InnerInstruction> for InnerInstr {
-    type Error = anyhow::Error;
-
-    fn try_from(value: confirmed_block::InnerInstruction) -> Result<Self, Self::Error> {
-        let ret = InnerInstr {
+impl From<confirmed_block::InnerInstruction> for InnerInstr {
+    fn from(value: confirmed_block::InnerInstruction) -> Self {
+        InnerInstr {
             program_id_index: value.program_id_index.into(),
             accounts: value.accounts,
             data: value.data,
-            stack_height: value
-                .stack_height.map(|x| x.try_into())
-                .transpose()
-                .map_err( anyhow::Error::new)?
-        };
-        Ok(ret)
+            stack_height: value.stack_height.map(|x| x.into()),
+        }
     }
 }
 
@@ -227,10 +226,7 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
     type Error = anyhow::Error;
 
     fn try_from(status_meta: confirmed_block::TransactionStatusMeta) -> Result<Self, Self::Error> {
-
-        let error = status_meta
-            .err
-            .map(|err| err.err);
+        let error = status_meta.err.map(|err| err.err);
         let fee = status_meta.fee.try_into()?;
         let pre_balances: Vec<i64> = try_vec_into(status_meta.pre_balances)?;
         let post_balances = try_vec_into(status_meta.post_balances)?;
@@ -291,12 +287,20 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
     fn try_from(value: SubscribeUpdateTransaction) -> Result<Transaction, Self::Error> {
         let slot: i64 = value.slot as i64;
 
-        let val_tx = value.transaction.ok_or(anyhow!("missing transaction info object"))?;
+        let val_tx = value
+            .transaction
+            .ok_or(anyhow!("missing transaction info object"))?;
 
         let signature = val_tx.signature;
-        let meta = val_tx.meta.ok_or(anyhow!("missing transaction status meta"))?;
-        let tx = val_tx.transaction.ok_or(anyhow!("missing transaction object from transaction info"))?;
-        let message = tx.message.ok_or(anyhow!("missing message object from transaction"))?;
+        let meta = val_tx
+            .meta
+            .ok_or(anyhow!("missing transaction status meta"))?;
+        let tx = val_tx
+            .transaction
+            .ok_or(anyhow!("missing transaction object from transaction info"))?;
+        let message = tx
+            .message
+            .ok_or(anyhow!("missing message object from transaction"))?;
         let message_header = message.header.ok_or(anyhow!("missing message header"))?;
 
         let res = Transaction {
@@ -355,7 +359,6 @@ impl From<AccountUpdate>
 }
 
 impl AccountUpdate {
-
     pub fn zero_account() -> Self {
         let bytes_vec: Vec<u8> = repeat(0).take(32).collect();
         let bytes_arr: [u8; 32] = bytes_vec.try_into().unwrap();
@@ -382,8 +385,14 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
         } else {
             let acc: yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo =
                 value.account.unwrap();
-            let pubkey: Pubkey = acc.pubkey.try_into().map_err(|err| anyhow!("Invalid pubkey: {:?}", err))?;
-            let owner: Pubkey = acc.owner.try_into().map_err(|err| anyhow!("Invalid owner: {:?}", err))?;
+            let pubkey: Pubkey = acc
+                .pubkey
+                .try_into()
+                .map_err(|err| anyhow!("Invalid pubkey: {:?}", err))?;
+            let owner: Pubkey = acc
+                .owner
+                .try_into()
+                .map_err(|err| anyhow!("Invalid owner: {:?}", err))?;
             let ret = AccountUpdate {
                 slot: slot as i64,
                 pubkey,
@@ -400,15 +409,13 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
     }
 }
 
-
-
 // impl SerializeRow for AccountUpdate {
 //     fn serialize(
 //         &self,
 //         ctx: &scylla::serialize::row::RowSerializationContext<'_>,
 //         writer: &mut scylla::serialize::RowWriter,
 //     ) -> Result<(), scylla::serialize::SerializationError> {
-        
+
 //         for c in ctx.columns() {
 //             match c.name.as_str() {
 //                 "slot" => self.slot.serialize(&c.typ, writer.make_cell_writer())?,

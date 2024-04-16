@@ -6,21 +6,25 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{Reward, Transaction},
-    }, crate::scylladb::{agent::AgentSystem, types::AccountUpdate}, deepsize::DeepSizeOf, futures::{Future, FutureExt, SinkExt}, scylla::{
+    },
+    crate::scylladb::{agent::AgentSystem, types::AccountUpdate},
+    deepsize::DeepSizeOf,
+    futures::{Future, FutureExt},
+    scylla::{
         batch::{Batch, BatchStatement},
         frame::{response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
         routing::Token,
-        serialize::{
-            batch::{BatchValues, BatchValuesIterator},
-            row::{RowSerializationContext, SerializeRow, SerializedValues},
-        },
-        transport::errors::QueryError,
+        serialize::row::{RowSerializationContext, SerializeRow, SerializedValues},
         QueryResult, Session, SessionBuilder,
-    }, std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration}, tokio::{
+    },
+    std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration},
+    tokio::{
         task::JoinSet,
         time::{self, Instant, Sleep},
-    }, tonic::async_trait, tracing::{debug, error, info, warn}
+    },
+    tonic::async_trait,
+    tracing::warn,
 };
 
 const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
@@ -74,7 +78,6 @@ impl Default for ScyllaSinkConfig {
 struct LogBuffer(Batch, Vec<BatchItem>);
 
 impl LogBuffer {
-
     fn with_capacity(capacity: usize) -> LogBuffer {
         LogBuffer(Batch::default(), Vec::with_capacity(capacity))
     }
@@ -97,8 +100,7 @@ impl LogBuffer {
     }
 }
 
-
-
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, DeepSizeOf)]
 enum BatchItem {
     // Add other action if necessary...
@@ -120,14 +122,14 @@ impl SerializeRow for BatchItem {
     ) -> Result<(), scylla::serialize::SerializationError> {
         match self {
             BatchItem::Account(acc) => acc.serialize(ctx, writer),
-            BatchItem::Transaction(tx ) => tx.serialize(ctx, writer),
+            BatchItem::Transaction(tx) => tx.serialize(ctx, writer),
         }
     }
 
     fn is_empty(&self) -> bool {
         match self {
             BatchItem::Account(acc) => acc.is_empty(),
-            BatchItem::Transaction(tx ) => tx.is_empty(),
+            BatchItem::Transaction(tx) => tx.is_empty(),
         }
     }
 }
@@ -163,7 +165,6 @@ impl BatchItem {
         };
         tt.compute_token(table, &pk)
     }
-
 }
 
 type NodeUuid = u128;
@@ -218,10 +219,9 @@ impl TokenTopology for LiveTokenTopology {
     }
 }
 
-
 struct LiveBatchSender {
     session: Arc<Session>,
-    js: JoinSet<Result<(), BatchSenderError>>,
+    js: JoinSet<Result<(), anyhow::Error>>,
     max_inflight: usize,
 }
 
@@ -235,48 +235,37 @@ impl LiveBatchSender {
     }
 }
 
-#[derive(Debug)]
-enum BatchSenderError {
-    ScyllaError(QueryError),
-    ChannelClosed,
-}
-
-
-
 #[async_trait]
 impl Ticker for LiveBatchSender {
     type Input = LogBuffer;
-    type Error = BatchSenderError;
 
-    async fn tick(
-        &mut self,
-        now: Instant,
-        msg: LogBuffer,
-    ) -> Result<Nothing, BatchSenderError> {
+    async fn tick(&mut self, _now: Instant, msg: LogBuffer) -> Result<Nothing, anyhow::Error> {
         scylladb_batch_size_observe(msg.len());
         let session = Arc::clone(&self.session);
         let batch_len = msg.len();
         while self.js.len() >= self.max_inflight {
-            let _result = self.js
+            let _result = self
+                .js
                 .join_next()
                 .await
                 .unwrap()
-                .map_err(|_join_error| BatchSenderError::ChannelClosed)??;
+                .map_err(anyhow::Error::new)?;
         }
-        
+
         let (stmts, rows) = msg.split();
 
-        let prepared_batch = self.session
+        let prepared_batch = self
+            .session
             .prepare_batch(&stmts)
             .await
-            .map_err(|e| BatchSenderError::ScyllaError(e))?;
+            .map_err(anyhow::Error::new)?;
 
         self.js.spawn(async move {
             let result = session
                 .batch(&prepared_batch, &rows)
                 .await
                 .map(|_| ())
-                .map_err(BatchSenderError::ScyllaError);
+                .map_err(anyhow::Error::new);
 
             scylladb_batch_sent_inc();
             scylladb_batchitem_sent_inc_by(batch_len as u64);
@@ -309,7 +298,6 @@ impl Timer {
     }
 }
 
-
 struct TimedBatcher {
     batch_len_limit: usize,
     batch_size_limit_kb: usize,
@@ -340,17 +328,24 @@ impl TimedBatcher {
 
     fn get_batch_mut(&mut self) -> &mut LogBuffer {
         if self.batch.is_none() {
-            self.batch.replace(LogBuffer::with_capacity(self.batch_len_limit));
+            self.batch
+                .replace(LogBuffer::with_capacity(self.batch_len_limit));
         }
         self.batch.as_mut().unwrap()
     }
 
-    async fn flush(&mut self, _now: Instant) -> Result<(), ()> {
+    async fn flush(&mut self, _now: Instant) -> Result<(), anyhow::Error> {
         self.curr_batch_len = 0;
         self.curr_batch_size_in_bytes = 0;
         if let Some(batch) = self.batch.take() {
             if !batch.is_empty() {
-                return self.batch_sender_handle.send(batch).await;
+                return self
+                    .batch_sender_handle
+                    .send(batch)
+                    .await
+                    .map_err(|lost_data| {
+                        anyhow::anyhow!("Failed to flush {:?} items", lost_data.len())
+                    });
             }
         }
         self.timer.restart();
@@ -361,22 +356,21 @@ impl TimedBatcher {
 #[async_trait]
 impl Ticker for TimedBatcher {
     type Input = BatchRequest;
-    type Error = Nothing;
 
     fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
         self.timer.sleep().map(|_| ()).boxed()
     }
 
-    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Nothing> {
+    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, anyhow::Error> {
         self.timer.restart();
         self.flush(now).await
     }
 
-    async fn terminate(&mut self, now: Instant) -> Result<Nothing, Nothing> {
+    async fn terminate(&mut self, now: Instant) -> Result<Nothing, anyhow::Error> {
         self.flush(now).await
     }
 
-    async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
+    async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, anyhow::Error> {
         {
             let msg_bytes = msg.item.deep_size_of();
             if (self.curr_batch_size_in_bytes + msg_bytes) / 1024 >= self.batch_size_limit_kb {
@@ -427,9 +421,8 @@ impl TokenAwareBatchRouter {
 #[async_trait]
 impl Ticker for TokenAwareBatchRouter {
     type Input = BatchRequest;
-    type Error = Nothing;
 
-    async fn tick(&mut self, _now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
+    async fn tick(&mut self, _now: Instant, msg: BatchRequest) -> Result<Nothing, anyhow::Error> {
         let token = msg.item.resolve_token(&self.token_topology);
         let node_uuid = self.token_topology.get_node_uuid_for_token(token);
 
@@ -443,7 +436,10 @@ impl Ticker for TokenAwareBatchRouter {
         let batcher_idx = *self.node2batcher.get(&node_uuid).unwrap();
 
         let batcher = self.batchers.get(batcher_idx).unwrap();
-        let result = batcher.send(msg).await;
+        let result = batcher
+            .send(msg)
+            .await
+            .map_err(|_lost_msg| anyhow::anyhow!("Lost of a message in router"));
         if result.is_ok() {
             scylladb_batch_request_lag_inc();
         }
@@ -517,10 +513,7 @@ impl ScyllaSink {
             .await
             .unwrap();
 
-        let insert_tx_ps = session
-            .prepare(SCYLLADB_INSERT_TRANSACTION)
-            .await
-            .unwrap();
+        let insert_tx_ps = session.prepare(SCYLLADB_INSERT_TRANSACTION).await.unwrap();
 
         let token_topology = LiveTokenTopology(Arc::clone(&session));
 
@@ -531,7 +524,12 @@ impl ScyllaSink {
 
         let mut batchers = vec![];
         for _ in 1..4 {
-            let tb = TimedBatcher::new(config.batch_len_limit, config.batch_size_kb_limit, lbs_handler.clone(), config.linger);
+            let tb = TimedBatcher::new(
+                config.batch_len_limit,
+                config.batch_size_kb_limit,
+                lbs_handler.clone(),
+                config.linger,
+            );
             let ah = system.spawn(tb);
             batchers.push(ah)
         }
@@ -567,7 +565,8 @@ impl ScyllaSink {
             stmt: BatchStatement::PreparedStatement(self.insert_tx_ps.clone()),
             item: BatchItem::Transaction(tx),
         };
-        self.batch_router_handle.send(br)
+        self.batch_router_handle
+            .send(br)
             .await
             .map_err(|_e| ScyllaSinkError::SinkClose)
     }
