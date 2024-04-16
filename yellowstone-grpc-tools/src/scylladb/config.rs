@@ -6,8 +6,12 @@ use {
     std::{net::SocketAddr, time::Duration},
 };
 
-const fn default_batch_size_limit() -> usize {
+const fn default_batch_len_limit() -> usize {
     10
+}
+
+const fn default_batch_size_kb() -> usize {
+    131585
 }
 
 const fn default_linger() -> Duration {
@@ -59,8 +63,11 @@ pub struct ConfigGrpc2ScyllaDB {
     pub endpoint: String,
     pub x_token: Option<String>,
     pub request: ConfigGrpcRequest,
-    #[serde(default = "default_batch_size_limit")]
-    pub batch_size_limit: usize,
+    #[serde(default = "default_batch_len_limit")]
+    pub batch_len_limit: usize,
+
+    #[serde(default = "default_batch_size_kb")]
+    pub batch_size_kb: usize,
 
     #[serde(default = "default_linger")]
     #[serde_as(as = "DurationMilliSeconds<u64>")]
@@ -76,7 +83,8 @@ pub struct ConfigGrpc2ScyllaDB {
 impl ConfigGrpc2ScyllaDB {
     pub fn get_scylladb_sink_config(&self) -> ScyllaSinkConfig {
         ScyllaSinkConfig {
-            batch_size_limit: self.batch_size_limit,
+            batch_len_limit: self.batch_len_limit,
+            batch_size_kb_limit: self.batch_size_kb,
             linger: self.linger,
             keyspace: self.keyspace.clone(),
             max_inflight_batch_delivery: self.max_inflight_batch_delivery,
