@@ -4,7 +4,7 @@ use {
     tokio::{
         sync::{self, mpsc::channel},
         task::JoinHandle,
-        time::{self, Instant},
+        time::Instant,
     },
     tonic::async_trait,
     tracing::error,
@@ -21,13 +21,13 @@ pub trait Ticker {
         pending().boxed()
     }
 
-    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, Self::Error> {
+    async fn on_timeout(&mut self, _now: Instant) -> Result<Nothing, Self::Error> {
         Ok(())
     }
 
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> Result<Nothing, Self::Error>;
 
-    async fn terminate(&mut self, now: Instant) -> Result<Nothing, Self::Error> {
+    async fn terminate(&mut self, _now: Instant) -> Result<Nothing, Self::Error> {
         Ok(())
     }
 }
@@ -41,6 +41,7 @@ pub enum AgentHandlerError {
 #[derive(Clone)]
 pub struct AgentHandler<I> {
     sender: sync::mpsc::Sender<I>,
+    #[allow(dead_code)]
     handle: Arc<JoinHandle<Result<Nothing, AgentHandlerError>>>,
 }
 
@@ -64,8 +65,8 @@ impl AgentSystem {
             loop {
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
-                        let res = ticker.on_timeout(Instant::now()).await;
-                        res
+
+                        ticker.on_timeout(Instant::now()).await
                     }
                     opt_msg = receiver.recv() => {
                         match opt_msg {

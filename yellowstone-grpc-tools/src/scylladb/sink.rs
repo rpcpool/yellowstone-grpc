@@ -2,53 +2,32 @@ use {
     super::{
         agent::{AgentHandler, Nothing, Ticker},
         prom::{
-            scylladb_batch_queue_dec, scylladb_batch_queue_inc, scylladb_batch_request_lag_inc,
-            scylladb_batch_request_lag_sub, scylladb_batch_sent_inc, scylladb_batch_size_observe,
-            scylladb_batchitem_sent_inc_by, scylladb_peak_batch_linger_observe,
+            scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
+            scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
+        types::Reward,
     },
     crate::scylladb::{agent::AgentSystem, types::AccountUpdate},
-    futures::{channel::mpsc, future::pending, Future, FutureExt, SinkExt, TryFutureExt},
-    google_cloud_pubsub::client::google_cloud_auth::{
-        token, token_source::service_account_token_source::ServiceAccountTokenSource,
-    },
+    futures::{Future, FutureExt},
     scylla::{
-        batch::{self, Batch, BatchStatement},
-        frame::{
-            request::{query, Query},
-            response::result::ColumnType,
-            Compression,
-        },
-        prepared_statement::{PreparedStatement, TokenCalculationError},
+        batch::{Batch, BatchStatement},
+        frame::{response::result::ColumnType, Compression},
+        prepared_statement::PreparedStatement,
         routing::Token,
         serialize::{
             batch::{BatchValues, BatchValuesIterator},
             row::{RowSerializationContext, SerializedValues},
         },
-        transport::{errors::QueryError, Node},
-        Session, SessionBuilder,
+        transport::errors::QueryError,
+        QueryResult, Session, SessionBuilder,
     },
-    sha2::digest::HashMarker,
-    std::{
-        cmp::Reverse,
-        collections::{BinaryHeap, HashMap},
-        hash::Hash,
-        num,
-        pin::Pin,
-        sync::Arc,
-        time::Duration,
-    },
+    std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration},
     tokio::{
-        sync::mpsc::{
-            channel,
-            error::{SendError, TryRecvError, TrySendError},
-            Receiver, Sender, UnboundedReceiver, UnboundedSender,
-        },
-        task::{JoinError, JoinHandle, JoinSet},
+        task::JoinSet,
         time::{self, Instant, Sleep},
     },
     tonic::async_trait,
-    tracing::{debug, info, trace, warn},
+    tracing::{info, warn, debug},
 };
 
 const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
@@ -297,7 +276,7 @@ impl Ticker for LiveBatchSender {
                 .map(|_| ());
 
             let after = Instant::now();
-            info!(
+            debug!(
                 "Batch sent: size={:?}, latency={:?}",
                 batch.statements.len() as i64,
                 after - now
@@ -306,7 +285,7 @@ impl Ticker for LiveBatchSender {
             scylladb_batch_sent_inc();
             scylladb_batchitem_sent_inc_by(batch.statements.len() as u64);
             scylladb_batch_request_lag_sub(batch.statements.len() as i64);
-            result.map_err(|query_error| BatchSenderError::ScyllaError(query_error))
+            result.map_err(BatchSenderError::ScyllaError)
         });
         Ok(())
     }
@@ -326,7 +305,7 @@ impl Timer {
     }
 
     fn restart(&mut self) {
-        self.deadline = Instant::now();
+        self.deadline = Instant::now() + self.linger;
     }
 
     fn sleep(&self) -> Sleep {
@@ -365,7 +344,7 @@ impl TimedBatcher {
         self.batch.get_mut(0).unwrap()
     }
 
-    async fn flush(&mut self, now: Instant) -> Result<(), ()> {
+    async fn flush(&mut self, _now: Instant) -> Result<(), ()> {
         self.curr_batch_size = 0;
         if let Some(batch) = self.batch.pop() {
             if !batch.1.is_empty() {
@@ -397,7 +376,7 @@ impl Ticker for TimedBatcher {
     async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
         {
             let ser_row = msg.item.serialize();
-            let ref mut mybatch = self.get_batch_mut();
+            let mybatch = &mut self.get_batch_mut();
             mybatch.0.append_statement(msg.stmt);
             mybatch.1.push(ser_row);
             self.curr_batch_size += 1;
@@ -442,7 +421,7 @@ impl Ticker for TokenAwareBatchRouter {
     type Input = BatchRequest;
     type Error = Nothing;
 
-    async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
+    async fn tick(&mut self, _now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
         let token = msg.item.resolve_token(&self.token_topology);
         let node_uuid = self.token_topology.get_node_uuid_for_token(token);
 
@@ -472,6 +451,39 @@ pub struct ScyllaSink {
 #[derive(Debug)]
 pub enum ScyllaSinkError {
     SinkClose,
+}
+
+pub struct Test {
+    session: Arc<Session>,
+}
+
+impl Test {
+    pub async fn new(
+        hostname: impl AsRef<str>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Test {
+        let session: Session = SessionBuilder::new()
+            .known_node(hostname)
+            .user(username, password)
+            .compression(Some(Compression::Lz4))
+            .use_keyspace("solana", false)
+            .build()
+            .await
+            .unwrap();
+        Test {
+            session: Arc::new(session),
+        }
+    }
+
+    pub async fn test(&self, id: i64, x: Reward) -> QueryResult {
+        let ps = self
+            .session
+            .prepare("insert into test (id, x) values (?, ?)")
+            .await
+            .unwrap();
+        self.session.execute(&ps, (id, x)).await.unwrap()
+    }
 }
 
 impl ScyllaSink {

@@ -1,6 +1,5 @@
 use {
-    prometheus::{Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts},
-    scylla::batch,
+    prometheus::{Histogram, HistogramOpts, IntCounter, IntGauge},
     std::time::Duration,
 };
 
