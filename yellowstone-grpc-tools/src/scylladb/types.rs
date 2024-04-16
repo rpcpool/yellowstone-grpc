@@ -1,13 +1,8 @@
 use {
-    core::fmt,
-    scylla::{
-        SerializeCql,
-    },
-    std::iter::repeat,
-    yellowstone_grpc_proto::{
+    anyhow::anyhow, core::fmt, scylla::{serialize::value::SerializeCql, SerializeCql}, std::{convert::Infallible, iter::repeat}, yellowstone_grpc_proto::{
         geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
         solana::storage::confirmed_block,
-    },
+    }
 };
 
 type Pubkey = [u8; 32];
@@ -113,7 +108,7 @@ pub struct InnerInstr {
 }
 
 impl TryFrom<confirmed_block::InnerInstruction> for InnerInstr {
-    type Error = ();
+    type Error = anyhow::Error;
 
     fn try_from(value: confirmed_block::InnerInstruction) -> Result<Self, Self::Error> {
         let ret = InnerInstr {
@@ -123,7 +118,7 @@ impl TryFrom<confirmed_block::InnerInstruction> for InnerInstr {
             stack_height: value
                 .stack_height.map(|x| x.try_into())
                 .transpose()
-                .map_err(|_| ())?,
+                .map_err( anyhow::Error::new)?
         };
         Ok(ret)
     }
@@ -137,15 +132,10 @@ pub struct InnerInstrs {
 }
 
 impl TryFrom<confirmed_block::InnerInstructions> for InnerInstrs {
-    type Error = ();
+    type Error = anyhow::Error;
 
     fn try_from(value: confirmed_block::InnerInstructions) -> Result<Self, Self::Error> {
-        let mut instructions: Vec<InnerInstr> = Vec::with_capacity(value.instructions.len());
-
-        for v in value.instructions {
-            let v2 = v.try_into()?;
-            instructions.push(v2);
-        }
+        let mut instructions: Vec<InnerInstr> = try_vec_into(value.instructions)?;
 
         let index = value.index.into();
         Ok(InnerInstrs {
@@ -206,12 +196,12 @@ pub struct Reward {
 }
 
 impl TryFrom<confirmed_block::Reward> for Reward {
-    type Error = ();
+    type Error = anyhow::Error;
     fn try_from(value: confirmed_block::Reward) -> Result<Self, Self::Error> {
         Ok(Reward {
             pubkey: value.pubkey,
             lamports: value.lamports,
-            post_balance: value.post_balance.try_into().map_err(|_| ())?,
+            post_balance: value.post_balance.try_into()?,
             reward_type: value.reward_type,
             commission: value.commission,
         })
@@ -221,7 +211,7 @@ impl TryFrom<confirmed_block::Reward> for Reward {
 #[derive(Debug, SerializeCql)]
 #[scylla(flavor = "match_by_name")]
 pub struct TransactionMeta {
-    pub error: Option<String>,
+    pub error: Option<Vec<u8>>,
     pub fee: i64,
     pub pre_balances: Vec<i64>,
     pub post_balances: Vec<i64>,
@@ -233,17 +223,16 @@ pub struct TransactionMeta {
 }
 
 impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
-    type Error = ();
+    type Error = anyhow::Error;
 
     fn try_from(status_meta: confirmed_block::TransactionStatusMeta) -> Result<Self, Self::Error> {
+
         let error = status_meta
             .err
-            .map(|err| String::from_utf8(err.err))
-            .transpose()
-            .map_err(|_| ())?;
-        let fee = status_meta.fee.try_into().map_err(|_| ())?;
-        let pre_balances: Vec<i64> = try_vec_into(status_meta.pre_balances).map_err(|_| ())?;
-        let post_balances = try_vec_into(status_meta.post_balances).map_err(|_| ())?;
+            .map(|err| err.err);
+        let fee = status_meta.fee.try_into()?;
+        let pre_balances: Vec<i64> = try_vec_into(status_meta.pre_balances)?;
+        let post_balances = try_vec_into(status_meta.post_balances)?;
         let inner_instructions: Vec<InnerInstrs> = try_vec_into(status_meta.inner_instructions)?;
         let log_messages = status_meta.log_messages;
 
@@ -297,18 +286,18 @@ pub struct Transaction {
 }
 
 impl TryFrom<SubscribeUpdateTransaction> for Transaction {
-    type Error = ();
+    type Error = anyhow::Error;
 
     fn try_from(value: SubscribeUpdateTransaction) -> Result<Transaction, Self::Error> {
-        let slot: i64 = value.slot.try_into().map_err(|_| ())?;
+        let slot: i64 = value.slot.try_into()?;
 
-        let val_tx = value.transaction.ok_or(())?;
+        let val_tx = value.transaction.ok_or(anyhow!("missing transaction info object"))?;
 
         let signature = val_tx.signature;
-        let meta = val_tx.meta.ok_or(())?;
-        let tx = val_tx.transaction.ok_or(())?;
-        let message = tx.message.ok_or(())?;
-        let message_header = message.header.ok_or(())?;
+        let meta = val_tx.meta.ok_or(anyhow!("missing transaction status meta"))?;
+        let tx = val_tx.transaction.ok_or(anyhow!("missing transaction object from transaction info"))?;
+        let message = tx.message.ok_or(anyhow!("missing message object from transaction"))?;
+        let message_header = message.header.ok_or(anyhow!("missing message header"))?;
 
         let res = Transaction {
             slot,
@@ -316,14 +305,12 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
             signatures: tx.signatures,
             num_readonly_signed_accounts: <i64>::try_from(
                 message_header.num_readonly_signed_accounts,
-            )
-            .map_err(|_| ())?,
+            ).map_err(anyhow::Error::new)?,
             num_readonly_unsigned_accounts: <i64>::try_from(
                 message_header.num_readonly_unsigned_accounts,
-            )
-            .map_err(|_| ())?,
+            ).map_err(anyhow::Error::new)?,
             num_required_signatures: <i64>::try_from(message_header.num_required_signatures)
-                .map_err(|_| ())?,
+                .map_err(anyhow::Error::new)?,
             account_keys: message.account_keys,
             recent_blockhash: message.recent_blockhash,
             instructions: message
@@ -408,16 +395,16 @@ impl AccountUpdate {
 }
 
 impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
-    type Error = ();
+    type Error = anyhow::Error;
     fn try_from(value: SubscribeUpdateAccount) -> Result<Self, Self::Error> {
         let slot = value.slot;
         if value.account.is_none() {
-            Err(())
+            Err(anyhow!("Missing account update."))
         } else {
             let acc: yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo =
                 value.account.unwrap();
-            let pubkey: Pubkey = acc.pubkey.try_into().map_err(|_| ())?;
-            let owner: Pubkey = acc.owner.try_into().map_err(|_| ())?;
+            let pubkey: Pubkey = acc.pubkey.try_into().map_err(|err| anyhow!("Invalid pubkey: {:?}", err))?;
+            let owner: Pubkey = acc.owner.try_into().map_err(|err| anyhow!("Invalid owner: {:?}", err))?;
             let ret = AccountUpdate {
                 slot: slot as i64,
                 pubkey,

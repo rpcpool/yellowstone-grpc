@@ -154,20 +154,20 @@ impl ArgsAction {
                             //     "Received an account update slot={:?}, pubkey={:?}",
                             //     msg.slot, pubkey_opt
                             // );
-                            let acc_update = msg.try_into();
+                            let acc_update = msg.clone().try_into();
                             if acc_update.is_err() {
                                 // Drop the message if invalid
-                                continue;
+                                warn!("failed to parse account update: {:?}", acc_update.err().unwrap());
+                                continue
                             }
                             // If the sink is close, let it crash...
                             sink.log_account_update(acc_update.unwrap()).await.unwrap();
                         }
                         UpdateOneof::Transaction(msg) => {
-                            let tx: Result<Transaction, ()> = msg.clone().try_into();
+                            let tx: Result<Transaction, anyhow::Error> = msg.clone().try_into();
                             if tx.is_err() {
-                                warn!("failed to convert update tx: {:?}", msg);
-                            } else {
-                                info!("success, got: {:?}", tx);
+                                warn!("failed to convert update tx: {:?}", tx.err().unwrap());
+                                continue
                             }
                         },
                         _ => continue,
