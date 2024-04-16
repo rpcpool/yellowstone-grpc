@@ -61,7 +61,7 @@ enum BatchItem {
     Account(AccountUpdate),
 }
 
-pub struct BatchRequest {
+struct BatchRequest {
     stmt: BatchStatement,
     item: BatchItem,
 }
@@ -119,6 +119,7 @@ impl BatchItem {
             BatchItem::Account(acc_update) => acc_update.into(),
         }
     }
+
 }
 
 #[async_trait]
@@ -218,14 +219,7 @@ impl TokenTopology for LiveTokenTopology {
     }
 }
 
-#[async_trait]
-pub trait BatchSender: Send + Sync + Clone {
-    async fn send_batch(
-        self,
-        batch: Batch,
-        serialized_rows: Vec<SerializedValues>,
-    ) -> Result<(), QueryError>;
-}
+
 struct LiveBatchSender {
     session: Arc<Session>,
     js: JoinSet<Result<(), BatchSenderError>>,
@@ -376,7 +370,7 @@ impl Ticker for TimedBatcher {
     async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
         {
             let ser_row = msg.item.serialize();
-            let mybatch = &mut self.get_batch_mut();
+            let mybatch = self.get_batch_mut();
             mybatch.0.append_statement(msg.stmt);
             mybatch.1.push(ser_row);
             self.curr_batch_size += 1;
