@@ -5,41 +5,54 @@ use {
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
-        types::Reward,
-    },
-    crate::scylladb::{agent::AgentSystem, types::AccountUpdate},
-    futures::{Future, FutureExt},
-    scylla::{
+        types::{Reward, Transaction},
+    }, crate::scylladb::{agent::AgentSystem, types::AccountUpdate}, deepsize::DeepSizeOf, futures::{Future, FutureExt, SinkExt}, scylla::{
         batch::{Batch, BatchStatement},
         frame::{response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
         routing::Token,
         serialize::{
             batch::{BatchValues, BatchValuesIterator},
-            row::{RowSerializationContext, SerializedValues},
+            row::{RowSerializationContext, SerializeRow, SerializedValues},
         },
         transport::errors::QueryError,
         QueryResult, Session, SessionBuilder,
-    },
-    std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration},
-    tokio::{
+    }, std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration}, tokio::{
         task::JoinSet,
         time::{self, Instant, Sleep},
-    },
-    tonic::async_trait,
-    tracing::{info, warn, debug},
+    }, tonic::async_trait, tracing::{debug, error, info, warn}
 };
 
 const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
+const SCYLLADB_TRANSACTION_LOG_TABLE_NAME: &str = "transaction_log";
 
 const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
-    INSERT INTO account_update_log (slot, pubkey, lamports, owner, executable, rent_epoch, write_version, data, txn_signature)
+    INSERT INTO solana.account_update_log (slot, pubkey, lamports, owner, executable, rent_epoch, write_version, data, txn_signature)
     VALUES (?,?,?,?,?,?,?,?,?)
+"###;
+
+const SCYLLADB_INSERT_TRANSACTION: &str = r###"
+    INSERT INTO solana.transaction_log (
+        slot, 
+        signature, 
+        recent_blockhash, 
+        account_keys, 
+        address_table_lookups, 
+        instructions, 
+        meta, 
+        num_readonly_signed_accounts, 
+        num_readonly_unsigned_accounts,
+        num_required_signatures,
+        signatures,
+        versioned
+    )
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 "###;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct ScyllaSinkConfig {
-    pub batch_size_limit: usize,
+    pub batch_len_limit: usize,
+    pub batch_size_kb_limit: usize,
     pub linger: Duration,
     pub keyspace: String,
     pub max_inflight_batch_delivery: usize,
@@ -48,7 +61,8 @@ pub struct ScyllaSinkConfig {
 impl Default for ScyllaSinkConfig {
     fn default() -> Self {
         Self {
-            batch_size_limit: 3000,
+            batch_len_limit: 300,
+            batch_size_kb_limit: 1024 * 128,
             linger: Duration::from_millis(10),
             keyspace: String::from("solana"),
             max_inflight_batch_delivery: 100,
@@ -56,38 +70,65 @@ impl Default for ScyllaSinkConfig {
     }
 }
 
+#[derive(Default, Clone)]
+struct LogBuffer(Batch, Vec<BatchItem>);
+
+impl LogBuffer {
+
+    fn with_capacity(capacity: usize) -> LogBuffer {
+        LogBuffer(Batch::default(), Vec::with_capacity(capacity))
+    }
+
+    fn split(self) -> (Batch, Vec<BatchItem>) {
+        (self.0, self.1)
+    }
+
+    fn push(&mut self, br: BatchRequest) {
+        self.0.append_statement(br.stmt);
+        self.1.push(br.item);
+    }
+
+    fn len(&self) -> usize {
+        self.1.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.1.is_empty()
+    }
+}
+
+
+
+#[derive(Debug, Clone, DeepSizeOf)]
 enum BatchItem {
     // Add other action if necessary...
     Account(AccountUpdate),
+    Transaction(Transaction),
 }
 
+#[derive(Clone)]
 struct BatchRequest {
     stmt: BatchStatement,
     item: BatchItem,
 }
 
-impl From<AccountUpdate> for SerializedValues {
-    fn from(account_update: AccountUpdate) -> Self {
-        let mut row = SerializedValues::new();
-        row.add_value(&account_update.slot, &ColumnType::BigInt)
-            .unwrap();
-        row.add_value(&account_update.pubkey, &ColumnType::Blob)
-            .unwrap();
-        row.add_value(&account_update.lamports, &ColumnType::BigInt)
-            .unwrap();
-        row.add_value(&account_update.owner, &ColumnType::Blob)
-            .unwrap();
-        row.add_value(&account_update.executable, &ColumnType::Boolean)
-            .unwrap();
-        row.add_value(&account_update.rent_epoch, &ColumnType::BigInt)
-            .unwrap();
-        row.add_value(&account_update.write_version, &ColumnType::BigInt)
-            .unwrap();
-        row.add_value(&account_update.data, &ColumnType::Blob)
-            .unwrap();
-        row.add_value(&account_update.txn_signature, &ColumnType::Blob)
-            .unwrap();
-        row
+impl SerializeRow for BatchItem {
+    fn serialize(
+        &self,
+        ctx: &RowSerializationContext<'_>,
+        writer: &mut scylla::serialize::RowWriter,
+    ) -> Result<(), scylla::serialize::SerializationError> {
+        match self {
+            BatchItem::Account(acc) => acc.serialize(ctx, writer),
+            BatchItem::Transaction(tx ) => tx.serialize(ctx, writer),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            BatchItem::Account(acc) => acc.is_empty(),
+            BatchItem::Transaction(tx ) => tx.is_empty(),
+        }
     }
 }
 
@@ -102,6 +143,14 @@ impl BatchItem {
                 pk_ser.add_value(&pubkey, &ColumnType::Blob).unwrap();
                 pk_ser
             }
+            BatchItem::Transaction(tx) => {
+                let slot = tx.slot;
+                let sig = &tx.signature;
+                let mut pk_ser = SerializedValues::new();
+                pk_ser.add_value(&slot, &ColumnType::BigInt).unwrap();
+                pk_ser.add_value(sig, &ColumnType::Blob).unwrap();
+                pk_ser
+            }
         }
     }
 
@@ -110,64 +159,14 @@ impl BatchItem {
 
         let table = match self {
             BatchItem::Account(_) => SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME,
+            BatchItem::Transaction(_) => SCYLLADB_TRANSACTION_LOG_TABLE_NAME,
         };
         tt.compute_token(table, &pk)
     }
 
-    fn serialize(self) -> SerializedValues {
-        match self {
-            BatchItem::Account(acc_update) => acc_update.into(),
-        }
-    }
-
-}
-
-#[async_trait]
-pub trait ScyllaBatcher {
-    async fn batch(&self, br: BatchRequest);
 }
 
 type NodeUuid = u128;
-
-struct PreSerializedBatchValuesIterator<'a> {
-    inner: &'a [SerializedValues],
-    i: usize,
-}
-
-struct PreSerializedBatchValues(Vec<SerializedValues>);
-
-impl BatchValues for PreSerializedBatchValues {
-    type BatchValuesIter<'r> = PreSerializedBatchValuesIterator<'r>;
-
-    fn batch_values_iter(&self) -> Self::BatchValuesIter<'_> {
-        PreSerializedBatchValuesIterator {
-            inner: &self.0,
-            i: 0,
-        }
-    }
-}
-
-impl<'bv> BatchValuesIterator<'bv> for PreSerializedBatchValuesIterator<'bv> {
-    fn serialize_next(
-        &mut self,
-        _ctx: &RowSerializationContext<'_>,
-        writer: &mut scylla::serialize::RowWriter,
-    ) -> Option<Result<(), scylla::serialize::SerializationError>> {
-        writer.append_serialize_row(self.inner.get(self.i).unwrap());
-        self.i += 1;
-        Some(Ok(()))
-    }
-
-    fn is_empty_next(&mut self) -> Option<bool> {
-        self.inner.get(self.i).map(|_| true)
-    }
-
-    fn skip_next(&mut self) -> Option<()> {
-        self.inner.get(self.i).map(|_| {
-            self.i += 1;
-        })
-    }
-}
 
 pub trait TokenTopology {
     fn get_node_uuid_for_token(&self, token: Token) -> NodeUuid;
@@ -242,44 +241,47 @@ enum BatchSenderError {
     ChannelClosed,
 }
 
+
+
 #[async_trait]
 impl Ticker for LiveBatchSender {
-    type Input = (Batch, Vec<SerializedValues>);
+    type Input = LogBuffer;
     type Error = BatchSenderError;
 
     async fn tick(
         &mut self,
         now: Instant,
-        msg: (Batch, Vec<SerializedValues>),
+        msg: LogBuffer,
     ) -> Result<Nothing, BatchSenderError> {
-        let (batch, ser_values) = msg;
-        scylladb_batch_size_observe(batch.statements.len());
+        scylladb_batch_size_observe(msg.len());
         let session = Arc::clone(&self.session);
-
+        let batch_len = msg.len();
         while self.js.len() >= self.max_inflight {
-            let result = self.js.join_next().await.unwrap();
-            if result.is_err() {
-                return Err(BatchSenderError::ChannelClosed);
-            }
+            let _result = self.js
+                .join_next()
+                .await
+                .unwrap()
+                .map_err(|_join_error| BatchSenderError::ChannelClosed)??;
         }
+        
+        let (stmts, rows) = msg.split();
+
+        let prepared_batch = self.session
+            .prepare_batch(&stmts)
+            .await
+            .map_err(|e| BatchSenderError::ScyllaError(e))?;
 
         self.js.spawn(async move {
             let result = session
-                .batch(&batch, PreSerializedBatchValues(ser_values))
+                .batch(&prepared_batch, &rows)
                 .await
-                .map(|_| ());
-
-            let after = Instant::now();
-            debug!(
-                "Batch sent: size={:?}, latency={:?}",
-                batch.statements.len() as i64,
-                after - now
-            );
+                .map(|_| ())
+                .map_err(BatchSenderError::ScyllaError);
 
             scylladb_batch_sent_inc();
-            scylladb_batchitem_sent_inc_by(batch.statements.len() as u64);
-            scylladb_batch_request_lag_sub(batch.statements.len() as i64);
-            result.map_err(BatchSenderError::ScyllaError)
+            scylladb_batchitem_sent_inc_by(batch_len as u64);
+            scylladb_batch_request_lag_sub(batch_len as i64);
+            result
         });
         Ok(())
     }
@@ -307,44 +309,51 @@ impl Timer {
     }
 }
 
+
 struct TimedBatcher {
-    batch_size_limit: usize,
-    batch: Vec<(Batch, Vec<SerializedValues>)>,
-    curr_batch_size: usize,
-    batch_sender_handle: AgentHandler<(Batch, Vec<SerializedValues>)>,
+    batch_len_limit: usize,
+    batch_size_limit_kb: usize,
+    batch: Option<LogBuffer>,
+    curr_batch_len: usize,
+    curr_batch_size_in_bytes: usize,
+    batch_sender_handle: AgentHandler<LogBuffer>,
     timer: Timer,
 }
 
 impl TimedBatcher {
     fn new(
-        batch_size_limit: usize,
-        batch_sender_handle: AgentHandler<(Batch, Vec<SerializedValues>)>,
+        batch_len_limit: usize,
+        batch_size_limit_kb: usize,
+        batch_sender_handle: AgentHandler<LogBuffer>,
         batch_linger: Duration,
     ) -> Self {
         TimedBatcher {
-            batch_size_limit,
-            batch: Vec::new(),
-            curr_batch_size: 0,
+            batch_len_limit,
+            batch_size_limit_kb,
+            batch: None,
+            curr_batch_len: 0,
+            curr_batch_size_in_bytes: 0,
             batch_sender_handle,
             timer: Timer::new(batch_linger),
         }
     }
 
-    fn get_batch_mut(&mut self) -> &mut (Batch, Vec<SerializedValues>) {
-        if self.batch.is_empty() {
-            self.batch
-                .push((Batch::default(), Vec::with_capacity(self.batch_size_limit)));
+    fn get_batch_mut(&mut self) -> &mut LogBuffer {
+        if self.batch.is_none() {
+            self.batch.replace(LogBuffer::with_capacity(self.batch_len_limit));
         }
-        self.batch.get_mut(0).unwrap()
+        self.batch.as_mut().unwrap()
     }
 
     async fn flush(&mut self, _now: Instant) -> Result<(), ()> {
-        self.curr_batch_size = 0;
-        if let Some(batch) = self.batch.pop() {
-            if !batch.1.is_empty() {
+        self.curr_batch_len = 0;
+        self.curr_batch_size_in_bytes = 0;
+        if let Some(batch) = self.batch.take() {
+            if !batch.is_empty() {
                 return self.batch_sender_handle.send(batch).await;
             }
         }
+        self.timer.restart();
         Ok(())
     }
 }
@@ -369,13 +378,18 @@ impl Ticker for TimedBatcher {
 
     async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, Nothing> {
         {
-            let ser_row = msg.item.serialize();
+            let msg_bytes = msg.item.deep_size_of();
+            if (self.curr_batch_size_in_bytes + msg_bytes) / 1024 >= self.batch_size_limit_kb {
+                self.flush(now).await?;
+            }
+
             let mybatch = self.get_batch_mut();
-            mybatch.0.append_statement(msg.stmt);
-            mybatch.1.push(ser_row);
-            self.curr_batch_size += 1;
+
+            mybatch.push(msg);
+            self.curr_batch_len += 1;
+            self.curr_batch_size_in_bytes += msg_bytes;
         }
-        if self.curr_batch_size >= self.batch_size_limit {
+        if self.curr_batch_len >= self.batch_len_limit {
             self.flush(now).await
         } else {
             Ok(())
@@ -439,6 +453,7 @@ impl Ticker for TokenAwareBatchRouter {
 
 pub struct ScyllaSink {
     insert_account_update_ps: PreparedStatement,
+    insert_tx_ps: PreparedStatement,
     batch_router_handle: AgentHandler<BatchRequest>,
 }
 
@@ -502,6 +517,11 @@ impl ScyllaSink {
             .await
             .unwrap();
 
+        let insert_tx_ps = session
+            .prepare(SCYLLADB_INSERT_TRANSACTION)
+            .await
+            .unwrap();
+
         let token_topology = LiveTokenTopology(Arc::clone(&session));
 
         let system = AgentSystem::new(10000);
@@ -511,7 +531,7 @@ impl ScyllaSink {
 
         let mut batchers = vec![];
         for _ in 1..4 {
-            let tb = TimedBatcher::new(config.batch_size_limit, lbs_handler.clone(), config.linger);
+            let tb = TimedBatcher::new(config.batch_len_limit, config.batch_size_kb_limit, lbs_handler.clone(), config.linger);
             let ah = system.spawn(tb);
             batchers.push(ah)
         }
@@ -523,6 +543,7 @@ impl ScyllaSink {
         //let batch_sender_handle = spawn_live_batch_sender(Arc::clone(&session), config.batch_size_limit, 2300);
         ScyllaSink {
             insert_account_update_ps,
+            insert_tx_ps,
             batch_router_handle: router_handle,
         }
     }
@@ -537,6 +558,16 @@ impl ScyllaSink {
         };
         self.batch_router_handle
             .send(br)
+            .await
+            .map_err(|_e| ScyllaSinkError::SinkClose)
+    }
+
+    pub async fn log_transaction(&mut self, tx: Transaction) -> Result<(), ScyllaSinkError> {
+        let br = BatchRequest {
+            stmt: BatchStatement::PreparedStatement(self.insert_tx_ps.clone()),
+            item: BatchItem::Transaction(tx),
+        };
+        self.batch_router_handle.send(br)
             .await
             .map_err(|_e| ScyllaSinkError::SinkClose)
     }

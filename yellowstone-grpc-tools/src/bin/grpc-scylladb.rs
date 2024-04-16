@@ -169,6 +169,7 @@ impl ArgsAction {
                                 warn!("failed to convert update tx: {:?}", tx.err().unwrap());
                                 continue
                             }
+                            sink.log_transaction(tx.unwrap()).await.unwrap();
                         },
                         _ => continue,
                     };

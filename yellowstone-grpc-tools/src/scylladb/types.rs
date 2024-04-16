@@ -1,5 +1,5 @@
 use {
-    anyhow::anyhow, core::fmt, scylla::{serialize::value::SerializeCql, SerializeCql}, std::{convert::Infallible, iter::repeat}, yellowstone_grpc_proto::{
+    anyhow::anyhow, core::fmt, deepsize::DeepSizeOf, scylla::{serialize::{row::SerializeRow, value::SerializeCql}, SerializeCql, SerializeRow}, std::{convert::Infallible, iter::repeat}, yellowstone_grpc_proto::{
         geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
         solana::storage::confirmed_block,
     }
@@ -7,6 +7,7 @@ use {
 
 type Pubkey = [u8; 32];
 
+#[derive(SerializeRow, Clone, Debug, DeepSizeOf)]
 pub struct AccountUpdate {
     pub slot: i64,
     pub pubkey: Pubkey,
@@ -48,7 +49,7 @@ where
 //     Ok(res)
 // }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct MessageAddrTableLookup {
     pub account_key: Vec<u8>,
@@ -72,7 +73,7 @@ impl From<confirmed_block::MessageAddressTableLookup> for MessageAddrTableLookup
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct CompiledInstr {
     pub program_id_index: i64,
@@ -98,7 +99,7 @@ impl From<confirmed_block::CompiledInstruction> for CompiledInstr {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct InnerInstr {
     pub program_id_index: i64,
@@ -124,7 +125,7 @@ impl TryFrom<confirmed_block::InnerInstruction> for InnerInstr {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct InnerInstrs {
     pub index: i64,
@@ -135,7 +136,7 @@ impl TryFrom<confirmed_block::InnerInstructions> for InnerInstrs {
     type Error = anyhow::Error;
 
     fn try_from(value: confirmed_block::InnerInstructions) -> Result<Self, Self::Error> {
-        let mut instructions: Vec<InnerInstr> = try_vec_into(value.instructions)?;
+        let instructions: Vec<InnerInstr> = try_vec_into(value.instructions)?;
 
         let index = value.index.into();
         Ok(InnerInstrs {
@@ -145,7 +146,7 @@ impl TryFrom<confirmed_block::InnerInstructions> for InnerInstrs {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct UiTokenAmount {
     pub ui_amount: f64,
@@ -165,7 +166,7 @@ impl From<confirmed_block::UiTokenAmount> for UiTokenAmount {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct TxTokenBalance {
     pub account_index: i64,
@@ -185,7 +186,7 @@ impl From<confirmed_block::TokenBalance> for TxTokenBalance {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct Reward {
     pub pubkey: String,
@@ -208,7 +209,7 @@ impl TryFrom<confirmed_block::Reward> for Reward {
     }
 }
 
-#[derive(Debug, SerializeCql)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf)]
 #[scylla(flavor = "match_by_name")]
 pub struct TransactionMeta {
     pub error: Option<Vec<u8>>,
@@ -268,15 +269,14 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
     }
 }
 
-#[derive(Debug, SerializeCql)]
-#[scylla(flavor = "match_by_name")]
+#[derive(Debug, SerializeRow, Clone, DeepSizeOf)]
 pub struct Transaction {
     pub slot: i64,
     pub signature: Vec<u8>,
     pub signatures: Vec<Vec<u8>>,
-    pub num_required_signatures: i64,
-    pub num_readonly_signed_accounts: i64,
-    pub num_readonly_unsigned_accounts: i64,
+    pub num_required_signatures: i32,
+    pub num_readonly_signed_accounts: i32,
+    pub num_readonly_unsigned_accounts: i32,
     pub account_keys: Vec<Vec<u8>>,
     pub recent_blockhash: Vec<u8>,
     pub instructions: Vec<CompiledInstr>,
@@ -289,7 +289,7 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
     type Error = anyhow::Error;
 
     fn try_from(value: SubscribeUpdateTransaction) -> Result<Transaction, Self::Error> {
-        let slot: i64 = value.slot.try_into()?;
+        let slot: i64 = value.slot as i64;
 
         let val_tx = value.transaction.ok_or(anyhow!("missing transaction info object"))?;
 
@@ -303,14 +303,9 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
             slot,
             signature,
             signatures: tx.signatures,
-            num_readonly_signed_accounts: <i64>::try_from(
-                message_header.num_readonly_signed_accounts,
-            ).map_err(anyhow::Error::new)?,
-            num_readonly_unsigned_accounts: <i64>::try_from(
-                message_header.num_readonly_unsigned_accounts,
-            ).map_err(anyhow::Error::new)?,
-            num_required_signatures: <i64>::try_from(message_header.num_required_signatures)
-                .map_err(anyhow::Error::new)?,
+            num_readonly_signed_accounts: message_header.num_readonly_signed_accounts as i32,
+            num_readonly_unsigned_accounts: message_header.num_readonly_unsigned_accounts as i32,
+            num_required_signatures: message_header.num_required_signatures as i32,
             account_keys: message.account_keys,
             recent_blockhash: message.recent_blockhash,
             instructions: message
@@ -360,22 +355,6 @@ impl From<AccountUpdate>
 }
 
 impl AccountUpdate {
-    #[allow(clippy::type_complexity)]
-    pub fn as_row(
-        self,
-    ) -> (
-        i64,
-        Pubkey,
-        i64,
-        Pubkey,
-        bool,
-        i64,
-        i64,
-        Vec<u8>,
-        Option<Vec<u8>>,
-    ) {
-        self.into()
-    }
 
     pub fn zero_account() -> Self {
         let bytes_vec: Vec<u8> = repeat(0).take(32).collect();
@@ -420,3 +399,33 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
         }
     }
 }
+
+
+
+// impl SerializeRow for AccountUpdate {
+//     fn serialize(
+//         &self,
+//         ctx: &scylla::serialize::row::RowSerializationContext<'_>,
+//         writer: &mut scylla::serialize::RowWriter,
+//     ) -> Result<(), scylla::serialize::SerializationError> {
+        
+//         for c in ctx.columns() {
+//             match c.name.as_str() {
+//                 "slot" => self.slot.serialize(&c.typ, writer.make_cell_writer())?,
+//                 "pubkey" => self.pubkey.serialize(&c.typ, writer.make_cell_writer())?,
+//                 "lamports" => self.lamports.serialize(&c.typ, writer.make_cell_writer())?,
+//                 "owner" => self.owner.serialize(&c.typ, writer.make_cell_writer())?,
+//                 "executable" => todo!(),
+//                 "rent_epoch" => todo!(),
+//                 "write_version" => todo!(),
+//                 "data" => todo!(),
+//                 "txn_signature" => todo!(),
+//             };
+//         }
+//         Ok(())
+//     }
+
+//     fn is_empty(&self) -> bool {
+//         false
+//     }
+// }

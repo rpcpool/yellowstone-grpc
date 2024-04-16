@@ -20,6 +20,7 @@ drop type if exists solana.message_addr_table_lookup;
 drop type if exists solana.compiled_instr;
 drop type if exists solana.tx_token_balance;
 drop type if exists solana.reward;
+drop type if exists solana.inner_instrs;
 drop type if exists solana.inner_instr;
 
 create type if not exists solana.message_addr_table_lookup (
@@ -69,7 +70,7 @@ create type if not exists solana.reward (
 );
 
 create type if not exists solana.transaction_meta (
-    error text,
+    error blob,
     fee bigint,
     pre_balances frozen<list<bigint>>,
     post_balances frozen<list<bigint>>,
