@@ -1,6 +1,6 @@
 use {
     futures::{Future, FutureExt},
-    std::{fmt, future::pending, pin::Pin, sync::Arc},
+    std::{future::pending, pin::Pin, sync::Arc},
     tokio::{
         sync::{self, mpsc::channel},
         task::JoinHandle,
@@ -15,19 +15,30 @@ pub type Nothing = ();
 #[async_trait]
 pub trait Ticker {
     type Input: Send + 'static;
-    type Error: Send + fmt::Debug + 'static;
 
+    ///
+    /// Optional timeout future that is pulled at the same time as the next message in the message loop.
+    ///
+    /// Implement this function if you need to flush your Ticker every N unit of time, such as batching.
+    ///
+    /// If the timeout finish before the next message is pull, then [`Ticker::on_timeout`] is invoked.
+    ///
     fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
         pending().boxed()
     }
 
-    async fn on_timeout(&mut self, _now: Instant) -> Result<Nothing, Self::Error> {
+    ///
+    /// Called if [`Ticker::timeout`] promise returned before the next message pull.
+    ///
+    async fn on_timeout(&mut self, _now: Instant) -> Result<Nothing, anyhow::Error> {
         Ok(())
     }
 
-    async fn tick(&mut self, now: Instant, msg: Self::Input) -> Result<Nothing, Self::Error>;
+    /// Called on each new message received by the message loop
+    async fn tick(&mut self, now: Instant, msg: Self::Input) -> Result<Nothing, anyhow::Error>;
 
-    async fn terminate(&mut self, _now: Instant) -> Result<Nothing, Self::Error> {
+    /// This is called if the agent handler must gracefully kill you.
+    async fn terminate(&mut self, _now: Instant) -> Result<Nothing, anyhow::Error> {
         Ok(())
     }
 }
@@ -45,9 +56,9 @@ pub struct AgentHandler<I> {
     handle: Arc<JoinHandle<Result<Nothing, AgentHandlerError>>>,
 }
 
-impl<I> AgentHandler<I> {
-    pub async fn send(&self, msg: I) -> Result<(), ()> {
-        self.sender.send(msg).await.map_err(|_err| ())
+impl<I: Send + 'static> AgentHandler<I> {
+    pub async fn send(&self, msg: I) -> Result<(), I> {
+        self.sender.send(msg).await.map_err(|err| err.0)
     }
 }
 

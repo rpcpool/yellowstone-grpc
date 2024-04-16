@@ -157,8 +157,11 @@ impl ArgsAction {
                             let acc_update = msg.clone().try_into();
                             if acc_update.is_err() {
                                 // Drop the message if invalid
-                                warn!("failed to parse account update: {:?}", acc_update.err().unwrap());
-                                continue
+                                warn!(
+                                    "failed to parse account update: {:?}",
+                                    acc_update.err().unwrap()
+                                );
+                                continue;
                             }
                             // If the sink is close, let it crash...
                             sink.log_account_update(acc_update.unwrap()).await.unwrap();
@@ -167,10 +170,10 @@ impl ArgsAction {
                             let tx: Result<Transaction, anyhow::Error> = msg.clone().try_into();
                             if tx.is_err() {
                                 warn!("failed to convert update tx: {:?}", tx.err().unwrap());
-                                continue
+                                continue;
                             }
                             sink.log_transaction(tx.unwrap()).await.unwrap();
-                        },
+                        }
                         _ => continue,
                     };
                 }
