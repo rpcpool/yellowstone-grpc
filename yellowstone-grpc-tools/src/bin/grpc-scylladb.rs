@@ -3,7 +3,7 @@ use {
     clap::{Parser, Subcommand},
     futures::{future::BoxFuture, stream::StreamExt},
     std::{net::SocketAddr, time::Duration},
-    tracing::{debug, info, trace, warn},
+    tracing::{info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
     yellowstone_grpc_tools::{
@@ -12,7 +12,8 @@ use {
         prom::run_server as prometheus_run_server,
         scylladb::{
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
-            sink::ScyllaSink,
+            sink::{ScyllaSink, Test},
+            types::{Reward, Transaction},
         },
         setup_tracing,
     },
@@ -44,6 +45,8 @@ enum ArgsAction {
     /// Receive data from Kafka and send them over gRPC
     #[command(name = "scylla2grpc")]
     Scylla2Grpc,
+    #[command(name = "test")]
+    Test,
 }
 
 impl ArgsAction {
@@ -63,7 +66,40 @@ impl ArgsAction {
                 // })?;
                 // Self::kafka2grpc(kafka_config, config, shutdown).await
             }
+            ArgsAction::Test => {
+                let config2 = config.grpc2scylladb.ok_or_else(|| {
+                    anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
+                })?;
+                Self::test(config2, config.scylladb).await
+            }
         }
+    }
+
+    async fn test(
+        _config: ConfigGrpc2ScyllaDB,
+        scylladb_conn_config: ScyllaDbConnectionInfo,
+    ) -> anyhow::Result<()> {
+        let t = Test::new(
+            scylladb_conn_config.hostname,
+            scylladb_conn_config.username,
+            scylladb_conn_config.password,
+        )
+        .await;
+
+        let res = t
+            .test(
+                1,
+                Reward {
+                    pubkey: String::from("DtdSSG8ZJRZVv5Jx7K1MeWp7Zxcu19GD5wQRGRpQ9uMF"),
+                    lamports: 10,
+                    post_balance: 100,
+                    reward_type: 1000,
+                    commission: String::from("this is a test"),
+                },
+            )
+            .await;
+        println!("res: {:?}", res);
+        Ok(())
     }
 
     async fn grpc2scylladb(
@@ -126,6 +162,14 @@ impl ArgsAction {
                             // If the sink is close, let it crash...
                             sink.log_account_update(acc_update.unwrap()).await.unwrap();
                         }
+                        UpdateOneof::Transaction(msg) => {
+                            let tx: Result<Transaction, ()> = msg.clone().try_into();
+                            if tx.is_err() {
+                                warn!("failed to convert update tx: {:?}", msg);
+                            } else {
+                                info!("success, got: {:?}", tx);
+                            }
+                        },
                         _ => continue,
                     };
                 }
