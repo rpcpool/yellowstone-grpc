@@ -128,7 +128,7 @@ impl ArgsAction {
             scylladb_conn_config.username,
             scylladb_conn_config.password,
         )
-        .await;
+        .await?;
 
         info!("ScyllaSink is ready.");
         // Receive-send loop

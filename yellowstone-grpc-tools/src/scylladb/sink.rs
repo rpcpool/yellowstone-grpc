@@ -1,43 +1,103 @@
 use {
     super::{
-        agent::{AgentHandler, Nothing, Ticker},
+        agent::{AgentHandler, Nothing, Ticker, WatchSignal},
         prom::{
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
-        types::{Reward, Transaction},
+        types::{BlockchainEvent, Reward, ShardId, ShardOffset, ShardStatistics, Transaction, SHARD_OFFSET_MODULO},
     },
     crate::scylladb::{agent::AgentSystem, types::AccountUpdate},
     deepsize::DeepSizeOf,
-    futures::{Future, FutureExt},
+    futures::{future::Join, Future, FutureExt},
     scylla::{
-        batch::{Batch, BatchStatement},
-        frame::{response::result::ColumnType, Compression},
-        prepared_statement::PreparedStatement,
-        routing::Token,
-        serialize::row::{RowSerializationContext, SerializeRow, SerializedValues},
-        QueryResult, Session, SessionBuilder,
+        batch::{self, Batch, BatchStatement}, frame::{response::result::ColumnType, Compression}, prepared_statement::PreparedStatement, routing::Token, serialize::row::{RowSerializationContext, SerializeRow, SerializedValues}, transport::{errors::QueryError, Node}, QueryResult, Session, SessionBuilder
     },
-    std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration},
+    std::{any, collections::{hash_map::DefaultHasher, HashMap}, hash::{self, Hasher}, ops::Index, pin::Pin, sync::Arc, time::Duration},
     tokio::{
-        task::JoinSet,
-        time::{self, Instant, Sleep},
+        sync::{mpsc::error::TrySendError, oneshot}, task::JoinSet, time::{self, Instant, Sleep}
     },
     tonic::async_trait,
-    tracing::warn,
+    tracing::{error, info, instrument::WithSubscriber, warn},
 };
 
-const SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME: &str = "account_update_log";
-const SCYLLADB_TRANSACTION_LOG_TABLE_NAME: &str = "transaction_log";
+const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
-const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
-    INSERT INTO solana.account_update_log (slot, pubkey, lamports, owner, executable, rent_epoch, write_version, data, txn_signature)
-    VALUES (?,?,?,?,?,?,?,?,?)
+
+// The following query always return the latest period because
+// of how the table was created, see DESC solana.shard_statistics
+// Looking at the table's DDL, you'll see that period is the clustering key sorted in descending.
+// Scylla uses cluster key ordering as the select default ordering.
+const SCYLLADB_GET_SHARD_STATISTICS: &str = r###"
+    SELECT
+        shard_id,
+        period,
+        min_slot,
+        max_slot,
+        total_events,
+        slot_event_counter
+    FROM shard_statistics
+    WHERE shard_id = ?
+    PER PARTITION LIMIT 1
 "###;
 
+const SCYLLADB_GET_MAX_OFFSET_FOR_SHARD: &str = r###"
+    SELECT
+        offset
+    FROM log
+    WHERE shard_id = ? AND period = ?
+    PER PARTITION LIMIT 1
+"###;
+
+
+const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
+    INSERT INTO log (
+        shard_id, 
+        period,
+        offset,
+        slot,
+        entry_type,
+
+
+        pubkey, 
+        lamports, 
+        owner, 
+        executable, 
+        rent_epoch, 
+        write_version, 
+        data, 
+        txn_signature,
+        created_at
+    )
+    VALUES (?,?,?,?,0, ?,?,?,?,?,?,?,?, currentTimestamp())
+"###;
+
+// const SCYLLADB_INSERT_TRANSACTION: &str = r###"
+//     INSERT INTO solana.transaction_log (
+//         slot, 
+//         signature, 
+//         recent_blockhash, 
+//         account_keys, 
+//         address_table_lookups, 
+//         instructions, 
+//         meta, 
+//         num_readonly_signed_accounts, 
+//         num_readonly_unsigned_accounts,
+//         num_required_signatures,
+//         signatures,
+//         versioned
+//     )
+//     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+// "###;
+
 const SCYLLADB_INSERT_TRANSACTION: &str = r###"
-    INSERT INTO solana.transaction_log (
-        slot, 
+    INSERT INTO log (
+        shard_id, 
+        period,
+        offset,
+        slot,
+        entry_type,
+
         signature, 
         recent_blockhash, 
         account_keys, 
@@ -48,10 +108,16 @@ const SCYLLADB_INSERT_TRANSACTION: &str = r###"
         num_readonly_unsigned_accounts,
         num_required_signatures,
         signatures,
-        versioned
+        versioned,
+
+        created_at
     )
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,1, ?,?,?,?,?,?,?,?,?,?,?, currentTimestamp())
 "###;
+
+
+
+const DEFAULT_SHARD_COUNT: i16 = 256;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct ScyllaSinkConfig {
@@ -60,6 +126,7 @@ pub struct ScyllaSinkConfig {
     pub linger: Duration,
     pub keyspace: String,
     pub max_inflight_batch_delivery: usize,
+    pub shard_count: ShardId,
 }
 
 impl Default for ScyllaSinkConfig {
@@ -70,33 +137,53 @@ impl Default for ScyllaSinkConfig {
             linger: Duration::from_millis(10),
             keyspace: String::from("solana"),
             max_inflight_batch_delivery: 100,
+            shard_count: DEFAULT_SHARD_COUNT,
         }
     }
 }
 
 #[derive(Default, Clone)]
-struct LogBuffer(Batch, Vec<BatchItem>);
+struct LogBuffer {
+    scylla_batch: Batch, 
+    rows: Vec<BlockchainEvent>, 
+    curr_byte_size: usize,
+    capacity: usize,
+    byte_size_capacity: usize,
+}
+
 
 impl LogBuffer {
-    fn with_capacity(capacity: usize) -> LogBuffer {
-        LogBuffer(Batch::default(), Vec::with_capacity(capacity))
+    fn with_capacity(capacity: usize, byte_size_capacity: usize) -> LogBuffer {
+        LogBuffer { 
+            scylla_batch: Batch::default(), 
+            rows: Vec::with_capacity(capacity), 
+            curr_byte_size: 0,
+            capacity,
+            byte_size_capacity
+        }
     }
 
-    fn split(self) -> (Batch, Vec<BatchItem>) {
-        (self.0, self.1)
-    }
-
-    fn push(&mut self, br: BatchRequest) {
-        self.0.append_statement(br.stmt);
-        self.1.push(br.item);
+    fn push(&mut self, br: ShardedBatchRequest) -> Result<(), ShardedBatchRequest> {
+        let data_size = br.item.deep_size_of();
+        if self.rows.len() == self.capacity {
+            Err(br)
+        } else if (self.curr_byte_size + data_size) > self.byte_size_capacity {
+            Err(br)
+        } else {
+            self.scylla_batch.append_statement(br.stmt);
+            self.curr_byte_size += data_size;
+            self.rows.push(br.item);
+            Ok(())
+        }
     }
 
     fn len(&self) -> usize {
-        self.1.len()
+        self.rows.len()
     }
 
-    fn is_empty(&self) -> bool {
-        self.1.is_empty()
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.scylla_batch.statements.clear();
     }
 }
 
@@ -114,58 +201,28 @@ struct BatchRequest {
     item: BatchItem,
 }
 
-impl SerializeRow for BatchItem {
-    fn serialize(
-        &self,
-        ctx: &RowSerializationContext<'_>,
-        writer: &mut scylla::serialize::RowWriter,
-    ) -> Result<(), scylla::serialize::SerializationError> {
-        match self {
-            BatchItem::Account(acc) => acc.serialize(ctx, writer),
-            BatchItem::Transaction(tx) => tx.serialize(ctx, writer),
-        }
-    }
+impl BatchRequest {
 
-    fn is_empty(&self) -> bool {
-        match self {
-            BatchItem::Account(acc) => acc.is_empty(),
-            BatchItem::Transaction(tx) => tx.is_empty(),
-        }
-    }
-}
+    fn with_shard(self, shard_id: ShardId, offset: ShardOffset) -> ShardedBatchRequest {
 
-impl BatchItem {
-    fn get_partition_key(&self) -> SerializedValues {
-        match self {
-            BatchItem::Account(acc_update) => {
-                let slot = acc_update.slot;
-                let pubkey = acc_update.pubkey;
-                let mut pk_ser = SerializedValues::new();
-                pk_ser.add_value(&slot, &ColumnType::BigInt).unwrap();
-                pk_ser.add_value(&pubkey, &ColumnType::Blob).unwrap();
-                pk_ser
-            }
-            BatchItem::Transaction(tx) => {
-                let slot = tx.slot;
-                let sig = &tx.signature;
-                let mut pk_ser = SerializedValues::new();
-                pk_ser.add_value(&slot, &ColumnType::BigInt).unwrap();
-                pk_ser.add_value(sig, &ColumnType::Blob).unwrap();
-                pk_ser
-            }
-        }
-    }
-
-    fn resolve_token(&self, tt: &impl TokenTopology) -> Token {
-        let pk = self.get_partition_key();
-
-        let table = match self {
-            BatchItem::Account(_) => SCYLLADB_ACCOUNT_UPDATE_LOG_TABLE_NAME,
-            BatchItem::Transaction(_) => SCYLLADB_TRANSACTION_LOG_TABLE_NAME,
+        let event = match self.item {
+            BatchItem::Account(acc) => acc.as_blockchain_event(shard_id, offset),
+            BatchItem::Transaction(tx) => tx.as_blockchain_event(shard_id, offset),
         };
-        tt.compute_token(table, &pk)
+
+        ShardedBatchRequest {
+            stmt: self.stmt,
+            item: event
+        }
     }
 }
+
+#[derive(Clone)]
+struct ShardedBatchRequest {
+    stmt: BatchStatement,
+    item: BlockchainEvent
+}
+
 
 type NodeUuid = u128;
 
@@ -175,6 +232,8 @@ pub trait TokenTopology {
     fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool;
 
     fn get_node_uuids(&self) -> Vec<NodeUuid>;
+
+    fn get_number_of_nodes(&self) -> usize;
 
     fn compute_token(&self, table: &str, serialized_values: &SerializedValues) -> Token;
 }
@@ -191,6 +250,13 @@ impl TokenTopology for LiveTokenTopology {
             .get_elem_for_token(token)
             .map(|node| node.host_id.as_u128())
             .unwrap() // If it is None it means we have no more -> we need to crash asap!
+    }
+
+    fn get_number_of_nodes(&self) -> usize {
+        self.0
+            .get_cluster_data()
+            .get_nodes_info()
+            .len()
     }
 
     fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool {
@@ -221,60 +287,98 @@ impl TokenTopology for LiveTokenTopology {
 
 struct LiveBatchSender {
     session: Arc<Session>,
-    js: JoinSet<Result<(), anyhow::Error>>,
-    max_inflight: usize,
+    timer: Timer,
+    buffer: LogBuffer,
+    watcher_signals: Vec<WatchSignal>,
 }
 
 impl LiveBatchSender {
-    fn new(session: Arc<Session>, max_inflight: usize) -> Self {
+    fn new(
+        session: Arc<Session>, 
+        linger: Duration,
+    ) -> Self {
         LiveBatchSender {
             session,
-            js: JoinSet::new(),
-            max_inflight,
+            timer: Timer::new(linger),
+            buffer: LogBuffer::with_capacity(300, 16000000),
+            watcher_signals: Vec::with_capacity(10),
         }
     }
+    
+    async fn flush(&mut self) -> anyhow::Result<Nothing> {
+        self.timer.restart();
+        let batch = &self.buffer;
+
+        scylladb_batch_size_observe(batch.len());
+        let session: Arc<Session> = Arc::clone(&self.session);
+        let batch_len = batch.len();
+
+        info!("Sending batch of length: {:?}", batch_len);
+        let prepared_batch = self
+            .session
+            .prepare_batch(&batch.scylla_batch)
+            .await
+            .map_err(anyhow::Error::new)?;
+
+        let result = {
+            let rows = &self.buffer.rows;
+            session
+                    .batch(&prepared_batch, rows)
+                    .await
+                    .map(|_| ())
+                    .map_err(anyhow::Error::new)
+        };
+
+        self.watcher_signals.drain(..).for_each(|ws| {
+            if let Err(e) = ws.send(()) {
+                warn!("Notification failed")
+            }
+        });
+
+        // TODO : don't drop the element here
+        self.buffer.clear();
+        scylladb_batch_sent_inc();
+        scylladb_batchitem_sent_inc_by(batch_len as u64);
+        scylladb_batch_request_lag_sub(batch_len as i64);
+        result
+    }
+
+    
+
 }
 
 #[async_trait]
 impl Ticker for LiveBatchSender {
-    type Input = LogBuffer;
+    type Input = ShardedBatchRequest;
 
-    async fn tick(&mut self, _now: Instant, msg: LogBuffer) -> Result<Nothing, anyhow::Error> {
-        scylladb_batch_size_observe(msg.len());
-        let session = Arc::clone(&self.session);
-        let batch_len = msg.len();
-        while self.js.len() >= self.max_inflight {
-            let _result = self
-                .js
-                .join_next()
-                .await
-                .unwrap()
-                .map_err(anyhow::Error::new)?;
+    fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
+        self.timer.sleep().boxed()
+    }
+
+    async fn on_timeout(&mut self, _now: Instant) -> anyhow::Result<Nothing> {
+        if self.buffer.len() > 0 {
+            self.flush().await
+        } else {
+            Ok(())
         }
+    }
 
-        let (stmts, rows) = msg.split();
+    async fn tick(&mut self, _now: Instant, msg: ShardedBatchRequest) -> Result<Nothing, anyhow::Error> {
+        let result = self.buffer.push(msg);
+        if let Err(msg) = result { 
+            let _ = self.flush().await?;
+            self.buffer.push(msg).err().unwrap();
+        } 
+        Ok(())
+    }
 
-        let prepared_batch = self
-            .session
-            .prepare_batch(&stmts)
-            .await
-            .map_err(anyhow::Error::new)?;
-
-        self.js.spawn(async move {
-            let result = session
-                .batch(&prepared_batch, &rows)
-                .await
-                .map(|_| ())
-                .map_err(anyhow::Error::new);
-
-            scylladb_batch_sent_inc();
-            scylladb_batchitem_sent_inc_by(batch_len as u64);
-            scylladb_batch_request_lag_sub(batch_len as i64);
-            result
-        });
+    async fn tick_with_watch(&mut self, now: Instant, msg: Self::Input, ws: WatchSignal) -> anyhow::Result<Nothing> {
+        self.tick(now, msg).await?;
+        self.watcher_signals.push(ws);
         Ok(())
     }
 }
+
 
 struct Timer {
     deadline: Instant,
@@ -298,152 +402,161 @@ impl Timer {
     }
 }
 
-struct TimedBatcher {
-    batch_len_limit: usize,
-    batch_size_limit_kb: usize,
-    batch: Option<LogBuffer>,
-    curr_batch_len: usize,
-    curr_batch_size_in_bytes: usize,
-    batch_sender_handle: AgentHandler<LogBuffer>,
-    timer: Timer,
+struct Shard {
+    shard_id: ShardId,
+    next_offset: ShardOffset,
+    token_topology: Arc<dyn TokenTopology + Send + Sync>,
+    batchers: Arc<[AgentHandler<ShardedBatchRequest>]>,
+    current_batcher: Option<usize>,
 }
 
-impl TimedBatcher {
+impl Shard {
     fn new(
-        batch_len_limit: usize,
-        batch_size_limit_kb: usize,
-        batch_sender_handle: AgentHandler<LogBuffer>,
-        batch_linger: Duration,
+        shard_id: ShardId,
+        next_offset: ShardOffset,
+        token_topology: Arc<dyn TokenTopology + Send + Sync>,
+        batchers: Arc<[AgentHandler<ShardedBatchRequest>]>,
     ) -> Self {
-        TimedBatcher {
-            batch_len_limit,
-            batch_size_limit_kb,
-            batch: None,
-            curr_batch_len: 0,
-            curr_batch_size_in_bytes: 0,
-            batch_sender_handle,
-            timer: Timer::new(batch_linger),
-        }
-    }
-
-    fn get_batch_mut(&mut self) -> &mut LogBuffer {
-        if self.batch.is_none() {
-            self.batch
-                .replace(LogBuffer::with_capacity(self.batch_len_limit));
-        }
-        self.batch.as_mut().unwrap()
-    }
-
-    async fn flush(&mut self, _now: Instant) -> Result<(), anyhow::Error> {
-        self.curr_batch_len = 0;
-        self.curr_batch_size_in_bytes = 0;
-        if let Some(batch) = self.batch.take() {
-            if !batch.is_empty() {
-                return self
-                    .batch_sender_handle
-                    .send(batch)
-                    .await
-                    .map_err(|lost_data| {
-                        anyhow::anyhow!("Failed to flush {:?} items", lost_data.len())
-                    });
-            }
-        }
-        self.timer.restart();
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Ticker for TimedBatcher {
-    type Input = BatchRequest;
-
-    fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
-        self.timer.sleep().map(|_| ()).boxed()
-    }
-
-    async fn on_timeout(&mut self, now: Instant) -> Result<Nothing, anyhow::Error> {
-        self.timer.restart();
-        self.flush(now).await
-    }
-
-    async fn terminate(&mut self, now: Instant) -> Result<Nothing, anyhow::Error> {
-        self.flush(now).await
-    }
-
-    async fn tick(&mut self, now: Instant, msg: BatchRequest) -> Result<Nothing, anyhow::Error> {
-        {
-            let msg_bytes = msg.item.deep_size_of();
-            if (self.curr_batch_size_in_bytes + msg_bytes) / 1024 >= self.batch_size_limit_kb {
-                self.flush(now).await?;
-            }
-
-            let mybatch = self.get_batch_mut();
-
-            mybatch.push(msg);
-            self.curr_batch_len += 1;
-            self.curr_batch_size_in_bytes += msg_bytes;
-        }
-        if self.curr_batch_len >= self.batch_len_limit {
-            self.flush(now).await
-        } else {
-            Ok(())
-        }
-    }
-}
-
-struct TokenAwareBatchRouter {
-    token_topology: LiveTokenTopology,
-    batchers: Vec<AgentHandler<BatchRequest>>,
-    node2batcher: HashMap<NodeUuid, usize>,
-}
-
-impl TokenAwareBatchRouter {
-    pub fn new(
-        token_topology: LiveTokenTopology,
-        batchers: Vec<AgentHandler<BatchRequest>>,
-    ) -> Self {
-        let mut res = TokenAwareBatchRouter {
+        Shard {
+            shard_id,
+            next_offset,
             token_topology,
             batchers,
-            node2batcher: Default::default(),
-        };
-        res.compute_batcher_assignments();
-        res
+            current_batcher: None
+        }
     }
 
-    fn compute_batcher_assignments(&mut self) {
-        let node_uuids = self.token_topology.get_node_uuids();
-        let cycle_iter = self.batchers.iter().enumerate().map(|(i, _)| i).cycle();
-        self.node2batcher = node_uuids.into_iter().zip(cycle_iter).collect();
+    fn get_batcher_idx_for_token(&self, token: Token) -> usize {
+        let node_uuid = self.token_topology.get_node_uuid_for_token(token);
+        let mut node_uuids = self.token_topology.get_node_uuids();
+        node_uuids.sort();
+        if let Ok(i) = node_uuids.binary_search(&node_uuid) {
+            i % self.batchers.len()
+        } else {
+            warn!("Token topology didn't know about {:?} at the time of batcher assignment.", node_uuid);
+            0
+        }
+    }
+
+}
+
+#[async_trait]
+impl Ticker for Shard {
+    type Input = BatchRequest;
+
+    async fn tick(&mut self, now: Instant, msg: BatchRequest) -> anyhow::Result<Nothing> {
+        let shard_id = self.shard_id;
+        let offset = self.next_offset;
+        self.next_offset += 1;
+
+        // Resolve the partition key
+        let next_period = (offset / SHARD_OFFSET_MODULO) * SHARD_OFFSET_MODULO;
+        let mut partition_key = SerializedValues::new();
+        partition_key.add_value(&shard_id, &ColumnType::SmallInt).unwrap();
+        partition_key.add_value(&next_period, &ColumnType::BigInt).unwrap();
+        let token = self.token_topology.compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
+
+        let batcher_idx = if offset % SHARD_OFFSET_MODULO == 0 {
+            // If we enter a new time period we need to decide on another batcher so we don't stick to the same
+            // batcher
+            let idx = self.get_batcher_idx_for_token(token);
+            if self.current_batcher.is_some() {
+                // It is never suppose to happen
+                panic!("Sharder is trying to get a new batcher while he's holding one already");
+            }
+            idx
+        } else {
+            match self.current_batcher {
+                Some(idx) => idx,
+                None => self.get_batcher_idx_for_token(token),
+            }
+        };
+        self.current_batcher.replace(batcher_idx);
+        let batcher = &self.batchers[batcher_idx];
+        let sharded = msg.with_shard(shard_id, offset);
+
+        // Handle the end of a period
+        if (offset + 1) % SHARD_OFFSET_MODULO == 0 {
+            // Remove the current_batcher so next round we decide on a new batcher
+            let _ = self.current_batcher.take();
+
+            // With watch allows us to block until the period is either completly committed or abandonned
+            // before sharding again.
+            let watch = batcher.send_with_watch(sharded).await?;
+            
+            watch.await.map_err(anyhow::Error::new)
+        } else {
+            batcher.send(sharded).await
+        }
+
+    }
+}
+
+
+struct RoundRobinShardRouter {
+    sharders: Vec<AgentHandler<BatchRequest>>,
+    sharder_idx: usize,
+}
+
+
+
+impl RoundRobinShardRouter {
+    pub fn new(
+        batchers: Vec<AgentHandler<BatchRequest>>,
+    ) -> Self {
+        let mut res = RoundRobinShardRouter {
+            sharders: batchers,
+            sharder_idx: 0,
+        };
+        res
     }
 }
 
 #[async_trait]
-impl Ticker for TokenAwareBatchRouter {
+impl Ticker for RoundRobinShardRouter {
     type Input = BatchRequest;
 
     async fn tick(&mut self, _now: Instant, msg: BatchRequest) -> Result<Nothing, anyhow::Error> {
-        let token = msg.item.resolve_token(&self.token_topology);
-        let node_uuid = self.token_topology.get_node_uuid_for_token(token);
+        let begin = self.sharder_idx;
 
-        if !self.node2batcher.contains_key(&node_uuid) {
-            self.compute_batcher_assignments();
-            warn!("Recomputing node to batcher assignments -- Token Topology got changed");
-        }
+        let maybe_permit = self.sharders
+            .iter()
+            .enumerate()
+            .cycle()
+            .skip(begin)
+            .take(self.sharders.len())
+            .find_map(|(i, sharder)| {
+                match sharder.try_reserve() {
+                    Ok(permit) => {
+                        Some((i, permit))
+                    },
+                    Err(TrySendError::Closed(_)) => {
+                        None
+                    },
+                    _ => None
+                }
+            });
 
-        // It should be safe to unwrap otherwise we need to crash fast and investigate.
-        // If it panic, this would mean we got a node uuid that does not exists anymore.
-        let batcher_idx = *self.node2batcher.get(&node_uuid).unwrap();
+        if let Some((i, permit)) = maybe_permit {
 
-        let batcher = self.batchers.get(batcher_idx).unwrap();
-        let result = batcher
-            .send(msg)
-            .await
-            .map_err(|_lost_msg| anyhow::anyhow!("Lost of a message in router"));
-        if result.is_ok() {
+            self.sharder_idx = std::cmp::max(1, i);
             scylladb_batch_request_lag_inc();
+            permit.send(msg);
+            return Ok(())
+        } else {
+            
+            // Pick the first living sharder and wait until it becomes available;
+
+            for sharder in self.sharders.iter() {
+                let result = sharder.reserve().await;
+                if let Ok(permit) = result {
+                    permit.send(msg);
+                    scylladb_batch_request_lag_inc();
+                    return Ok(());
+                }
+            }
+            return Err(anyhow::anyhow!("failed to find a sharder, message is dropped"));
         }
-        result
     }
 }
 
@@ -491,13 +604,38 @@ impl Test {
     }
 }
 
+
+async fn get_shard_stat(session: Arc<Session>, shard_id: i16) -> anyhow::Result<Option<ShardStatistics>> {
+    session
+        .query(SCYLLADB_GET_SHARD_STATISTICS, (shard_id,))
+        .await?
+        .maybe_first_row()?
+        .map(|row| row.into_typed())
+        .transpose()
+        .map_err(anyhow::Error::new)
+}
+
+async fn get_next_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyhow::Result<i64> {
+    let last_period = get_shard_stat(Arc::clone(&session), shard_id)
+        .await?
+        .map(|stats| stats.period)
+        .unwrap_or(0);
+
+    session.query(SCYLLADB_GET_MAX_OFFSET_FOR_SHARD, (shard_id, last_period))
+        .await?
+        .maybe_first_row_typed::<(ShardOffset,)>()
+        .map(|maybe| maybe.unwrap_or((-1,)))
+        .map(|tuple| tuple.0 + 1)
+        .map_err(anyhow::Error::new)
+}   
+
 impl ScyllaSink {
     pub async fn new(
         config: ScyllaSinkConfig,
         hostname: impl AsRef<str>,
         username: impl Into<String>,
         password: impl Into<String>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let session: Session = SessionBuilder::new()
             .known_node(hostname)
             .user(username, password)
@@ -515,35 +653,55 @@ impl ScyllaSink {
 
         let insert_tx_ps = session.prepare(SCYLLADB_INSERT_TRANSACTION).await.unwrap();
 
-        let token_topology = LiveTokenTopology(Arc::clone(&session));
+        let token_topology: Arc<dyn TokenTopology + Send + Sync> = Arc::new(LiveTokenTopology(Arc::clone(&session)));
 
-        let system = AgentSystem::new(10000);
+        let system = AgentSystem::new(16);
 
-        let lbs = LiveBatchSender::new(Arc::clone(&session), 160);
-        let lbs_handler = system.spawn(lbs);
+        let num_batcher = (config.shard_count / 2) as usize;
+        let mut batchers = Vec::with_capacity(num_batcher);
+        for _ in 0..num_batcher {
+            let lbs = LiveBatchSender::new(Arc::clone(&session), config.linger);
+            let lbs_handler = system.spawn(lbs);
+            batchers.push(lbs_handler);
+        }
+        
+        let batchers: Arc<[AgentHandler<ShardedBatchRequest>]> = Arc::from(batchers.into_boxed_slice());
 
-        let mut batchers = vec![];
-        for _ in 1..4 {
-            let tb = TimedBatcher::new(
-                config.batch_len_limit,
-                config.batch_size_kb_limit,
-                lbs_handler.clone(),
-                config.linger,
-            );
-            let ah = system.spawn(tb);
-            batchers.push(ah)
+        let mut sharders = vec![];
+        let mut js: JoinSet<anyhow::Result<Shard>> = JoinSet::new();
+        for shard_id in 0..config.shard_count {
+            let session = Arc::clone(&session);
+            let tt = Arc::clone(&token_topology);
+            let batchers = Arc::clone(&batchers);
+            js.spawn(async move {
+                let before = Instant::now();
+                let next_offset = get_next_offset_for_shard(session, shard_id).await?;
+                let tb = Shard::new(
+                    shard_id, 
+                    next_offset, 
+                    tt,
+                    batchers,
+                );
+                info!("sharder {:?} next_offset: {:?}, stats collected in: {:?}", shard_id, next_offset, before.elapsed());
+                Ok(tb)
+            });
         }
 
-        let router = TokenAwareBatchRouter::new(token_topology, batchers);
+        while let Some(result) = js.join_next().await {
+            let shard = result.unwrap().unwrap();
+            sharders.push(system.spawn(shard));
+        }
+
+        let router = RoundRobinShardRouter::new(sharders);
 
         let router_handle = system.spawn(router);
+        info!("Shard router has started.");
 
-        //let batch_sender_handle = spawn_live_batch_sender(Arc::clone(&session), config.batch_size_limit, 2300);
-        ScyllaSink {
+        Ok(ScyllaSink {
             insert_account_update_ps,
             insert_tx_ps,
             batch_router_handle: router_handle,
-        }
+        })
     }
 
     pub async fn log_account_update(

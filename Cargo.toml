@@ -71,6 +71,7 @@ yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "=1.14.0+s
 scylla = "0.12.0"
 serde_with = "3.7.0"
 deepsize = "0.2.0"
+tokio-zookeeper = "0.2.1"
 
 [profile.release]
 debug = true
