@@ -1,5 +1,66 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 
+
+
+create table if not exists solana.shard_statistics (
+    shard_id smallint,
+    period bigint,
+    min_slot bigint,
+    max_slot bigint,
+    total_events bigint,
+    slot_event_counter map<bigint, int>,
+    created_at timestamp,
+    primary key(shard_id, period)
+) with CLUSTERING order by (period desc);
+
+
+-- ScyllaDB table can hold different kind of entities at the same time.
+-- There is not performance advantage to have separate tables since ScyllaDB is wide-column family database.
+-- ScyllaDB is built to have sparse columns (alot of unused columns)
+-- On each query, the storage engine only retrieves what matters to the query.
+create table if not exists solana.log (
+
+    -- commun columns
+    shard_id smallint,
+    period bigint,
+    offset bigint,
+    slot bigint,
+    entry_type smallint,
+        -- 0 = account update
+        -- 1 = new transaction
+
+    -- account columns
+    pubkey blob,
+    lamports bigint,
+    owner blob,
+    executable boolean,
+    rent_epoch bigint,
+    write_version bigint,
+    data blob,
+    txn_signature blob,
+
+
+    -- transaction columns
+    signature blob,
+    signatures frozen<list<blob>>,
+    num_required_signatures int,
+    num_readonly_signed_accounts int,
+    num_readonly_unsigned_accounts int,
+    account_keys frozen<list<blob>>,
+    recent_blockhash blob,
+    instructions frozen<list<solana.compiled_instr>>,
+    versioned boolean,
+    address_table_lookups frozen<list<solana.message_addr_table_lookup>>,
+    meta solana.transaction_meta,
+
+
+    -- meta data field for debugging purposes
+    created_at timestamp,
+
+    primary key ((shard_id, period), offset, entry_type, slot)
+);
+
+
 create table if not exists solana.account_update_log (
     slot bigint,
     pubkey blob,
@@ -10,8 +71,8 @@ create table if not exists solana.account_update_log (
     write_version bigint,
     data blob,
     txn_signature blob,
-    primary key ((slot, pubkey_bucket), (pubkey, write_version))
-) WITH CLUSTERING ORDER BY (write_version DESC);
+    primary key ((slot, subslot), pubkey, write_version)
+) WITH CLUSTERING ORDER BY (pubkey ASC, write_version ASC);
 
 
 drop table if exists solana.transaction_log;
@@ -97,8 +158,14 @@ create table if not exists solana.transaction_log (
     primary key ((slot, signature), recent_blockhash)
 );
 
+
 create table if not exists solana.test (
     id bigint,
-    x solana.reward,
-    primary key (id)
+    bucket int,
+    x text,
+    data int,
+    primary key ((id, bucket), x)
 );
+
+insert into solana.test (id, bucket, x, data)
+values (1, 1, 'a', 1);

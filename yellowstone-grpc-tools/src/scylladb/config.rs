@@ -88,6 +88,7 @@ impl ConfigGrpc2ScyllaDB {
             linger: self.linger,
             keyspace: self.keyspace.clone(),
             max_inflight_batch_delivery: self.max_inflight_batch_delivery,
+            shard_count: 256,
         }
     }
 }
