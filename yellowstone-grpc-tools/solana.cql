@@ -5,13 +5,13 @@ CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', '
 create table if not exists solana.shard_statistics (
     shard_id smallint,
     period bigint,
+    offset bigint,
     min_slot bigint,
     max_slot bigint,
     total_events bigint,
     slot_event_counter map<bigint, int>,
-    created_at timestamp,
-    primary key(shard_id, period)
-) with CLUSTERING order by (period desc);
+    primary key(shard_id, period, offset)
+) with CLUSTERING order by (period desc, offset desc);
 
 
 -- ScyllaDB table can hold different kind of entities at the same time.

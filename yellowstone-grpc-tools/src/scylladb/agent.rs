@@ -1,22 +1,25 @@
 use {
+    anyhow::anyhow,
     futures::{Future, FutureExt, TryFutureExt},
-    std::{any, borrow::BorrowMut, fmt, future::pending, pin::Pin, sync::Arc},
+    std::{borrow::BorrowMut, future::pending, pin::Pin, sync::Arc},
     tokio::{
-        sync::{self, mpsc::{channel, error::TrySendError, Permit}, oneshot},
+        sync::{
+            self,
+            mpsc::{channel, error::TrySendError, Permit},
+            oneshot,
+        },
         task::JoinHandle,
         time::Instant,
     },
     tonic::async_trait,
-    tracing::{error, warn}, tracing_subscriber::fmt::format::Full,
+    tracing::{error, warn},
 };
 
 pub type Nothing = ();
 
-
 pub type Watch = oneshot::Receiver<Nothing>;
 
 pub type WatchSignal = oneshot::Sender<Nothing>;
-
 
 /// Watch to see when a message, previously sent, has been consumed and processed by an agent.
 
@@ -35,22 +38,31 @@ pub trait Ticker {
         pending().boxed()
     }
 
+    async fn init(&mut self) -> anyhow::Result<Nothing> {
+        Ok(())
+    }
+
     ///
     /// Called if [`Ticker::timeout`] promise returned before the next message pull.
     ///
-    async fn on_timeout(&mut self, _now: Instant) -> anyhow::Result<Nothing> {
+    async fn on_timeout(&mut self, now: Instant) -> anyhow::Result<Nothing> {
         Ok(())
     }
 
     /// Called on each new message received by the message loop
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
-        let (sender, receiver) = oneshot::channel();
+        let (sender, _receiver) = oneshot::channel();
         self.tick_with_watch(now, msg, sender).await
     }
-    
-    async fn tick_with_watch(&mut self, now: Instant, msg: Self::Input, ws: WatchSignal) -> anyhow::Result<Nothing> {
+
+    async fn tick_with_watch(
+        &mut self,
+        now: Instant,
+        msg: Self::Input,
+        ws: WatchSignal,
+    ) -> anyhow::Result<Nothing> {
         let result = self.tick(now, msg).await;
-        if let Err(_) = ws.send(()) {
+        if ws.send(()).is_err() {
             warn!("Failed to notified because endpoint already closed");
         }
         result
@@ -73,9 +85,7 @@ enum Message<T> {
     WithWatch(T, oneshot::Sender<Nothing>),
 }
 
-
 impl<T> Message<T> {
-
     fn unwrap(self) -> (T, Option<oneshot::Sender<Nothing>>) {
         match self {
             Self::FireAndForget(x) => (x, None),
@@ -84,18 +94,18 @@ impl<T> Message<T> {
     }
 }
 
-
 #[derive(Clone)]
 pub struct AgentHandler<T> {
+    name: String,
     sender: sync::mpsc::Sender<Message<T>>,
     #[allow(dead_code)]
-    handle: Arc<JoinHandle<Result<Nothing, AgentHandlerError>>>,
+    handle: Arc<JoinHandle<anyhow::Result<Nothing>>>,
     deadletter_queue: Option<Arc<DeadLetterQueueHandler<T>>>,
 }
 
 struct DeadLetterQueueHandler<T> {
     sender: sync::mpsc::Sender<T>,
-    handle: Arc<JoinHandle<()>>
+    handle: Arc<JoinHandle<()>>,
 }
 
 impl<T> DeadLetterQueueHandler<T> {
@@ -110,9 +120,7 @@ pub struct Slot<'a, T> {
 
 impl<'a, T> Slot<'a, T> {
     fn new(permit: Permit<'a, Message<T>>) -> Self {
-        Slot {
-            inner: permit
-        }
+        Slot { inner: permit }
     }
 
     pub fn send(self, msg: T) {
@@ -123,15 +131,12 @@ impl<'a, T> Slot<'a, T> {
         let (sender, receiver) = oneshot::channel();
         self.inner.send(Message::WithWatch(msg, sender));
         receiver
-    } 
+    }
 }
-
 
 impl<T: Send + 'static> AgentHandler<T> {
     pub async fn send(&self, msg: T) -> anyhow::Result<()> {
-        let result = self.sender
-            .send(Message::FireAndForget(msg))
-            .await;
+        let result = self.sender.send(Message::FireAndForget(msg)).await;
 
         if let Err(e) = result {
             Err(self.handle_failed_transmission(e.0.unwrap().0).await)
@@ -142,18 +147,23 @@ impl<T: Send + 'static> AgentHandler<T> {
 
     async fn handle_failed_transmission(&self, msg: T) -> anyhow::Error {
         if let Some(dlq) = self.deadletter_queue.clone() {
-            let emsg = "Failed to send message with watch, will reroute to deadletter queue";
+            let emsg = format!(
+                "({:?}) Failed to send message with watch, will reroute to deadletter queue",
+                self.name
+            );
             error!(emsg);
             dlq.send(msg).await;
             anyhow::anyhow!(emsg)
         } else {
-            error!("Failed to send message with watch, message will be dropped, not deadletter queue is setup");
-            anyhow::anyhow!("failed to send message with watch, message is dropped.")
+            let emsg = format!("({:?}) Failed to send message with watch, message will be dropped (no deadletter queue detected)", self.name);
+            error!(emsg);
+            anyhow::anyhow!(emsg)
         }
     }
 
     pub async fn reserve(&self) -> anyhow::Result<Slot<'_, T>> {
-        self.sender.reserve()
+        self.sender
+            .reserve()
             .map_err(anyhow::Error::new)
             .await
             .map(Slot::new)
@@ -165,8 +175,7 @@ impl<T: Send + 'static> AgentHandler<T> {
 
     pub async fn send_with_watch(&self, msg: T) -> anyhow::Result<oneshot::Receiver<Nothing>> {
         let (sender, receiver) = oneshot::channel();
-        let result = self.sender 
-            .send(Message::WithWatch(msg, sender)).await;
+        let result = self.sender.send(Message::WithWatch(msg, sender)).await;
 
         if let Err(e) = result {
             Err(self.handle_failed_transmission(e.0.unwrap().0).await)
@@ -185,17 +194,21 @@ pub struct AgentSystem {
 }
 
 impl AgentSystem {
-    pub fn spawn<T>(&self, mut ticker: T) -> AgentHandler<T::Input>
+    pub fn spawn<T, N: Into<String>>(&self, name: N, mut ticker: T) -> AgentHandler<T::Input>
     where
         T: Ticker + Send + 'static,
     {
         let (sender, mut receiver) = channel::<Message<T::Input>>(self.agent_buffer_size);
-
+        let agent_name: String = name.into();
+        let inner_agent_name = agent_name.clone();
         let h = tokio::spawn(async move {
+            let name = inner_agent_name;
+
+            let result = ticker.init().await?;
+
             loop {
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
-
                         ticker.on_timeout(Instant::now()).await
                     }
                     opt_msg = receiver.recv() => {
@@ -213,9 +226,8 @@ impl AgentSystem {
                                 return Err(
                                     ticker.terminate(now)
                                         .await
-                                        .map_err(|_err| AgentHandlerError::AgentError)
                                         .err()
-                                        .unwrap_or(AgentHandlerError::Closed)
+                                        .unwrap_or(anyhow!("Agent is closed"))
                                 )
                             },
                         }
@@ -223,12 +235,14 @@ impl AgentSystem {
                 };
 
                 if result.is_err() {
-                    error!("{:?}", result.err().unwrap());
-                    return Err(AgentHandlerError::AgentError);
+                    let emsg = format!("{:?}, {:?}", name, result.err().unwrap());
+                    error!(emsg);
+                    return Err(anyhow!(emsg));
                 }
             }
         });
         AgentHandler {
+            name: agent_name,
             sender,
             handle: Arc::new(h),
             deadletter_queue: None,
