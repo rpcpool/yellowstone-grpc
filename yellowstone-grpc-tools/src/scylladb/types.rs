@@ -1,12 +1,22 @@
 use {
-    anyhow::anyhow, core::fmt, deepsize::DeepSizeOf, scylla::{cql_to_rust::{FromCqlVal, FromCqlValError}, frame::response::result::CqlValue, routing::Shard, serialize::{value::SerializeCql, SerializationError}, FromRow, FromUserType, SerializeCql, SerializeRow}, serde::Serialize, std::{collections::HashMap, iter::repeat}, tokio::time::Instant, yellowstone_grpc_proto::{
+    anyhow::anyhow,
+    core::fmt,
+    deepsize::DeepSizeOf,
+    scylla::{
+        cql_to_rust::{FromCqlVal, FromCqlValError},
+        frame::response::result::CqlValue,
+        serialize::value::SerializeCql,
+        serialize::row::SerializeRow,
+        FromRow, FromUserType, SerializeCql, SerializeRow,
+    },
+    std::{collections::HashMap, iter::repeat},
+    yellowstone_grpc_proto::{
         geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
         solana::storage::confirmed_block,
-    }
+    },
 };
 
-
-pub const SHARD_OFFSET_MODULO: i64 = 10000;
+pub const SHARD_OFFSET_MODULO: i64 = 1000;
 
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
@@ -16,14 +26,33 @@ pub type ShardOffset = i64;
 pub(crate) struct ShardStatistics {
     pub(crate) shard_id: ShardId,
     pub(crate) period: ShardPeriod,
+    pub(crate) offset: ShardOffset,
     pub(crate) min_slot: i64,
     pub(crate) max_slot: i64,
     pub(crate) total_events: i64,
     pub(crate) slot_event_counter: HashMap<i64, i32>,
 }
 
+impl ShardStatistics {
+
+    pub(crate) fn from_slot_event_counter(shard_id: ShardId, period: ShardPeriod, offset: ShardOffset, counter_map: &HashMap<i64, i32>) -> Self {
+        let min_slot = counter_map.keys().min().map(|slot| *slot).unwrap_or(-1);
+        let max_slot = counter_map.keys().max().map(|slot| *slot).unwrap_or(-1);
+        let total_events: i64 = counter_map.values().map(|cnt| *cnt as i64).sum();
+        ShardStatistics {
+            shard_id,
+            period,
+            offset,
+            min_slot,
+            max_slot,
+            total_events,
+            slot_event_counter: counter_map.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, PartialOrd, Copy, DeepSizeOf)]
-enum BlockchainEventType {
+pub enum BlockchainEventType {
     AccountUpdate = 0,
     NewTransaction = 1,
 }
@@ -40,23 +69,24 @@ impl TryFrom<i16> for BlockchainEventType {
     }
 }
 
-impl Into<i16> for BlockchainEventType {
-    fn into(self) -> i16 {
-        match self {
+impl From<BlockchainEventType> for i16 {
+    fn from(val: BlockchainEventType) -> Self {
+        match val {
             BlockchainEventType::AccountUpdate => 0,
             BlockchainEventType::NewTransaction => 1,
         }
     }
 }
 
-
 impl SerializeCql for BlockchainEventType {
     fn serialize<'b>(
         &self,
         typ: &scylla::frame::response::result::ColumnType,
         writer: scylla::serialize::CellWriter<'b>,
-    ) -> Result<scylla::serialize::writers::WrittenCellProof<'b>, scylla::serialize::SerializationError> {
-
+    ) -> Result<
+        scylla::serialize::writers::WrittenCellProof<'b>,
+        scylla::serialize::SerializationError,
+    > {
         let x: i16 = (*self).into();
         SerializeCql::serialize(&x, typ, writer)
     }
@@ -66,7 +96,7 @@ impl FromCqlVal<CqlValue> for BlockchainEventType {
     fn from_cql(cql_val: CqlValue) -> Result<Self, scylla::cql_to_rust::FromCqlValError> {
         match cql_val {
             CqlValue::SmallInt(x) => x.try_into().map_err(|_| FromCqlValError::BadVal),
-            _ => Err(FromCqlValError::BadCqlType)
+            _ => Err(FromCqlValError::BadCqlType),
         }
     }
 }
@@ -104,8 +134,6 @@ pub struct BlockchainEvent {
     pub meta: TransactionMeta,
 }
 
-
-
 type Pubkey = [u8; 32];
 
 #[derive(SerializeRow, Clone, Debug, DeepSizeOf)]
@@ -120,9 +148,6 @@ pub struct AccountUpdate {
     pub data: Vec<u8>,
     pub txn_signature: Option<Vec<u8>>,
 }
-
-
-
 
 fn try_vec_into<U: fmt::Debug, I: IntoIterator>(
     it: I,
@@ -307,7 +332,7 @@ pub struct TransactionMeta {
     pub log_messages: Vec<String>,
     pub pre_token_balances: Vec<TxTokenBalance>,
     pub post_token_balances: Vec<TxTokenBalance>,
-    pub rewards: Vec<Reward>
+    pub rewards: Vec<Reward>,
 }
 
 impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
@@ -527,14 +552,12 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
     }
 }
 
-
 impl Transaction {
-
     pub fn as_blockchain_event(self, shard_id: ShardId, offset: ShardOffset) -> BlockchainEvent {
         BlockchainEvent {
             shard_id,
             period: offset / SHARD_OFFSET_MODULO,
-            offset: offset,
+            offset,
             slot: self.slot,
             entry_type: BlockchainEventType::NewTransaction,
 
@@ -558,6 +581,94 @@ impl Transaction {
             versioned: self.versioned,
             address_table_lookups: self.address_table_lookups,
             meta: self.meta,
+        }
+    }
+}
+
+#[derive(SerializeRow, Debug, Clone, DeepSizeOf)]
+pub struct ShardedAccountUpdate {
+    // Common
+    pub shard_id: ShardId,
+    pub period: ShardPeriod,
+    pub offset: ShardOffset,
+    pub slot: i64,
+    pub entry_type: BlockchainEventType,
+
+    // AccountUpdate
+    pub pubkey: Pubkey,
+    pub lamports: i64,
+    pub owner: Pubkey,
+    pub executable: bool,
+    pub rent_epoch: i64,
+    pub write_version: i64,
+    pub data: Vec<u8>,
+    pub txn_signature: Option<Vec<u8>>,
+}
+
+#[derive(SerializeRow, Debug, Clone, DeepSizeOf)]
+pub struct ShardedTransaction {
+    // Common
+    pub shard_id: ShardId,
+    pub period: ShardPeriod,
+    pub offset: ShardOffset,
+    pub slot: i64,
+    pub entry_type: BlockchainEventType,
+
+    // Transaction
+    pub signature: Vec<u8>,
+    pub signatures: Vec<Vec<u8>>,
+    pub num_required_signatures: i32,
+    pub num_readonly_signed_accounts: i32,
+    pub num_readonly_unsigned_accounts: i32,
+    pub account_keys: Vec<Vec<u8>>,
+    pub recent_blockhash: Vec<u8>,
+    pub instructions: Vec<CompiledInstr>,
+    pub versioned: bool,
+    pub address_table_lookups: Vec<MessageAddrTableLookup>,
+    pub meta: TransactionMeta,
+}
+
+// Implement Into<ShardedAccountUpdate> for BlockchainEvent
+impl From<BlockchainEvent> for ShardedAccountUpdate {
+    fn from(val: BlockchainEvent) -> Self {
+        ShardedAccountUpdate {
+            shard_id: val.shard_id,
+            period: val.period,
+            offset: val.offset,
+            slot: val.slot,
+            entry_type: val.entry_type,
+            pubkey: val.pubkey,
+            lamports: val.lamports,
+            owner: val.owner,
+            executable: val.executable,
+            rent_epoch: val.rent_epoch,
+            write_version: val.write_version,
+            data: val.data,
+            txn_signature: val.txn_signature,
+        }
+    }
+}
+
+// Implement Into<ShardedTransaction> for BlockchainEvent
+impl From<BlockchainEvent> for ShardedTransaction {
+    fn from(val: BlockchainEvent) -> Self {
+        ShardedTransaction {
+            shard_id: val.shard_id,
+            period: val.period,
+            offset: val.offset,
+            slot: val.slot,
+            entry_type: val.entry_type,
+            signature: val.signature,
+            signatures: val.signatures,
+            num_required_signatures: val.num_required_signatures,
+            num_readonly_signed_accounts: val.num_readonly_signed_accounts,
+            num_readonly_unsigned_accounts: val.num_readonly_unsigned_accounts,
+            account_keys: val.account_keys,
+            recent_blockhash: val.recent_blockhash,
+            instructions: val.instructions,
+            versioned: val.versioned,
+            address_table_lookups: val.address_table_lookups,
+            meta: val.meta,
         }
     }
 }
