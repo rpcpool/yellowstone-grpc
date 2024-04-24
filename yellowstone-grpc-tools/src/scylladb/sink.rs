@@ -8,16 +8,12 @@ use {
         types::{
             BlockchainEvent, Reward, ShardId, ShardOffset, ShardPeriod, ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO
         },
-    },
-    crate::scylladb::{
+    }, crate::scylladb::{
         agent::AgentSystem,
         types::{AccountUpdate, BlockchainEventType, ShardedTransaction},
-    },
-    deepsize::DeepSizeOf,
-    futures::{future::ready, Future, FutureExt},
-    scylla::{
+    }, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::google_cloud_auth::token, scylla::{
         batch::{Batch, BatchStatement},
-        frame::{response::result::ColumnType, Compression},
+        frame::{request::query, response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
         routing::Token,
         serialize::{
@@ -25,25 +21,36 @@ use {
         },
         transport::{errors::QueryError, Node},
         QueryResult, Session, SessionBuilder,
-    },
-    std::{
+    }, std::{
         borrow::BorrowMut, collections::{HashMap, HashSet}, hash::{self, Hasher}, pin::Pin, sync::Arc, time::Duration
-    },
-    tokio::{
+    }, tokio::{
         sync::{mpsc::error::TrySendError, oneshot},
         task::JoinSet,
         time::{self, Instant, Sleep},
-    },
-    tonic::async_trait,
-    tracing::{error, info, instrument::WithSubscriber, warn},
+    }, tonic::async_trait, tracing::{error, info, instrument::WithSubscriber, warn}
 };
 
 const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
-// The following query always return the latest period because
-// of how the table was created, see DESC solana.shard_statistics
-// Looking at the table's DDL, you'll see that period is the clustering key sorted in descending.
-// Scylla uses cluster key ordering as the select default ordering.
+const SCYLLADB_TRY_ACQUIRE_SHARD_LOCK: &str = r###"
+    INSERT INTO shard_locks (
+        shard_id, 
+        lock_held_by
+    ) 
+    VALUES (?, ?) 
+    IF NOT EXISTS
+"###;
+
+
+const SCYLLADB_GET_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
+SELECT
+    offset
+FROM shard_max_offset_mv 
+WHERE shard_id = ?
+ORDER BY offset DESC 
+PER PARTITION LIMIT 1
+"###;
+
 const SCYLLADB_GET_SHARD_STATISTICS: &str = r###"
     SELECT
         shard_id,
@@ -448,7 +455,6 @@ impl Timer {
     }
 }
 
-
 struct Shard {
     session: Arc<Session>,
     shard_id: ShardId,
@@ -608,7 +614,7 @@ struct RoundRobinShardRouter {
 
 impl RoundRobinShardRouter {
     pub fn new(batchers: Vec<AgentHandler<ClientCommand>>) -> Self {
-        let mut res = RoundRobinShardRouter {
+        let res = RoundRobinShardRouter {
             sharders: batchers,
             sharder_idx: 0,
         };
@@ -709,23 +715,35 @@ async fn get_shard_stat(
     result
 }
 
-async fn get_next_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyhow::Result<i64> {
-    let maybe = get_shard_stat(Arc::clone(&session), shard_id).await?;
-    let guessed_last_period = maybe
-        .map(|stats| stats.period)
-        .unwrap_or(0);
+async fn get_max_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyhow::Result<Option<i64>> {
+    let query_result = session
+        .query(SCYLLADB_GET_MAX_OFFSET_FOR_SHARD_MV, (shard_id,))
+        .await?;
 
-    let row = (shard_id, guessed_last_period-1, guessed_last_period, guessed_last_period+1);
+    query_result
+        .single_row()
+        .ok()
+        .map(|row| row.into_typed::<(ShardOffset,)>())
+        .transpose()
+        .map(|maybe| maybe.map(|typed_row| typed_row.0))
+        .map_err(anyhow::Error::new)
+}
 
-    let next_offset = session
-        .query(SCYLLADB_GET_MAX_OFFSET_FOR_SHARD, row)
-        .await?
-        .rows_typed_or_empty::<(ShardOffset,)>()
-        .map(|result| result.unwrap())
-        .map(|row1| row1.0 + 1)
-        .max()
-        .unwrap_or(1);
-    Ok(next_offset)
+
+type BatcherArray = Arc<[AgentHandler<ShardedClientCommand>]>;
+
+async fn shard_factory(session: Arc<Session>, shard_id: i16,  token_toplogy: Arc<dyn TokenTopology + Send + Sync>, batchers: BatcherArray) -> anyhow::Result<Shard> {
+    let before: Instant = Instant::now();
+    let max_offset = get_max_offset_for_shard(Arc::clone(&session), shard_id).await?;
+    let next_offset = max_offset.unwrap_or(0) + 1;
+    let shard = Shard::new(session, shard_id, next_offset, token_toplogy, batchers);
+    info!(
+        "sharder {:?} next_offset: {:?}, stats collected in: {:?}",
+        shard_id,
+        next_offset,
+        before.elapsed()
+    );
+    Ok(shard)
 }
 
 
@@ -751,8 +769,8 @@ impl ScyllaSink {
 
         let system = AgentSystem::new(16);
 
-        let shard_count = 1;// config.shard_count;
-        let num_batcher = 1;//(shard_count / 8) as usize;
+        let shard_count =  config.shard_count;
+        let num_batcher = (shard_count / 8) as usize;
 
         let mut batchers = Vec::with_capacity(num_batcher);
         for i in 0..num_batcher {
@@ -773,16 +791,7 @@ impl ScyllaSink {
             let tt = Arc::clone(&token_topology);
             let batchers = Arc::clone(&batchers);
             js.spawn(async move {
-                let before = Instant::now();
-                let next_offset = get_next_offset_for_shard(Arc::clone(&session), shard_id).await?;
-                let tb = Shard::new(session, shard_id, next_offset, tt, batchers);
-                info!(
-                    "sharder {:?} next_offset: {:?}, stats collected in: {:?}",
-                    shard_id,
-                    next_offset,
-                    before.elapsed()
-                );
-                Ok(tb)
+                shard_factory(session, shard_id, tt, batchers).await
             });
         }
 
