@@ -11,7 +11,7 @@ use {
     }, crate::scylladb::{
         agent::AgentSystem,
         types::{AccountUpdate, BlockchainEventType, ProducerInfo, ShardedTransaction},
-    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::google_cloud_auth::token, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
+    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::{google_cloud_auth::token, Client}, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
         batch::{Batch, BatchStatement},
         frame::{request::query, response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
@@ -519,6 +519,32 @@ impl Shard {
     fn period(&self) -> i64 {
         self.next_offset / SHARD_OFFSET_MODULO
     }
+
+    fn pick_batcher_if_nonset(&mut self) {
+        let shard_id = self.shard_id;
+        if self.current_batcher.is_some() {
+            return;
+        }
+
+        info!("shard({:?}) will pick a new batcher.", shard_id);
+        // Resolve the partition key
+        let mut partition_key = SerializedValues::new();
+        let period = self.period();
+        partition_key
+            .add_value(&shard_id, &ColumnType::SmallInt)
+            .unwrap();
+        partition_key
+            .add_value(&period, &ColumnType::BigInt)
+            .unwrap();
+        let token = self
+            .token_topology
+            .compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
+        let idx = self.get_batcher_idx_for_token(token);
+        let old = self.current_batcher.replace(idx);
+        if old.is_some() {
+            panic!("Sharder is trying to get a new batcher while he's holding one already");
+        }
+    }
 }
 
 #[async_trait]
@@ -549,32 +575,15 @@ impl Ticker for Shard {
             let _ = self.current_batcher.take();
         }
 
+        if self.current_batcher.is_none() {
+            self.pick_batcher_if_nonset();
+        }
+
+        let batcher_idx = self.current_batcher.unwrap();
+    
+
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
         self.next_offset += 1;
-        
-        let batcher_idx = if self.current_batcher.is_none() {
-            info!("shard({:?}) will pick a new batcher.", shard_id);
-            // Resolve the partition key
-            let mut partition_key = SerializedValues::new();
-            let period = self.period();
-            partition_key
-                .add_value(&shard_id, &ColumnType::SmallInt)
-                .unwrap();
-            partition_key
-                .add_value(&period, &ColumnType::BigInt)
-                .unwrap();
-            let token = self
-                .token_topology
-                .compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
-            let idx = self.get_batcher_idx_for_token(token);
-            let old = self.current_batcher.replace(idx);
-            if old.is_some() {
-                panic!("Sharder is trying to get a new batcher while he's holding one already");
-            }
-            idx
-        } else {
-            self.current_batcher.unwrap()
-        };
     
         let batcher = &self.batchers[batcher_idx];
         let slot = msg.slot();
