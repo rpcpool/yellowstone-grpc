@@ -1,18 +1,11 @@
 use {
-    anyhow::anyhow,
-    futures::{Future, FutureExt, TryFutureExt},
-    std::{borrow::BorrowMut, future::pending, pin::Pin, sync::Arc},
-    tokio::{
-        sync::{
+    crate::create_shutdown, anyhow::anyhow, futures::{Future, FutureExt, TryFutureExt}, std::{borrow::BorrowMut, future::pending, pin::Pin, sync::Arc, time::Duration}, tokio::{
+        signal::{self, unix::signal}, sync::{
             self,
             mpsc::{channel, error::TrySendError, Permit},
             oneshot,
-        },
-        task::JoinHandle,
-        time::Instant,
-    },
-    tonic::async_trait,
-    tracing::{error, warn},
+        }, task::JoinHandle, time::Instant
+    }, tonic::async_trait, tracing::{error, warn}
 };
 
 pub type Nothing = ();
@@ -36,6 +29,10 @@ pub trait Ticker {
     ///
     fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
         pending().boxed()
+    }
+
+    fn timeout2(&self, now: Instant) -> bool {
+        false
     }
 
     async fn init(&mut self) -> anyhow::Result<Nothing> {
@@ -136,7 +133,12 @@ impl<'a, T> Slot<'a, T> {
 
 impl<T: Send + 'static> AgentHandler<T> {
     pub async fn send(&self, msg: T) -> anyhow::Result<()> {
+        let now = Instant::now();
         let result = self.sender.send(Message::FireAndForget(msg)).await;
+
+        if now.elapsed() > Duration::from_millis(100) {
+            warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
+        }
 
         if let Err(e) = result {
             error!("error in send");
@@ -192,15 +194,23 @@ impl<T: Send + 'static> AgentHandler<T> {
 }
 
 pub struct AgentSystem {
-    pub agent_buffer_size: usize,
+    pub default_agent_buffer_capacity: usize,
 }
 
 impl AgentSystem {
+
     pub fn spawn<T, N: Into<String>>(&self, name: N, mut ticker: T) -> AgentHandler<T::Input>
+    where
+        T: Ticker + Send + 'static, 
+    {
+        self.spawn_with_capacity(name, ticker, self.default_agent_buffer_capacity)
+    }
+
+    pub fn spawn_with_capacity<T, N: Into<String>>(&self, name: N, mut ticker: T, buffer: usize) -> AgentHandler<T::Input>
     where
         T: Ticker + Send + 'static,
     {
-        let (sender, mut receiver) = channel::<Message<T::Input>>(self.agent_buffer_size);
+        let (sender, mut receiver) = channel::<Message<T::Input>>(buffer);
         let agent_name: String = name.into();
         let inner_agent_name = agent_name.clone();
         let h = tokio::spawn(async move {
@@ -213,12 +223,23 @@ impl AgentSystem {
                 return init_result;
             }
 
+            let mut before = Instant::now();
+            let mut last_branch = -1;
             loop {
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
+
+                        last_branch = 1;
                         ticker.on_timeout(Instant::now()).await
                     }
-                    opt_msg = receiver.recv() => {
+                    opt_msg = receiver.recv() => {                       
+                        if before.elapsed() > Duration::from_millis(10) {
+                            warn!("in timeout {:?}, last branch: {:?}", before.elapsed(), last_branch);
+                            before = Instant::now();
+                        }
+                        
+                        last_branch = 2;
+
                         match opt_msg {
                             Some(msg) => {
                                 let now = Instant::now();
@@ -257,6 +278,6 @@ impl AgentSystem {
     }
 
     pub const fn new(agent_buffer_size: usize) -> AgentSystem {
-        AgentSystem { agent_buffer_size }
+        AgentSystem { default_agent_buffer_capacity: agent_buffer_size }
     }
 }

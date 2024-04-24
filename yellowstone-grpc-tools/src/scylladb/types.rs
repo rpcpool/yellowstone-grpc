@@ -36,6 +36,13 @@ pub(crate) struct ShardStatistics {
     pub(crate) slot_event_counter: HashMap<i64, i32>,
 }
 
+
+#[derive(SerializeRow, Clone, Debug, FromRow)]
+pub(crate) struct ProducerInfo {
+    pub(crate) producer_id: ProducerId,
+    pub(crate) min_offset_per_shard: HashMap<ShardId, ShardOffset>
+}
+
 impl ShardStatistics {
 
     pub(crate) fn from_slot_event_counter(shard_id: ShardId, period: ShardPeriod, producer_id: ProducerId, offset: ShardOffset, counter_map: &HashMap<i64, i32>) -> Self {
