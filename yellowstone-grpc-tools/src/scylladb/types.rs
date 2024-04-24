@@ -22,10 +22,13 @@ pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
 
+pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machine
+
 #[derive(SerializeRow, Clone, Debug, FromRow)]
 pub(crate) struct ShardStatistics {
     pub(crate) shard_id: ShardId,
     pub(crate) period: ShardPeriod,
+    pub(crate) producer_id: ProducerId,
     pub(crate) offset: ShardOffset,
     pub(crate) min_slot: i64,
     pub(crate) max_slot: i64,
@@ -35,13 +38,14 @@ pub(crate) struct ShardStatistics {
 
 impl ShardStatistics {
 
-    pub(crate) fn from_slot_event_counter(shard_id: ShardId, period: ShardPeriod, offset: ShardOffset, counter_map: &HashMap<i64, i32>) -> Self {
+    pub(crate) fn from_slot_event_counter(shard_id: ShardId, period: ShardPeriod, producer_id: ProducerId, offset: ShardOffset, counter_map: &HashMap<i64, i32>) -> Self {
         let min_slot = counter_map.keys().min().map(|slot| *slot).unwrap_or(-1);
         let max_slot = counter_map.keys().max().map(|slot| *slot).unwrap_or(-1);
         let total_events: i64 = counter_map.values().map(|cnt| *cnt as i64).sum();
         ShardStatistics {
             shard_id,
             period,
+            producer_id,
             offset,
             min_slot,
             max_slot,
@@ -106,6 +110,7 @@ pub struct BlockchainEvent {
     // Common
     pub shard_id: ShardId,
     pub period: ShardPeriod,
+    pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
     pub entry_type: BlockchainEventType,
@@ -488,10 +493,11 @@ impl AccountUpdate {
         }
     }
 
-    pub fn as_blockchain_event(self, shard_id: ShardId, offset: ShardOffset) -> BlockchainEvent {
+    pub fn as_blockchain_event(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> BlockchainEvent {
         BlockchainEvent {
             shard_id,
             period: offset / SHARD_OFFSET_MODULO,
+            producer_id,
             offset,
             slot: self.slot,
             entry_type: BlockchainEventType::AccountUpdate,
@@ -553,10 +559,11 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
 }
 
 impl Transaction {
-    pub fn as_blockchain_event(self, shard_id: ShardId, offset: ShardOffset) -> BlockchainEvent {
+    pub fn as_blockchain_event(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> BlockchainEvent {
         BlockchainEvent {
             shard_id,
             period: offset / SHARD_OFFSET_MODULO,
+            producer_id,
             offset,
             slot: self.slot,
             entry_type: BlockchainEventType::NewTransaction,
@@ -590,6 +597,7 @@ pub struct ShardedAccountUpdate {
     // Common
     pub shard_id: ShardId,
     pub period: ShardPeriod,
+    pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
     pub entry_type: BlockchainEventType,
@@ -610,6 +618,7 @@ pub struct ShardedTransaction {
     // Common
     pub shard_id: ShardId,
     pub period: ShardPeriod,
+    pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
     pub entry_type: BlockchainEventType,
@@ -634,6 +643,7 @@ impl From<BlockchainEvent> for ShardedAccountUpdate {
         ShardedAccountUpdate {
             shard_id: val.shard_id,
             period: val.period,
+            producer_id: val.producer_id,
             offset: val.offset,
             slot: val.slot,
             entry_type: val.entry_type,
@@ -655,6 +665,7 @@ impl From<BlockchainEvent> for ShardedTransaction {
         ShardedTransaction {
             shard_id: val.shard_id,
             period: val.period,
+            producer_id: val.producer_id,
             offset: val.offset,
             slot: val.slot,
             entry_type: val.entry_type,
