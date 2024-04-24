@@ -4,9 +4,8 @@ CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', '
 
 create table if not exists solana.producer_info (
     producer_id blob,
-    device text,
-    ipv4 text,
-    min_offset_per_shard: map<smallint, bigint>
+    min_offset_per_shard map<smallint, bigint>,
+    primary key (producer_id)
 );
 
 create table if not exists solana.shard_statistics (
@@ -82,7 +81,7 @@ where
     and offset is not null
     and period is not null
     and producer_id is not null
-primary key(shard_id, offset, period, producer_id);
+primary key(shard_id, producer_id, offset, period);
 
 
 

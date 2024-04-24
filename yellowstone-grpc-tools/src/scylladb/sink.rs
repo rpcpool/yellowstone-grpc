@@ -10,7 +10,7 @@ use {
         },
     }, crate::scylladb::{
         agent::AgentSystem,
-        types::{AccountUpdate, BlockchainEventType, ShardedTransaction},
+        types::{AccountUpdate, BlockchainEventType, ProducerInfo, ShardedTransaction},
     }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::google_cloud_auth::token, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
         batch::{Batch, BatchStatement},
         frame::{request::query, response::result::ColumnType, Compression},
@@ -36,14 +36,18 @@ const SHARD_COUNT: i16 = 256;
 const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
 
-const SCYLLADB_GET_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
-SELECT
-    offset
-FROM shard_max_offset_mv 
-WHERE shard_id = ?
-ORDER BY offset DESC 
-PER PARTITION LIMIT 1
+const SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
+    SELECT
+        offset
+    FROM shard_max_offset_mv 
+    WHERE 
+        shard_id = ?
+        AND producer_id = ?
+
+    ORDER BY offset DESC 
+    PER PARTITION LIMIT 1
 "###;
+
 
 
 lazy_static! {
@@ -54,6 +58,7 @@ lazy_static! {
 
         format!(r###"
             SELECT
+                shard_id,
                 offset
             FROM shard_max_offset_mv 
             WHERE shard_id IN ({:?})
@@ -137,7 +142,6 @@ pub struct ScyllaSinkConfig {
     pub batch_size_kb_limit: usize,
     pub linger: Duration,
     pub keyspace: String,
-    pub shard_count: ShardId,
 }
 
 
@@ -389,8 +393,11 @@ impl Ticker for LiveBatchSender {
 
         let msg_size = msg.deep_size_of();
 
+        let beginning_batch_len = self.buffer.len();
+        let beginning_batch_size = self.curr_batch_byte_size;
+
         // TODO: make the capacity parameterized
-        let need_flush = self.buffer.len() >= self.max_batch_capacity
+        let need_flush = beginning_batch_len >= self.max_batch_capacity
             || (self.curr_batch_byte_size + msg_size) >= self.max_batch_byte_size;
 
         if need_flush {
@@ -405,6 +412,11 @@ impl Ticker for LiveBatchSender {
         self.scylla_batch.append_statement(batch_stmt);
         self.buffer.push(msg);
         self.curr_batch_byte_size += msg_size;
+
+        if now.elapsed() > Duration::from_millis(100) {
+            warn!("batcher tick elapsed {:?}, batcher len: {:?}, batch size {:?}", now.elapsed(), beginning_batch_len, beginning_batch_size);
+        }
+
         Ok(())
     }
 
@@ -521,7 +533,7 @@ impl Ticker for Shard {
             self.shard_stats_checkpoint_timer.sleep().boxed()
         }
     }
-    
+
     async fn on_timeout(&mut self, now: Instant) -> anyhow::Result<Nothing> {
         self.do_shard_stats_checkpoint().await?;
         info!("shard({:?}) checkpoint at {:?}", self.shard_id, now);
@@ -532,38 +544,38 @@ impl Ticker for Shard {
         let shard_id = self.shard_id;
         let producer_id = self.producer_id;
         let offset = self.next_offset;
+
+        if offset % SHARD_OFFSET_MODULO == 0 {
+            let _ = self.current_batcher.take();
+        }
+
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
         self.next_offset += 1;
-
-        // Resolve the partition key
-        let mut partition_key = SerializedValues::new();
-        let period = self.period();
-        partition_key
-            .add_value(&shard_id, &ColumnType::SmallInt)
-            .unwrap();
-        partition_key
-            .add_value(&period, &ColumnType::BigInt)
-            .unwrap();
-        let token = self
-            .token_topology
-            .compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
-
-        let batcher_idx = if offset % SHARD_OFFSET_MODULO == 0 {
-            // If we enter a new time period we need to decide on another batcher so we don't stick to the same
-            // batcher
+        
+        let batcher_idx = if self.current_batcher.is_none() {
+            info!("shard({:?}) will pick a new batcher.", shard_id);
+            // Resolve the partition key
+            let mut partition_key = SerializedValues::new();
+            let period = self.period();
+            partition_key
+                .add_value(&shard_id, &ColumnType::SmallInt)
+                .unwrap();
+            partition_key
+                .add_value(&period, &ColumnType::BigInt)
+                .unwrap();
+            let token = self
+                .token_topology
+                .compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
             let idx = self.get_batcher_idx_for_token(token);
-            if self.current_batcher.is_some() {
-                // It is never suppose to happen
+            let old = self.current_batcher.replace(idx);
+            if old.is_some() {
                 panic!("Sharder is trying to get a new batcher while he's holding one already");
             }
             idx
         } else {
-            match self.current_batcher {
-                Some(idx) => idx,
-                None => self.get_batcher_idx_for_token(token),
-            }
+            self.current_batcher.unwrap()
         };
-        self.current_batcher.replace(batcher_idx);
+    
         let batcher = &self.batchers[batcher_idx];
         let slot = msg.slot();
         let sharded = msg.with_shard_info(shard_id, producer_id, offset);
@@ -595,7 +607,7 @@ impl Ticker for Shard {
         }
 
         if now.elapsed() > Duration::from_millis(100) {
-            warn!("shard tick elapsed {:?}", now.elapsed());
+            warn!("shard tick elapsed {:?}, is_end_of_period: {:?}", now.elapsed(), is_end_of_period);
         }
         return result;
     }
@@ -698,9 +710,9 @@ impl Test {
 }
 
 
-async fn get_max_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyhow::Result<Option<i64>> {
+async fn get_max_offset_for_shard_and_producer(session: Arc<Session>, shard_id: i16, producer_id: ProducerId) -> anyhow::Result<Option<i64>> {
     let query_result = session
-        .query(SCYLLADB_GET_MAX_OFFSET_FOR_SHARD_MV, (shard_id,))
+        .query(SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV, (shard_id, producer_id))
         .await?;
 
     query_result
@@ -723,7 +735,7 @@ async fn shard_factory(
     batchers: BatcherArray
 ) -> anyhow::Result<Shard> {
     let before: Instant = Instant::now();
-    let max_offset = get_max_offset_for_shard(Arc::clone(&session), shard_id).await?;
+    let max_offset = get_max_offset_for_shard_and_producer(Arc::clone(&session), shard_id, producer_id).await?;
     let next_offset = max_offset.unwrap_or(0) + 1;
     let shard = Shard::new(session, shard_id, producer_id, next_offset, token_toplogy, batchers);
     info!(
@@ -734,15 +746,6 @@ async fn shard_factory(
     );
     Ok(shard)
 }
-
-
-async fn setup_producer_info(session: Arc<Session>) {
-    let result = session.query(SCYLLADB_GET_MAX_OFFSET_FOR_ALL_SHARD_MV.as_str(), &[]).await;
-
-    println!("{:?}", result);
-}
-
-
 
 impl ScyllaSink {
     pub async fn new(
@@ -763,7 +766,6 @@ impl ScyllaSink {
             .unwrap();
 
         let session = Arc::new(session);
-        setup_producer_info(Arc::clone(&session));
         let token_topology: Arc<dyn TokenTopology + Send + Sync> =
             Arc::new(LiveTokenTopology(Arc::clone(&session)));
 
@@ -780,7 +782,7 @@ impl ScyllaSink {
                 config.batch_len_limit,
                 config.batch_size_kb_limit
             );
-            let lbs_handler = system.spawn(format!("batcher({:?})", i), lbs);
+            let lbs_handler = system.spawn_with_capacity(format!("batcher({:?})", i), lbs, 100);
             batchers.push(lbs_handler);
         }
 

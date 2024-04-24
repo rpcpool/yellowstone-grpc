@@ -88,7 +88,6 @@ impl ConfigGrpc2ScyllaDB {
             batch_size_kb_limit: self.batch_size_kb_limit,
             linger: self.linger,
             keyspace: self.keyspace.clone(),
-            shard_count: 256,
         }
     }
 }
