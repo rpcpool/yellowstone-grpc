@@ -63,11 +63,14 @@ pub struct ConfigGrpc2ScyllaDB {
     pub endpoint: String,
     pub x_token: Option<String>,
     pub request: ConfigGrpcRequest,
+
+    pub producer_id: u8,
+
     #[serde(default = "default_batch_len_limit")]
     pub batch_len_limit: usize,
 
     #[serde(default = "default_batch_size_kb")]
-    pub batch_size_kb: usize,
+    pub batch_size_kb_limit: usize,
 
     #[serde(default = "default_linger")]
     #[serde_as(as = "DurationMilliSeconds<u64>")]
@@ -75,19 +78,16 @@ pub struct ConfigGrpc2ScyllaDB {
 
     #[serde(default = "default_keyspace")]
     pub keyspace: String,
-
-    #[serde(default = "default_max_inflight_batch_delivery")]
-    pub max_inflight_batch_delivery: usize,
 }
 
 impl ConfigGrpc2ScyllaDB {
     pub fn get_scylladb_sink_config(&self) -> ScyllaSinkConfig {
         ScyllaSinkConfig {
+            producer_id: self.producer_id,
             batch_len_limit: self.batch_len_limit,
-            batch_size_kb_limit: self.batch_size_kb,
+            batch_size_kb_limit: self.batch_size_kb_limit,
             linger: self.linger,
             keyspace: self.keyspace.clone(),
-            max_inflight_batch_delivery: self.max_inflight_batch_delivery,
             shard_count: 256,
         }
     }

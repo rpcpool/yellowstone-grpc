@@ -6,23 +6,23 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            BlockchainEvent, Reward, ShardId, ShardOffset, ShardPeriod, ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO
+            BlockchainEvent, ProducerId, Reward, ShardId, ShardOffset, ShardPeriod, ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO
         },
     }, crate::scylladb::{
         agent::AgentSystem,
         types::{AccountUpdate, BlockchainEventType, ShardedTransaction},
-    }, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::google_cloud_auth::token, scylla::{
+    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, Future, FutureExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::google_cloud_auth::token, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
         batch::{Batch, BatchStatement},
         frame::{request::query, response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
         routing::Token,
         serialize::{
-            batch::{BatchValues, BatchValuesIterator}, row::{RowSerializationContext, SerializeRow, SerializedValues}, value::SerializeCql, RowWriter
+            row::{RowSerializationContext, SerializeRow, SerializedValues}, value::SerializeCql, RowWriter
         },
         transport::{errors::QueryError, Node},
         QueryResult, Session, SessionBuilder,
-    }, std::{
-        borrow::BorrowMut, collections::{HashMap, HashSet}, hash::{self, Hasher}, pin::Pin, sync::Arc, time::Duration
+    }, sha2::digest::typenum::Prod, std::{
+        borrow::BorrowMut, collections::{HashMap, HashSet}, fmt::format, hash::{self, Hasher}, iter::repeat, path::Display, pin::Pin, sync::Arc, time::Duration
     }, tokio::{
         sync::{mpsc::error::TrySendError, oneshot},
         task::JoinSet,
@@ -30,16 +30,10 @@ use {
     }, tonic::async_trait, tracing::{error, info, instrument::WithSubscriber, warn}
 };
 
-const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
+const SHARD_COUNT: i16 = 256;
 
-const SCYLLADB_TRY_ACQUIRE_SHARD_LOCK: &str = r###"
-    INSERT INTO shard_locks (
-        shard_id, 
-        lock_held_by
-    ) 
-    VALUES (?, ?) 
-    IF NOT EXISTS
-"###;
+
+const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
 
 const SCYLLADB_GET_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
@@ -51,49 +45,46 @@ ORDER BY offset DESC
 PER PARTITION LIMIT 1
 "###;
 
-const SCYLLADB_GET_SHARD_STATISTICS: &str = r###"
-    SELECT
-        shard_id,
-        period,
-        offset,
-        min_slot,
-        max_slot,
-        total_events,
-        slot_event_counter
-    FROM shard_statistics
-    WHERE shard_id = ?
-    ORDER BY period desc, offset desc
-    PER PARTITION LIMIT 1
-"###;
+
+lazy_static! {
+
+    static ref SCYLLADB_GET_MAX_OFFSET_FOR_ALL_SHARD_MV: String = {
+        
+        let joined = (0..SHARD_COUNT).map(|x| format!("{:?}", x)).collect::<Vec<_>>().join(",");
+
+        format!(r###"
+            SELECT
+                offset
+            FROM shard_max_offset_mv 
+            WHERE shard_id IN ({:?})
+            ORDER BY offset DESC 
+            PER PARTITION LIMIT 1
+            "###, 
+            joined
+        )
+    };
+}
+
 
 const SCYLLADB_INSERT_SHARD_STATISTICS: &str = r###"
     INSERT INTO shard_statistics (
         shard_id,
         period,
+        producer_id,
         offset,
         min_slot,
         max_slot,
         total_events,
         slot_event_counter
     )
-    VALUES (?,?,?,?,?,?,?)
-"###;
-
-
-// Here period = (?, ?, ?) <=> period = (<lower bound>, <estimated period>, <future period in case estimated is off>)
-const SCYLLADB_GET_MAX_OFFSET_FOR_SHARD: &str = r###"
-    SELECT
-        offset
-    FROM log
-    WHERE shard_id = ? AND period in (?, ?, ?)
-    ORDER BY offset DESC
-    PER PARTITION LIMIT 1
+    VALUES (?,?,?,?,?,?,?,?)
 "###;
 
 const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
     INSERT INTO log (
         shard_id, 
         period,
+        producer_id,
         offset,
         slot,
         entry_type,
@@ -109,58 +100,46 @@ const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
 
         created_at
     )
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,currentTimestamp())
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,currentTimestamp())
 "###;
 
 const SCYLLADB_INSERT_TRANSACTION: &str = r###"
     INSERT INTO log (
         shard_id, 
         period,
+        producer_id,
         offset,
         slot,
         entry_type,
 
-        signature, 
-        recent_blockhash, 
-        account_keys, 
-        address_table_lookups, 
-        instructions, 
-        meta, 
+        signature,
+        signatures,
         num_readonly_signed_accounts, 
         num_readonly_unsigned_accounts,
         num_required_signatures,
-        signatures,
+        account_keys, 
+        recent_blockhash, 
+        instructions, 
         versioned,
+        address_table_lookups, 
+        meta, 
 
         created_at
     )
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,currentTimestamp())
+    VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?, currentTimestamp())
 "###;
 
-const DEFAULT_SHARD_COUNT: i16 = 256;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct ScyllaSinkConfig {
+    pub producer_id: u8,
     pub batch_len_limit: usize,
     pub batch_size_kb_limit: usize,
     pub linger: Duration,
     pub keyspace: String,
-    pub max_inflight_batch_delivery: usize,
     pub shard_count: ShardId,
 }
 
-impl Default for ScyllaSinkConfig {
-    fn default() -> Self {
-        Self {
-            batch_len_limit: 300,
-            batch_size_kb_limit: 1024 * 128,
-            linger: Duration::from_millis(10),
-            keyspace: String::from("solana"),
-            max_inflight_batch_delivery: 100,
-            shard_count: DEFAULT_SHARD_COUNT,
-        }
-    }
-}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, DeepSizeOf)]
@@ -184,6 +163,7 @@ impl ClientCommand {
 struct ShardedClientCommand {
     shard_id: ShardId,
     offset: ShardOffset,
+    producer_id: ProducerId,
     //stmt: BatchStatement,
     client_command: ClientCommand,
 }
@@ -197,12 +177,12 @@ impl SerializeRow for ShardedClientCommand {
         //let period = (self.offset / SHARD_OFFSET_MODULO) * SHARD_OFFSET_MODULO;
         match &self.client_command {
             ClientCommand::InsertAccountUpdate(val) => {
-                let val: ShardedAccountUpdate = val.clone().as_blockchain_event(self.shard_id, self.offset).into();
+                let val: ShardedAccountUpdate = val.clone().as_blockchain_event(self.shard_id, self.producer_id, self.offset).into();
                 //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }   
             ClientCommand::InsertTransaction(val) => {
-                let val: ShardedTransaction = val.clone().as_blockchain_event(self.shard_id, self.offset).into();
+                let val: ShardedTransaction = val.clone().as_blockchain_event(self.shard_id, self.producer_id, self.offset).into();
                 //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }
@@ -216,9 +196,10 @@ impl SerializeRow for ShardedClientCommand {
 
 
 impl ClientCommand {
-    fn with_shard_info(self, shard_id: ShardId, offset: ShardOffset) -> ShardedClientCommand {
+    fn with_shard_info(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> ShardedClientCommand {
         ShardedClientCommand {
             shard_id,
+            producer_id,
             offset,
             client_command: self,
         }
@@ -297,18 +278,23 @@ struct LiveBatchSender {
 }
 
 impl LiveBatchSender {
-    fn new(session: Arc<Session>, linger: Duration) -> Self {
+    fn new(
+        session: Arc<Session>, 
+        linger: Duration,
+        max_batch_len: usize,
+        max_batch_size_kb: usize,
+    ) -> Self {
         LiveBatchSender {
             session,
             timer: Timer::new(linger),
-            buffer: Vec::with_capacity(300),
+            buffer: Vec::with_capacity(max_batch_len),
             scylla_batch: Batch::default(),
             watcher_signals: Vec::with_capacity(10),
             insert_tx_query: SCYLLADB_INSERT_TRANSACTION.into(),
             insert_acccount_update_query: SCYLLADB_INSERT_ACCOUNT_UPDATE.into(),
             curr_batch_byte_size: 0,
-            max_batch_capacity: 300,
-            max_batch_byte_size: 16000000,
+            max_batch_capacity: max_batch_len,
+            max_batch_byte_size: max_batch_size_kb * 1000,
         }
     }
 
@@ -400,6 +386,7 @@ impl Ticker for LiveBatchSender {
         now: Instant,
         msg: ShardedClientCommand,
     ) -> Result<Nothing, anyhow::Error> {
+
         let msg_size = msg.deep_size_of();
 
         // TODO: make the capacity parameterized
@@ -458,6 +445,7 @@ impl Timer {
 struct Shard {
     session: Arc<Session>,
     shard_id: ShardId,
+    producer_id: ProducerId,
     next_offset: ShardOffset,
     token_topology: Arc<dyn TokenTopology + Send + Sync>,
     batchers: Arc<[AgentHandler<ShardedClientCommand>]>,
@@ -470,6 +458,7 @@ impl Shard {
     fn new(
         session: Arc<Session>,
         shard_id: ShardId,
+        producer_id: ProducerId,
         next_offset: ShardOffset,
         token_topology: Arc<dyn TokenTopology + Send + Sync>,
         batchers: Arc<[AgentHandler<ShardedClientCommand>]>,
@@ -477,6 +466,7 @@ impl Shard {
         Shard {
             session,
             shard_id,
+            producer_id,
             next_offset,
             token_topology,
             batchers,
@@ -504,8 +494,10 @@ impl Shard {
     async fn do_shard_stats_checkpoint(&mut self) -> anyhow::Result<Nothing> {
         self.session.query(
             SCYLLADB_INSERT_SHARD_STATISTICS,
-            ShardStatistics::from_slot_event_counter(self.shard_id, self.period(), self.next_offset, &self.slot_event_counter)
-        ).await?;
+            ShardStatistics::from_slot_event_counter(self.shard_id, self.period(), self.producer_id, self.next_offset, &self.slot_event_counter)
+        ).await.map_err(|e|
+            anyhow!("ICIIII {:?}", e)
+        )?;
 
         self.slot_event_counter.clear();
         self.shard_stats_checkpoint_timer.restart();
@@ -531,12 +523,14 @@ impl Ticker for Shard {
     }
     
     async fn on_timeout(&mut self, now: Instant) -> anyhow::Result<Nothing> {
+        self.do_shard_stats_checkpoint().await?;
         info!("shard({:?}) checkpoint at {:?}", self.shard_id, now);
-        self.do_shard_stats_checkpoint().await
+        Ok(())
     }
 
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
         let shard_id = self.shard_id;
+        let producer_id = self.producer_id;
         let offset = self.next_offset;
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
         self.next_offset += 1;
@@ -572,7 +566,7 @@ impl Ticker for Shard {
         self.current_batcher.replace(batcher_idx);
         let batcher = &self.batchers[batcher_idx];
         let slot = msg.slot();
-        let sharded = msg.with_shard_info(shard_id, offset);
+        let sharded = msg.with_shard_info(shard_id, producer_id, offset);
 
         // Handle the end of a period
         let result = if is_end_of_period {
@@ -703,17 +697,6 @@ impl Test {
     }
 }
 
-async fn get_shard_stat(
-    session: Arc<Session>,
-    shard_id: i16,
-) -> anyhow::Result<Option<ShardStatistics>> {
-    let result = session
-        .query(SCYLLADB_GET_SHARD_STATISTICS, (shard_id,))
-        .await?
-        .maybe_first_row_typed::<ShardStatistics>()
-        .map_err(anyhow::Error::new);
-    result
-}
 
 async fn get_max_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyhow::Result<Option<i64>> {
     let query_result = session
@@ -732,11 +715,17 @@ async fn get_max_offset_for_shard(session: Arc<Session>, shard_id: i16) -> anyho
 
 type BatcherArray = Arc<[AgentHandler<ShardedClientCommand>]>;
 
-async fn shard_factory(session: Arc<Session>, shard_id: i16,  token_toplogy: Arc<dyn TokenTopology + Send + Sync>, batchers: BatcherArray) -> anyhow::Result<Shard> {
+async fn shard_factory(
+    session: Arc<Session>, 
+    shard_id: ShardId,
+    producer_id: ProducerId,
+    token_toplogy: Arc<dyn TokenTopology + Send + Sync>, 
+    batchers: BatcherArray
+) -> anyhow::Result<Shard> {
     let before: Instant = Instant::now();
     let max_offset = get_max_offset_for_shard(Arc::clone(&session), shard_id).await?;
     let next_offset = max_offset.unwrap_or(0) + 1;
-    let shard = Shard::new(session, shard_id, next_offset, token_toplogy, batchers);
+    let shard = Shard::new(session, shard_id, producer_id, next_offset, token_toplogy, batchers);
     info!(
         "sharder {:?} next_offset: {:?}, stats collected in: {:?}",
         shard_id,
@@ -747,6 +736,14 @@ async fn shard_factory(session: Arc<Session>, shard_id: i16,  token_toplogy: Arc
 }
 
 
+async fn setup_producer_info(session: Arc<Session>) {
+    let result = session.query(SCYLLADB_GET_MAX_OFFSET_FOR_ALL_SHARD_MV.as_str(), &[]).await;
+
+    println!("{:?}", result);
+}
+
+
+
 impl ScyllaSink {
     pub async fn new(
         config: ScyllaSinkConfig,
@@ -754,6 +751,8 @@ impl ScyllaSink {
         username: impl Into<String>,
         password: impl Into<String>,
     ) -> anyhow::Result<Self> {
+        let producer_id = [config.producer_id];
+
         let session: Session = SessionBuilder::new()
             .known_node(hostname)
             .user(username, password)
@@ -764,17 +763,23 @@ impl ScyllaSink {
             .unwrap();
 
         let session = Arc::new(session);
+        setup_producer_info(Arc::clone(&session));
         let token_topology: Arc<dyn TokenTopology + Send + Sync> =
             Arc::new(LiveTokenTopology(Arc::clone(&session)));
 
         let system = AgentSystem::new(16);
 
-        let shard_count =  config.shard_count;
-        let num_batcher = (shard_count / 8) as usize;
+        let shard_count =  1; // config.shard_count;
+        let num_batcher = 1; // (shard_count / 8) as usize;
 
         let mut batchers = Vec::with_capacity(num_batcher);
         for i in 0..num_batcher {
-            let lbs = LiveBatchSender::new(Arc::clone(&session), config.linger);
+            let lbs = LiveBatchSender::new(
+                Arc::clone(&session),
+                config.linger,
+                config.batch_len_limit,
+                config.batch_size_kb_limit
+            );
             let lbs_handler = system.spawn(format!("batcher({:?})", i), lbs);
             batchers.push(lbs_handler);
         }
@@ -791,7 +796,7 @@ impl ScyllaSink {
             let tt = Arc::clone(&token_topology);
             let batchers = Arc::clone(&batchers);
             js.spawn(async move {
-                shard_factory(session, shard_id, tt, batchers).await
+                shard_factory(session, shard_id, producer_id, tt, batchers).await
             });
         }
 

@@ -2,9 +2,17 @@ CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', '
 
 
 
+create table if not exists solana.producer_info (
+    producer_id blob,
+    device text,
+    ipv4 text,
+    min_offset_per_shard: map<smallint, bigint>
+);
+
 create table if not exists solana.shard_statistics (
     shard_id smallint,
     period bigint,
+    producer_id blob,
     offset bigint,
     min_slot bigint,
     max_slot bigint,
@@ -23,6 +31,7 @@ create table if not exists solana.log (
     -- commun columns
     shard_id smallint,
     period bigint,
+    producer_id blob,
     offset bigint,
     slot bigint,
     entry_type smallint,
@@ -57,22 +66,24 @@ create table if not exists solana.log (
     -- meta data field for debugging purposes
     created_at timestamp,
 
-    primary key ((shard_id, period), offset, entry_type, slot)
+    primary key ((shard_id, period), producer_id, offset)
 );
 
+create materialized view solana.shard_max_offset_mv 
+as 
+select 
+    shard_id, 
+    producer_id,
+    offset,
+    period
+from solana.log
+where 
+    shard_id is not null 
+    and offset is not null
+    and period is not null
+    and producer_id is not null
+primary key(shard_id, offset, period, producer_id);
 
-create table if not exists solana.account_update_log (
-    slot bigint,
-    pubkey blob,
-    lamports bigint,
-    owner blob,
-    executable boolean,
-    rent_epoch bigint,
-    write_version bigint,
-    data blob,
-    txn_signature blob,
-    primary key ((slot, subslot), pubkey, write_version)
-) WITH CLUSTERING ORDER BY (pubkey ASC, write_version ASC);
 
 
 drop table if exists solana.transaction_log;
@@ -157,6 +168,19 @@ create table if not exists solana.transaction_log (
     meta solana.transaction_meta,
     primary key ((slot, signature), recent_blockhash)
 );
+
+create table if not exists solana.account_update_log (
+    slot bigint,
+    pubkey blob,
+    lamports bigint,
+    owner blob,
+    executable boolean,
+    rent_epoch bigint,
+    write_version bigint,
+    data blob,
+    txn_signature blob,
+    primary key ((slot, subslot), pubkey, write_version)
+) WITH CLUSTERING ORDER BY (pubkey ASC, write_version ASC);
 
 
 create table if not exists solana.test (

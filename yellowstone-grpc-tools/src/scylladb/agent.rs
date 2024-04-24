@@ -139,6 +139,7 @@ impl<T: Send + 'static> AgentHandler<T> {
         let result = self.sender.send(Message::FireAndForget(msg)).await;
 
         if let Err(e) = result {
+            error!("error in send");
             Err(self.handle_failed_transmission(e.0.unwrap().0).await)
         } else {
             Ok(())
@@ -148,14 +149,14 @@ impl<T: Send + 'static> AgentHandler<T> {
     async fn handle_failed_transmission(&self, msg: T) -> anyhow::Error {
         if let Some(dlq) = self.deadletter_queue.clone() {
             let emsg = format!(
-                "({:?}) Failed to send message with watch, will reroute to deadletter queue",
+                "({:?}) Failed to send message, will reroute to deadletter queue",
                 self.name
             );
             error!(emsg);
             dlq.send(msg).await;
             anyhow::anyhow!(emsg)
         } else {
-            let emsg = format!("({:?}) Failed to send message with watch, message will be dropped (no deadletter queue detected)", self.name);
+            let emsg = format!("({:?}) Failed to send message, message will be dropped (no deadletter queue detected)", self.name);
             error!(emsg);
             anyhow::anyhow!(emsg)
         }
@@ -178,6 +179,7 @@ impl<T: Send + 'static> AgentHandler<T> {
         let result = self.sender.send(Message::WithWatch(msg, sender)).await;
 
         if let Err(e) = result {
+            error!("error in send_with_watch");
             Err(self.handle_failed_transmission(e.0.unwrap().0).await)
         } else {
             Ok(receiver)
@@ -204,7 +206,12 @@ impl AgentSystem {
         let h = tokio::spawn(async move {
             let name = inner_agent_name;
 
-            let _ = ticker.init().await?;
+            let init_result = ticker.init().await;
+
+            if init_result.is_err() {
+                error!("{:?} error during init: {:?}", name, init_result);
+                return init_result;
+            }
 
             loop {
                 let result = tokio::select! {
@@ -235,7 +242,7 @@ impl AgentSystem {
                 };
 
                 if result.is_err() {
-                    let emsg = format!("{:?}, {:?}", name, result.err().unwrap());
+                    let emsg = format!("message loop: {:?}, {:?}", name, result.err().unwrap());
                     error!(emsg);
                     return Err(anyhow!(emsg));
                 }
