@@ -204,7 +204,7 @@ impl AgentSystem {
         let h = tokio::spawn(async move {
             let name = inner_agent_name;
 
-            let result = ticker.init().await?;
+            let _ = ticker.init().await?;
 
             loop {
                 let result = tokio::select! {
