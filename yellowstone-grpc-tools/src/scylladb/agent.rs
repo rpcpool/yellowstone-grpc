@@ -1,10 +1,10 @@
 use {
-    crate::create_shutdown, anyhow::anyhow, futures::{Future, FutureExt, TryFutureExt}, std::{borrow::BorrowMut, future::pending, pin::Pin, sync::Arc, time::Duration}, tokio::{
+    crate::create_shutdown, anyhow::anyhow, futures::{Future, FutureExt, TryFutureExt}, std::{future::pending, pin::Pin, sync::Arc, time::Duration}, tokio::{
         signal::{self, unix::signal}, sync::{
             self,
             mpsc::{channel, error::TrySendError, Permit},
             oneshot,
-        }, task::JoinHandle, time::Instant
+        }, task::{AbortHandle, JoinHandle, JoinSet}, time::Instant
     }, tonic::async_trait, tracing::{error, warn}
 };
 
@@ -71,6 +71,7 @@ pub trait Ticker {
 
     /// This is called if the agent handler must gracefully kill you.
     async fn terminate(&mut self, _now: Instant) -> Result<Nothing, anyhow::Error> {
+        warn!("Agent terminated");
         Ok(())
     }
 }
@@ -100,7 +101,7 @@ pub struct AgentHandler<T> {
     name: String,
     sender: sync::mpsc::Sender<Message<T>>,
     #[allow(dead_code)]
-    handle: Arc<JoinHandle<anyhow::Result<Nothing>>>,
+    abort_handle: Arc<AbortHandle>,
     deadletter_queue: Option<Arc<DeadLetterQueueHandler<T>>>,
 }
 
@@ -140,7 +141,7 @@ impl<T: Send + 'static> AgentHandler<T> {
         let now = Instant::now();
         let result = self.sender.send(Message::FireAndForget(msg)).await;
 
-        if now.elapsed() > Duration::from_millis(10) {
+        if now.elapsed() > Duration::from_millis(500) {
             warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
         }
 
@@ -193,31 +194,39 @@ impl<T: Send + 'static> AgentHandler<T> {
     }
 
     pub fn kill(self) {
-        self.handle.abort();
+        self.abort_handle.abort();
     }
 }
 
 pub struct AgentSystem {
     pub default_agent_buffer_capacity: usize,
+    handlers: JoinSet<anyhow::Result<Nothing>>,
 }
 
 impl AgentSystem {
 
-    pub fn spawn<T, N: Into<String>>(&self, name: N, mut ticker: T) -> AgentHandler<T::Input>
+    pub fn new(default_agent_buffer_capacity: usize) -> Self {
+        AgentSystem {
+            default_agent_buffer_capacity,
+            handlers: JoinSet::new(),
+        }
+    }
+
+    pub fn spawn<T, N: Into<String>>(&mut self, name: N, ticker: T) -> AgentHandler<T::Input>
     where
         T: Ticker + Send + 'static, 
     {
         self.spawn_with_capacity(name, ticker, self.default_agent_buffer_capacity)
     }
 
-    pub fn spawn_with_capacity<T, N: Into<String>>(&self, name: N, mut ticker: T, buffer: usize) -> AgentHandler<T::Input>
+    pub fn spawn_with_capacity<T, N: Into<String>>(&mut self, name: N, mut ticker: T, buffer: usize) -> AgentHandler<T::Input>
     where
         T: Ticker + Send + 'static,
     {
         let (sender, mut receiver) = channel::<Message<T::Input>>(buffer);
         let agent_name: String = name.into();
         let inner_agent_name = agent_name.clone();
-        let h = tokio::spawn(async move {
+        let abort_handle = self.handlers.spawn(async move {
             let name = inner_agent_name;
 
             let init_result = ticker.init().await;
@@ -230,7 +239,6 @@ impl AgentSystem {
             loop {
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
-
                         ticker.on_timeout(Instant::now()).await
                     }
                     opt_msg = receiver.recv(), if ticker.is_pull_ready() => {                       
@@ -263,15 +271,28 @@ impl AgentSystem {
                 }
             }
         });
+
         AgentHandler {
             name: agent_name,
             sender,
-            handle: Arc::new(h),
+            abort_handle: Arc::new(abort_handle),
             deadletter_queue: None,
         }
     }
 
-    pub const fn new(agent_buffer_size: usize) -> AgentSystem {
-        AgentSystem { default_agent_buffer_capacity: agent_buffer_size }
+
+    pub fn until_one_agent_dies(&mut self) -> impl Future<Output=anyhow::Result<Nothing>> + '_ {
+        self.handlers
+            .join_next()
+            .map(|inner| inner.unwrap_or(Ok(Ok(()))))
+            .map(|result| {
+                match result {
+                    Ok(result2)  => {
+                        result2
+                    }
+                    Err(e) => Err(anyhow::Error::new(e))
+                }
+            })
     }
+
 }
