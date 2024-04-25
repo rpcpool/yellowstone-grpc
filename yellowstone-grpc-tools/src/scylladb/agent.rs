@@ -46,6 +46,10 @@ pub trait Ticker {
         Ok(())
     }
 
+    fn is_pull_ready(&self) -> bool {
+        true
+    }
+
     /// Called on each new message received by the message loop
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
         let (sender, _receiver) = oneshot::channel();
@@ -223,23 +227,13 @@ impl AgentSystem {
                 return init_result;
             }
 
-            let mut before = Instant::now();
-            let mut last_branch = -1;
             loop {
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
 
-                        last_branch = 1;
                         ticker.on_timeout(Instant::now()).await
                     }
-                    opt_msg = receiver.recv() => {                       
-                        if before.elapsed() > Duration::from_millis(10) {
-                            warn!("in timeout {:?}, last branch: {:?}", before.elapsed(), last_branch);
-                            before = Instant::now();
-                        }
-                        
-                        last_branch = 2;
-
+                    opt_msg = receiver.recv(), if ticker.is_pull_ready() => {                       
                         match opt_msg {
                             Some(msg) => {
                                 let now = Instant::now();

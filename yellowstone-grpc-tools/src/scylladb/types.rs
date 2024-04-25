@@ -16,7 +16,7 @@ use {
     },
 };
 
-pub const SHARD_OFFSET_MODULO: i64 = 1000;
+pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
