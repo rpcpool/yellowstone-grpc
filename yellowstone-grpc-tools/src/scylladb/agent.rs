@@ -140,7 +140,7 @@ impl<T: Send + 'static> AgentHandler<T> {
         let now = Instant::now();
         let result = self.sender.send(Message::FireAndForget(msg)).await;
 
-        if now.elapsed() > Duration::from_millis(100) {
+        if now.elapsed() > Duration::from_millis(10) {
             warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
         }
 

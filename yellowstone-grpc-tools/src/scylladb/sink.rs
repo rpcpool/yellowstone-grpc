@@ -394,7 +394,6 @@ impl Ticker for LiveBatchSender {
         let msg_size = msg.deep_size_of();
 
         let beginning_batch_len = self.buffer.len();
-        let beginning_batch_size = self.curr_batch_byte_size;
 
         // TODO: make the capacity parameterized
         let need_flush = beginning_batch_len >= self.max_batch_capacity
@@ -629,53 +628,43 @@ impl Ticker for Shard {
     }
 }
 
-struct RoundRobinShardRouter {
-    sharders: Vec<AgentHandler<ClientCommand>>,
-    sharder_idx: usize,
+struct RoundRobinRouter<T> {
+    destinations: Vec<AgentHandler<T>>,
+    idx: usize,
 }
 
-impl RoundRobinShardRouter {
-    pub fn new(batchers: Vec<AgentHandler<ClientCommand>>) -> Self {
-        let res = RoundRobinShardRouter {
-            sharders: batchers,
-            sharder_idx: 0,
+impl<T> RoundRobinRouter<T> {
+    pub fn new(batchers: Vec<AgentHandler<T>>) -> Self {
+        let res = RoundRobinRouter {
+            destinations: batchers,
+            idx: 0,
         };
         res
     }
 }
 
 #[async_trait]
-impl Ticker for RoundRobinShardRouter {
-    type Input = ClientCommand;
+impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
+    type Input = T;
 
     async fn tick(&mut self, _now: Instant, msg: Self::Input) -> Result<Nothing, anyhow::Error> {
-        let begin = self.sharder_idx;
+        let begin = self.idx;
 
         let maybe_permit = self
-            .sharders
+            .destinations
             .iter()
             .enumerate()
+            // Cycle forever until you find a destination
             .cycle()
             .skip(begin)
-            .take(self.sharders.len())
-            .find_map(|(i, sharder)| sharder.try_reserve().ok().map(|slot| (i, slot)));
+            .find_map(|(i, dest)| dest.try_reserve().ok().map(|slot| (i, slot)));
 
         if let Some((i, permit)) = maybe_permit {
-            self.sharder_idx = i + 1;
+            self.idx = i + 1;
             scylladb_batch_request_lag_inc();
             permit.send(msg);
             return Ok(());
         } else {
-            // Pick the first living sharder and wait until it becomes available;
-
-            for sharder in self.sharders.iter() {
-                let result = sharder.reserve().await;
-                if let Ok(permit) = result {
-                    permit.send(msg);
-                    scylladb_batch_request_lag_inc();
-                    return Ok(());
-                }
-            }
             return Err(anyhow::anyhow!(
                 "failed to find a sharder, message is dropped"
             ));
@@ -790,7 +779,7 @@ impl ScyllaSink {
             sharders.push(system.spawn(format!("shard({:?})", shard.shard_id), shard));
         }
 
-        let router = RoundRobinShardRouter::new(sharders);
+        let router = RoundRobinRouter::new(sharders);
 
         let router_handle = system.spawn("router", router);
         info!("Shard router has started.");
