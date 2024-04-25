@@ -27,7 +27,7 @@ use {
         sync::{mpsc::error::TrySendError, oneshot},
         task::JoinSet,
         time::{self, Instant, Sleep},
-    }, tonic::async_trait, tracing::{error, info, instrument::WithSubscriber, warn}
+    }, tonic::async_trait, tracing::{error, info, instrument::WithSubscriber, warn},
 };
 
 const SHARD_COUNT: i16 = 256;
@@ -413,10 +413,6 @@ impl Ticker for LiveBatchSender {
         self.buffer.push(msg);
         self.curr_batch_byte_size += msg_size;
 
-        if now.elapsed() > Duration::from_millis(100) {
-            warn!("batcher tick elapsed {:?}, batcher len: {:?}, batch size {:?}", now.elapsed(), beginning_batch_len, beginning_batch_size);
-        }
-
         Ok(())
     }
 
@@ -492,8 +488,24 @@ impl Shard {
         let node_uuid = self.token_topology.get_node_uuid_for_token(token);
         let mut node_uuids = self.token_topology.get_node_uuids();
         node_uuids.sort();
+
+        // this always hold true: node_uuids.len() << batchers.len()
+        let batch_partition_size: usize = self.batchers.len() / node_uuids.len();
+        
         if let Ok(i) = node_uuids.binary_search(&node_uuid) {
-            i % self.batchers.len()
+            let batch_partition = self.batchers
+                .chunks(batch_partition_size)
+                .skip(i)
+                .next()
+                .unwrap();
+            
+            let batch_partition_offset = (self.shard_id as usize) % batch_partition.len();
+            let global_offset = (batch_partition_size * i) + batch_partition_offset;
+            if global_offset > self.batchers.len() {
+                panic!("batcher idx fell out of batchers list index bound")
+            }                                                            
+            global_offset
+            
         } else {
             warn!(
                 "Token topology didn't know about {:?} at the time of batcher assignment.",
@@ -507,9 +519,7 @@ impl Shard {
         self.session.query(
             SCYLLADB_INSERT_SHARD_STATISTICS,
             ShardStatistics::from_slot_event_counter(self.shard_id, self.period(), self.producer_id, self.next_offset, &self.slot_event_counter)
-        ).await.map_err(|e|
-            anyhow!("ICIIII {:?}", e)
-        )?;
+        ).await.map_err(anyhow::Error::new)?;
 
         self.slot_event_counter.clear();
         self.shard_stats_checkpoint_timer.restart();
@@ -615,9 +625,6 @@ impl Ticker for Shard {
             
         }
 
-        if now.elapsed() > Duration::from_millis(100) {
-            warn!("shard tick elapsed {:?}, is_end_of_period: {:?}", now.elapsed(), is_end_of_period);
-        }
         return result;
     }
 }
@@ -685,40 +692,6 @@ pub enum ScyllaSinkError {
     SinkClose,
 }
 
-pub struct Test {
-    session: Arc<Session>,
-}
-
-impl Test {
-    pub async fn new(
-        hostname: impl AsRef<str>,
-        username: impl Into<String>,
-        password: impl Into<String>,
-    ) -> Test {
-        let session: Session = SessionBuilder::new()
-            .known_node(hostname)
-            .user(username, password)
-            .compression(Some(Compression::Lz4))
-            .use_keyspace("solana", false)
-            .build()
-            .await
-            .unwrap();
-        Test {
-            session: Arc::new(session),
-        }
-    }
-
-    pub async fn test(&self, id: i64, x: Reward) -> QueryResult {
-        let ps = self
-            .session
-            .prepare("insert into test (id, x) values (?, ?)")
-            .await
-            .unwrap();
-        self.session.execute(&ps, (id, x)).await.unwrap()
-    }
-}
-
-
 async fn get_max_offset_for_shard_and_producer(session: Arc<Session>, shard_id: i16, producer_id: ProducerId) -> anyhow::Result<Option<i64>> {
     let query_result = session
         .query(SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV, (shard_id, producer_id))
@@ -778,12 +751,13 @@ impl ScyllaSink {
         let token_topology: Arc<dyn TokenTopology + Send + Sync> =
             Arc::new(LiveTokenTopology(Arc::clone(&session)));
 
+
         let system = AgentSystem::new(16);
 
-        let shard_count =  1; // config.shard_count;
-        let num_batcher = 1; // (shard_count / 8) as usize;
+        let shard_count = SHARD_COUNT;//SHARD_COUNT; // config.shard_count;
+        let num_batcher = SHARD_COUNT / 2;//SHARD_COUNT; // (shard_count / 8) as usize;
 
-        let mut batchers = Vec::with_capacity(num_batcher);
+        let mut batchers = Vec::with_capacity(num_batcher as usize);
         for i in 0..num_batcher {
             let lbs = LiveBatchSender::new(
                 Arc::clone(&session),

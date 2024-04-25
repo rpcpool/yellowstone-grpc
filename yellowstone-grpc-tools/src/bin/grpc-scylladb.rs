@@ -12,7 +12,7 @@ use {
         prom::run_server as prometheus_run_server,
         scylladb::{
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
-            sink::{ScyllaSink, Test},
+            sink::ScyllaSink,
             types::{Reward, Transaction},
         },
         setup_tracing,
@@ -67,39 +67,13 @@ impl ArgsAction {
                 // Self::kafka2grpc(kafka_config, config, shutdown).await
             }
             ArgsAction::Test => {
-                let config2 = config.grpc2scylladb.ok_or_else(|| {
-                    anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
-                })?;
-                Self::test(config2, config.scylladb).await
+                Ok(())
+                // let config2 = config.grpc2scylladb.ok_or_else(|| {
+                //     anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
+                // })?;
+                // Self::test(config2, config.scylladb).await
             }
         }
-    }
-
-    async fn test(
-        _config: ConfigGrpc2ScyllaDB,
-        scylladb_conn_config: ScyllaDbConnectionInfo,
-    ) -> anyhow::Result<()> {
-        let t = Test::new(
-            scylladb_conn_config.hostname,
-            scylladb_conn_config.username,
-            scylladb_conn_config.password,
-        )
-        .await;
-
-        let res = t
-            .test(
-                1,
-                Reward {
-                    pubkey: String::from("DtdSSG8ZJRZVv5Jx7K1MeWp7Zxcu19GD5wQRGRpQ9uMF"),
-                    lamports: 10,
-                    post_balance: 100,
-                    reward_type: 1000,
-                    commission: String::from("this is a test"),
-                },
-            )
-            .await;
-        println!("res: {:?}", res);
-        Ok(())
     }
 
     async fn grpc2scylladb(
