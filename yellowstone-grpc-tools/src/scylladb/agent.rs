@@ -2,7 +2,7 @@ use {
     crate::create_shutdown, anyhow::anyhow, futures::{Future, FutureExt, TryFutureExt}, std::{future::pending, pin::Pin, sync::Arc, time::Duration}, tokio::{
         signal::{self, unix::signal}, sync::{
             self,
-            mpsc::{channel, error::TrySendError, Permit},
+            mpsc::{channel, error::{SendError, TrySendError}, Permit},
             oneshot,
         }, task::{AbortHandle, JoinHandle, JoinSet}, time::Instant
     }, tonic::async_trait, tracing::{error, warn}
@@ -10,9 +10,9 @@ use {
 
 pub type Nothing = ();
 
-pub type Watch = oneshot::Receiver<Nothing>;
+pub type Callback = oneshot::Receiver<Nothing>;
 
-pub type WatchSignal = oneshot::Sender<Nothing>;
+pub type CallbackSender = oneshot::Sender<Nothing>;
 
 /// Watch to see when a message, previously sent, has been consumed and processed by an agent.
 
@@ -53,19 +53,23 @@ pub trait Ticker {
     /// Called on each new message received by the message loop
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
         let (sender, _receiver) = oneshot::channel();
-        self.tick_with_watch(now, msg, sender).await
+        self.tick_with_callback_sender(now, msg, vec![sender]).await
     }
 
-    async fn tick_with_watch(
+    async fn tick_with_callback_sender(
         &mut self,
         now: Instant,
         msg: Self::Input,
-        ws: WatchSignal,
+        callback_senders: Vec<CallbackSender>,
     ) -> anyhow::Result<Nothing> {
         let result = self.tick(now, msg).await;
-        if ws.send(()).is_err() {
-            warn!("Failed to notified because endpoint already closed");
+
+        for cb_sender in callback_senders {
+            if cb_sender.send(()).is_err() {
+                warn!("Failed to notified because endpoint already closed");
+            }
         }
+       
         result
     }
 
@@ -82,19 +86,14 @@ pub enum AgentHandlerError {
     AgentError,
 }
 
-enum Message<T> {
-    FireAndForget(T),
-    WithWatch(T, oneshot::Sender<Nothing>),
+struct Message<T> {
+    data: T,
+    callbacks: Vec<CallbackSender>,
+    //FireAndForget(T),
+    //WithCallbacks(T, Vec<oneshot::Sender<Nothing>>),
 }
 
-impl<T> Message<T> {
-    fn unwrap(self) -> (T, Option<oneshot::Sender<Nothing>>) {
-        match self {
-            Self::FireAndForget(x) => (x, None),
-            Self::WithWatch(x, sender) => (x, Some(sender)),
-        }
-    }
-}
+
 
 #[derive(Clone)]
 pub struct AgentHandler<T> {
@@ -120,36 +119,31 @@ pub struct Slot<'a, T> {
     inner: Permit<'a, Message<T>>,
 }
 
+
 impl<'a, T> Slot<'a, T> {
     fn new(permit: Permit<'a, Message<T>>) -> Self {
         Slot { inner: permit }
     }
 
     pub fn send(self, msg: T) {
-        self.inner.send(Message::FireAndForget(msg))
+        self.send_with_callback_senders( msg, Vec::new() );
     }
 
-    pub fn send_with_watch(self, msg: T) -> oneshot::Receiver<()> {
+    pub fn send_with_callback_senders<IT>(self, msg: T, callback_senders: IT)
+        where IT: IntoIterator<Item = CallbackSender> {
+        self.inner.send(Message { data: msg, callbacks: callback_senders.into_iter().collect() })
+    }
+
+    pub fn send_and_subscribe(self, msg: T) -> oneshot::Receiver<()> {
         let (sender, receiver) = oneshot::channel();
-        self.inner.send(Message::WithWatch(msg, sender));
+        self.send_with_callback_senders(msg, [sender]);
         receiver
     }
 }
 
 impl<T: Send + 'static> AgentHandler<T> {
-    pub async fn send(&self, msg: T) -> anyhow::Result<()> {
-        let now = Instant::now();
-        let result = self.sender.send(Message::FireAndForget(msg)).await;
-        if now.elapsed() > Duration::from_millis(500) {
-            warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
-        }
-
-        if let Err(e) = result {
-            error!("error in send");
-            Err(self.handle_failed_transmission(e.0.unwrap().0).await)
-        } else {
-            Ok(())
-        }
+    pub async fn send(&self, msg: T) -> anyhow::Result<Nothing> {
+        self.send_with_callback_senders(msg, Vec::new()).await
     }
 
     async fn handle_failed_transmission(&self, msg: T) -> anyhow::Error {
@@ -180,16 +174,29 @@ impl<T: Send + 'static> AgentHandler<T> {
         self.sender.try_reserve().map(Slot::new)
     }
 
-    pub async fn send_with_watch(&self, msg: T) -> anyhow::Result<oneshot::Receiver<Nothing>> {
-        let (sender, receiver) = oneshot::channel();
-        let result = self.sender.send(Message::WithWatch(msg, sender)).await;
+    pub async fn send_with_callback_senders<IT>(&self, msg: T, callback_senders: IT) -> anyhow::Result<Nothing>
+        where IT: IntoIterator<Item = CallbackSender> {
+        let now = Instant::now();
+        let envelope = Message { data: msg, callbacks: callback_senders.into_iter().collect() };
+        let result = self.sender.send(envelope).await;
+
+        
+        if now.elapsed() > Duration::from_millis(500) {
+            warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
+        }
 
         if let Err(e) = result {
             error!("error in send_with_watch");
-            Err(self.handle_failed_transmission(e.0.unwrap().0).await)
+            Err(self.handle_failed_transmission(e.0.data).await)
         } else {
-            Ok(receiver)
+            Ok(())
         }
+    }
+
+    pub async fn send_and_subscribe(&self, msg: T) -> anyhow::Result<oneshot::Receiver<Nothing>> {
+        let (sender, receiver) = oneshot::channel();
+        self.send_with_callback_senders(msg, vec![sender]).await?;
+        Ok(receiver)
     }
 
     pub fn kill(self) {
@@ -245,10 +252,10 @@ impl AgentSystem {
                         match opt_msg {
                             Some(msg) => {
                                 let now = Instant::now();
-                                let (content, maybe) = msg.unwrap();
-                                match maybe {
-                                    Some(sender) => ticker.tick_with_watch(now, content, sender).await,
-                                    None => ticker.tick(now, content).await,
+                                if msg.callbacks.is_empty() {
+                                    ticker.tick(now, msg.data).await
+                                } else {
+                                    ticker.tick_with_callback_sender(now, msg.data, msg.callbacks).await
                                 }
                             },
                             None => {
@@ -271,7 +278,7 @@ impl AgentSystem {
                 }
 
                 let iteration_duration = before.elapsed();
-                if iteration_duration > Duration::from_millis(100) {
+                if iteration_duration > Duration::from_millis(500) {
                     warn!("loop iteration took: {:?}", iteration_duration);
                 }
             }

@@ -1,6 +1,6 @@
 use {
     super::{
-        agent::{AgentHandler, Nothing, Ticker, WatchSignal},
+        agent::{AgentHandler, CallbackSender, Nothing, Ticker},
         prom::{
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
@@ -11,7 +11,7 @@ use {
     }, crate::scylladb::{
         agent::AgentSystem,
         types::{AccountUpdate, BlockchainEventType, ProducerInfo, ShardedTransaction},
-    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, io::Flush, Future, FutureExt, SinkExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::{google_cloud_auth::token, Client}, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
+    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, io::Flush, stream::Zip, Future, FutureExt, SinkExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::{google_cloud_auth::token, Client}, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
         batch::{Batch, BatchStatement},
         frame::{request::query, response::result::ColumnType, Compression},
         prepared_statement::PreparedStatement,
@@ -269,22 +269,20 @@ impl TokenTopology for LiveTokenTopology {
 }
 
 
-struct FlushBuffer {
+struct Buffer {
     // TODO implement bitarray
     shard_id_presents: HashSet<ShardId>,
     scylla_stmt_batch: Batch,
     rows: Vec<ShardedClientCommand>,
-    watcher_signals: Vec<WatchSignal>,
     curr_batch_byte_size: usize,
 }
 
-impl FlushBuffer {
-    fn with_capacity(capacity: usize) -> FlushBuffer {
-        FlushBuffer {
+impl Buffer {
+    fn with_capacity(capacity: usize) -> Buffer {
+        Buffer {
             shard_id_presents: HashSet::new(),
             scylla_stmt_batch: Batch::default(),
             rows: Vec::with_capacity(capacity),
-            watcher_signals: Vec::new(),
             curr_batch_byte_size: 0
         }
     }
@@ -312,163 +310,106 @@ impl FlushBuffer {
         self.shard_id_presents.clear();
     }
 
-    async fn flush(mut self, session: Arc<Session>) -> anyhow::Result<(Vec<ShardId>, Self)> {
-        scylladb_batch_size_observe(self.len());
-        
-        let shard_id_presents = self.shard_id_presents.iter().cloned().collect::<Vec<_>>();
-        let batch_len = self.len();
+
+    fn drain_into(&mut self, target: &mut Buffer) {
+        self.rows.drain(..)
+            .zip(self.scylla_stmt_batch.statements.drain(..))
+            .for_each(|(row, bs)| target.push(bs, row));
+
+        self.clear();
+    }
+
+}
+
+struct Flusher {
+    session: Arc<Session>,
+}
+
+impl Flusher {
+    fn new(session: Arc<Session>) -> Self {
+        Flusher { 
+            session,
+        }
+    }
+}
+
+#[async_trait]
+impl Ticker for Flusher {
+    type Input = Buffer;
+    
+    async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
+        let mut buffer = msg;
+        let batch_len = buffer.len();
+        scylladb_batch_size_observe(buffer.len());
         if batch_len > 0 {
             //info!("Sending batch of length: {:?}, curr_batch_size: {:?}", batch_len, self.curr_batch_byte_size);
-            let prepared_batch = session
-                .prepare_batch(&self.scylla_stmt_batch)
+            let prepared_batch = self.session
+                .prepare_batch(&buffer.scylla_stmt_batch)
                 .await
                 .map_err(anyhow::Error::new)?;
 
-            let rows = &self.rows;
+            let rows = &buffer.rows;
 
-            session
+            self.session
                 .batch(&prepared_batch, rows)
                 .await
                 .map(|_| ())
                 .map_err(anyhow::Error::new)?;
         }
 
-        self.watcher_signals.drain(..).for_each(|ws| {
-            if let Err(_e) = ws.send(()) {
-                warn!("Notification failed")
-            }
-        });
-
-        // TODO : don't drop the element here
-        self.clear();
+        buffer.clear();
         scylladb_batch_sent_inc();
         scylladb_batchitem_sent_inc_by(batch_len as u64);
         scylladb_batch_request_lag_sub(batch_len as i64);
-        Ok((shard_id_presents, self))
+        Ok(())
     }
-
-
-
 }
 
 
-struct LiveBatchSender {
+
+struct Batcher {
     session: Arc<Session>,
     timer: Timer,
-    watcher_signals: Vec<WatchSignal>,
+    callback_senders: Vec<CallbackSender>,
     insert_tx_query: BatchStatement,
     insert_acccount_update_query: BatchStatement,
     max_batch_capacity: usize,
     max_batch_byte_size: usize,
-    flush_buffer: FlushBuffer,
-    flush_queue: VecDeque<FlushBuffer>,
-    in_transit_shard_ids: HashSet<ShardId>,
-    flush_callbacks: JoinSet<anyhow::Result<(Vec<ShardId>, FlushBuffer)>>,
-    flush_buffer_pool: Vec<FlushBuffer>,
-    max_infligh_flush: usize,
-    max_flush_queue_size: usize,
+    buffer: Buffer,
+    flusher: Arc<AgentHandler<Buffer>>,
 }
 
-impl LiveBatchSender {
+impl Batcher {
     fn new(
         session: Arc<Session>, 
         linger: Duration,
         max_batch_len: usize,
         max_batch_size_kb: usize,
+        flusher_handle: Arc<AgentHandler<Buffer>>
     ) -> Self {
-
-        let mut fbuffer_pools = Vec::with_capacity(10);
-        for _ in 0..10 {
-            let fbuffer = FlushBuffer::with_capacity(max_batch_len);
-            fbuffer_pools.push(fbuffer);
-        }
-
-        LiveBatchSender {
+        Batcher {
             session,
             timer: Timer::new(linger),
-            watcher_signals: Vec::with_capacity(10),
+            callback_senders: Vec::with_capacity(10),
             insert_tx_query: SCYLLADB_INSERT_TRANSACTION.into(),
             insert_acccount_update_query: SCYLLADB_INSERT_ACCOUNT_UPDATE.into(),
             max_batch_capacity: max_batch_len,
             max_batch_byte_size: max_batch_size_kb * 1000,
-            flush_buffer: FlushBuffer::with_capacity(max_batch_len),
-            flush_queue: VecDeque::with_capacity(10),
-            in_transit_shard_ids: HashSet::new(),
-            flush_callbacks: JoinSet::new(),
-            flush_buffer_pool: fbuffer_pools,
-            max_infligh_flush: 1,
-            max_flush_queue_size: 2,
+            buffer: Buffer::with_capacity(max_batch_len),
+            flusher: flusher_handle,
         }
     }
-
-    fn try_spawn_next_in_flush_queue(&mut self) {
-        let flush_queue_len = self.flush_queue.len();
-        'outer: for _ in 0..flush_queue_len {
-            if self.flush_callbacks.len() >= self.max_infligh_flush {
-                return
-            }
-            if let Some(fbuffer) = self.flush_queue.pop_back() {
-                for shard_id in &self.in_transit_shard_ids {
-                    if fbuffer.shard_id_presents.contains(shard_id) {
-                        // We cannot flush a buffer that contains element from the shard time in parallel.
-                        // this would break the monotonic guarantee the log offers.
-                        
-                        // Reschedule it for later
-                        self.flush_queue.push_front(fbuffer);
-                        continue 'outer;
-                    }
-                }
-
-                for shard_id in &fbuffer.shard_id_presents {
-                    self.in_transit_shard_ids.insert(*shard_id);
-                }
-
-                let session = Arc::clone(&self.session);
-                let _abort_handle = self.flush_callbacks.spawn(async move {
-                    fbuffer.flush(session).await
-                });
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn handle_completed_flush(&mut self, mut flush_buffer_to_recycle: FlushBuffer, shard_ids_flushed: &[ShardId]) {
-        for shard_id in shard_ids_flushed {
-            self.in_transit_shard_ids.remove(&shard_id);
-        }
-        flush_buffer_to_recycle.clear();
-        self.flush_buffer_pool.push(flush_buffer_to_recycle);
-    }
-
-    async fn resolve_next_flush(&mut self) -> anyhow::Result<Nothing> {
-         let maybe = self.flush_callbacks.join_next().await;
-
-        if let Some(join_result) = maybe {
-            let flush_job_result = join_result?;
-            let (shard_ids, released_fbuffer) = flush_job_result?;
-            self.handle_completed_flush(released_fbuffer, &shard_ids);
-        }
-            // clear our the in_tranist bit array
-        self.try_spawn_next_in_flush_queue();
-        Ok(())
-    }
-
+    
     async fn flush(&mut self) -> anyhow::Result<Nothing> {
         self.timer.restart();
-        // We include + 1 since we will add the current flush buffer
-        while self.flush_queue.len() >= self.max_flush_queue_size {
-           self.resolve_next_flush().await?;
-        }
-        let mut fbuffer = if let Some(fbuffer) = self.flush_buffer_pool.pop() {
-            fbuffer
-        } else {
-            FlushBuffer::with_capacity(self.max_batch_capacity)
-        };
+        let mut new_buffer = Buffer::with_capacity(self.buffer.len());
+        self.buffer.drain_into(&mut new_buffer);
 
-        mem::swap(&mut fbuffer, &mut self.flush_buffer);
-        self.flush_queue.push_front(fbuffer);
-        self.try_spawn_next_in_flush_queue();
+        let reserve_result = self.flusher.reserve().await?;
+
+        reserve_result
+            .send_with_callback_senders(new_buffer, self.callback_senders.drain(..));
+
         Ok(())
     }
 
@@ -476,7 +417,7 @@ impl LiveBatchSender {
 
 
 #[async_trait]
-impl Ticker for LiveBatchSender {
+impl Ticker for Batcher {
     type Input = ShardedClientCommand;
 
     fn timeout(&self) -> Pin<Box<dyn Future<Output = Nothing> + Send + 'static>> {
@@ -516,15 +457,15 @@ impl Ticker for LiveBatchSender {
 
         let msg_size = msg.deep_size_of();
 
-        let beginning_batch_len = self.flush_buffer.len();
+        let beginning_batch_len = self.buffer.len();
 
         // TODO: make the capacity parameterized
         let need_flush = beginning_batch_len >= self.max_batch_capacity
-            || (self.flush_buffer.total_byte_size() + msg_size) >= self.max_batch_byte_size;
+            || (self.buffer.total_byte_size() + msg_size) >= self.max_batch_byte_size;
 
         if need_flush {
             self.flush().await?;
-            if self.flush_buffer.len() > 0 {
+            if self.buffer.len() > 0 {
                 panic!("Corrupted flush buffer");
             }
         }
@@ -535,18 +476,18 @@ impl Ticker for LiveBatchSender {
         };
 
         //self.scylla_batch.append_statement(batch_stmt);
-        self.flush_buffer.push(batch_stmt, msg);
+        self.buffer.push(batch_stmt, msg);
         Ok(())
     }
 
-    async fn tick_with_watch(
+    async fn tick_with_callback_sender(
         &mut self,
         now: Instant,
         msg: Self::Input,
-        ws: WatchSignal,
+        callback_senders: Vec<CallbackSender>,
     ) -> anyhow::Result<Nothing> {
         self.tick(now, msg).await?;
-        self.watcher_signals.push(ws);
+        self.callback_senders.extend(callback_senders);
         Ok(())
     }
 }
@@ -729,7 +670,7 @@ impl Ticker for Shard {
 
             // With watch allows us to block until the period is either completly committed or abandonned
             // before sharding again.
-            let watch = batcher.send_with_watch(sharded).await?;
+            let watch = batcher.send_and_subscribe(sharded).await?;
 
             let subres = watch.await.map_err(anyhow::Error::new);
             subres
@@ -878,11 +819,16 @@ impl ScyllaSink {
 
         let mut batchers = Vec::with_capacity(num_batcher as usize);
         for i in 0..num_batcher {
-            let lbs = LiveBatchSender::new(
+            let flusher = Flusher::new(Arc::clone(&session));
+
+            let flusher_handle = system.spawn(format!("flusher({:?})", i), flusher);
+
+            let lbs = Batcher::new(
                 Arc::clone(&session),
                 config.linger,
                 config.batch_len_limit,
-                config.batch_size_kb_limit
+                config.batch_size_kb_limit,
+                Arc::new(flusher_handle),
             );
             let lbs_handler = system.spawn_with_capacity(format!("batcher({:?})", i), lbs, 100);
             batchers.push(lbs_handler);
