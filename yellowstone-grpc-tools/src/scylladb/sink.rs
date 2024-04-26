@@ -299,6 +299,10 @@ impl Buffer {
         self.curr_batch_byte_size += row_byte_size;
     }
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn total_byte_size(&self) -> usize {
         self.curr_batch_byte_size
     }
@@ -355,10 +359,10 @@ impl Ticker for Flusher {
                 .await
                 .map(|_| ())
                 .map_err(anyhow::Error::new)?;
+            scylladb_batch_sent_inc();
         }
 
         buffer.clear();
-        scylladb_batch_sent_inc();
         scylladb_batchitem_sent_inc_by(batch_len as u64);
         scylladb_batch_request_lag_sub(batch_len as i64);
         Ok(())
@@ -402,6 +406,11 @@ impl Batcher {
     
     async fn flush(&mut self) -> anyhow::Result<Nothing> {
         self.timer.restart();
+        if self.buffer.is_empty() {
+            // The callback senders should be empty, but clear it incase of so if anyone is waiting on the signal gets unblock.
+            self.callback_senders.clear();
+            return Ok(());
+        }
         let mut new_buffer = Buffer::with_capacity(self.buffer.len());
         self.buffer.drain_into(&mut new_buffer);
 
@@ -655,7 +664,6 @@ impl Ticker for Shard {
 
         let batcher_idx = self.current_batcher.unwrap();
     
-
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
         self.next_offset += 1;
     
@@ -714,8 +722,6 @@ impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
 
     async fn tick(&mut self, now: Instant, msg: Self::Input) -> Result<Nothing, anyhow::Error> {
         let begin = self.idx;
-
-
         let maybe_permit = self
             .destinations
             .iter()
