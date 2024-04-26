@@ -6,35 +6,44 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            BlockchainEvent, ProducerId, Reward, ShardId, ShardOffset, ShardPeriod, ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO
+            ProducerId, ShardId, ShardOffset, ShardPeriod,
+            ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO,
         },
-    }, crate::scylladb::{
+    },
+    crate::scylladb::{
         agent::AgentSystem,
-        types::{AccountUpdate, BlockchainEventType, ProducerInfo, ShardedTransaction},
-    }, anyhow::anyhow, deepsize::DeepSizeOf, futures::{future::ready, io::Flush, stream::Zip, Future, FutureExt, SinkExt}, google_cloud_googleapis::r#type, google_cloud_pubsub::client::{google_cloud_auth::token, Client}, lazy_static::lazy_static, rdkafka::producer::Producer, scylla::{
+        types::{AccountUpdate, ShardedTransaction},
+    },
+    deepsize::DeepSizeOf,
+    futures::{future::ready, Future, FutureExt},
+    lazy_static::lazy_static,
+    scylla::{
         batch::{Batch, BatchStatement},
-        frame::{request::query, response::result::ColumnType, Compression},
-        prepared_statement::PreparedStatement,
+        frame::{response::result::ColumnType, Compression},
         routing::Token,
         serialize::{
-            row::{RowSerializationContext, SerializeRow, SerializedValues}, value::SerializeCql, RowWriter
-        },
-        transport::{errors::QueryError, Node},
-        QueryResult, Session, SessionBuilder,
-    }, sha2::digest::typenum::Prod, std::{
-        borrow::BorrowMut, collections::{HashMap, HashSet, VecDeque}, fmt::format, hash::{self, Hasher}, iter::repeat, mem, num, ops::Index, path::Display, pin::Pin, sync::Arc, time::Duration
-    }, tokio::{
-        sync::{mpsc::error::TrySendError, oneshot},
+            row::{RowSerializationContext, SerializeRow, SerializedValues},
+            RowWriter,
+        }, Session, SessionBuilder,
+    },
+    std::{
+        borrow::BorrowMut,
+        collections::{HashMap, HashSet},
+        pin::Pin,
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::{
         task::{JoinHandle, JoinSet},
         time::{self, Instant, Sleep},
-    }, tonic::async_trait, tracing::{error, info, instrument::WithSubscriber, warn}
+    },
+    tonic::async_trait,
+    tracing::{info, warn},
 };
 
 const SHARD_COUNT: i16 = 256;
 
-
 const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
-
 
 const SCYLLADB_COMMIT_PRODUCER_PERIOD: &str = r###"
     INSERT INTO producer_period_commit_log (
@@ -58,15 +67,15 @@ const SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
     PER PARTITION LIMIT 1
 "###;
 
-
-
 lazy_static! {
-
     static ref SCYLLADB_GET_MAX_OFFSET_FOR_ALL_SHARD_MV: String = {
-        
-        let joined = (0..SHARD_COUNT).map(|x| format!("{:?}", x)).collect::<Vec<_>>().join(",");
+        let joined = (0..SHARD_COUNT)
+            .map(|x| format!("{:?}", x))
+            .collect::<Vec<_>>()
+            .join(",");
 
-        format!(r###"
+        format!(
+            r###"
             SELECT
                 shard_id,
                 offset
@@ -74,12 +83,11 @@ lazy_static! {
             WHERE shard_id IN ({:?})
             ORDER BY offset DESC 
             PER PARTITION LIMIT 1
-            "###, 
+            "###,
             joined
         )
     };
 }
-
 
 const SCYLLADB_INSERT_SHARD_STATISTICS: &str = r###"
     INSERT INTO shard_statistics (
@@ -144,7 +152,6 @@ const SCYLLADB_INSERT_TRANSACTION: &str = r###"
     VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?, currentTimestamp())
 "###;
 
-
 #[derive(Clone, PartialEq, Debug)]
 pub struct ScyllaSinkConfig {
     pub producer_id: u8,
@@ -153,7 +160,6 @@ pub struct ScyllaSinkConfig {
     pub linger: Duration,
     pub keyspace: String,
 }
-
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, DeepSizeOf)]
@@ -190,12 +196,18 @@ impl SerializeRow for ShardedClientCommand {
         //let period = (self.offset / SHARD_OFFSET_MODULO) * SHARD_OFFSET_MODULO;
         match &self.client_command {
             ClientCommand::InsertAccountUpdate(val) => {
-                let val: ShardedAccountUpdate = val.clone().as_blockchain_event(self.shard_id, self.producer_id, self.offset).into();
+                let val: ShardedAccountUpdate = val
+                    .clone()
+                    .as_blockchain_event(self.shard_id, self.producer_id, self.offset)
+                    .into();
                 //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
-            }   
+            }
             ClientCommand::InsertTransaction(val) => {
-                let val: ShardedTransaction = val.clone().as_blockchain_event(self.shard_id, self.producer_id, self.offset).into();
+                let val: ShardedTransaction = val
+                    .clone()
+                    .as_blockchain_event(self.shard_id, self.producer_id, self.offset)
+                    .into();
                 //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }
@@ -207,9 +219,13 @@ impl SerializeRow for ShardedClientCommand {
     }
 }
 
-
 impl ClientCommand {
-    fn with_shard_info(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> ShardedClientCommand {
+    fn with_shard_info(
+        self,
+        shard_id: ShardId,
+        producer_id: ProducerId,
+        offset: ShardOffset,
+    ) -> ShardedClientCommand {
         ShardedClientCommand {
             shard_id,
             producer_id,
@@ -277,7 +293,6 @@ impl TokenTopology for LiveTokenTopology {
     }
 }
 
-
 struct Buffer {
     // TODO implement bitarray
     shard_id_presents: HashSet<ShardId>,
@@ -292,7 +307,7 @@ impl Buffer {
             shard_id_presents: HashSet::new(),
             scylla_stmt_batch: Batch::default(),
             rows: Vec::with_capacity(capacity),
-            curr_batch_byte_size: 0
+            curr_batch_byte_size: 0,
         }
     }
 
@@ -323,15 +338,14 @@ impl Buffer {
         self.shard_id_presents.clear();
     }
 
-
     fn drain_into(&mut self, target: &mut Buffer) {
-        self.rows.drain(..)
+        self.rows
+            .drain(..)
             .zip(self.scylla_stmt_batch.statements.drain(..))
             .for_each(|(row, bs)| target.push(bs, row));
 
         self.clear();
     }
-
 }
 
 struct Flusher {
@@ -340,23 +354,22 @@ struct Flusher {
 
 impl Flusher {
     fn new(session: Arc<Session>) -> Self {
-        Flusher { 
-            session,
-        }
+        Flusher { session }
     }
 }
 
 #[async_trait]
 impl Ticker for Flusher {
     type Input = Buffer;
-    
-    async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
+
+    async fn tick(&mut self, _now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
         let mut buffer = msg;
         let batch_len = buffer.len();
         scylladb_batch_size_observe(buffer.len());
         if batch_len > 0 {
             //info!("Sending batch of length: {:?}, curr_batch_size: {:?}", batch_len, self.curr_batch_byte_size);
-            let prepared_batch = self.session
+            let prepared_batch = self
+                .session
                 .prepare_batch(&buffer.scylla_stmt_batch)
                 .await
                 .map_err(anyhow::Error::new)?;
@@ -378,8 +391,6 @@ impl Ticker for Flusher {
     }
 }
 
-
-
 struct Batcher {
     session: Arc<Session>,
     timer: Timer,
@@ -394,11 +405,11 @@ struct Batcher {
 
 impl Batcher {
     fn new(
-        session: Arc<Session>, 
+        session: Arc<Session>,
         linger: Duration,
         max_batch_len: usize,
         max_batch_size_kb: usize,
-        flusher_handle: Arc<AgentHandler<Buffer>>
+        flusher_handle: Arc<AgentHandler<Buffer>>,
     ) -> Self {
         Batcher {
             session,
@@ -412,7 +423,7 @@ impl Batcher {
             flusher: flusher_handle,
         }
     }
-    
+
     async fn flush(&mut self) -> anyhow::Result<Nothing> {
         self.timer.restart();
         if self.buffer.is_empty() {
@@ -425,14 +436,11 @@ impl Batcher {
 
         let reserve_result = self.flusher.reserve().await?;
 
-        reserve_result
-            .send_with_callback_senders(new_buffer, self.callback_senders.drain(..));
+        reserve_result.send_with_callback_senders(new_buffer, self.callback_senders.drain(..));
 
         Ok(())
     }
-
 }
-
 
 #[async_trait]
 impl Ticker for Batcher {
@@ -448,7 +456,7 @@ impl Ticker for Batcher {
     }
 
     async fn init(&mut self) -> anyhow::Result<Nothing> {
-        let mut batch_stmts = [
+        let batch_stmts = [
             self.insert_acccount_update_query.borrow_mut(),
             self.insert_tx_query.borrow_mut(),
         ];
@@ -469,10 +477,9 @@ impl Ticker for Batcher {
 
     async fn tick(
         &mut self,
-        now: Instant,
+        _now: Instant,
         msg: ShardedClientCommand,
     ) -> Result<Nothing, anyhow::Error> {
-
         let msg_size = msg.deep_size_of();
 
         let beginning_batch_len = self.buffer.len();
@@ -483,7 +490,7 @@ impl Ticker for Batcher {
 
         if need_flush {
             self.flush().await?;
-            if self.buffer.len() > 0 {
+            if !self.buffer.is_empty() {
                 panic!("Corrupted flush buffer");
             }
         }
@@ -540,7 +547,7 @@ struct Shard {
     token_topology: Arc<dyn TokenTopology + Send + Sync>,
     batchers: Arc<[AgentHandler<ShardedClientCommand>]>,
     current_batcher: Option<usize>,
-    slot_event_counter : HashMap<i64, i32>,
+    slot_event_counter: HashMap<i64, i32>,
     shard_stats_checkpoint_timer: Timer,
     curr_bg_period_commit: Option<JoinHandle<anyhow::Result<Nothing>>>,
 }
@@ -575,21 +582,19 @@ impl Shard {
 
         // this always hold true: node_uuids.len() << batchers.len()
         let batch_partition_size: usize = self.batchers.len() / node_uuids.len();
-        
+
         if let Ok(i) = node_uuids.binary_search(&node_uuid) {
-            let batch_partition = self.batchers
-                .chunks(batch_partition_size)
-                .skip(i)
-                .next()
+            let batch_partition = self
+                .batchers
+                .chunks(batch_partition_size).nth(i)
                 .unwrap();
-            
+
             let batch_partition_offset = (self.shard_id as usize) % batch_partition.len();
             let global_offset = (batch_partition_size * i) + batch_partition_offset;
             if global_offset > self.batchers.len() {
                 panic!("batcher idx fell out of batchers list index bound")
-            }                                                            
+            }
             global_offset
-            
         } else {
             warn!(
                 "Token topology didn't know about {:?} at the time of batcher assignment.",
@@ -600,10 +605,19 @@ impl Shard {
     }
 
     async fn do_shard_stats_checkpoint(&mut self) -> anyhow::Result<Nothing> {
-        self.session.query(
-            SCYLLADB_INSERT_SHARD_STATISTICS,
-            ShardStatistics::from_slot_event_counter(self.shard_id, self.period(), self.producer_id, self.next_offset, &self.slot_event_counter)
-        ).await.map_err(anyhow::Error::new)?;
+        self.session
+            .query(
+                SCYLLADB_INSERT_SHARD_STATISTICS,
+                ShardStatistics::from_slot_event_counter(
+                    self.shard_id,
+                    self.period(),
+                    self.producer_id,
+                    self.next_offset,
+                    &self.slot_event_counter,
+                ),
+            )
+            .await
+            .map_err(anyhow::Error::new)?;
 
         self.slot_event_counter.clear();
         self.shard_stats_checkpoint_timer.restart();
@@ -614,7 +628,11 @@ impl Shard {
         self.next_offset / SHARD_OFFSET_MODULO
     }
 
-    async fn bg_period_commit(&mut self, period: ShardPeriod, callback: Callback) -> anyhow::Result<Nothing> {
+    async fn bg_period_commit(
+        &mut self,
+        period: ShardPeriod,
+        callback: Callback,
+    ) -> anyhow::Result<Nothing> {
         let shard_id = self.shard_id;
         let producer_id = self.producer_id;
 
@@ -623,15 +641,16 @@ impl Shard {
             bg_commit.await.map_err(anyhow::Error::new)??;
         }
         let session = Arc::clone(&self.session);
-        let fut = tokio::spawn( async move {
+        let fut = tokio::spawn(async move {
             callback.await.map_err(anyhow::Error::new)?;
-            session.query(
-                SCYLLADB_COMMIT_PRODUCER_PERIOD,
-                (producer_id, shard_id, period)
-            )
-            .await
-            .map(|_qr| ())
-            .map_err(anyhow::Error::new)
+            session
+                .query(
+                    SCYLLADB_COMMIT_PRODUCER_PERIOD,
+                    (producer_id, shard_id, period),
+                )
+                .await
+                .map(|_qr| ())
+                .map_err(anyhow::Error::new)
         });
 
         self.curr_bg_period_commit.replace(fut);
@@ -685,7 +704,7 @@ impl Ticker for Shard {
         Ok(())
     }
 
-    async fn tick(&mut self, now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
+    async fn tick(&mut self, _now: Instant, msg: Self::Input) -> anyhow::Result<Nothing> {
         let shard_id = self.shard_id;
         let producer_id = self.producer_id;
         let offset = self.next_offset;
@@ -700,9 +719,9 @@ impl Ticker for Shard {
         }
 
         let batcher_idx = self.current_batcher.unwrap();
-    
+
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
-    
+
         let batcher = &self.batchers[batcher_idx];
         let slot = msg.slot();
         let sharded = msg.with_shard_info(shard_id, producer_id, offset);
@@ -728,7 +747,6 @@ impl Ticker for Shard {
                 // Flush important statistics
                 self.do_shard_stats_checkpoint().await?;
             }
-            
         }
 
         return result;
@@ -742,11 +760,11 @@ struct RoundRobinRouter<T> {
 
 impl<T> RoundRobinRouter<T> {
     pub fn new(batchers: Vec<AgentHandler<T>>) -> Self {
-        let res = RoundRobinRouter {
+        
+        RoundRobinRouter {
             destinations: batchers,
             idx: 0,
-        };
-        res
+        }
     }
 }
 
@@ -792,9 +810,16 @@ pub enum ScyllaSinkError {
     SinkClose,
 }
 
-async fn get_max_offset_for_shard_and_producer(session: Arc<Session>, shard_id: i16, producer_id: ProducerId) -> anyhow::Result<Option<i64>> {
+async fn get_max_offset_for_shard_and_producer(
+    session: Arc<Session>,
+    shard_id: i16,
+    producer_id: ProducerId,
+) -> anyhow::Result<Option<i64>> {
     let query_result = session
-        .query(SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV, (shard_id, producer_id))
+        .query(
+            SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV,
+            (shard_id, producer_id),
+        )
         .await?;
 
     query_result
@@ -806,20 +831,27 @@ async fn get_max_offset_for_shard_and_producer(session: Arc<Session>, shard_id: 
         .map_err(anyhow::Error::new)
 }
 
-
 type BatcherArray = Arc<[AgentHandler<ShardedClientCommand>]>;
 
 async fn shard_factory(
-    session: Arc<Session>, 
+    session: Arc<Session>,
     shard_id: ShardId,
     producer_id: ProducerId,
-    token_toplogy: Arc<dyn TokenTopology + Send + Sync>, 
-    batchers: BatcherArray
+    token_toplogy: Arc<dyn TokenTopology + Send + Sync>,
+    batchers: BatcherArray,
 ) -> anyhow::Result<Shard> {
     let before: Instant = Instant::now();
-    let max_offset = get_max_offset_for_shard_and_producer(Arc::clone(&session), shard_id, producer_id).await?;
+    let max_offset =
+        get_max_offset_for_shard_and_producer(Arc::clone(&session), shard_id, producer_id).await?;
     let next_offset = max_offset.unwrap_or(0) + 1;
-    let shard = Shard::new(session, shard_id, producer_id, next_offset, token_toplogy, batchers);
+    let shard = Shard::new(
+        session,
+        shard_id,
+        producer_id,
+        next_offset,
+        token_toplogy,
+        batchers,
+    );
     info!(
         "sharder {:?} next_offset: {:?}, stats collected in: {:?}",
         shard_id,
@@ -850,7 +882,6 @@ impl ScyllaSink {
         let session = Arc::new(session);
         let token_topology: Arc<dyn TokenTopology + Send + Sync> =
             Arc::new(LiveTokenTopology(Arc::clone(&session)));
-
 
         let mut system = AgentSystem::new(16);
 
@@ -885,9 +916,9 @@ impl ScyllaSink {
             let session = Arc::clone(&session);
             let tt = Arc::clone(&token_topology);
             let batchers = Arc::clone(&batchers);
-            js.spawn(async move {
-                shard_factory(session, shard_id, producer_id, tt, batchers).await
-            });
+            js.spawn(
+                async move { shard_factory(session, shard_id, producer_id, tt, batchers).await },
+            );
         }
 
         while let Some(join_result) = js.join_next().await {
@@ -906,7 +937,6 @@ impl ScyllaSink {
         })
     }
 
-
     async fn inner_log(&mut self, cmd: ClientCommand) -> anyhow::Result<()> {
         tokio::select! {
             _ = self.batch_router_handle.send(cmd) => Ok(()),
@@ -914,11 +944,7 @@ impl ScyllaSink {
         }
     }
 
-
-    pub async fn log_account_update(
-        &mut self,
-        update: AccountUpdate,
-    ) -> anyhow::Result<()> {
+    pub async fn log_account_update(&mut self, update: AccountUpdate) -> anyhow::Result<()> {
         let cmd = ClientCommand::InsertAccountUpdate(update);
         self.inner_log(cmd).await
     }

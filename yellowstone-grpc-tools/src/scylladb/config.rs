@@ -30,9 +30,6 @@ fn default_keyspace() -> String {
     "default".into()
 }
 
-const fn default_max_inflight_batch_delivery() -> usize {
-    100
-}
 
 fn default_hostname() -> String {
     String::from("127.0.0.1:9144")

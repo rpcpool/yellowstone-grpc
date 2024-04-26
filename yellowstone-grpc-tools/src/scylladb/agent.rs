@@ -1,11 +1,22 @@
 use {
-    crate::create_shutdown, anyhow::anyhow, futures::{Future, FutureExt, TryFutureExt}, std::{future::pending, pin::Pin, sync::Arc, time::Duration}, tokio::{
-        signal::{self, unix::signal}, sync::{
+    anyhow::anyhow,
+    futures::{Future, FutureExt, TryFutureExt},
+    std::{future::pending, pin::Pin, sync::Arc, time::Duration},
+    tokio::{
+        sync::{
             self,
-            mpsc::{channel, error::{SendError, TrySendError}, Permit},
+            mpsc::{
+                channel,
+                error::TrySendError,
+                Permit,
+            },
             oneshot,
-        }, task::{AbortHandle, JoinHandle, JoinSet}, time::Instant
-    }, tonic::async_trait, tracing::{error, warn}
+        },
+        task::{AbortHandle, JoinHandle, JoinSet},
+        time::Instant,
+    },
+    tonic::async_trait,
+    tracing::{error, warn},
 };
 
 pub type Nothing = ();
@@ -13,6 +24,8 @@ pub type Nothing = ();
 pub type Callback = oneshot::Receiver<Nothing>;
 
 pub type CallbackSender = oneshot::Sender<Nothing>;
+
+const LOOP_DELAY_WARN_THRESHOLD: std::time::Duration = Duration::from_millis(500);
 
 /// Watch to see when a message, previously sent, has been consumed and processed by an agent.
 
@@ -31,7 +44,7 @@ pub trait Ticker {
         pending().boxed()
     }
 
-    fn timeout2(&self, now: Instant) -> bool {
+    fn timeout2(&self, _now: Instant) -> bool {
         false
     }
 
@@ -42,7 +55,7 @@ pub trait Ticker {
     ///
     /// Called if [`Ticker::timeout`] promise returned before the next message pull.
     ///
-    async fn on_timeout(&mut self, now: Instant) -> anyhow::Result<Nothing> {
+    async fn on_timeout(&mut self, _now: Instant) -> anyhow::Result<Nothing> {
         Ok(())
     }
 
@@ -69,7 +82,7 @@ pub trait Ticker {
                 warn!("Failed to notified because endpoint already closed");
             }
         }
-       
+
         result
     }
 
@@ -93,8 +106,6 @@ struct Message<T> {
     //WithCallbacks(T, Vec<oneshot::Sender<Nothing>>),
 }
 
-
-
 #[derive(Clone)]
 pub struct AgentHandler<T> {
     name: String,
@@ -106,6 +117,7 @@ pub struct AgentHandler<T> {
 
 struct DeadLetterQueueHandler<T> {
     sender: sync::mpsc::Sender<T>,
+    #[allow(dead_code)]
     handle: Arc<JoinHandle<()>>,
 }
 
@@ -119,19 +131,23 @@ pub struct Slot<'a, T> {
     inner: Permit<'a, Message<T>>,
 }
 
-
 impl<'a, T> Slot<'a, T> {
     fn new(permit: Permit<'a, Message<T>>) -> Self {
         Slot { inner: permit }
     }
 
     pub fn send(self, msg: T) {
-        self.send_with_callback_senders( msg, Vec::new() );
+        self.send_with_callback_senders(msg, Vec::new());
     }
 
     pub fn send_with_callback_senders<IT>(self, msg: T, callback_senders: IT)
-        where IT: IntoIterator<Item = CallbackSender> {
-        self.inner.send(Message { data: msg, callbacks: callback_senders.into_iter().collect() })
+    where
+        IT: IntoIterator<Item = CallbackSender>,
+    {
+        self.inner.send(Message {
+            data: msg,
+            callbacks: callback_senders.into_iter().collect(),
+        })
     }
 
     pub fn send_and_subscribe(self, msg: T) -> oneshot::Receiver<()> {
@@ -174,15 +190,26 @@ impl<T: Send + 'static> AgentHandler<T> {
         self.sender.try_reserve().map(Slot::new)
     }
 
-    pub async fn send_with_callback_senders<IT>(&self, msg: T, callback_senders: IT) -> anyhow::Result<Nothing>
-        where IT: IntoIterator<Item = CallbackSender> {
+    pub async fn send_with_callback_senders<IT>(
+        &self,
+        msg: T,
+        callback_senders: IT,
+    ) -> anyhow::Result<Nothing>
+    where
+        IT: IntoIterator<Item = CallbackSender>,
+    {
         let now = Instant::now();
-        let envelope = Message { data: msg, callbacks: callback_senders.into_iter().collect() };
+        let envelope = Message {
+            data: msg,
+            callbacks: callback_senders.into_iter().collect(),
+        };
         let result = self.sender.send(envelope).await;
 
-        
         if now.elapsed() > Duration::from_millis(500) {
-            warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
+            warn!(
+                "AgentHandler::send slow function detected: {:?}",
+                now.elapsed()
+            );
         }
 
         if let Err(e) = result {
@@ -210,7 +237,6 @@ pub struct AgentSystem {
 }
 
 impl AgentSystem {
-
     pub fn new(default_agent_buffer_capacity: usize) -> Self {
         AgentSystem {
             default_agent_buffer_capacity,
@@ -220,12 +246,17 @@ impl AgentSystem {
 
     pub fn spawn<T, N: Into<String>>(&mut self, name: N, ticker: T) -> AgentHandler<T::Input>
     where
-        T: Ticker + Send + 'static, 
+        T: Ticker + Send + 'static,
     {
         self.spawn_with_capacity(name, ticker, self.default_agent_buffer_capacity)
     }
 
-    pub fn spawn_with_capacity<T, N: Into<String>>(&mut self, name: N, mut ticker: T, buffer: usize) -> AgentHandler<T::Input>
+    pub fn spawn_with_capacity<T, N: Into<String>>(
+        &mut self,
+        name: N,
+        mut ticker: T,
+        buffer: usize,
+    ) -> AgentHandler<T::Input>
     where
         T: Ticker + Send + 'static,
     {
@@ -248,7 +279,7 @@ impl AgentSystem {
                     _ = ticker.timeout() => {
                         ticker.on_timeout(Instant::now()).await
                     }
-                    opt_msg = receiver.recv(), if ticker.is_pull_ready() => {                       
+                    opt_msg = receiver.recv(), if ticker.is_pull_ready() => {
                         match opt_msg {
                             Some(msg) => {
                                 let now = Instant::now();
@@ -278,7 +309,7 @@ impl AgentSystem {
                 }
 
                 let iteration_duration = before.elapsed();
-                if iteration_duration > Duration::from_millis(500) {
+                if iteration_duration >= LOOP_DELAY_WARN_THRESHOLD {
                     warn!("{:?} loop iteration took: {:?}", name, iteration_duration);
                 }
             }
@@ -292,19 +323,13 @@ impl AgentSystem {
         }
     }
 
-
-    pub fn until_one_agent_dies(&mut self) -> impl Future<Output=anyhow::Result<Nothing>> + '_ {
+    pub fn until_one_agent_dies(&mut self) -> impl Future<Output = anyhow::Result<Nothing>> + '_ {
         self.handlers
             .join_next()
             .map(|inner| inner.unwrap_or(Ok(Ok(()))))
-            .map(|result| {
-                match result {
-                    Ok(result2)  => {
-                        result2
-                    }
-                    Err(e) => Err(anyhow::Error::new(e))
-                }
+            .map(|result| match result {
+                Ok(result2) => result2,
+                Err(e) => Err(anyhow::Error::new(e)),
             })
     }
-
 }

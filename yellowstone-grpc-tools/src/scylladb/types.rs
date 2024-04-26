@@ -5,8 +5,7 @@ use {
     scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
-        serialize::value::SerializeCql,
-        serialize::row::SerializeRow,
+        serialize::{value::SerializeCql},
         FromRow, FromUserType, SerializeCql, SerializeRow,
     },
     std::{collections::HashMap, iter::repeat},
@@ -36,18 +35,22 @@ pub(crate) struct ShardStatistics {
     pub(crate) slot_event_counter: HashMap<i64, i32>,
 }
 
-
 #[derive(SerializeRow, Clone, Debug, FromRow)]
 pub(crate) struct ProducerInfo {
     pub(crate) producer_id: ProducerId,
-    pub(crate) min_offset_per_shard: HashMap<ShardId, ShardOffset>
+    pub(crate) min_offset_per_shard: HashMap<ShardId, ShardOffset>,
 }
 
 impl ShardStatistics {
-
-    pub(crate) fn from_slot_event_counter(shard_id: ShardId, period: ShardPeriod, producer_id: ProducerId, offset: ShardOffset, counter_map: &HashMap<i64, i32>) -> Self {
-        let min_slot = counter_map.keys().min().map(|slot| *slot).unwrap_or(-1);
-        let max_slot = counter_map.keys().max().map(|slot| *slot).unwrap_or(-1);
+    pub(crate) fn from_slot_event_counter(
+        shard_id: ShardId,
+        period: ShardPeriod,
+        producer_id: ProducerId,
+        offset: ShardOffset,
+        counter_map: &HashMap<i64, i32>,
+    ) -> Self {
+        let min_slot = counter_map.keys().min().copied().unwrap_or(-1);
+        let max_slot = counter_map.keys().max().copied().unwrap_or(-1);
         let total_events: i64 = counter_map.values().map(|cnt| *cnt as i64).sum();
         ShardStatistics {
             shard_id,
@@ -500,7 +503,12 @@ impl AccountUpdate {
         }
     }
 
-    pub fn as_blockchain_event(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> BlockchainEvent {
+    pub fn as_blockchain_event(
+        self,
+        shard_id: ShardId,
+        producer_id: ProducerId,
+        offset: ShardOffset,
+    ) -> BlockchainEvent {
         BlockchainEvent {
             shard_id,
             period: offset / SHARD_OFFSET_MODULO,
@@ -566,7 +574,12 @@ impl TryFrom<SubscribeUpdateAccount> for AccountUpdate {
 }
 
 impl Transaction {
-    pub fn as_blockchain_event(self, shard_id: ShardId, producer_id: ProducerId, offset: ShardOffset) -> BlockchainEvent {
+    pub fn as_blockchain_event(
+        self,
+        shard_id: ShardId,
+        producer_id: ProducerId,
+        offset: ShardOffset,
+    ) -> BlockchainEvent {
         BlockchainEvent {
             shard_id,
             period: offset / SHARD_OFFSET_MODULO,
