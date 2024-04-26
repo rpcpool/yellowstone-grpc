@@ -140,7 +140,6 @@ impl<T: Send + 'static> AgentHandler<T> {
     pub async fn send(&self, msg: T) -> anyhow::Result<()> {
         let now = Instant::now();
         let result = self.sender.send(Message::FireAndForget(msg)).await;
-
         if now.elapsed() > Duration::from_millis(500) {
             warn!("AgentHandler::send slow function detected: {:?}", now.elapsed());
         }
@@ -237,6 +236,7 @@ impl AgentSystem {
             }
 
             loop {
+                let before = Instant::now();
                 let result = tokio::select! {
                     _ = ticker.timeout() => {
                         ticker.on_timeout(Instant::now()).await
@@ -268,6 +268,11 @@ impl AgentSystem {
                     let emsg = format!("message loop: {:?}, {:?}", name, result.err().unwrap());
                     error!(emsg);
                     return Err(anyhow!(emsg));
+                }
+
+                let iteration_duration = before.elapsed();
+                if iteration_duration > Duration::from_millis(100) {
+                    warn!("loop iteration took: {:?}", iteration_duration);
                 }
             }
         });
