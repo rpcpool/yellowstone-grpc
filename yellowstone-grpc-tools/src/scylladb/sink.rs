@@ -771,8 +771,9 @@ impl<T> RoundRobinRouter<T> {
 impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
     type Input = T;
 
-    async fn tick(&mut self, _now: Instant, msg: Self::Input) -> Result<Nothing, anyhow::Error> {
+    async fn tick(&mut self, now: Instant, msg: Self::Input) -> Result<Nothing, anyhow::Error> {
         let begin = self.idx;
+
 
         let maybe_permit = self
             .destinations
@@ -781,6 +782,7 @@ impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
             // Cycle forever until you find a destination
             .cycle()
             .skip(begin)
+            .take(self.destinations.len())
             .find_map(|(i, dest)| dest.try_reserve().ok().map(|slot| (i, slot)));
 
         if let Some((i, permit)) = maybe_permit {
@@ -789,9 +791,12 @@ impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
             permit.send(msg);
             return Ok(());
         } else {
-            return Err(anyhow::anyhow!(
-                "failed to find a sharder, message is dropped"
-            ));
+            warn!("failed to find a sharder without waiting ");
+            let result = self.destinations[self.idx].send(msg).await;
+            scylladb_batch_request_lag_inc();
+            warn!("find a sharder after: {:?}", now.elapsed());
+            self.idx += 1;
+            result
         }
     }
 }
