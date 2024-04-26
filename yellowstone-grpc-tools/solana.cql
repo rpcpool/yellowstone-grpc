@@ -2,13 +2,6 @@ CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', '
 
 
 
-create table if not exists solana.producer_info (
-    producer_id blob,
-    min_offset_per_shard map<smallint, bigint>,
-    primary key (producer_id)
-);
-
-
 create table if not exists solana.producer_period_commit_log (
     producer_id blob,
     shard_id smallint,
