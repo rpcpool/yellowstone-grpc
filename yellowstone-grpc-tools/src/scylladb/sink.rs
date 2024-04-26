@@ -1,6 +1,6 @@
 use {
     super::{
-        agent::{AgentHandler, CallbackSender, Nothing, Ticker},
+        agent::{AgentHandler, Callback, CallbackSender, Nothing, Ticker},
         prom::{
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
@@ -542,6 +542,7 @@ struct Shard {
     current_batcher: Option<usize>,
     slot_event_counter : HashMap<i64, i32>,
     shard_stats_checkpoint_timer: Timer,
+    curr_bg_period_commit: Option<JoinHandle<anyhow::Result<Nothing>>>,
 }
 
 impl Shard {
@@ -562,7 +563,8 @@ impl Shard {
             batchers,
             current_batcher: None,
             slot_event_counter: HashMap::new(),
-            shard_stats_checkpoint_timer: Timer::new(Duration::from_secs(60))
+            shard_stats_checkpoint_timer: Timer::new(Duration::from_secs(60)),
+            curr_bg_period_commit: None,
         }
     }
 
@@ -610,6 +612,31 @@ impl Shard {
 
     fn period(&self) -> i64 {
         self.next_offset / SHARD_OFFSET_MODULO
+    }
+
+    async fn bg_period_commit(&mut self, period: ShardPeriod, callback: Callback) -> anyhow::Result<Nothing> {
+        let shard_id = self.shard_id;
+        let producer_id = self.producer_id;
+
+        if let Some(bg_commit) = self.curr_bg_period_commit.take() {
+            // If there is already a background commit job, wait for it to finish first.
+            bg_commit.await.map_err(anyhow::Error::new)??;
+        }
+        let session = Arc::clone(&self.session);
+        let fut = tokio::spawn( async move {
+            callback.await.map_err(anyhow::Error::new)?;
+            session.query(
+                SCYLLADB_COMMIT_PRODUCER_PERIOD,
+                (producer_id, shard_id, period)
+            )
+            .await
+            .map(|_qr| ())
+            .map_err(anyhow::Error::new)
+        });
+
+        self.curr_bg_period_commit.replace(fut);
+
+        Ok(())
     }
 
     fn pick_batcher_if_nonset(&mut self) {
@@ -663,7 +690,7 @@ impl Ticker for Shard {
         let producer_id = self.producer_id;
         let offset = self.next_offset;
         let curr_period = self.period();
-
+        self.next_offset += 1;
         if offset % SHARD_OFFSET_MODULO == 0 {
             let _ = self.current_batcher.take();
         }
@@ -675,7 +702,6 @@ impl Ticker for Shard {
         let batcher_idx = self.current_batcher.unwrap();
     
         let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
-        self.next_offset += 1;
     
         let batcher = &self.batchers[batcher_idx];
         let slot = msg.slot();
@@ -688,19 +714,11 @@ impl Ticker for Shard {
 
             // With watch allows us to block until the period is either completly committed or abandonned
             // before sharding again.
-            let watch = batcher.send_and_subscribe(sharded).await?;
+            let callback = batcher.send_and_subscribe(sharded).await?;
 
-            let subres = watch.await.map_err(anyhow::Error::new);
-
-            self.session.query(
-                SCYLLADB_COMMIT_PRODUCER_PERIOD,
-                (self.producer_id, self.shard_id, curr_period)
-            ).await?;
-
-            subres
+            self.bg_period_commit(curr_period, callback).await
         } else {
-            let subres = batcher.send(sharded).await;
-            subres
+            batcher.send(sharded).await
         };
 
         if result.is_ok() {
@@ -749,7 +767,7 @@ impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
             .find_map(|(i, dest)| dest.try_reserve().ok().map(|slot| (i, slot)));
 
         if let Some((i, permit)) = maybe_permit {
-            self.idx = i + 1;
+            self.idx = (i + 1) % self.destinations.len();
             scylladb_batch_request_lag_inc();
             permit.send(msg);
             return Ok(());
@@ -758,7 +776,7 @@ impl<T: Send + 'static> Ticker for RoundRobinRouter<T> {
             let result = self.destinations[self.idx].send(msg).await;
             scylladb_batch_request_lag_inc();
             warn!("find a sharder after: {:?}", now.elapsed());
-            self.idx += 1;
+            self.idx = (self.idx + 1) % self.destinations.len();
             result
         }
     }
@@ -836,8 +854,8 @@ impl ScyllaSink {
 
         let mut system = AgentSystem::new(16);
 
-        let shard_count = SHARD_COUNT;//SHARD_COUNT; // config.shard_count;
-        let num_batcher = SHARD_COUNT / 2;//SHARD_COUNT; // (shard_count / 8) as usize;
+        let shard_count = SHARD_COUNT;
+        let num_batcher = SHARD_COUNT / 2;
 
         let mut batchers = Vec::with_capacity(num_batcher as usize);
         for i in 0..num_batcher {
