@@ -5,7 +5,7 @@ use {
     scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
-        serialize::{value::SerializeCql},
+        serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
     },
     std::{collections::HashMap, iter::repeat},

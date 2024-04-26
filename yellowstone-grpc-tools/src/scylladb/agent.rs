@@ -5,11 +5,7 @@ use {
     tokio::{
         sync::{
             self,
-            mpsc::{
-                channel,
-                error::TrySendError,
-                Permit,
-            },
+            mpsc::{channel, error::TrySendError, Permit},
             oneshot,
         },
         task::{AbortHandle, JoinHandle, JoinSet},

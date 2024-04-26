@@ -6,8 +6,8 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            ProducerId, ShardId, ShardOffset, ShardPeriod,
-            ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO,
+            ProducerId, ShardId, ShardOffset, ShardPeriod, ShardStatistics, ShardedAccountUpdate,
+            Transaction, SHARD_OFFSET_MODULO,
         },
     },
     crate::scylladb::{
@@ -24,7 +24,8 @@ use {
         serialize::{
             row::{RowSerializationContext, SerializeRow, SerializedValues},
             RowWriter,
-        }, Session, SessionBuilder,
+        },
+        Session, SessionBuilder,
     },
     std::{
         borrow::BorrowMut,
@@ -584,10 +585,7 @@ impl Shard {
         let batch_partition_size: usize = self.batchers.len() / node_uuids.len();
 
         if let Ok(i) = node_uuids.binary_search(&node_uuid) {
-            let batch_partition = self
-                .batchers
-                .chunks(batch_partition_size).nth(i)
-                .unwrap();
+            let batch_partition = self.batchers.chunks(batch_partition_size).nth(i).unwrap();
 
             let batch_partition_offset = (self.shard_id as usize) % batch_partition.len();
             let global_offset = (batch_partition_size * i) + batch_partition_offset;
@@ -760,7 +758,6 @@ struct RoundRobinRouter<T> {
 
 impl<T> RoundRobinRouter<T> {
     pub fn new(batchers: Vec<AgentHandler<T>>) -> Self {
-        
         RoundRobinRouter {
             destinations: batchers,
             idx: 0,
