@@ -36,6 +36,16 @@ const SHARD_COUNT: i16 = 256;
 const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
 
+const SCYLLADB_COMMIT_PRODUCER_PERIOD: &str = r###"
+    INSERT INTO producer_period_commit_log (
+        producer_id,
+        shard_id,
+        period,
+        created_at
+    )
+    VALUES (?,?,?,currentTimestamp())
+"###;
+
 const SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
     SELECT
         offset
@@ -168,7 +178,6 @@ struct ShardedClientCommand {
     shard_id: ShardId,
     offset: ShardOffset,
     producer_id: ProducerId,
-    //stmt: BatchStatement,
     client_command: ClientCommand,
 }
 
@@ -653,6 +662,7 @@ impl Ticker for Shard {
         let shard_id = self.shard_id;
         let producer_id = self.producer_id;
         let offset = self.next_offset;
+        let curr_period = self.period();
 
         if offset % SHARD_OFFSET_MODULO == 0 {
             let _ = self.current_batcher.take();
@@ -681,6 +691,12 @@ impl Ticker for Shard {
             let watch = batcher.send_and_subscribe(sharded).await?;
 
             let subres = watch.await.map_err(anyhow::Error::new);
+
+            self.session.query(
+                SCYLLADB_COMMIT_PRODUCER_PERIOD,
+                (self.producer_id, self.shard_id, curr_period)
+            ).await?;
+
             subres
         } else {
             let subres = batcher.send(sharded).await;

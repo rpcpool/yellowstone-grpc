@@ -8,6 +8,15 @@ create table if not exists solana.producer_info (
     primary key (producer_id)
 );
 
+
+create table if not exists solana.producer_period_commit_log (
+    producer_id blob,
+    shard_id smallint,
+    period bigint,
+    created_at timestamp,
+    PRIMARY KEY(producer_id, shard_id, period)
+) with CLUSTERING order by (shard_id desc, period desc);
+
 create table if not exists solana.shard_statistics (
     shard_id smallint,
     period bigint,
