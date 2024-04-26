@@ -279,7 +279,7 @@ impl AgentSystem {
 
                 let iteration_duration = before.elapsed();
                 if iteration_duration > Duration::from_millis(500) {
-                    warn!("loop iteration took: {:?}", iteration_duration);
+                    warn!("{:?} loop iteration took: {:?}", name, iteration_duration);
                 }
             }
         });
