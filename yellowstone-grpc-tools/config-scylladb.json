@@ -6,7 +6,7 @@
         "password": "cassandra"
     },
     "grpc2scylladb": {
-        "endpoint": "https://index.rpcpool.com:10000",
+        "endpoint": "localhost:10000",
         "x_token": "",
         "request": {
             "accounts": {

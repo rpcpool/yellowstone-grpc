@@ -5,11 +5,7 @@ use {
     tokio::{
         sync::{
             self,
-            mpsc::{
-                channel,
-                error::TrySendError,
-                Permit,
-            },
+            mpsc::{channel, error::TrySendError, Permit},
             oneshot,
         },
         task::{AbortHandle, JoinHandle, JoinSet},
@@ -267,7 +263,6 @@ impl AgentSystem {
             let name = inner_agent_name;
 
             let init_result = ticker.init().await;
-
             if init_result.is_err() {
                 error!("{:?} error during init: {:?}", name, init_result);
                 return init_result;
@@ -302,10 +297,9 @@ impl AgentSystem {
                     }
                 };
 
-                if result.is_err() {
-                    let emsg = format!("message loop: {:?}, {:?}", name, result.err().unwrap());
-                    error!(emsg);
-                    return Err(anyhow!(emsg));
+                if let Err(e) = result {
+                    let emsg = format!("message loop: {:?}, {:?}", name, e);
+                    anyhow::bail!(emsg)
                 }
 
                 let iteration_duration = before.elapsed();
@@ -323,13 +317,11 @@ impl AgentSystem {
         }
     }
 
-    pub fn until_one_agent_dies(&mut self) -> impl Future<Output = anyhow::Result<Nothing>> + '_ {
+    pub async fn until_one_agent_dies(&mut self) -> anyhow::Result<Nothing> {
         self.handlers
             .join_next()
             .map(|inner| inner.unwrap_or(Ok(Ok(()))))
-            .map(|result| match result {
-                Ok(result2) => result2,
-                Err(e) => Err(anyhow::Error::new(e)),
-            })
+            .map(|join_result| join_result?)
+            .await
     }
 }

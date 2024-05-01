@@ -1,11 +1,10 @@
 use {
     anyhow::anyhow,
-    core::fmt,
     deepsize::DeepSizeOf,
     scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
-        serialize::{value::SerializeCql},
+        serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
     },
     std::{collections::HashMap, iter::repeat},
@@ -164,22 +163,11 @@ pub struct AccountUpdate {
     pub txn_signature: Option<Vec<u8>>,
 }
 
-fn try_vec_into<U: fmt::Debug, I: IntoIterator>(
-    it: I,
-) -> Result<Vec<U>, <I::Item as TryInto<U>>::Error>
+fn try_collect<U, I: IntoIterator>(it: I) -> Result<Vec<U>, <I::Item as TryInto<U>>::Error>
 where
-    I::Item: TryInto<U> + fmt::Debug,
-    <I::Item as TryInto<U>>::Error: fmt::Debug,
+    I::Item: TryInto<U>,
 {
-    let mut res = Vec::new();
-    for x in it.into_iter() {
-        let y = x.try_into();
-        if y.is_err() {
-            return Err(y.unwrap_err());
-        }
-        res.push(y.unwrap());
-    }
-    Ok(res)
+    it.into_iter().map(|item| item.try_into()).collect()
 }
 
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
@@ -263,7 +251,7 @@ impl TryFrom<confirmed_block::InnerInstructions> for InnerInstrs {
     type Error = anyhow::Error;
 
     fn try_from(value: confirmed_block::InnerInstructions) -> Result<Self, Self::Error> {
-        let instructions: Vec<InnerInstr> = try_vec_into(value.instructions)?;
+        let instructions: Vec<InnerInstr> = try_collect(value.instructions)?;
 
         let index = value.index.into();
         Ok(InnerInstrs {
@@ -356,9 +344,9 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
     fn try_from(status_meta: confirmed_block::TransactionStatusMeta) -> Result<Self, Self::Error> {
         let error = status_meta.err.map(|err| err.err);
         let fee = status_meta.fee.try_into()?;
-        let pre_balances: Vec<i64> = try_vec_into(status_meta.pre_balances)?;
-        let post_balances = try_vec_into(status_meta.post_balances)?;
-        let inner_instructions: Vec<InnerInstrs> = try_vec_into(status_meta.inner_instructions)?;
+        let pre_balances: Vec<i64> = try_collect(status_meta.pre_balances)?;
+        let post_balances = try_collect(status_meta.post_balances)?;
+        let inner_instructions: Vec<InnerInstrs> = try_collect(status_meta.inner_instructions)?;
         let log_messages = status_meta.log_messages;
 
         let pre_token_balances: Vec<TxTokenBalance> = status_meta
@@ -373,7 +361,7 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
             .map(|pre_tb| pre_tb.into())
             .collect();
 
-        let rewards: Vec<Reward> = try_vec_into(status_meta.rewards)?;
+        let rewards: Vec<Reward> = try_collect(status_meta.rewards)?;
 
         // Create a new TransactionMeta instance
         let transaction_meta = TransactionMeta {

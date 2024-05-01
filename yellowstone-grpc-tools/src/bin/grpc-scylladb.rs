@@ -13,14 +13,14 @@ use {
         scylladb::{
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
             sink::ScyllaSink,
-            types::{Reward, Transaction},
+            types::Transaction,
         },
         setup_tracing,
     },
 };
 
 // 512MB
-const MAX_DECODING_MESSAGE_SIZE_BYTES: usize = 512000000;
+const MAX_DECODING_MESSAGE_SIZE_BYTES: usize = 512_000_000;
 
 #[derive(Debug, Clone, Parser)]
 #[clap(author, version, about = "Yellowstone gRPC ScyllaDB Tool")]
@@ -60,18 +60,10 @@ impl ArgsAction {
                 Self::grpc2scylladb(config2, config.scylladb, shutdown).await
             }
             ArgsAction::Scylla2Grpc => {
-                Ok(())
-                // let config = config.kafka2grpc.ok_or_else(|| {
-                //     anyhow::anyhow!("`kafka2grpc` section in config should be defined")
-                // })?;
-                // Self::kafka2grpc(kafka_config, config, shutdown).await
+                unimplemented!();
             }
             ArgsAction::Test => {
-                Ok(())
-                // let config2 = config.grpc2scylladb.ok_or_else(|| {
-                //     anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
-                // })?;
-                // Self::test(config2, config.scylladb).await
+                unimplemented!();
             }
         }
     }
@@ -141,7 +133,7 @@ impl ArgsAction {
                             sink.log_account_update(acc_update.unwrap()).await.unwrap();
                         }
                         UpdateOneof::Transaction(msg) => {
-                            let tx: Result<Transaction, anyhow::Error> = msg.clone().try_into();
+                            let tx: Result<Transaction, anyhow::Error> = msg.try_into();
                             if tx.is_err() {
                                 warn!("failed to convert update tx: {:?}", tx.err().unwrap());
                                 continue;

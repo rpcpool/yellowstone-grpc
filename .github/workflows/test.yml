@@ -34,12 +34,12 @@ jobs:
           echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
           echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
           components: rustfmt
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ env.RUST_STABLE }}
           components: clippy, rustfmt

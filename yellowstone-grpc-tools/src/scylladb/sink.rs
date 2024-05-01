@@ -1,22 +1,17 @@
 use {
     super::{
-        agent::{AgentHandler, Callback, CallbackSender, Nothing, Ticker},
+        agent::{AgentHandler, AgentSystem, Callback, CallbackSender, Nothing, Ticker},
         prom::{
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            ProducerId, ShardId, ShardOffset, ShardPeriod,
-            ShardStatistics, ShardedAccountUpdate, Transaction, SHARD_OFFSET_MODULO,
+            AccountUpdate, ProducerId, ShardId, ShardOffset, ShardPeriod, ShardStatistics,
+            ShardedAccountUpdate, ShardedTransaction, Transaction, SHARD_OFFSET_MODULO,
         },
-    },
-    crate::scylladb::{
-        agent::AgentSystem,
-        types::{AccountUpdate, ShardedTransaction},
     },
     deepsize::DeepSizeOf,
     futures::{future::ready, Future, FutureExt},
-    lazy_static::lazy_static,
     scylla::{
         batch::{Batch, BatchStatement},
         frame::{response::result::ColumnType, Compression},
@@ -24,7 +19,8 @@ use {
         serialize::{
             row::{RowSerializationContext, SerializeRow, SerializedValues},
             RowWriter,
-        }, Session, SessionBuilder,
+        },
+        Session, SessionBuilder,
     },
     std::{
         borrow::BorrowMut,
@@ -41,7 +37,7 @@ use {
     tracing::{info, warn},
 };
 
-const SHARD_COUNT: i16 = 256;
+const SHARD_COUNT: usize = 256;
 
 const SCYLLADB_SOLANA_LOG_TABLE_NAME: &str = "log";
 
@@ -66,28 +62,6 @@ const SCYLLADB_GET_PRODUCER_MAX_OFFSET_FOR_SHARD_MV: &str = r###"
     ORDER BY offset DESC 
     PER PARTITION LIMIT 1
 "###;
-
-lazy_static! {
-    static ref SCYLLADB_GET_MAX_OFFSET_FOR_ALL_SHARD_MV: String = {
-        let joined = (0..SHARD_COUNT)
-            .map(|x| format!("{:?}", x))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        format!(
-            r###"
-            SELECT
-                shard_id,
-                offset
-            FROM shard_max_offset_mv 
-            WHERE shard_id IN ({:?})
-            ORDER BY offset DESC 
-            PER PARTITION LIMIT 1
-            "###,
-            joined
-        )
-    };
-}
 
 const SCYLLADB_INSERT_SHARD_STATISTICS: &str = r###"
     INSERT INTO shard_statistics (
@@ -237,60 +211,31 @@ impl ClientCommand {
 
 type NodeUuid = u128;
 
-pub trait TokenTopology {
-    fn get_node_uuid_for_token(&self, token: Token) -> NodeUuid;
-
-    fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool;
-
-    fn get_node_uuids(&self) -> Vec<NodeUuid>;
-
-    fn get_number_of_nodes(&self) -> usize;
-
-    fn compute_token(&self, table: &str, serialized_values: &SerializedValues) -> Token;
+fn get_node_uuid_for_token(session: Arc<Session>, token: Token) -> NodeUuid {
+    session
+        .get_cluster_data()
+        .replica_locator()
+        .ring()
+        .get_elem_for_token(token)
+        .map(|node| node.host_id.as_u128())
+        .unwrap() // If it is None it means we have no more -> we need to crash asap!
 }
 
-#[derive(Clone)]
-struct LiveTokenTopology(Arc<Session>);
+fn get_node_uuids(session: Arc<Session>) -> Vec<NodeUuid> {
+    session
+        .get_cluster_data()
+        .get_nodes_info()
+        .iter()
+        .map(|node| node.host_id.as_u128())
+        .collect()
+}
 
-impl TokenTopology for LiveTokenTopology {
-    fn get_node_uuid_for_token(&self, token: Token) -> NodeUuid {
-        self.0
-            .get_cluster_data()
-            .replica_locator()
-            .ring()
-            .get_elem_for_token(token)
-            .map(|node| node.host_id.as_u128())
-            .unwrap() // If it is None it means we have no more -> we need to crash asap!
-    }
-
-    fn get_number_of_nodes(&self) -> usize {
-        self.0.get_cluster_data().get_nodes_info().len()
-    }
-
-    fn is_node_uuid_exists(&self, node_uuid: NodeUuid) -> bool {
-        self.0
-            .get_cluster_data()
-            .get_nodes_info()
-            .iter()
-            .any(|node| node.host_id.as_u128() == node_uuid)
-    }
-
-    fn get_node_uuids(&self) -> Vec<NodeUuid> {
-        self.0
-            .get_cluster_data()
-            .get_nodes_info()
-            .iter()
-            .map(|node| node.host_id.as_u128())
-            .collect()
-    }
-
-    fn compute_token(&self, table: &str, partition_key: &SerializedValues) -> Token {
-        let current_keysapce = self.0.get_keyspace().unwrap();
-        self.0
-            .get_cluster_data()
-            .compute_token(&current_keysapce, table, partition_key)
-            .unwrap()
-    }
+fn compute_token(session: Arc<Session>, table: &str, partition_key: &SerializedValues) -> Token {
+    let current_keysapce = session.get_keyspace().unwrap();
+    session
+        .get_cluster_data()
+        .compute_token(&current_keysapce, table, partition_key)
+        .unwrap()
 }
 
 struct Buffer {
@@ -509,10 +454,10 @@ impl Ticker for Batcher {
         &mut self,
         now: Instant,
         msg: Self::Input,
-        callback_senders: Vec<CallbackSender>,
+        mut callback_senders: Vec<CallbackSender>,
     ) -> anyhow::Result<Nothing> {
         self.tick(now, msg).await?;
-        self.callback_senders.extend(callback_senders);
+        self.callback_senders.append(&mut callback_senders);
         Ok(())
     }
 }
@@ -544,7 +489,6 @@ struct Shard {
     shard_id: ShardId,
     producer_id: ProducerId,
     next_offset: ShardOffset,
-    token_topology: Arc<dyn TokenTopology + Send + Sync>,
     batchers: Arc<[AgentHandler<ShardedClientCommand>]>,
     current_batcher: Option<usize>,
     slot_event_counter: HashMap<i64, i32>,
@@ -558,7 +502,6 @@ impl Shard {
         shard_id: ShardId,
         producer_id: ProducerId,
         next_offset: ShardOffset,
-        token_topology: Arc<dyn TokenTopology + Send + Sync>,
         batchers: Arc<[AgentHandler<ShardedClientCommand>]>,
     ) -> Self {
         Shard {
@@ -566,7 +509,6 @@ impl Shard {
             shard_id,
             producer_id,
             next_offset,
-            token_topology,
             batchers,
             current_batcher: None,
             slot_event_counter: HashMap::new(),
@@ -576,18 +518,15 @@ impl Shard {
     }
 
     fn get_batcher_idx_for_token(&self, token: Token) -> usize {
-        let node_uuid = self.token_topology.get_node_uuid_for_token(token);
-        let mut node_uuids = self.token_topology.get_node_uuids();
+        let node_uuid = get_node_uuid_for_token(Arc::clone(&self.session), token);
+        let mut node_uuids = get_node_uuids(Arc::clone(&self.session));
         node_uuids.sort();
 
         // this always hold true: node_uuids.len() << batchers.len()
         let batch_partition_size: usize = self.batchers.len() / node_uuids.len();
 
         if let Ok(i) = node_uuids.binary_search(&node_uuid) {
-            let batch_partition = self
-                .batchers
-                .chunks(batch_partition_size).nth(i)
-                .unwrap();
+            let batch_partition = self.batchers.chunks(batch_partition_size).nth(i).unwrap();
 
             let batch_partition_offset = (self.shard_id as usize) % batch_partition.len();
             let global_offset = (batch_partition_size * i) + batch_partition_offset;
@@ -674,9 +613,11 @@ impl Shard {
         partition_key
             .add_value(&period, &ColumnType::BigInt)
             .unwrap();
-        let token = self
-            .token_topology
-            .compute_token(SCYLLADB_SOLANA_LOG_TABLE_NAME, &partition_key);
+        let token = compute_token(
+            Arc::clone(&self.session),
+            SCYLLADB_SOLANA_LOG_TABLE_NAME,
+            &partition_key,
+        );
         let idx = self.get_batcher_idx_for_token(token);
         let old = self.current_batcher.replace(idx);
         if old.is_some() {
@@ -760,7 +701,6 @@ struct RoundRobinRouter<T> {
 
 impl<T> RoundRobinRouter<T> {
     pub fn new(batchers: Vec<AgentHandler<T>>) -> Self {
-        
         RoundRobinRouter {
             destinations: batchers,
             idx: 0,
@@ -837,21 +777,13 @@ async fn shard_factory(
     session: Arc<Session>,
     shard_id: ShardId,
     producer_id: ProducerId,
-    token_toplogy: Arc<dyn TokenTopology + Send + Sync>,
     batchers: BatcherArray,
 ) -> anyhow::Result<Shard> {
     let before: Instant = Instant::now();
     let max_offset =
         get_max_offset_for_shard_and_producer(Arc::clone(&session), shard_id, producer_id).await?;
     let next_offset = max_offset.unwrap_or(0) + 1;
-    let shard = Shard::new(
-        session,
-        shard_id,
-        producer_id,
-        next_offset,
-        token_toplogy,
-        batchers,
-    );
+    let shard = Shard::new(session, shard_id, producer_id, next_offset, batchers);
     info!(
         "sharder {:?} next_offset: {:?}, stats collected in: {:?}",
         shard_id,
@@ -880,9 +812,6 @@ impl ScyllaSink {
             .unwrap();
 
         let session = Arc::new(session);
-        let token_topology: Arc<dyn TokenTopology + Send + Sync> =
-            Arc::new(LiveTokenTopology(Arc::clone(&session)));
-
         let mut system = AgentSystem::new(16);
 
         let shard_count = SHARD_COUNT;
@@ -914,11 +843,10 @@ impl ScyllaSink {
         info!("Will create {:?} shards", shard_count);
         for shard_id in 0..shard_count {
             let session = Arc::clone(&session);
-            let tt = Arc::clone(&token_topology);
             let batchers = Arc::clone(&batchers);
-            js.spawn(
-                async move { shard_factory(session, shard_id, producer_id, tt, batchers).await },
-            );
+            js.spawn(async move {
+                shard_factory(session, shard_id as i16, producer_id, batchers).await
+            });
         }
 
         while let Some(join_result) = js.join_next().await {

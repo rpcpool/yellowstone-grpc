@@ -30,7 +30,6 @@ fn default_keyspace() -> String {
     "default".into()
 }
 
-
 fn default_hostname() -> String {
     String::from("127.0.0.1:9144")
 }
