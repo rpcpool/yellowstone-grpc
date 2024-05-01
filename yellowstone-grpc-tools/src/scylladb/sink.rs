@@ -85,7 +85,6 @@ const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
         offset,
         slot,
         entry_type,
-
         pubkey, 
         lamports, 
         owner, 
@@ -94,7 +93,6 @@ const SCYLLADB_INSERT_ACCOUNT_UPDATE: &str = r###"
         write_version, 
         data, 
         txn_signature,
-
         created_at
     )
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,currentTimestamp())
@@ -108,7 +106,6 @@ const SCYLLADB_INSERT_TRANSACTION: &str = r###"
         offset,
         slot,
         entry_type,
-
         signature,
         signatures,
         num_readonly_signed_accounts, 
@@ -119,11 +116,13 @@ const SCYLLADB_INSERT_TRANSACTION: &str = r###"
         instructions, 
         versioned,
         address_table_lookups, 
-        meta, 
+        meta,
+        is_vote,
+        tx_index,
 
         created_at
     )
-    VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?, currentTimestamp())
+    VALUES (?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?, currentTimestamp())
 "###;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -182,6 +181,9 @@ impl SerializeRow for ShardedClientCommand {
                     .clone()
                     .as_blockchain_event(self.shard_id, self.producer_id, self.offset)
                     .into();
+                //let foo = val.serialize(ctx, writer);
+                //println!("{:?}", foo);
+                //foo
                 //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }

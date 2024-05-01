@@ -1,23 +1,20 @@
 use {
-    anyhow::anyhow,
-    deepsize::DeepSizeOf,
-    scylla::{
+    anyhow::anyhow, deepsize::DeepSizeOf, scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
-    },
-    std::{collections::HashMap, iter::repeat},
-    yellowstone_grpc_proto::{
-        geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
+    }, serde_with::BoolFromInt, std::{collections::HashMap, iter::repeat}, yellowstone_grpc_proto::{
+        geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo},
         solana::storage::confirmed_block,
-    },
+    }
 };
 
 
 pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
+pub type ProgramId = [u8; 32];
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
@@ -142,6 +139,8 @@ pub struct BlockchainEvent {
     pub versioned: bool,
     pub address_table_lookups: Vec<MessageAddrTableLookup>,
     pub meta: TransactionMeta,
+    pub is_vote: bool,
+    pub tx_index: i64,
 }
 
 type Pubkey = [u8; 32];
@@ -322,6 +321,23 @@ impl TryFrom<confirmed_block::Reward> for Reward {
 
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
+pub struct ReturnData {
+    pub program_id: ProgramId,
+    pub data: Vec<u8>,
+}
+
+impl TryFrom<confirmed_block::ReturnData> for ReturnData {
+    type Error = anyhow::Error;
+    fn try_from(value: confirmed_block::ReturnData) -> Result<Self, Self::Error> {
+        Ok(ReturnData {
+            program_id: value.program_id.try_into().map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?,
+            data: value.data,
+        })
+    }
+}
+
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[scylla(flavor = "match_by_name")]
 pub struct TransactionMeta {
     pub error: Option<Vec<u8>>,
     pub fee: i64,
@@ -332,6 +348,10 @@ pub struct TransactionMeta {
     pub pre_token_balances: Vec<TxTokenBalance>,
     pub post_token_balances: Vec<TxTokenBalance>,
     pub rewards: Vec<Reward>,
+    pub loaded_writable_addresses: Vec<Pubkey>,
+    pub loaded_readonly_addresses: Vec<Pubkey>,
+    pub return_data: Option<ReturnData>,
+    pub compute_units_consumed: Option<i64>,
 }
 
 impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
@@ -359,6 +379,13 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
 
         let rewards: Vec<Reward> = try_collect(status_meta.rewards)?;
 
+        let loaded_readonly_addresses: Vec<Pubkey> = try_collect(status_meta.loaded_readonly_addresses)
+            .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
+        let loaded_writable_addresses = try_collect(status_meta.loaded_writable_addresses)
+            .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
+
+        let return_data = status_meta.return_data.map(|rd| rd.try_into()).transpose()?;
+        let compute_units_consumed = status_meta.compute_units_consumed.map(|cu| cu.try_into()).transpose()?;
         // Create a new TransactionMeta instance
         let transaction_meta = TransactionMeta {
             error,
@@ -370,6 +397,10 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
             pre_token_balances,
             post_token_balances,
             rewards,
+            loaded_readonly_addresses,
+            loaded_writable_addresses,
+            return_data,
+            compute_units_consumed: compute_units_consumed
         };
 
         // Return the new TransactionMeta instance
@@ -391,6 +422,8 @@ pub struct Transaction {
     pub versioned: bool,
     pub address_table_lookups: Vec<MessageAddrTableLookup>,
     pub meta: TransactionMeta,
+    pub is_vote: bool,
+    pub tx_index: i64,
 }
 
 impl TryFrom<SubscribeUpdateTransaction> for Transaction {
@@ -436,6 +469,8 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
                 .map(|atl| atl.into())
                 .collect(),
             meta: meta.try_into()?,
+            is_vote: val_tx.is_vote,
+            tx_index: val_tx.index as i64
         };
 
         Ok(res)
@@ -519,6 +554,8 @@ impl AccountUpdate {
             versioned: Default::default(),
             address_table_lookups: Default::default(),
             meta: Default::default(),
+            is_vote: Default::default(),
+            tx_index: Default::default(),
         }
     }
 }
@@ -592,6 +629,8 @@ impl Transaction {
             versioned: self.versioned,
             address_table_lookups: self.address_table_lookups,
             meta: self.meta,
+            is_vote: self.is_vote,
+            tx_index: self.tx_index,
         }
     }
 }
@@ -639,6 +678,8 @@ pub struct ShardedTransaction {
     pub versioned: bool,
     pub address_table_lookups: Vec<MessageAddrTableLookup>,
     pub meta: TransactionMeta,
+    pub is_vote: bool,
+    pub tx_index: i64,
 }
 
 // Implement Into<ShardedAccountUpdate> for BlockchainEvent
@@ -649,8 +690,8 @@ impl From<BlockchainEvent> for ShardedAccountUpdate {
             period: val.period,
             producer_id: val.producer_id,
             offset: val.offset,
-            slot: val.slot,
             entry_type: val.entry_type,
+            slot: val.slot,
             pubkey: val.pubkey,
             lamports: val.lamports,
             owner: val.owner,
@@ -671,8 +712,8 @@ impl From<BlockchainEvent> for ShardedTransaction {
             period: val.period,
             producer_id: val.producer_id,
             offset: val.offset,
-            slot: val.slot,
             entry_type: val.entry_type,
+            slot: val.slot,
             signature: val.signature,
             signatures: val.signatures,
             num_required_signatures: val.num_required_signatures,
@@ -684,6 +725,45 @@ impl From<BlockchainEvent> for ShardedTransaction {
             versioned: val.versioned,
             address_table_lookups: val.address_table_lookups,
             meta: val.meta,
+            is_vote: val.is_vote,
+            tx_index: val.tx_index,
+        }
+    }
+}
+
+impl From<BlockchainEvent> for Transaction {
+    fn from(val: BlockchainEvent) -> Self {
+        Transaction {
+            slot: val.slot,
+            signature: val.signature,
+            signatures: val.signatures,
+            num_required_signatures: val.num_required_signatures,
+            num_readonly_signed_accounts: val.num_readonly_signed_accounts,
+            num_readonly_unsigned_accounts: val.num_readonly_unsigned_accounts,
+            account_keys: val.account_keys,
+            recent_blockhash: val.recent_blockhash,
+            instructions: val.instructions,
+            versioned: val.versioned,
+            address_table_lookups: val.address_table_lookups,
+            meta: val.meta,
+            is_vote: val.is_vote,
+            tx_index: val.tx_index,
+        }
+    }
+}
+
+impl From<BlockchainEvent> for AccountUpdate {
+    fn from(val: BlockchainEvent) -> Self {
+        AccountUpdate {
+            slot: val.slot,
+            pubkey: val.pubkey,
+            lamports: val.lamports,
+            owner: val.owner,
+            executable: val.executable,
+            rent_epoch: val.rent_epoch,
+            write_version: val.write_version,
+            data: val.data,
+            txn_signature: val.txn_signature,
         }
     }
 }
@@ -694,4 +774,67 @@ pub(crate) struct ProducerInfo {
     pub(crate) producer_id: ProducerId,
     pub(crate) num_shards: ShardId,
     pub(crate) is_active: bool,
+}
+
+
+impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
+    type Error = anyhow::Error;
+
+    fn try_from(acc_update: AccountUpdate) -> anyhow::Result<Self> {
+        let pubkey_bytes: [u8; 32] = acc_update.pubkey;
+        let owner_bytes: [u8; 32] = acc_update.owner;
+
+        // Create the SubscribeUpdateAccount instance
+        let subscribe_update_account = SubscribeUpdateAccount {
+            slot: acc_update.slot as u64,
+            account: Some(yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo {
+                pubkey: Vec::from(acc_update.pubkey),
+                lamports: acc_update.lamports as u64,
+                owner: Vec::from(acc_update.owner),
+                executable: acc_update.executable,
+                rent_epoch: acc_update.rent_epoch as u64,
+                write_version: acc_update.write_version as u64,
+                data: acc_update.data,
+                txn_signature: acc_update.txn_signature,
+            }),
+            is_startup: false,
+        };
+
+        Ok(subscribe_update_account)
+    }
+}
+
+
+impl TryFrom<Transaction> for SubscribeUpdateTransaction {
+    type Error = anyhow::Error;
+
+    fn try_from(tx: Transaction) -> anyhow::Result<Self> {
+        // Extract fields from Transaction
+        let slot = tx.slot;
+        let signature = tx.signature;
+        let signatures = tx.signatures;
+        let num_required_signatures = tx.num_required_signatures;
+        let num_readonly_signed_accounts = tx.num_readonly_signed_accounts;
+        let num_readonly_unsigned_accounts = tx.num_readonly_unsigned_accounts;
+        let account_keys = tx.account_keys;
+        let recent_blockhash = tx.recent_blockhash;
+        let instructions = tx.instructions;
+        let versioned = tx.versioned;
+        let address_table_lookups = tx.address_table_lookups;
+        let meta = tx.meta;
+
+        // Create SubscribeTransactionUpdate instance
+        let subscribe_tx_update = SubscribeUpdateTransaction {
+            slot: slot as u64,
+            transaction: Some(SubscribeUpdateTransactionInfo {
+                signature,
+                is_vote: todo!(),
+                transaction: todo!(),
+                meta: todo!(),
+                index: todo!(),
+            })
+        };
+
+        // Ok(subscribe_tx_update)
+    }
 }

@@ -1,5 +1,22 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 
+drop materialized view if exists solana.producer_consumer_mapping_mv;
+drop materialized view if exists solana.shard_max_offset_mv;
+
+drop table if exists solana.shard_statistics;
+drop table if exists solana.producer_info;
+drop table if exists solana.consumer_info;
+drop table if exists solana.consumer_producer_mapping;
+drop table if exists solana.log;
+drop type if exists solana.transaction_meta;
+drop type if exists solana.message_addr_table_lookup;
+drop type if exists solana.compiled_instr;
+drop type if exists solana.tx_token_balance;
+drop type if exists solana.reward;
+drop type if exists solana.inner_instrs;
+drop type if exists solana.inner_instr;
+drop type if exists solana.return_data;
+
 
 create table if not exists solana.consumer_info (
     consumer_id text,
@@ -11,25 +28,25 @@ create table if not exists solana.consumer_info (
     PRIMARY KEY ((consumer_id, producer_id))
 );
 
-insert into solana.consumer_info (
-    consumer_id,
-    producer_id,
-    shard_id
-    offset,
-    created_at,
-    updated_at
-)
-values 
-('test_lv', 0x01, [0], currentTimestamp(), currentTimestamp());
+-- insert into solana.consumer_info (
+--     consumer_id,
+--     producer_id,
+--     shard_id
+--     offset,
+--     created_at,
+--     updated_at
+-- )
+-- values 
+-- ('test_lv', 0x01, [0], currentTimestamp(), currentTimestamp());
 
-update solana.consumer_info
-set shard_offset_arrmap = [0,0]
-where consumer_id = 'test_lv' and producer_id = 0x01;
+-- update solana.consumer_info
+-- set shard_offset_arrmap = [0,0]
+-- where consumer_id = 'test_lv' and producer_id = 0x01;
 
-update solana.consumer_info
-set shard_offset_arrmap[0] = 1, updated_at = currentTimestamp()
-where consumer_id = 'test_lv' and producer_id = 0x01
-if shard_offset_arrmap[0] = 0;
+-- update solana.consumer_info
+-- set shard_offset_arrmap[0] = 1, updated_at = currentTimestamp()
+-- where consumer_id = 'test_lv' and producer_id = 0x01
+-- if shard_offset_arrmap[0] = 0;
 
 
 
@@ -62,16 +79,16 @@ create table if not exists solana.producer_info (
     PRIMARY KEY (producer_id)
 );
 
-# example
-insert into solana.producer_info (
-    producer_id, 
-    num_shards, 
-    is_active, 
-    assigned_consumers,
-    created_at,
-    updated_at
-)
-values (0x01, 256, true, {}, currentTimestamp(), currentTimestamp());
+-- # example
+-- insert into solana.producer_info (
+--     producer_id, 
+--     num_shards, 
+--     is_active, 
+--     assigned_consumers,
+--     created_at,
+--     updated_at
+-- )
+-- values (0x01, 256, true, {}, currentTimestamp(), currentTimestamp());
 
 
 create table if not exists solana.producer_period_commit_log (
@@ -95,54 +112,7 @@ create table if not exists solana.shard_statistics (
 ) with CLUSTERING order by (period desc, offset desc);
 
 
--- ScyllaDB table can hold different kind of entities at the same time.
--- There is not performance advantage to have separate tables since ScyllaDB is wide-column family database.
--- ScyllaDB is built to have sparse columns (alot of unused columns)
--- On each query, the storage engine only retrieves what matters to the query.
-create table if not exists solana.log (
-
-    -- commun columns
-    shard_id smallint,
-    period bigint,
-    producer_id blob,
-    offset bigint,
-    slot bigint,
-    entry_type smallint,
-        -- 0 = account update
-        -- 1 = new transaction
-
-    -- account columns
-    pubkey blob,
-    lamports bigint,
-    owner blob,
-    executable boolean,
-    rent_epoch bigint,
-    write_version bigint,
-    data blob,
-    txn_signature blob,
-
-
-    -- transaction columns
-    signature blob,
-    signatures frozen<list<blob>>,
-    num_required_signatures int,
-    num_readonly_signed_accounts int,
-    num_readonly_unsigned_accounts int,
-    account_keys frozen<list<blob>>,
-    recent_blockhash blob,
-    instructions frozen<list<solana.compiled_instr>>,
-    versioned boolean,
-    address_table_lookups frozen<list<solana.message_addr_table_lookup>>,
-    meta solana.transaction_meta,
-
-
-    -- meta data field for debugging purposes
-    created_at timestamp,
-
-    primary key ((shard_id, period), producer_id, offset)
-);
-
-create materialized view solana.shard_max_offset_mv 
+create materialized view if not exists solana.shard_max_offset_mv 
 as 
 select 
     producer_id,
@@ -157,16 +127,6 @@ where
     and producer_id is not null
 primary key(producer_id, shard_id, offset, period);
 
-
-
-drop table if exists solana.transaction_log;
-drop type if exists solana.transaction_meta;
-drop type if exists solana.message_addr_table_lookup;
-drop type if exists solana.compiled_instr;
-drop type if exists solana.tx_token_balance;
-drop type if exists solana.reward;
-drop type if exists solana.inner_instrs;
-drop type if exists solana.inner_instr;
 
 create type if not exists solana.message_addr_table_lookup (
     account_key blob,
@@ -214,6 +174,11 @@ create type if not exists solana.reward (
     commission text
 );
 
+create type if not exists solana.return_data (
+    program_id blob,
+    data blob
+);
+
 create type if not exists solana.transaction_meta (
     error blob,
     fee bigint,
@@ -223,11 +188,42 @@ create type if not exists solana.transaction_meta (
     log_messages frozen<list<text>>,
     pre_token_balances frozen<list<solana.tx_token_balance>>,
     post_token_balances frozen<list<solana.tx_token_balance>>,
-    rewards frozen<list<solana.reward>>
+    rewards frozen<list<solana.reward>>,
+    loaded_writable_addresses frozen<list<blob>>,
+    loaded_readonly_addresses frozen<list<blob>>,
+    return_data frozen<solana.return_data>,
+    compute_units_consumed bigint
 );
 
-create table if not exists solana.transaction_log (
+
+-- ScyllaDB table can hold different kind of entities at the same time.
+-- There is not performance advantage to have separate tables since ScyllaDB is wide-column family database.
+-- ScyllaDB is built to have sparse columns (alot of unused columns)
+-- On each query, the storage engine only retrieves what matters to the query.
+create table if not exists solana.log (
+
+    -- commun columns
+    shard_id smallint,
+    period bigint,
+    producer_id blob,
+    offset bigint,
     slot bigint,
+    entry_type smallint,
+        -- 0 = account update
+        -- 1 = new transaction
+
+    -- account columns
+    pubkey blob,
+    lamports bigint,
+    owner blob,
+    executable boolean,
+    rent_epoch bigint,
+    write_version bigint,
+    data blob,
+    txn_signature blob,
+
+
+    -- transaction columns
     signature blob,
     signatures frozen<list<blob>>,
     num_required_signatures int,
@@ -239,30 +235,12 @@ create table if not exists solana.transaction_log (
     versioned boolean,
     address_table_lookups frozen<list<solana.message_addr_table_lookup>>,
     meta solana.transaction_meta,
-    primary key ((slot, signature), recent_blockhash)
+    is_vote boolean,
+    tx_index bigint,
+
+
+    -- meta data field for debugging purposes
+    created_at timestamp,
+
+    primary key ((shard_id, period), producer_id, offset)
 );
-
-create table if not exists solana.account_update_log (
-    slot bigint,
-    pubkey blob,
-    lamports bigint,
-    owner blob,
-    executable boolean,
-    rent_epoch bigint,
-    write_version bigint,
-    data blob,
-    txn_signature blob,
-    primary key ((slot, subslot), pubkey, write_version)
-) WITH CLUSTERING ORDER BY (pubkey ASC, write_version ASC);
-
-
-create table if not exists solana.test (
-    id bigint,
-    bucket int,
-    x text,
-    data int,
-    primary key ((id, bucket), x)
-);
-
-insert into solana.test (id, bucket, x, data)
-values (1, 1, 'a', 1);
