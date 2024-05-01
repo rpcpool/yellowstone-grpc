@@ -18,12 +18,17 @@ required-features = ["google-pubsub"]
 name = "grpc-kafka"
 required-features = ["kafka"]
 
+[[bin]]
+name = "grpc-scylladb"
+required-features = ["scylladb"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
+deepsize = { workspace = true, optional = true }
 futures = { workspace = true }
 google-cloud-googleapis = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
@@ -31,11 +36,13 @@ hyper = { workspace = true }
 json5 = { workspace = true }
 lazy_static = { workspace = true }
 prometheus = { workspace = true }
+scylla = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_with = { workspace = true, optional = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "time"] }
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip"] }
 tonic-health = { workspace = true }
@@ -43,6 +50,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
 rdkafka = { workspace = true, features = ["sasl", "ssl"], optional = true }
@@ -60,3 +70,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
+scylladb = ["scylla", "serde_with", "deepsize"]

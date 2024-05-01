@@ -1,0 +1,23 @@
+{
+    "prometheus": "127.0.0.1:8873",
+    "scylladb": {
+        "hostname": "localhost:9042",
+        "username": "cassandra",
+        "password": "cassandra"
+    },
+    "grpc2scylladb": {
+        "endpoint": "localhost:10000",
+        "x_token": "",
+        "request": {
+            "accounts": {
+                "my_filter": {
+                    "owner": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"]
+                }
+            }
+        },
+        "batch_size_limit": 1000,
+        "linger": 10,
+        "keyspace": "solana",
+        "max_inflight_batch_delivery": 80
+    }
+}

@@ -37,15 +37,11 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
-          override: true
-          profile: minimal
           components: rustfmt
 
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ env.RUST_STABLE }}
-          override: true
-          profile: minimal
           components: clippy, rustfmt
 
       - uses: actions/cache@v4

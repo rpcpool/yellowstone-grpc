@@ -6,6 +6,9 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
   push:
     branches:
       - 'master'
@@ -75,13 +78,17 @@ jobs:
       - name: Build release tarball
         run: ./ci/create-tarball.sh
 
-      - name: Rename binaries for ubuntu22 release
+      - name: Rename binaries
+        run: |
+          mv target/release/client target/release/client-${{ matrix.os }}
+          mv target/release/config-check target/release/config-check-${{ matrix.os }}
+          mv target/release/grpc-google-pubsub target/release/grpc-google-pubsub-${{ matrix.os }}
+          mv target/release/grpc-kafka target/release/grpc-kafka-${{ matrix.os }}
+          mv target/release/grpc-scylladb target/release/grpc-scylladb-${{ matrix.os }}
+
+      - name: Rename lib for ubuntu22 release
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          mv target/release/client target/release/client-22
-          mv target/release/config-check target/release/config-check-22
-          mv target/release/grpc-google-pubsub target/release/grpc-google-pubsub-22
-          mv target/release/grpc-kafka target/release/grpc-kafka-22
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
@@ -91,7 +98,8 @@ jobs:
             target/release/client.d \
             target/release/config-check.d \
             target/release/grpc-google-pubsub.d \
-            target/release/grpc-kafka.d
+            target/release/grpc-kafka.d \
+            target/release/grpc-scylladb.d
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -109,3 +117,17 @@ jobs:
             target/release/config-check*
             target/release/grpc-google-pubsub*
             target/release/grpc-kafka*
+            target/release/grpc-scylladb*
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-22.04'
+        with:
+          name: yellowstone-grpc-${{ github.sha }}-${{ matrix.os }}
+          path: |
+            ${{ env.GEYSER_PLUGIN_NAME }}-release*
+            yellowstone-grpc-proto/proto/*.proto
+            target/release/client*
+            target/release/config-check*
+            target/release/grpc-google-pubsub*
+            target/release/grpc-kafka*
+            target/release/grpc-scylladb*
