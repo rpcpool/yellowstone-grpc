@@ -76,7 +76,7 @@ impl ArgsAction {
         }
     }
 
-    async fn grpc2scylladb(
+      async fn grpc2scylladb(
         config: ConfigGrpc2ScyllaDB,
         scylladb_conn_config: ScyllaDbConnectionInfo,
         mut shutdown: BoxFuture<'static, ()>,

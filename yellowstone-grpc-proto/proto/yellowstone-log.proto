@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+import public "geyser.proto";
+
+
+option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+
+package yellowstone.log;
+
+service YellowstoneLog {
+  rpc consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+
+message ConsumeRequest {
+    string x_token = 1;
+    string consumer_id = 2;
+}
+
+
+message LogFilter {
+  optional geyser.SubscribeRequestFilterAccounts account_criteria = 1;
+  optional geyser.SubscribeRequestFilterTransactions tx_criteria = 2;
+}

@@ -1,6 +1,78 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 
 
+create table if not exists solana.consumer_info (
+    consumer_id text,
+    producer_id blob,
+    shard_id smallint,
+    offset bigint,
+    created_at timestamp,
+    updated_at timestamp,
+    PRIMARY KEY ((consumer_id, producer_id))
+);
+
+insert into solana.consumer_info (
+    consumer_id,
+    producer_id,
+    shard_id
+    offset,
+    created_at,
+    updated_at
+)
+values 
+('test_lv', 0x01, [0], currentTimestamp(), currentTimestamp());
+
+update solana.consumer_info
+set shard_offset_arrmap = [0,0]
+where consumer_id = 'test_lv' and producer_id = 0x01;
+
+update solana.consumer_info
+set shard_offset_arrmap[0] = 1, updated_at = currentTimestamp()
+where consumer_id = 'test_lv' and producer_id = 0x01
+if shard_offset_arrmap[0] = 0;
+
+
+
+create table if not exists solana.consumer_producer_mapping (
+    consumer_id text,
+    producer_id blob,
+    created_at timestamp,
+    updated_at timestamp,
+    PRIMARY KEY (consumer_id)
+);
+
+create materialized view if not exists solana.producer_consumer_mapping_mv
+as
+select
+    producer_id,
+    consumer_id
+from solana.consumer_producer_mapping
+where 
+    consumer_id is not null
+    and producer_id is not null
+primary key (producer_id, consumer_id);
+    
+
+create table if not exists solana.producer_info (
+    producer_id blob,
+    num_shards smallint,
+    is_active boolean,
+    created_at timestamp,
+    updated_at timestamp,
+    PRIMARY KEY (producer_id)
+);
+
+# example
+insert into solana.producer_info (
+    producer_id, 
+    num_shards, 
+    is_active, 
+    assigned_consumers,
+    created_at,
+    updated_at
+)
+values (0x01, 256, true, {}, currentTimestamp(), currentTimestamp());
+
 
 create table if not exists solana.producer_period_commit_log (
     producer_id blob,
@@ -73,8 +145,8 @@ create table if not exists solana.log (
 create materialized view solana.shard_max_offset_mv 
 as 
 select 
-    shard_id, 
     producer_id,
+    shard_id, 
     offset,
     period
 from solana.log
@@ -83,7 +155,7 @@ where
     and offset is not null
     and period is not null
     and producer_id is not null
-primary key(shard_id, producer_id, offset, period);
+primary key(producer_id, shard_id, offset, period);
 
 
 

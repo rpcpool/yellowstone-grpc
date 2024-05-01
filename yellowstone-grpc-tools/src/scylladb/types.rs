@@ -15,6 +15,8 @@ use {
     },
 };
 
+
+pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
 pub type ShardId = i16;
@@ -33,12 +35,6 @@ pub(crate) struct ShardStatistics {
     pub(crate) max_slot: i64,
     pub(crate) total_events: i64,
     pub(crate) slot_event_counter: HashMap<i64, i32>,
-}
-
-#[derive(SerializeRow, Clone, Debug, FromRow)]
-pub(crate) struct ProducerInfo {
-    pub(crate) producer_id: ProducerId,
-    pub(crate) min_offset_per_shard: HashMap<ShardId, ShardOffset>,
 }
 
 impl ShardStatistics {
@@ -702,4 +698,12 @@ impl From<BlockchainEvent> for ShardedTransaction {
             meta: val.meta,
         }
     }
+}
+
+
+#[derive(FromRow, Debug, Clone)]
+pub(crate) struct ProducerInfo {
+    pub(crate) producer_id: ProducerId,
+    pub(crate) num_shards: ShardId,
+    pub(crate) is_active: bool,
 }
