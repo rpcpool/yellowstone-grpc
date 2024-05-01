@@ -1,4 +1,4 @@
-use {cargo_lock::Lockfile, std::collections::HashSet};
+use {cargo_lock::Lockfile, std::{collections::HashSet, path::{Path, PathBuf}, str::FromStr}};
 
 fn main() -> anyhow::Result<()> {
     let mut envs = vergen::EmitBuilder::builder();

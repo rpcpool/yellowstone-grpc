@@ -51,6 +51,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 
@@ -61,6 +62,7 @@ rdkafka = { workspace = true, features = ["sasl", "ssl"], optional = true }
 rdkafka = { workspace = true, features = ["sasl", "ssl-vendored"], optional = true }
 
 [build-dependencies]
+project-root = "0.2.2"
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
