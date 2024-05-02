@@ -164,6 +164,7 @@ create type if not exists solana.tx_token_balance (
     mint text,  --varchar(44)
     ui_token_amount frozen<solana.ui_token_amount>,
     owner text, --varchar(44)
+    program_id text,
 );
 
 create type if not exists solana.reward (
