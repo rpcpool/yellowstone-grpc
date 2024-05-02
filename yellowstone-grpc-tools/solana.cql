@@ -25,7 +25,7 @@ create table if not exists solana.consumer_info (
     offset bigint,
     created_at timestamp,
     updated_at timestamp,
-    PRIMARY KEY ((consumer_id, producer_id))
+    PRIMARY KEY ((consumer_id, producer_id), shard_id)
 );
 
 -- insert into solana.consumer_info (
@@ -80,15 +80,14 @@ create table if not exists solana.producer_info (
 );
 
 -- # example
--- insert into solana.producer_info (
---     producer_id, 
---     num_shards, 
---     is_active, 
---     assigned_consumers,
---     created_at,
---     updated_at
--- )
--- values (0x01, 256, true, {}, currentTimestamp(), currentTimestamp());
+insert into solana.producer_info (
+    producer_id, 
+    num_shards, 
+    is_active, 
+    created_at,
+    updated_at
+)
+values (0x00, 256, true, {}, currentTimestamp(), currentTimestamp());
 
 
 create table if not exists solana.producer_period_commit_log (

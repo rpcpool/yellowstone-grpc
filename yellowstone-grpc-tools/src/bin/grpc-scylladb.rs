@@ -2,16 +2,18 @@ use {
     anyhow::Ok,
     clap::{Parser, Subcommand},
     futures::{future::BoxFuture, stream::StreamExt},
-    std::{net::SocketAddr, time::Duration},
+    scylla::{frame::Compression, Session, SessionBuilder},
+    std::{net::SocketAddr, sync::Arc, time::Duration},
     tracing::{info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
-    yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
+    yellowstone_grpc_proto::{geyser::SubscribeUpdate, prelude::subscribe_update::UpdateOneof},
     yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
         create_shutdown,
         prom::run_server as prometheus_run_server,
         scylladb::{
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
+            consumer::{get_or_register_consumer, spawn_consumer, ConsumerInfo},
             sink::ScyllaSink,
             types::Transaction,
         },
@@ -63,12 +65,46 @@ impl ArgsAction {
                 unimplemented!();
             }
             ArgsAction::Test => {
-                unimplemented!();
+                let config2 = config.grpc2scylladb.ok_or_else(|| {
+                    anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
+                })?;
+                Self::test(config2, config.scylladb, shutdown).await
             }
         }
     }
 
-      async fn grpc2scylladb(
+    async fn test(
+        config: ConfigGrpc2ScyllaDB,
+        scylladb_conn_config: ScyllaDbConnectionInfo,
+        mut shutdown: BoxFuture<'static, ()>,
+    ) -> anyhow::Result<()> {
+        let session: Session = SessionBuilder::new()
+            .known_node(scylladb_conn_config.hostname)
+            .user(scylladb_conn_config.username, scylladb_conn_config.password)
+            .compression(Some(Compression::Lz4))
+            .use_keyspace(config.keyspace.clone(), false)
+            .build()
+            .await?;
+        let session = Arc::new(session);
+        let ci = get_or_register_consumer(Arc::clone(&session), "test", Default::default()).await?;
+        let mut rx = spawn_consumer(Arc::clone(&session), ci, None, None).await?;
+
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => return Ok(()),
+                Some(result) = rx.recv() => {
+                    if result.is_err() {
+                        anyhow::bail!("fail!!!")
+                    }
+                    let x: SubscribeUpdate = result?;
+                    println!("{:?}", x.update_oneof);
+                    return Ok(())
+                }
+            }
+        }
+    }
+
+    async fn grpc2scylladb(
         config: ConfigGrpc2ScyllaDB,
         scylladb_conn_config: ScyllaDbConnectionInfo,
         mut shutdown: BoxFuture<'static, ()>,
@@ -114,12 +150,6 @@ impl ArgsAction {
 
                     match message {
                         UpdateOneof::Account(msg) => {
-                            // let pubkey_opt: &Option<&[u8]> =
-                            //     &msg.account.as_ref().map(|acc| acc.pubkey.as_ref());
-                            // trace!(
-                            //     "Received an account update slot={:?}, pubkey={:?}",
-                            //     msg.slot, pubkey_opt
-                            // );
                             let acc_update = msg.clone().try_into();
                             if acc_update.is_err() {
                                 // Drop the message if invalid

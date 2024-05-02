@@ -1,15 +1,22 @@
 use {
-    anyhow::{anyhow, Ok}, deepsize::DeepSizeOf, rdkafka::{admin::ConfigResource, statistics}, scylla::{
+    anyhow::{anyhow, Ok},
+    deepsize::DeepSizeOf,
+    scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
-    }, serde_with::BoolFromInt, sha2::digest::typenum::UInt, std::{any, collections::HashMap, iter::repeat}, yellowstone_grpc_proto::{
-        geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo},
-        solana::storage::confirmed_block::{self, CompiledInstruction, InnerInstruction, InnerInstructions, Message},
-    }
+    },
+    std::{collections::HashMap, iter::repeat},
+    yellowstone_grpc_proto::{
+        geyser::{
+            SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+        solana::storage::confirmed_block::{
+            self, CompiledInstruction,
+        },
+    },
 };
-
 
 pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
@@ -192,10 +199,10 @@ impl From<confirmed_block::MessageAddressTableLookup> for MessageAddrTableLookup
 impl From<MessageAddrTableLookup> for confirmed_block::MessageAddressTableLookup {
     fn from(msg: MessageAddrTableLookup) -> Self {
         // Create a new instance of AddressLookup
-        confirmed_block::MessageAddressTableLookup { 
-            account_key: msg.account_key , 
-            writable_indexes: msg.writable_indexes, 
-            readonly_indexes: msg.readonly_indexes, 
+        confirmed_block::MessageAddressTableLookup {
+            account_key: msg.account_key,
+            writable_indexes: msg.writable_indexes,
+            readonly_indexes: msg.readonly_indexes,
         }
     }
 }
@@ -262,14 +269,12 @@ impl TryFrom<InnerInstr> for confirmed_block::InnerInstruction {
     type Error = anyhow::Error;
 
     fn try_from(value: InnerInstr) -> Result<Self, Self::Error> {
-        Ok(
-            confirmed_block::InnerInstruction {
-                program_id_index: value.program_id_index.try_into()?,
-                accounts: value.accounts,
-                data: value.data,
-                stack_height: value.stack_height.map(|x| x.try_into()).transpose()?,
-            }
-        )
+        Ok(confirmed_block::InnerInstruction {
+            program_id_index: value.program_id_index.try_into()?,
+            accounts: value.accounts,
+            data: value.data,
+            stack_height: value.stack_height.map(|x| x.try_into()).transpose()?,
+        })
     }
 }
 
@@ -298,12 +303,10 @@ impl TryFrom<InnerInstrs> for confirmed_block::InnerInstructions {
     type Error = anyhow::Error;
 
     fn try_from(value: InnerInstrs) -> Result<Self, Self::Error> {
-        Ok(
-            confirmed_block::InnerInstructions {
-                index: value.index.try_into()?,
-                instructions: try_collect(value.instructions)?,
-            }
-        )
+        Ok(confirmed_block::InnerInstructions {
+            index: value.index.try_into()?,
+            instructions: try_collect(value.instructions)?,
+        })
     }
 }
 
@@ -331,14 +334,12 @@ impl TryFrom<UiTokenAmount> for confirmed_block::UiTokenAmount {
     type Error = anyhow::Error;
 
     fn try_from(value: UiTokenAmount) -> Result<Self, Self::Error> {
-        Ok(
-            confirmed_block::UiTokenAmount { 
-                ui_amount: value.ui_amount, 
-                decimals: value.decimals.try_into()?, 
-                amount: value.amount, 
-                ui_amount_string: value.ui_amount_string,
-            }
-        )
+        Ok(confirmed_block::UiTokenAmount {
+            ui_amount: value.ui_amount,
+            decimals: value.decimals.try_into()?,
+            amount: value.amount,
+            ui_amount_string: value.ui_amount_string,
+        })
     }
 }
 
@@ -368,15 +369,13 @@ impl TryFrom<TxTokenBalance> for confirmed_block::TokenBalance {
     type Error = anyhow::Error;
 
     fn try_from(value: TxTokenBalance) -> Result<Self, Self::Error> {
-        Ok(
-            confirmed_block::TokenBalance {
-                account_index: value.account_index.try_into()?,
-                mint: value.mint,
-                ui_token_amount: value.ui_token_amount.map(TryInto::try_into).transpose()?,
-                owner: value.owner,
-                program_id: value.program_id
-            }
-        )
+        Ok(confirmed_block::TokenBalance {
+            account_index: value.account_index.try_into()?,
+            mint: value.mint,
+            ui_token_amount: value.ui_token_amount.map(TryInto::try_into).transpose()?,
+            owner: value.owner,
+            program_id: value.program_id,
+        })
     }
 }
 
@@ -407,15 +406,13 @@ impl TryFrom<Reward> for confirmed_block::Reward {
     type Error = anyhow::Error;
 
     fn try_from(value: Reward) -> Result<Self, Self::Error> {
-        Ok(
-            confirmed_block::Reward {
-                pubkey: value.pubkey,
-                lamports: value.lamports,
-                post_balance: value.post_balance.try_into()?,
-                reward_type: value.reward_type,
-                commission: value.commission,
-            }
-        )
+        Ok(confirmed_block::Reward {
+            pubkey: value.pubkey,
+            lamports: value.lamports,
+            post_balance: value.post_balance.try_into()?,
+            reward_type: value.reward_type,
+            commission: value.commission,
+        })
     }
 }
 
@@ -430,14 +427,16 @@ impl TryFrom<confirmed_block::ReturnData> for ReturnData {
     type Error = anyhow::Error;
     fn try_from(value: confirmed_block::ReturnData) -> Result<Self, Self::Error> {
         Ok(ReturnData {
-            program_id: value.program_id.try_into().map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?,
+            program_id: value
+                .program_id
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?,
             data: value.data,
         })
     }
 }
 
 impl From<ReturnData> for confirmed_block::ReturnData {
-
     fn from(value: ReturnData) -> Self {
         confirmed_block::ReturnData {
             program_id: value.program_id.into(),
@@ -489,13 +488,20 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
 
         let rewards: Vec<Reward> = try_collect(status_meta.rewards)?;
 
-        let loaded_readonly_addresses: Vec<Pubkey> = try_collect(status_meta.loaded_readonly_addresses)
-            .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
+        let loaded_readonly_addresses: Vec<Pubkey> =
+            try_collect(status_meta.loaded_readonly_addresses)
+                .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
         let loaded_writable_addresses = try_collect(status_meta.loaded_writable_addresses)
             .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
 
-        let return_data = status_meta.return_data.map(|rd| rd.try_into()).transpose()?;
-        let compute_units_consumed = status_meta.compute_units_consumed.map(|cu| cu.try_into()).transpose()?;
+        let return_data = status_meta
+            .return_data
+            .map(|rd| rd.try_into())
+            .transpose()?;
+        let compute_units_consumed = status_meta
+            .compute_units_consumed
+            .map(|cu| cu.try_into())
+            .transpose()?;
 
         // Create a new TransactionMeta instance
         let transaction_meta = TransactionMeta {
@@ -503,15 +509,23 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
             fee,
             pre_balances,
             post_balances,
-            inner_instructions: if status_meta.inner_instructions_none { Some(inner_instructions) } else { None },
-            log_messages: if status_meta.log_messages_none { Some(log_messages) } else { None },
+            inner_instructions: if status_meta.inner_instructions_none {
+                Some(inner_instructions)
+            } else {
+                None
+            },
+            log_messages: if status_meta.log_messages_none {
+                Some(log_messages)
+            } else {
+                None
+            },
             pre_token_balances,
             post_token_balances,
             rewards,
             loaded_readonly_addresses,
             loaded_writable_addresses,
             return_data,
-            compute_units_consumed: compute_units_consumed
+            compute_units_consumed,
         };
 
         // Return the new TransactionMeta instance
@@ -526,26 +540,37 @@ impl TryFrom<TransactionMeta> for confirmed_block::TransactionStatusMeta {
         let inner_instructions_none = value.inner_instructions.is_none();
         let log_messages_none = value.log_messages.is_none();
         let return_data_none = value.return_data.is_none();
-        Ok(
-            confirmed_block::TransactionStatusMeta {
-                err: value.error.map(|bindata| confirmed_block::TransactionError { err: bindata } ),
-                fee: value.fee.try_into()?,
-                pre_balances: try_collect(value.pre_balances)?,
-                post_balances: try_collect(value.post_balances)?,
-                inner_instructions: value.inner_instructions.map(try_collect).transpose()?.unwrap_or(Vec::new()),
-                inner_instructions_none,
-                log_messages: value.log_messages.map(try_collect).transpose()?.unwrap_or(Vec::new()),
-                log_messages_none,
-                pre_token_balances: try_collect(value.pre_token_balances)?,
-                post_token_balances: try_collect(value.post_token_balances)?,
-                rewards: try_collect(value.rewards)?,
-                loaded_writable_addresses: try_collect(value.loaded_writable_addresses)?,
-                loaded_readonly_addresses: try_collect(value.loaded_readonly_addresses)?,
-                return_data: value.return_data.map(Into::into),
-                return_data_none,
-                compute_units_consumed: value.compute_units_consumed.map(TryInto::try_into).transpose()?,
-            }
-        )
+        Ok(confirmed_block::TransactionStatusMeta {
+            err: value
+                .error
+                .map(|bindata| confirmed_block::TransactionError { err: bindata }),
+            fee: value.fee.try_into()?,
+            pre_balances: try_collect(value.pre_balances)?,
+            post_balances: try_collect(value.post_balances)?,
+            inner_instructions: value
+                .inner_instructions
+                .map(try_collect)
+                .transpose()?
+                .unwrap_or(Vec::new()),
+            inner_instructions_none,
+            log_messages: value
+                .log_messages
+                .map(try_collect)
+                .transpose()?
+                .unwrap_or(Vec::new()),
+            log_messages_none,
+            pre_token_balances: try_collect(value.pre_token_balances)?,
+            post_token_balances: try_collect(value.post_token_balances)?,
+            rewards: try_collect(value.rewards)?,
+            loaded_writable_addresses: try_collect(value.loaded_writable_addresses)?,
+            loaded_readonly_addresses: try_collect(value.loaded_readonly_addresses)?,
+            return_data: value.return_data.map(Into::into),
+            return_data_none,
+            compute_units_consumed: value
+                .compute_units_consumed
+                .map(TryInto::try_into)
+                .transpose()?,
+        })
     }
 }
 
@@ -611,50 +636,45 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
                 .collect(),
             meta: meta.try_into()?,
             is_vote: val_tx.is_vote,
-            tx_index: val_tx.index as i64
+            tx_index: val_tx.index as i64,
         };
 
         Ok(res)
     }
 }
 
-
 impl TryFrom<Transaction> for SubscribeUpdateTransaction {
     type Error = anyhow::Error;
 
     fn try_from(value: Transaction) -> Result<Self, Self::Error> {
         let ret = SubscribeUpdateTransaction {
-            transaction: Some(
-                SubscribeUpdateTransactionInfo {
-                    signature: value.signature,
-                    is_vote: value.is_vote,
-                    transaction: Some(
-                        confirmed_block::Transaction { 
-                            signatures: value.signatures, 
-                            message: Some(
-                                confirmed_block::Message {
-                                    header: Some(
-                                        confirmed_block::MessageHeader { 
-                                            num_required_signatures: value.num_required_signatures.try_into()?, 
-                                            num_readonly_signed_accounts: value.num_readonly_signed_accounts.try_into()?, 
-                                            num_readonly_unsigned_accounts: value.num_readonly_unsigned_accounts.try_into()?,
-                                        }
-                                    ),
-                                    account_keys: value.account_keys,
-                                    recent_blockhash: value.recent_blockhash,
-                                    instructions: try_collect(value.instructions)?,
-                                    versioned: value.versioned,
-                                    address_table_lookups: try_collect(value.address_table_lookups)?,
-                                }
-                            )
-                        }
-                    ),
-                    meta: Some(value.meta.try_into()).transpose()?,
-                    index: value.tx_index.try_into()?,
-                }
-            ),
+            transaction: Some(SubscribeUpdateTransactionInfo {
+                signature: value.signature,
+                is_vote: value.is_vote,
+                transaction: Some(confirmed_block::Transaction {
+                    signatures: value.signatures,
+                    message: Some(confirmed_block::Message {
+                        header: Some(confirmed_block::MessageHeader {
+                            num_required_signatures: value.num_required_signatures.try_into()?,
+                            num_readonly_signed_accounts: value
+                                .num_readonly_signed_accounts
+                                .try_into()?,
+                            num_readonly_unsigned_accounts: value
+                                .num_readonly_unsigned_accounts
+                                .try_into()?,
+                        }),
+                        account_keys: value.account_keys,
+                        recent_blockhash: value.recent_blockhash,
+                        instructions: try_collect(value.instructions)?,
+                        versioned: value.versioned,
+                        address_table_lookups: try_collect(value.address_table_lookups)?,
+                    }),
+                }),
+                meta: Some(value.meta.try_into()).transpose()?,
+                index: value.tx_index.try_into()?,
+            }),
             slot: value.slot.try_into()?,
-        }; 
+        };
         Ok(ret)
     }
 }
@@ -950,7 +970,6 @@ impl From<BlockchainEvent> for AccountUpdate {
     }
 }
 
-
 #[derive(FromRow, Debug, Clone)]
 pub(crate) struct ProducerInfo {
     pub(crate) producer_id: ProducerId,
@@ -958,30 +977,53 @@ pub(crate) struct ProducerInfo {
     pub(crate) is_active: bool,
 }
 
-
 impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
     type Error = anyhow::Error;
 
     fn try_from(acc_update: AccountUpdate) -> anyhow::Result<Self> {
-        let pubkey_bytes: [u8; 32] = acc_update.pubkey;
-        let owner_bytes: [u8; 32] = acc_update.owner;
+        let _pubkey_bytes: [u8; 32] = acc_update.pubkey;
+        let _owner_bytes: [u8; 32] = acc_update.owner;
 
         // Create the SubscribeUpdateAccount instance
         let subscribe_update_account = SubscribeUpdateAccount {
             slot: acc_update.slot as u64,
-            account: Some(yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo {
-                pubkey: Vec::from(acc_update.pubkey),
-                lamports: acc_update.lamports as u64,
-                owner: Vec::from(acc_update.owner),
-                executable: acc_update.executable,
-                rent_epoch: acc_update.rent_epoch as u64,
-                write_version: acc_update.write_version as u64,
-                data: acc_update.data,
-                txn_signature: acc_update.txn_signature,
-            }),
+            account: Some(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo {
+                    pubkey: Vec::from(acc_update.pubkey),
+                    lamports: acc_update.lamports as u64,
+                    owner: Vec::from(acc_update.owner),
+                    executable: acc_update.executable,
+                    rent_epoch: acc_update.rent_epoch as u64,
+                    write_version: acc_update.write_version as u64,
+                    data: acc_update.data,
+                    txn_signature: acc_update.txn_signature,
+                },
+            ),
             is_startup: false,
         };
 
         Ok(subscribe_update_account)
+    }
+}
+
+impl TryFrom<BlockchainEvent> for SubscribeUpdateAccount {
+    type Error = anyhow::Error;
+    fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
+        if value.entry_type != BlockchainEventType::AccountUpdate {
+            anyhow::bail!("BlockchainEvent is not an AccountUpdate");
+        }
+        let ret: AccountUpdate = value.into();
+        ret.try_into()
+    }
+}
+
+impl TryFrom<BlockchainEvent> for SubscribeUpdateTransaction {
+    type Error = anyhow::Error;
+    fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
+        if value.entry_type != BlockchainEventType::NewTransaction {
+            anyhow::bail!("BlockchainEvent is not a Transaction");
+        }
+        let ret: Transaction = value.into();
+        ret.try_into()
     }
 }

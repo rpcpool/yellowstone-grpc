@@ -810,8 +810,7 @@ impl ScyllaSink {
             .compression(Some(Compression::Lz4))
             .use_keyspace(config.keyspace.clone(), false)
             .build()
-            .await
-            .unwrap();
+            .await?;
 
         let session = Arc::new(session);
         let mut system = AgentSystem::new(16);
@@ -819,7 +818,7 @@ impl ScyllaSink {
         let shard_count = SHARD_COUNT;
         let num_batcher = SHARD_COUNT / 2;
 
-        let mut batchers = Vec::with_capacity(num_batcher as usize);
+        let mut batchers = Vec::with_capacity(num_batcher);
         for i in 0..num_batcher {
             let flusher = Flusher::new(Arc::clone(&session));
 
