@@ -1,13 +1,5 @@
 use {
-    anyhow::Ok,
-    clap::{Parser, Subcommand},
-    futures::{future::BoxFuture, stream::StreamExt},
-    scylla::{frame::Compression, Session, SessionBuilder},
-    std::{net::SocketAddr, sync::Arc, time::Duration},
-    tracing::{info, warn},
-    yellowstone_grpc_client::GeyserGrpcClient,
-    yellowstone_grpc_proto::{geyser::SubscribeUpdate, prelude::subscribe_update::UpdateOneof},
-    yellowstone_grpc_tools::{
+    anyhow::Ok, clap::{Parser, Subcommand}, futures::{future::BoxFuture, stream::StreamExt}, scylla::{frame::Compression, Session, SessionBuilder}, std::{net::SocketAddr, sync::Arc, time::Duration}, tokio::time::Instant, tracing::{info, warn}, yellowstone_grpc_client::GeyserGrpcClient, yellowstone_grpc_proto::{geyser::SubscribeUpdate, prelude::subscribe_update::UpdateOneof}, yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
         create_shutdown,
         prom::run_server as prometheus_run_server,
@@ -18,7 +10,7 @@ use {
             types::Transaction,
         },
         setup_tracing,
-    },
+    }
 };
 
 // 512MB
@@ -89,7 +81,14 @@ impl ArgsAction {
         let ci = get_or_register_consumer(Arc::clone(&session), "test", InitialOffsetPolicy::Earliest).await?;
         let mut rx = spawn_consumer(Arc::clone(&session), ci, None, None).await?;
 
+        let mut print_tx_secs = Instant::now() + Duration::from_secs(1);
+        let mut num_events = 0;
         loop {
+            if print_tx_secs.elapsed() > Duration::ZERO {
+                println!("event/second {}", num_events);
+                num_events = 0;
+                print_tx_secs = Instant::now() + Duration::from_secs(1);
+            }
             tokio::select! {
                 _ = &mut shutdown => return Ok(()),
                 Some(result) = rx.recv() => {
@@ -97,11 +96,12 @@ impl ArgsAction {
                         anyhow::bail!("fail!!!")
                     }
                     let x = result?.update_oneof.expect("got none");
-                    match x {
-                        UpdateOneof::Account(acc) => println!("acc, slot {:?}", acc.slot),
-                        UpdateOneof::Transaction(tx) => println!("tx, slot {:?}", tx.slot),
-                        _ => unimplemented!()
-                    }
+                    // match x {
+                    //     UpdateOneof::Account(acc) => println!("acc, slot {:?}", acc.slot),
+                    //     UpdateOneof::Transaction(tx) => println!("tx, slot {:?}", tx.slot),
+                    //     _ => unimplemented!()
+                    // }
+                    num_events += 1;
                 }
             }
         }

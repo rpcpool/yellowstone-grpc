@@ -1,32 +1,19 @@
 use {
     super::types::{
         BlockchainEvent, BlockchainEventType, ProducerId, ProducerInfo, ShardId, ShardOffset, MAX_PRODUCER, MIN_PROCUDER, SHARD_OFFSET_MODULO
-    },
-    core::{fmt, panic},
-    futures::{stream::BoxStream, StreamExt},
-    scylla::{
-        batch::{Batch, BatchType},
-        frame::response::result::ColumnType,
-        prepared_statement::PreparedStatement,
-        serialize::{
+    }, crate::scylladb::types::{InnerInstrs, ReturnData, Reward, TransactionMeta, TxTokenBalance}, anyhow::anyhow, core::{fmt, panic}, futures::{stream::BoxStream, StreamExt}, rdkafka::Offset, scylla::{
+        batch::{Batch, BatchType}, cql_to_rust::{FromCqlVal, FromCqlValError}, frame::response::result::{ColumnType, CqlValue}, prepared_statement::PreparedStatement, serialize::{
             row::SerializeRow,
             value::SerializeCql,
-        },
-        transport::query_result::SingleRowTypedError, Session,
-    },
-    std::{
+        }, transport::{query_result::SingleRowTypedError, topology::UserDefinedType}, Session
+    }, std::{
         borrow::BorrowMut, fmt::Debug, pin::Pin, sync::Arc, time::Duration
-    },
-    tokio::{sync::mpsc, task::JoinSet, time::Instant},
-    tokio_stream::{wrappers::ReceiverStream, Stream},
-    tonic::Response,
-    tracing::{error, info},
-    yellowstone_grpc_proto::{
+    }, tokio::{sync::{mpsc, oneshot::{self, error::TryRecvError}}, task::JoinSet, time::Instant}, tokio_stream::{wrappers::ReceiverStream, Stream}, tonic::Response, tracing::{error, info}, yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, SubscribeUpdate,
         },
         yellowstone::log::{yellowstone_log_server::YellowstoneLog, ConsumeRequest},
-    },
+    }
 };
 
 pub type OldShardOffset = ShardOffset;
@@ -568,9 +555,23 @@ impl ConsumerQueries {
             .map_err(anyhow::Error::new)?;
 
         let boxed = row_it
-            .map(|result| {
+            .map(move |result| {
                 let row = result.expect("faled to execute_iter on solana log");
-                row.into_typed().expect("row has unexpected format")
+                let row_period = row.columns.get(1).and_then(Option::to_owned);
+                let row_offset = row.columns.get(3).and_then(Option::to_owned);
+                let typed_row_result = row.into_typed();
+                // The error from ScyllaDB are cryptic and contain little information, 
+                // this is why im forging a long message here, because into_typed() error are really hard to debug.
+                match typed_row_result {
+                    Err(e) => {
+                        let emsg = format!(
+                            "unexpected row format, got {:?} -- shard={:?}, period={:?}, producer={:?}, offset={:?}",
+                            e, shard_id, row_period, producer_id, row_offset
+                        );
+                        panic!("{}", emsg);
+                    } ,
+                    Ok(typed_row) => typed_row
+                }
             })
             .boxed();
         Ok(boxed)
@@ -650,35 +651,31 @@ pub async fn spawn_consumer(
 }
 
 /// Here's the flow of the state machine a shard iterator go through it lifetime.
-///                                  _____
-///                                 |     |
-///                                 |     |
-///                                 v     |
-/// Empty ----> Available ----> EndOfPeriod --+
-///   ^                                       |
-///   |                                       |
-///   +---------------------------------------+
+///                                                _____
+///                                               |     |
+///                                               |     |
+///                                               v     |
+/// Empty ---->  Loading ------> Available ----> EndOfPeriod --+
+///   ^                                               |
+///   |                                               |
+///   +-----------------------------------------------+
 /// 
+/// Empty : the shard iterator is either brand new or no more row are available in its inner row stream.
+/// Loading : We asked for a row iterator that may take some time to resolve but we don't want to block a consumer.
+/// Available: the inner row stream is available to stream event.
+/// EndOfPeriod : No more data for the current "period", we need to go back to the end Empty tate.
 enum ShardIteratorState {
     Empty(ShardOffset),
+    Loading(ShardOffset, oneshot::Receiver<anyhow::Result<BoxStream<'static, BlockchainEvent>>>),
     Available(ShardOffset, BoxStream<'static, BlockchainEvent>),
     EndOfPeriod(ShardOffset),
-}
-
-impl fmt::Debug for ShardIteratorState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty(arg0) => f.debug_tuple("Empty").field(arg0).finish(),
-            Self::Available(arg0, arg1) => f.debug_tuple("Available").field(arg0).finish(),
-            Self::EndOfPeriod(arg0) => f.debug_tuple("EndOfPeriod").field(arg0).finish(),
-        }
-    }
 }
 
 impl ShardIteratorState {
     fn last_offset(&self) -> ShardOffset {
         match self {
             Self::Empty(offset) => *offset,
+            Self::Loading(offset, _) => *offset,
             Self::Available(offset, _) => *offset,
             Self::EndOfPeriod(offset) => *offset,
         }
@@ -738,16 +735,35 @@ impl ShardIterator {
         let last_offset = self.inner.last_offset();
         let current_state =
             std::mem::replace(&mut self.inner, ShardIteratorState::Empty(last_offset));
-        info!("current state: {:?}", current_state);
-        //let inner_ptr = self.inner.borrow_mut();
+        let producer_id = self.producer_id;
+        let shard_id = self.shard_id;
+
         let (next_state, maybe_to_return) = match current_state {
             ShardIteratorState::Empty(last_offset) => {
-                let row_stream = self
-                    .consumer_queries
-                    .get_log_iterator_after_offset(self.producer_id, self.shard_id, last_offset)
-                    .await?;
-                (ShardIteratorState::Available(last_offset, row_stream), None)
-            }
+                let (sender, receiver) = oneshot::channel();
+                let consumer_queries = self.consumer_queries.clone();
+                tokio::spawn(async move {
+                    let result = consumer_queries
+                        .get_log_iterator_after_offset(producer_id, shard_id, last_offset)
+                        .await;
+
+                    sender.send(result)
+                        .map_err(|_| anyhow::anyhow!("failed to send row_iterator to shard iterator, channel's closed."))
+                });
+
+                (ShardIteratorState::Loading(last_offset, receiver), None)
+            },
+            ShardIteratorState::Loading(last_offset, mut receiver) => {
+                let result = receiver.try_recv();
+                match result {
+                    Err(TryRecvError::Empty) => (ShardIteratorState::Loading(last_offset, receiver), None),
+                    Err(TryRecvError::Closed) => anyhow::bail!("fail"),
+                    Ok(subresult) => {
+                        let row_stream = subresult?;
+                        (ShardIteratorState::Available(last_offset, row_stream), None)
+                    } 
+                }
+            },
             ShardIteratorState::Available(last_offset, mut row_stream) => {
                 let row = row_stream.next().await;
                 let next_state = if row.is_none() {
@@ -760,11 +776,11 @@ impl ShardIterator {
                     ShardIteratorState::Available(last_offset + 1, row_stream)
                 };
                 (next_state, row)
-            }
+            },
             ShardIteratorState::EndOfPeriod(last_offset) => {
                 let is_period_committed = self
                     .consumer_queries
-                    .is_period_committed(self.producer_id, self.shard_id, last_offset)
+                    .is_period_committed(producer_id, shard_id, last_offset)
                     .await?;
                 let next_state = if is_period_committed {
                     ShardIteratorState::Empty(last_offset)
@@ -774,9 +790,7 @@ impl ShardIterator {
                 (next_state, None)
             }
         };
-        println!("next state {:?}", next_state);
         let _ = std::mem::replace(&mut self.inner, next_state);
-        println!("new state: {:?}", self.inner);
         Ok(maybe_to_return)
     }
 }
@@ -802,7 +816,6 @@ impl Consumer {
             for (i, shard_it) in self.shard_iterators.iter_mut().enumerate() {
                 let maybe = shard_it.try_next().await?;
                 if let Some(block_chain_event) = maybe {
-                    info!("sending result");
                     let event_offset = block_chain_event.offset;
                     let geyser_event = match block_chain_event.entry_type {
                         BlockchainEventType::AccountUpdate => {
@@ -819,8 +832,6 @@ impl Consumer {
                     let permit = self.sender.reserve().await?;
                     permit.send(Ok(subscribe_update));
                     curr_shard_offsets[i] = event_offset;
-                } else {
-                    info!("no result to send");
                 }
             }
 
