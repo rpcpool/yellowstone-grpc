@@ -22,11 +22,15 @@ pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
 pub type ProgramId = [u8; 32];
+
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
 
 pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machine
+
+pub const MIN_PROCUDER: ProducerId = [0x00];
+pub const MAX_PRODUCER: ProducerId = [0xFF];
 
 #[derive(SerializeRow, Clone, Debug, FromRow)]
 pub(crate) struct ShardStatistics {

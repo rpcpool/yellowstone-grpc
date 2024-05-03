@@ -1,32 +1,26 @@
 use {
     super::types::{
-        BlockchainEvent, BlockchainEventType, ProducerId, ProducerInfo, ShardId,
-        ShardOffset, SHARD_OFFSET_MODULO,
+        BlockchainEvent, BlockchainEventType, ProducerId, ProducerInfo, ShardId, ShardOffset, MAX_PRODUCER, MIN_PROCUDER, SHARD_OFFSET_MODULO
     },
-    core::{panic},
+    core::{fmt, panic},
     futures::{stream::BoxStream, StreamExt},
     scylla::{
         batch::{Batch, BatchType},
-        frame::{
-            response::result::{ColumnType},
-        },
+        frame::response::result::ColumnType,
         prepared_statement::PreparedStatement,
         serialize::{
-            row::{SerializeRow},
+            row::SerializeRow,
             value::SerializeCql,
         },
-        transport::{query_result::SingleRowTypedError}, Session,
+        transport::query_result::SingleRowTypedError, Session,
     },
     std::{
-        fmt::{Debug},
-        pin::Pin,
-        sync::{Arc},
-        time::Duration,
+        borrow::BorrowMut, fmt::Debug, pin::Pin, sync::Arc, time::Duration
     },
-    tokio::{sync::mpsc, time::Instant},
+    tokio::{sync::mpsc, task::JoinSet, time::Instant},
     tokio_stream::{wrappers::ReceiverStream, Stream},
     tonic::Response,
-    tracing::{error},
+    tracing::{error, info},
     yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, SubscribeUpdate,
@@ -49,6 +43,28 @@ const DEFAULT_OFFSET_COMMIT_INTERVAL: Duration = Duration::from_secs(10);
 
 const DEFAULT_CONSUMER_STREAM_BUFFER_CAPACITY: usize = 100;
 
+const SCYLLADB_GET_LATEST_SHARD_OFFSET_FOR_PRODUCER_ID: &str = r###"
+    SELECT 
+        shard_id, 
+        max(offset) as max_offset
+    FROM shard_max_offset_mv 
+    WHERE 
+        producer_id = ? 
+    GROUP BY producer_id, shard_id 
+    ORDER BY shard_id;
+"###;
+
+const SCYLLADB_GET_EARLIEST_SHARD_OFFSET_FOR_PRODUCER_ID: &str = r###"
+    SELECT 
+        shard_id, 
+        min(offset) as min_offset
+    FROM shard_max_offset_mv 
+    WHERE 
+        producer_id = ? 
+    GROUP BY producer_id, shard_id 
+    ORDER BY shard_id;
+"###;
+
 const SCYLLADB_UPDATE_CONSUMER_SHARD_OFFSET: &str = r###"
     UPDATE consumer_info
     SET offset = ?, updated_at = currentTimestamp() 
@@ -61,7 +77,7 @@ const SCYLLADB_UPDATE_CONSUMER_SHARD_OFFSET: &str = r###"
 
 const SCYLLADB_PRODUCER_SHARD_PERIOD_COMMIT_EXISTS: &str = r###"
     SELECT
-        1
+        producer_id
     FROM producer_period_commit_log
     WHERE 
         producer_id = ?
@@ -97,14 +113,16 @@ const SCYLLADB_QUERY_LOG: &str = r###"
         instructions,
         versioned,
         address_table_lookups,
-        meta solana.transaction_meta
+        meta,
+        is_vote,
+        tx_index
     FROM log
     WHERE producer_id = ? and shard_id = ? and offset > ? and period = ?
     ORDER BY offset ASC
 "###;
 
 const SCYLALDB_INSERT_CONSUMER_OFFSET: &str = r###"
-    INSERT INTO (
+    INSERT INTO consumer_info (
         consumer_id,
         producer_id,
         shard_id,
@@ -138,7 +156,7 @@ const SCYLLADB_PRODUCER_CONSUMER_COUNT: &str = r###"
     SELECT
         producer_id,
         count(1)
-    FROM consumer_producer_mapping_mv
+    FROM producer_consumer_mapping_mv
     GROUP BY producer_id
 "###;
 
@@ -147,27 +165,25 @@ const SCYLLADB_INSERT_CONSUMER_PRODUCER_MAP: &str = r###"
         consumer_id,
         producer_id,
         created_at,
-        update_at
+        updated_at
     )
     VALUES (?, ?, currentTimestamp(), currentTimestamp())
 "###;
 
-const SCYLLADB_LIST_PRODUCER_INFO: &str = r###"
-    SELECT
-        producer_id,
-        num_shards,
-        is_active
-    FROM producer_info;
-"###;
 
+///
+/// CQL does not support OR conditions, 
+/// this is why use >=/<= to emulate the following condition: (producer_id = ? or ?)
+/// produ
 const SCYLLADB_GET_RANDOM_PRODUCER_INFO: &str = r###"
     SELECT
         producer_id,
         num_shards,
         is_active
     FROM producer_info
-    WHERE ( producer_id = ? or ? )
-    LIMIT 1;
+    WHERE producer_id >= ? and producer_id <= ?
+    LIMIT 1
+    ALLOW FILTERING
 "###;
 
 struct QueryMaxOffsetPerShardArgs {
@@ -260,8 +276,8 @@ async fn get_any_producer_info(
         .query(
             SCYLLADB_GET_RANDOM_PRODUCER_INFO,
             (
-                producer_id.unwrap_or([0x00]),
-                producer_id.map(|_| false).unwrap_or(true),
+                producer_id.unwrap_or(MIN_PROCUDER),
+                producer_id.map(|pid| pid).unwrap_or(MAX_PRODUCER),
             ),
         )
         .await?;
@@ -298,44 +314,30 @@ async fn set_consumer_shard_offsets_at_earliest_or_latest(
         );
     }
 
-    let joined = (0..producer_info.num_shards)
-        .map(|x| format!("{:?}", x))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let query = format!(
-        r###"
-        SELECT
-            shard_id,
-            offset
-        FROM shard_max_offset_mv 
-        WHERE 
-            producer_id = ?
-            AND shard_id IN ({:?})
-        ORDER BY shard_id, offset {:?}
-        PER PARTITION LIMIT 1
-        "###,
-        joined,
-        if initial_log_pos == InitialLogPosition::Earliest {
-            "ASC"
-        } else {
-            "DESC"
-        }
-    );
-
-    let qargs = QueryMaxOffsetPerShardArgs {
-        producer_id,
-        num_shards: producer_info.num_shards,
+    let query = match initial_log_pos {
+        InitialLogPosition::Latest => SCYLLADB_GET_LATEST_SHARD_OFFSET_FOR_PRODUCER_ID,
+        InitialLogPosition::Earliest => SCYLLADB_GET_EARLIEST_SHARD_OFFSET_FOR_PRODUCER_ID,
     };
-    let shard_ordered_qr = session.query(query, &qargs).await?;
+
+    let shard_ordered_qr = session.query(query, (producer_id,)).await?;
 
     let ps = session.prepare(SCYLALDB_INSERT_CONSUMER_OFFSET).await?;
 
-    let mut batch = Batch::default();
+    // Safe to Unlogged since batch will only change one partition.
+    let mut batch = Batch::new(BatchType::Unlogged);
     // Stack buffer will be for Scylladb.
     let mut stack_buffer = [(new_consumer_id.as_ref(), producer_id, 0, 0); MAX_NUM_SHARD];
     let mut heap_buffer = Vec::with_capacity(producer_info.num_shards as usize);
     let mut expected_shard = 0_i16;
+
+    // Adjustement is required when positionning a consumer at the earliest point in time.
+    // Since log query uses the following clause `offset > <last_offset>` this is a strict greater than.
+    // When starting at earliest, in order to capture the earliest event, we need to behind that event (-1). 
+    let adjustement = match initial_log_pos {
+        InitialLogPosition::Latest => 0,
+        InitialLogPosition::Earliest => -1,
+    };
+
     for r in shard_ordered_qr.rows_typed_or_empty::<(ShardId, ShardOffset)>() {
         let (shard_id, offset) = r?;
         if shard_id != expected_shard {
@@ -344,6 +346,7 @@ async fn set_consumer_shard_offsets_at_earliest_or_latest(
                 expected_shard, producer_id
             );
         }
+        let offset = offset + adjustement;
         batch.append_statement(ps.clone());
         heap_buffer.push(offset);
         stack_buffer[expected_shard as usize] =
@@ -364,7 +367,7 @@ async fn set_consumer_shard_offsets_at_earliest_or_latest(
 ///
 /// Initial position in the log when creating a new consumer.
 ///  
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy)]
 pub enum InitialOffsetPolicy {
     Earliest,
     #[default]
@@ -383,6 +386,7 @@ pub async fn get_or_register_consumer(
     let maybe_producer_id =
         get_producer_id_for_consumer(Arc::clone(&session), consumer_id.as_ref()).await?;
     let producer_id = if let Some(producer_id) = maybe_producer_id {
+        info!("consumer {:?} exists with producer {:?} assigned to it", consumer_id.as_ref(), producer_id);
         producer_id
     } else {
         let maybe = get_producer_id_with_least_assigned_consumer(Arc::clone(&session)).await?;
@@ -393,6 +397,7 @@ pub async fn get_or_register_consumer(
             let producer = get_any_producer_info(Arc::clone(&session), None).await?;
             producer.expect("No producer registered").producer_id
         };
+        info!("consumer {:?} does not exists, will try to assign producer {:?}", consumer_id.as_ref(), producer_id);
 
         session
             .query(
@@ -400,6 +405,7 @@ pub async fn get_or_register_consumer(
                 (consumer_id.as_ref(), producer_id),
             )
             .await?;
+        info!("consumer {:?} successfully assigned producer {:?}", consumer_id.as_ref(), producer_id);
         producer_id
     };
 
@@ -412,6 +418,7 @@ pub async fn get_or_register_consumer(
     let shard_offsets = if !shard_offsets.is_empty() {
         shard_offsets
     } else {
+        info!("new consumer {:?} initial offset policy {:?}", consumer_id.as_ref(), initial_offset_policy);
         match initial_offset_policy {
             InitialOffsetPolicy::Earliest => {
                 set_consumer_shard_offsets_at_earliest_or_latest(
@@ -510,7 +517,6 @@ impl ConsumerQueries {
         // Apparently, this is done by default by Scylla, but we make it explicit here since the driver is not quite mature.
         let mut atomic_batch = Batch::new(BatchType::Unlogged);
 
-        atomic_batch.append_statement(self.update_shard_offset_query.clone());
 
         let buffer = shards_old_and_new_offsets
             .iter()
@@ -526,7 +532,12 @@ impl ConsumerQueries {
                 )
             })
             .collect::<Vec<_>>();
-
+        
+        if buffer.is_empty() {
+            return Ok(Ok(()))
+        }
+        
+        atomic_batch.append_statement(self.update_shard_offset_query.clone());
         let query_result = self.session.batch(&atomic_batch, &buffer).await?;
 
         let (success, actual_offset) = query_result
@@ -578,7 +589,7 @@ impl ConsumerQueries {
                 (producer_id, shard_id, period),
             )
             .await
-            .map(|qr| qr.maybe_first_row().map(|_| true).unwrap_or(false))
+            .map(|qr| qr.maybe_first_row().map(|_row| true).unwrap_or(false))
             .map_err(anyhow::Error::new)
     }
 }
@@ -597,17 +608,26 @@ pub async fn spawn_consumer(
     let cq = ConsumerQueries::new(Arc::clone(&session), buffer_capacity as i32).await?;
     let num_shards = consumer_info.shard_offsets.len();
 
-    //let offset_commit_interval = self.offset_commit_interval.unwrap_or(DEFAULT_OFFSET_COMMIT_INTERVAL);
-
-    let mut shard_iterators = Vec::with_capacity(num_shards);
+    // prewarm all the iterators.
+    let mut prewarm_set: JoinSet<anyhow::Result<ShardIterator>> = JoinSet::new();
     for i in 0..num_shards {
-        let shard_iterator = ShardIterator::new(
+        let mut shard_iterator = ShardIterator::new(
             Arc::clone(&session),
             cq.clone(),
             consumer_info.producer_id,
             i as i16,
             consumer_info.shard_offsets[i],
         );
+        prewarm_set.spawn(async move {
+            shard_iterator.warm().await?;
+            Ok(shard_iterator)
+        });
+    }
+
+    let mut shard_iterators = Vec::with_capacity(num_shards);
+
+    while let Some(result) = prewarm_set.join_next().await {
+        let shard_iterator = result??;
         shard_iterators.push(shard_iterator);
     }
 
@@ -638,10 +658,21 @@ pub async fn spawn_consumer(
 ///   ^                                       |
 ///   |                                       |
 ///   +---------------------------------------+
+/// 
 enum ShardIteratorState {
     Empty(ShardOffset),
     Available(ShardOffset, BoxStream<'static, BlockchainEvent>),
     EndOfPeriod(ShardOffset),
+}
+
+impl fmt::Debug for ShardIteratorState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty(arg0) => f.debug_tuple("Empty").field(arg0).finish(),
+            Self::Available(arg0, arg1) => f.debug_tuple("Available").field(arg0).finish(),
+            Self::EndOfPeriod(arg0) => f.debug_tuple("EndOfPeriod").field(arg0).finish(),
+        }
+    }
 }
 
 impl ShardIteratorState {
@@ -652,6 +683,14 @@ impl ShardIteratorState {
             Self::EndOfPeriod(offset) => *offset,
         }
     }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            ShardIteratorState::Empty(_) => true,
+            _ => false
+        }
+    }
+
 }
 
 struct ShardIterator {
@@ -678,11 +717,28 @@ impl ShardIterator {
             inner: ShardIteratorState::Empty(offset),
         }
     }
+
+    ///
+    /// If the state of the shard iterator is [[`ShardIteratorState::Empty`]] it loads the scylladb row iterator, otherwise nothing.
+    async fn warm(&mut self) -> anyhow::Result<()> {
+        if !self.inner.is_empty() {
+            return Ok(())
+        }
+        let last_offset = self.inner.last_offset();
+        let row_stream = self
+            .consumer_queries
+            .get_log_iterator_after_offset(self.producer_id, self.shard_id, last_offset)
+            .await?;
+        let new_state = ShardIteratorState::Available(last_offset, row_stream);
+        self.inner = new_state;
+        Ok(())
+    }
+
     async fn try_next(&mut self) -> anyhow::Result<Option<BlockchainEvent>> {
         let last_offset = self.inner.last_offset();
         let current_state =
             std::mem::replace(&mut self.inner, ShardIteratorState::Empty(last_offset));
-
+        info!("current state: {:?}", current_state);
         //let inner_ptr = self.inner.borrow_mut();
         let (next_state, maybe_to_return) = match current_state {
             ShardIteratorState::Empty(last_offset) => {
@@ -718,7 +774,9 @@ impl ShardIterator {
                 (next_state, None)
             }
         };
+        println!("next state {:?}", next_state);
         let _ = std::mem::replace(&mut self.inner, next_state);
+        println!("new state: {:?}", self.inner);
         Ok(maybe_to_return)
     }
 }
@@ -738,11 +796,13 @@ impl Consumer {
             .cloned()
             .zip(curr_shard_offsets.iter().cloned())
             .collect::<Vec<_>>();
+        info!("Serving consumer: {:?}", consumer_id);
 
         loop {
             for (i, shard_it) in self.shard_iterators.iter_mut().enumerate() {
                 let maybe = shard_it.try_next().await?;
                 if let Some(block_chain_event) = maybe {
+                    info!("sending result");
                     let event_offset = block_chain_event.offset;
                     let geyser_event = match block_chain_event.entry_type {
                         BlockchainEventType::AccountUpdate => {
@@ -759,6 +819,8 @@ impl Consumer {
                     let permit = self.sender.reserve().await?;
                     permit.send(Ok(subscribe_update));
                     curr_shard_offsets[i] = event_offset;
+                } else {
+                    info!("no result to send");
                 }
             }
 
@@ -772,13 +834,18 @@ impl Consumer {
                         .zip(curr_shard_offsets.iter().cloned()),
                 );
 
-                self.consumer_queries
+                let result = self.consumer_queries
                     .update_shard_offsets_for_consumer(
                         consumer_id.as_str(),
                         producer_id,
                         &shards_old_and_new_offsets,
                     )
                     .await?;
+                
+                if let Err(_actual_offset_in_scylla) = result {
+                    anyhow::bail!("two concurrent connections are using the same consumer instance")
+                }
+                info!("Successfully committed offsets for consumer {:?}", consumer_id);
 
                 // Swap old committed offset with new committed offset.
                 shard_offset_last_committed.copy_from_slice(&curr_shard_offsets[..]);

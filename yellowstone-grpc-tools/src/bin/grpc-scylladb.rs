@@ -13,7 +13,7 @@ use {
         prom::run_server as prometheus_run_server,
         scylladb::{
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
-            consumer::{get_or_register_consumer, spawn_consumer, ConsumerInfo},
+            consumer::{get_or_register_consumer, spawn_consumer, ConsumerInfo, InitialOffsetPolicy},
             sink::ScyllaSink,
             types::Transaction,
         },
@@ -86,7 +86,7 @@ impl ArgsAction {
             .build()
             .await?;
         let session = Arc::new(session);
-        let ci = get_or_register_consumer(Arc::clone(&session), "test", Default::default()).await?;
+        let ci = get_or_register_consumer(Arc::clone(&session), "test", InitialOffsetPolicy::Earliest).await?;
         let mut rx = spawn_consumer(Arc::clone(&session), ci, None, None).await?;
 
         loop {
@@ -96,9 +96,12 @@ impl ArgsAction {
                     if result.is_err() {
                         anyhow::bail!("fail!!!")
                     }
-                    let x: SubscribeUpdate = result?;
-                    println!("{:?}", x.update_oneof);
-                    return Ok(())
+                    let x = result?.update_oneof.expect("got none");
+                    match x {
+                        UpdateOneof::Account(acc) => println!("acc, slot {:?}", acc.slot),
+                        UpdateOneof::Transaction(tx) => println!("tx, slot {:?}", tx.slot),
+                        _ => unimplemented!()
+                    }
                 }
             }
         }

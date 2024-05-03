@@ -69,7 +69,6 @@ where
     and producer_id is not null
 primary key (producer_id, consumer_id);
     
-
 create table if not exists solana.producer_info (
     producer_id blob,
     num_shards smallint,
@@ -125,6 +124,24 @@ where
     and period is not null
     and producer_id is not null
 primary key(producer_id, shard_id, offset, period);
+
+
+create materialized view if not exists solana.slot_map
+as
+select
+    slot,
+    producer_id,
+    shard_id,
+    period,
+    offset
+from solana.log
+where
+    slot is not null
+    and producer_id is not null
+    and shard_id is not null
+    and period is not null
+    and offset is not null
+primary key (slot, producer_id, shard_id, period, offset);
 
 
 create type if not exists solana.message_addr_table_lookup (
