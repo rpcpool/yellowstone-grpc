@@ -27,7 +27,9 @@ use {
     },
     tokio::{
         fs,
+        runtime::Builder,
         sync::{broadcast, mpsc, Mutex, Notify, RwLock, Semaphore},
+        task::spawn_blocking,
         time::{sleep, Duration, Instant},
     },
     tokio_stream::wrappers::ReceiverStream,
@@ -787,12 +789,20 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        tokio::spawn(tokio::task::unconstrained(Self::geyser_loop(
-            messages_rx,
-            blocks_meta_tx,
-            broadcast_tx,
-            block_fail_action,
-        )));
+        spawn_blocking(move || {
+            Builder::new_multi_thread()
+                .thread_name_fn(crate::get_thread_name)
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .expect("Failed to create a new runtime for geyser loop")
+                .block_on(Self::geyser_loop(
+                    messages_rx,
+                    blocks_meta_tx,
+                    broadcast_tx,
+                    block_fail_action,
+                ));
+        });
 
         // Run Server
         let shutdown = Arc::new(Notify::new());
