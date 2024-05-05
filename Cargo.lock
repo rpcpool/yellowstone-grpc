@@ -5210,7 +5210,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.14.1+solana.1.17.33"
+version = "1.14.2+solana.1.17.33"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
