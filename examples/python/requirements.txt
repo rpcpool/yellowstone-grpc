@@ -1,0 +1,4 @@
+click==8.1.7
+grpcio==1.63.0
+grpcio-tools==1.63.0
+protobuf==5.26.1
