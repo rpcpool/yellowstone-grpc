@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+import public "geyser.proto";
+
+
+option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+
+package yellowstone.log;
+
+service YellowstoneLog {
+  rpc Consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+
+enum InitialOffsetPolicy {
+  EARLIEST = 0;
+  LATEST = 1;
+  SLOT = 2;
+}
+
+enum EventSubscriptionPolicy {
+  ACCOUNT_UPDATE_ONLY = 0;
+  TRANSACTION_ONLY = 1;
+  BOTH = 2;
+}
+
+message ConsumeRequest {
+  optional string consumer_id = 1;
+  InitialOffsetPolicy initial_offset_policy = 2;
+  optional int64 at_slot = 3;
+  EventSubscriptionPolicy event_subscription_policy = 4;
+  optional AccountUpdateEventFilter account_update_event_filter = 5;
+  optional TransactionEventFilter tx_event_filter = 6;
+}
+
+message AccountUpdateEventFilter {
+  repeated bytes pubkeys = 1;
+  repeated bytes owners = 2;
+}
+
+message TransactionEventFilter {
+  repeated bytes account_keys = 1;
+}

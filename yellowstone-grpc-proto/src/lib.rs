@@ -1,5 +1,11 @@
 #![allow(clippy::large_enum_variant)]
 
+pub mod yellowstone {
+    pub mod log {
+        tonic::include_proto!("yellowstone.log");
+    }
+}
+
 pub mod geyser {
     tonic::include_proto!("geyser");
 }

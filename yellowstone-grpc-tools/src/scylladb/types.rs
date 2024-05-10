@@ -1,5 +1,5 @@
 use {
-    anyhow::anyhow,
+    anyhow::{anyhow, Ok},
     deepsize::DeepSizeOf,
     scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
@@ -7,64 +7,29 @@ use {
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
     },
-    std::{collections::HashMap, iter::repeat},
+    std::iter::repeat,
     yellowstone_grpc_proto::{
-        geyser::{SubscribeUpdateAccount, SubscribeUpdateTransaction},
-        solana::storage::confirmed_block,
+        geyser::{
+            SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+        solana::storage::confirmed_block::{self, CompiledInstruction},
     },
 };
 
+pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
+
+pub type ProgramId = [u8; 32];
 
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
-
 pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machine
 
-#[derive(SerializeRow, Clone, Debug, FromRow)]
-pub(crate) struct ShardStatistics {
-    pub(crate) shard_id: ShardId,
-    pub(crate) period: ShardPeriod,
-    pub(crate) producer_id: ProducerId,
-    pub(crate) offset: ShardOffset,
-    pub(crate) min_slot: i64,
-    pub(crate) max_slot: i64,
-    pub(crate) total_events: i64,
-    pub(crate) slot_event_counter: HashMap<i64, i32>,
-}
+pub const MIN_PROCUDER: ProducerId = [0x00];
+pub const MAX_PRODUCER: ProducerId = [0xFF];
 
-#[derive(SerializeRow, Clone, Debug, FromRow)]
-pub(crate) struct ProducerInfo {
-    pub(crate) producer_id: ProducerId,
-    pub(crate) min_offset_per_shard: HashMap<ShardId, ShardOffset>,
-}
-
-impl ShardStatistics {
-    pub(crate) fn from_slot_event_counter(
-        shard_id: ShardId,
-        period: ShardPeriod,
-        producer_id: ProducerId,
-        offset: ShardOffset,
-        counter_map: &HashMap<i64, i32>,
-    ) -> Self {
-        let min_slot = counter_map.keys().min().copied().unwrap_or(-1);
-        let max_slot = counter_map.keys().max().copied().unwrap_or(-1);
-        let total_events: i64 = counter_map.values().map(|cnt| *cnt as i64).sum();
-        ShardStatistics {
-            shard_id,
-            period,
-            producer_id,
-            offset,
-            min_slot,
-            max_slot,
-            total_events,
-            slot_event_counter: counter_map.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, PartialOrd, Copy, DeepSizeOf)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
 pub enum BlockchainEventType {
     AccountUpdate = 0,
     NewTransaction = 1,
@@ -122,30 +87,32 @@ pub struct BlockchainEvent {
     pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
-    pub entry_type: BlockchainEventType,
+    pub event_type: BlockchainEventType,
 
     // AccountUpdate
-    pub pubkey: Pubkey,
-    pub lamports: i64,
-    pub owner: Pubkey,
-    pub executable: bool,
-    pub rent_epoch: i64,
-    pub write_version: i64,
-    pub data: Vec<u8>,
+    pub pubkey: Option<Pubkey>,
+    pub lamports: Option<i64>,
+    pub owner: Option<Pubkey>,
+    pub executable: Option<bool>,
+    pub rent_epoch: Option<i64>,
+    pub write_version: Option<i64>,
+    pub data: Option<Vec<u8>>,
     pub txn_signature: Option<Vec<u8>>,
 
     // Transaction
-    pub signature: Vec<u8>,
-    pub signatures: Vec<Vec<u8>>,
-    pub num_required_signatures: i32,
-    pub num_readonly_signed_accounts: i32,
-    pub num_readonly_unsigned_accounts: i32,
-    pub account_keys: Vec<Vec<u8>>,
-    pub recent_blockhash: Vec<u8>,
-    pub instructions: Vec<CompiledInstr>,
-    pub versioned: bool,
-    pub address_table_lookups: Vec<MessageAddrTableLookup>,
-    pub meta: TransactionMeta,
+    pub signature: Option<Vec<u8>>,
+    pub signatures: Option<Vec<Vec<u8>>>,
+    pub num_required_signatures: Option<i32>,
+    pub num_readonly_signed_accounts: Option<i32>,
+    pub num_readonly_unsigned_accounts: Option<i32>,
+    pub account_keys: Option<Vec<Vec<u8>>>,
+    pub recent_blockhash: Option<Vec<u8>>,
+    pub instructions: Option<Vec<CompiledInstr>>,
+    pub versioned: Option<bool>,
+    pub address_table_lookups: Option<Vec<MessageAddrTableLookup>>,
+    pub meta: Option<TransactionMeta>,
+    pub is_vote: Option<bool>,
+    pub tx_index: Option<i64>,
 }
 
 type Pubkey = [u8; 32];
@@ -194,6 +161,17 @@ impl From<confirmed_block::MessageAddressTableLookup> for MessageAddrTableLookup
     }
 }
 
+impl From<MessageAddrTableLookup> for confirmed_block::MessageAddressTableLookup {
+    fn from(msg: MessageAddrTableLookup) -> Self {
+        // Create a new instance of AddressLookup
+        confirmed_block::MessageAddressTableLookup {
+            account_key: msg.account_key,
+            writable_indexes: msg.writable_indexes,
+            readonly_indexes: msg.readonly_indexes,
+        }
+    }
+}
+
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
 pub struct CompiledInstr {
@@ -220,6 +198,18 @@ impl From<confirmed_block::CompiledInstruction> for CompiledInstr {
     }
 }
 
+impl TryFrom<CompiledInstr> for confirmed_block::CompiledInstruction {
+    type Error = anyhow::Error;
+
+    fn try_from(value: CompiledInstr) -> Result<Self, Self::Error> {
+        Ok(CompiledInstruction {
+            program_id_index: value.program_id_index.try_into()?,
+            accounts: value.accounts,
+            data: value.data,
+        })
+    }
+}
+
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
 pub struct InnerInstr {
@@ -237,6 +227,19 @@ impl From<confirmed_block::InnerInstruction> for InnerInstr {
             data: value.data,
             stack_height: value.stack_height.map(|x| x.into()),
         }
+    }
+}
+
+impl TryFrom<InnerInstr> for confirmed_block::InnerInstruction {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InnerInstr) -> Result<Self, Self::Error> {
+        Ok(confirmed_block::InnerInstruction {
+            program_id_index: value.program_id_index.try_into()?,
+            accounts: value.accounts,
+            data: value.data,
+            stack_height: value.stack_height.map(|x| x.try_into()).transpose()?,
+        })
     }
 }
 
@@ -261,6 +264,17 @@ impl TryFrom<confirmed_block::InnerInstructions> for InnerInstrs {
     }
 }
 
+impl TryFrom<InnerInstrs> for confirmed_block::InnerInstructions {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InnerInstrs) -> Result<Self, Self::Error> {
+        Ok(confirmed_block::InnerInstructions {
+            index: value.index.try_into()?,
+            instructions: try_collect(value.instructions)?,
+        })
+    }
+}
+
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
 pub struct UiTokenAmount {
@@ -281,6 +295,19 @@ impl From<confirmed_block::UiTokenAmount> for UiTokenAmount {
     }
 }
 
+impl TryFrom<UiTokenAmount> for confirmed_block::UiTokenAmount {
+    type Error = anyhow::Error;
+
+    fn try_from(value: UiTokenAmount) -> Result<Self, Self::Error> {
+        Ok(confirmed_block::UiTokenAmount {
+            ui_amount: value.ui_amount,
+            decimals: value.decimals.try_into()?,
+            amount: value.amount,
+            ui_amount_string: value.ui_amount_string,
+        })
+    }
+}
+
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
 pub struct TxTokenBalance {
@@ -288,6 +315,7 @@ pub struct TxTokenBalance {
     pub mint: String,
     pub ui_token_amount: Option<UiTokenAmount>,
     pub owner: String,
+    pub program_id: String,
 }
 
 impl From<confirmed_block::TokenBalance> for TxTokenBalance {
@@ -295,9 +323,24 @@ impl From<confirmed_block::TokenBalance> for TxTokenBalance {
         TxTokenBalance {
             account_index: value.account_index.into(),
             mint: value.mint,
-            ui_token_amount: value.ui_token_amount.map(|x| x.into()),
+            ui_token_amount: value.ui_token_amount.map(Into::into),
             owner: value.owner,
+            program_id: value.program_id,
         }
+    }
+}
+
+impl TryFrom<TxTokenBalance> for confirmed_block::TokenBalance {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TxTokenBalance) -> Result<Self, Self::Error> {
+        Ok(confirmed_block::TokenBalance {
+            account_index: value.account_index.try_into()?,
+            mint: value.mint,
+            ui_token_amount: value.ui_token_amount.map(TryInto::try_into).transpose()?,
+            owner: value.owner,
+            program_id: value.program_id,
+        })
     }
 }
 
@@ -324,6 +367,49 @@ impl TryFrom<confirmed_block::Reward> for Reward {
     }
 }
 
+impl TryFrom<Reward> for confirmed_block::Reward {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Reward) -> Result<Self, Self::Error> {
+        Ok(confirmed_block::Reward {
+            pubkey: value.pubkey,
+            lamports: value.lamports,
+            post_balance: value.post_balance.try_into()?,
+            reward_type: value.reward_type,
+            commission: value.commission,
+        })
+    }
+}
+
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[scylla(flavor = "match_by_name")]
+pub struct ReturnData {
+    pub program_id: ProgramId,
+    pub data: Vec<u8>,
+}
+
+impl TryFrom<confirmed_block::ReturnData> for ReturnData {
+    type Error = anyhow::Error;
+    fn try_from(value: confirmed_block::ReturnData) -> Result<Self, Self::Error> {
+        Ok(ReturnData {
+            program_id: value
+                .program_id
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?,
+            data: value.data,
+        })
+    }
+}
+
+impl From<ReturnData> for confirmed_block::ReturnData {
+    fn from(value: ReturnData) -> Self {
+        confirmed_block::ReturnData {
+            program_id: value.program_id.into(),
+            data: value.data,
+        }
+    }
+}
+
 #[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
 #[scylla(flavor = "match_by_name")]
 pub struct TransactionMeta {
@@ -331,11 +417,15 @@ pub struct TransactionMeta {
     pub fee: i64,
     pub pre_balances: Vec<i64>,
     pub post_balances: Vec<i64>,
-    pub inner_instructions: Vec<InnerInstrs>,
-    pub log_messages: Vec<String>,
+    pub inner_instructions: Option<Vec<InnerInstrs>>,
+    pub log_messages: Option<Vec<String>>,
     pub pre_token_balances: Vec<TxTokenBalance>,
     pub post_token_balances: Vec<TxTokenBalance>,
     pub rewards: Vec<Reward>,
+    pub loaded_writable_addresses: Vec<Pubkey>,
+    pub loaded_readonly_addresses: Vec<Pubkey>,
+    pub return_data: Option<ReturnData>,
+    pub compute_units_consumed: Option<i64>,
 }
 
 impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
@@ -363,21 +453,89 @@ impl TryFrom<confirmed_block::TransactionStatusMeta> for TransactionMeta {
 
         let rewards: Vec<Reward> = try_collect(status_meta.rewards)?;
 
+        let loaded_readonly_addresses: Vec<Pubkey> =
+            try_collect(status_meta.loaded_readonly_addresses)
+                .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
+        let loaded_writable_addresses = try_collect(status_meta.loaded_writable_addresses)
+            .map_err(|e| anyhow::anyhow!("Inavlid readonly address, got: {:?}", e))?;
+
+        let return_data = status_meta
+            .return_data
+            .map(|rd| rd.try_into())
+            .transpose()?;
+        let compute_units_consumed = status_meta
+            .compute_units_consumed
+            .map(|cu| cu.try_into())
+            .transpose()?;
+
         // Create a new TransactionMeta instance
         let transaction_meta = TransactionMeta {
             error,
             fee,
             pre_balances,
             post_balances,
-            inner_instructions,
-            log_messages,
+            inner_instructions: if status_meta.inner_instructions_none {
+                Some(inner_instructions)
+            } else {
+                None
+            },
+            log_messages: if status_meta.log_messages_none {
+                Some(log_messages)
+            } else {
+                None
+            },
             pre_token_balances,
             post_token_balances,
             rewards,
+            loaded_readonly_addresses,
+            loaded_writable_addresses,
+            return_data,
+            compute_units_consumed,
         };
 
         // Return the new TransactionMeta instance
         Ok(transaction_meta)
+    }
+}
+
+impl TryFrom<TransactionMeta> for confirmed_block::TransactionStatusMeta {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TransactionMeta) -> Result<Self, Self::Error> {
+        let inner_instructions_none = value.inner_instructions.is_none();
+        let log_messages_none = value.log_messages.is_none();
+        let return_data_none = value.return_data.is_none();
+        Ok(confirmed_block::TransactionStatusMeta {
+            err: value
+                .error
+                .map(|bindata| confirmed_block::TransactionError { err: bindata }),
+            fee: value.fee.try_into()?,
+            pre_balances: try_collect(value.pre_balances)?,
+            post_balances: try_collect(value.post_balances)?,
+            inner_instructions: value
+                .inner_instructions
+                .map(try_collect)
+                .transpose()?
+                .unwrap_or(Vec::new()),
+            inner_instructions_none,
+            log_messages: value
+                .log_messages
+                .map(try_collect)
+                .transpose()?
+                .unwrap_or(Vec::new()),
+            log_messages_none,
+            pre_token_balances: try_collect(value.pre_token_balances)?,
+            post_token_balances: try_collect(value.post_token_balances)?,
+            rewards: try_collect(value.rewards)?,
+            loaded_writable_addresses: try_collect(value.loaded_writable_addresses)?,
+            loaded_readonly_addresses: try_collect(value.loaded_readonly_addresses)?,
+            return_data: value.return_data.map(Into::into),
+            return_data_none,
+            compute_units_consumed: value
+                .compute_units_consumed
+                .map(TryInto::try_into)
+                .transpose()?,
+        })
     }
 }
 
@@ -395,6 +553,8 @@ pub struct Transaction {
     pub versioned: bool,
     pub address_table_lookups: Vec<MessageAddrTableLookup>,
     pub meta: TransactionMeta,
+    pub is_vote: bool,
+    pub tx_index: i64,
 }
 
 impl TryFrom<SubscribeUpdateTransaction> for Transaction {
@@ -440,9 +600,47 @@ impl TryFrom<SubscribeUpdateTransaction> for Transaction {
                 .map(|atl| atl.into())
                 .collect(),
             meta: meta.try_into()?,
+            is_vote: val_tx.is_vote,
+            tx_index: val_tx.index as i64,
         };
 
         Ok(res)
+    }
+}
+
+impl TryFrom<Transaction> for SubscribeUpdateTransaction {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Transaction) -> Result<Self, Self::Error> {
+        let ret = SubscribeUpdateTransaction {
+            transaction: Some(SubscribeUpdateTransactionInfo {
+                signature: value.signature,
+                is_vote: value.is_vote,
+                transaction: Some(confirmed_block::Transaction {
+                    signatures: value.signatures,
+                    message: Some(confirmed_block::Message {
+                        header: Some(confirmed_block::MessageHeader {
+                            num_required_signatures: value.num_required_signatures.try_into()?,
+                            num_readonly_signed_accounts: value
+                                .num_readonly_signed_accounts
+                                .try_into()?,
+                            num_readonly_unsigned_accounts: value
+                                .num_readonly_unsigned_accounts
+                                .try_into()?,
+                        }),
+                        account_keys: value.account_keys,
+                        recent_blockhash: value.recent_blockhash,
+                        instructions: try_collect(value.instructions)?,
+                        versioned: value.versioned,
+                        address_table_lookups: try_collect(value.address_table_lookups)?,
+                    }),
+                }),
+                meta: Some(value.meta.try_into()).transpose()?,
+                index: value.tx_index.try_into()?,
+            }),
+            slot: value.slot.try_into()?,
+        };
+        Ok(ret)
     }
 }
 
@@ -503,14 +701,14 @@ impl AccountUpdate {
             producer_id,
             offset,
             slot: self.slot,
-            entry_type: BlockchainEventType::AccountUpdate,
-            pubkey: self.pubkey,
-            lamports: self.lamports,
-            owner: self.owner,
-            executable: self.executable,
-            rent_epoch: self.rent_epoch,
-            write_version: self.write_version,
-            data: self.data,
+            event_type: BlockchainEventType::AccountUpdate,
+            pubkey: Some(self.pubkey),
+            lamports: Some(self.lamports),
+            owner: Some(self.owner),
+            executable: Some(self.executable),
+            rent_epoch: Some(self.rent_epoch),
+            write_version: Some(self.write_version),
+            data: Some(self.data),
             txn_signature: self.txn_signature,
             signature: Default::default(),
             signatures: Default::default(),
@@ -523,6 +721,8 @@ impl AccountUpdate {
             versioned: Default::default(),
             address_table_lookups: Default::default(),
             meta: Default::default(),
+            is_vote: Default::default(),
+            tx_index: Default::default(),
         }
     }
 }
@@ -574,7 +774,7 @@ impl Transaction {
             producer_id,
             offset,
             slot: self.slot,
-            entry_type: BlockchainEventType::NewTransaction,
+            event_type: BlockchainEventType::NewTransaction,
 
             pubkey: Default::default(),
             lamports: Default::default(),
@@ -585,17 +785,19 @@ impl Transaction {
             data: Default::default(),
             txn_signature: Default::default(),
 
-            signature: self.signature,
-            signatures: self.signatures,
-            num_required_signatures: self.num_required_signatures,
-            num_readonly_signed_accounts: self.num_readonly_signed_accounts,
-            num_readonly_unsigned_accounts: self.num_readonly_unsigned_accounts,
-            account_keys: self.account_keys,
-            recent_blockhash: self.recent_blockhash,
-            instructions: self.instructions,
-            versioned: self.versioned,
-            address_table_lookups: self.address_table_lookups,
-            meta: self.meta,
+            signature: Some(self.signature),
+            signatures: Some(self.signatures),
+            num_required_signatures: Some(self.num_required_signatures),
+            num_readonly_signed_accounts: Some(self.num_readonly_signed_accounts),
+            num_readonly_unsigned_accounts: Some(self.num_readonly_unsigned_accounts),
+            account_keys: Some(self.account_keys),
+            recent_blockhash: Some(self.recent_blockhash),
+            instructions: Some(self.instructions),
+            versioned: Some(self.versioned),
+            address_table_lookups: Some(self.address_table_lookups),
+            meta: Some(self.meta),
+            is_vote: Some(self.is_vote),
+            tx_index: Some(self.tx_index),
         }
     }
 }
@@ -608,7 +810,7 @@ pub struct ShardedAccountUpdate {
     pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
-    pub entry_type: BlockchainEventType,
+    pub event_type: BlockchainEventType,
 
     // AccountUpdate
     pub pubkey: Pubkey,
@@ -629,7 +831,7 @@ pub struct ShardedTransaction {
     pub producer_id: ProducerId,
     pub offset: ShardOffset,
     pub slot: i64,
-    pub entry_type: BlockchainEventType,
+    pub event_type: BlockchainEventType,
 
     // Transaction
     pub signature: Vec<u8>,
@@ -643,6 +845,8 @@ pub struct ShardedTransaction {
     pub versioned: bool,
     pub address_table_lookups: Vec<MessageAddrTableLookup>,
     pub meta: TransactionMeta,
+    pub is_vote: bool,
+    pub tx_index: i64,
 }
 
 // Implement Into<ShardedAccountUpdate> for BlockchainEvent
@@ -653,15 +857,15 @@ impl From<BlockchainEvent> for ShardedAccountUpdate {
             period: val.period,
             producer_id: val.producer_id,
             offset: val.offset,
+            event_type: val.event_type,
             slot: val.slot,
-            entry_type: val.entry_type,
-            pubkey: val.pubkey,
-            lamports: val.lamports,
-            owner: val.owner,
-            executable: val.executable,
-            rent_epoch: val.rent_epoch,
-            write_version: val.write_version,
-            data: val.data,
+            pubkey: val.pubkey.expect("pubkey is none"),
+            lamports: val.lamports.expect("lamports is none"),
+            owner: val.owner.expect("owner is none"),
+            executable: val.executable.expect("executable is none"),
+            rent_epoch: val.rent_epoch.expect("rent_epch is none"),
+            write_version: val.write_version.expect("write_version is none"),
+            data: val.data.expect("data is none"),
             txn_signature: val.txn_signature,
         }
     }
@@ -675,19 +879,135 @@ impl From<BlockchainEvent> for ShardedTransaction {
             period: val.period,
             producer_id: val.producer_id,
             offset: val.offset,
+            event_type: val.event_type,
             slot: val.slot,
-            entry_type: val.entry_type,
-            signature: val.signature,
-            signatures: val.signatures,
-            num_required_signatures: val.num_required_signatures,
-            num_readonly_signed_accounts: val.num_readonly_signed_accounts,
-            num_readonly_unsigned_accounts: val.num_readonly_unsigned_accounts,
-            account_keys: val.account_keys,
-            recent_blockhash: val.recent_blockhash,
-            instructions: val.instructions,
-            versioned: val.versioned,
-            address_table_lookups: val.address_table_lookups,
-            meta: val.meta,
+            signature: val.signature.expect("signature is none"),
+            signatures: val.signatures.expect("signatures is none"),
+            num_required_signatures: val
+                .num_required_signatures
+                .expect("num_required_signature is none"),
+            num_readonly_signed_accounts: val
+                .num_readonly_signed_accounts
+                .expect("num_readonly_signed_accounts is none"),
+            num_readonly_unsigned_accounts: val
+                .num_readonly_unsigned_accounts
+                .expect("num_readonly_unsigned_accounts is none"),
+            account_keys: val.account_keys.expect("account_keys is none"),
+            recent_blockhash: val.recent_blockhash.expect("recent_blockhash is none"),
+            instructions: val.instructions.expect("instructions is none"),
+            versioned: val.versioned.expect("versioned is none"),
+            address_table_lookups: val
+                .address_table_lookups
+                .expect("address_table_lookups is none"),
+            meta: val.meta.expect("meta is none"),
+            is_vote: val.is_vote.expect("is_vote is none"),
+            tx_index: val.tx_index.expect("tx_index is none"),
         }
+    }
+}
+
+impl From<BlockchainEvent> for Transaction {
+    fn from(val: BlockchainEvent) -> Self {
+        Transaction {
+            slot: val.slot,
+            signature: val.signature.expect("signature is none"),
+            signatures: val.signatures.expect("signatures is none"),
+            num_required_signatures: val
+                .num_required_signatures
+                .expect("num_required_signature is none"),
+            num_readonly_signed_accounts: val
+                .num_readonly_signed_accounts
+                .expect("num_readonly_signed_accounts is none"),
+            num_readonly_unsigned_accounts: val
+                .num_readonly_unsigned_accounts
+                .expect("num_readonly_unsigned_accounts is none"),
+            account_keys: val.account_keys.expect("account_keys is none"),
+            recent_blockhash: val.recent_blockhash.expect("recent_blockhash is none"),
+            instructions: val.instructions.expect("instructions is none"),
+            versioned: val.versioned.expect("versioned is none"),
+            address_table_lookups: val
+                .address_table_lookups
+                .expect("address_table_lookups is none"),
+            meta: val.meta.expect("meta is none"),
+            is_vote: val.is_vote.expect("is_vote is none"),
+            tx_index: val.tx_index.expect("tx_index is none"),
+        }
+    }
+}
+
+impl From<BlockchainEvent> for AccountUpdate {
+    fn from(val: BlockchainEvent) -> Self {
+        AccountUpdate {
+            slot: val.slot,
+            pubkey: val.pubkey.expect("pubkey is none"),
+            lamports: val.lamports.expect("lamports is none"),
+            owner: val.owner.expect("owner is none"),
+            executable: val.executable.expect("executable is none"),
+            rent_epoch: val.rent_epoch.expect("rent_epch is none"),
+            write_version: val.write_version.expect("write_version is none"),
+            data: val.data.expect("data is none"),
+            txn_signature: val.txn_signature,
+        }
+    }
+}
+
+#[derive(FromRow, Debug, Clone)]
+pub struct ProducerInfo {
+    pub producer_id: ProducerId,
+    #[allow(dead_code)]
+    pub num_shards: ShardId,
+    #[allow(dead_code)]
+    pub is_active: bool,
+}
+
+impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
+    type Error = anyhow::Error;
+
+    fn try_from(acc_update: AccountUpdate) -> anyhow::Result<Self> {
+        let _pubkey_bytes: [u8; 32] = acc_update.pubkey;
+        let _owner_bytes: [u8; 32] = acc_update.owner;
+
+        // Create the SubscribeUpdateAccount instance
+        let subscribe_update_account = SubscribeUpdateAccount {
+            slot: acc_update.slot as u64,
+            account: Some(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateAccountInfo {
+                    pubkey: Vec::from(acc_update.pubkey),
+                    lamports: acc_update.lamports as u64,
+                    owner: Vec::from(acc_update.owner),
+                    executable: acc_update.executable,
+                    rent_epoch: acc_update.rent_epoch as u64,
+                    write_version: acc_update.write_version as u64,
+                    data: acc_update.data,
+                    txn_signature: acc_update.txn_signature,
+                },
+            ),
+            is_startup: false,
+        };
+
+        Ok(subscribe_update_account)
+    }
+}
+
+impl TryFrom<BlockchainEvent> for SubscribeUpdateAccount {
+    type Error = anyhow::Error;
+    fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
+        if value.event_type != BlockchainEventType::AccountUpdate {
+            anyhow::bail!("BlockchainEvent is not an AccountUpdate");
+        }
+        let ret: AccountUpdate = value.into();
+        ret.try_into()
+    }
+}
+
+impl TryFrom<BlockchainEvent> for SubscribeUpdateTransaction {
+    type Error = anyhow::Error;
+    fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
+        anyhow::ensure!(
+            value.event_type != BlockchainEventType::NewTransaction,
+            "BlockchainEvent is not a Transaction"
+        );
+        let ret: Transaction = value.into();
+        ret.try_into()
     }
 }
