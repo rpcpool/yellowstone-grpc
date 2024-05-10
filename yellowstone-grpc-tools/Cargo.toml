@@ -48,8 +48,10 @@ tonic = { workspace = true, features = ["gzip"] }
 tonic-health = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid = { workspace = true, optional = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
+
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
@@ -61,6 +63,7 @@ rdkafka = { workspace = true, features = ["sasl", "ssl"], optional = true }
 rdkafka = { workspace = true, features = ["sasl", "ssl-vendored"], optional = true }
 
 [build-dependencies]
+project-root = "0.2.2"
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
@@ -70,4 +73,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid"]
