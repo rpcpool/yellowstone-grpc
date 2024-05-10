@@ -5,23 +5,15 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            AccountUpdate, ProducerId, ShardId, ShardOffset, ShardedAccountUpdate,
-            ShardedTransaction, Transaction, SHARD_OFFSET_MODULO,
+            AccountUpdate, ProducerId, ProducerInfo, ShardId, ShardOffset, ShardedAccountUpdate, ShardedTransaction, Transaction, SHARD_OFFSET_MODULO
         },
-    },
-    deepsize::DeepSizeOf,
-    scylla::{
-        batch::{Batch, BatchType},
-        frame::Compression,
-        serialize::{
+    }, deepsize::DeepSizeOf, local_ip_address::{list_afinet_netifas, local_ip}, scylla::{
+        batch::{Batch, BatchType}, cql_to_rust::{FromCqlValError, FromRowError}, frame::Compression, serialize::{
             row::{RowSerializationContext, SerializeRow},
             RowWriter,
-        },
-        Session, SessionBuilder,
-    },
-    std::{sync::Arc, time::Duration},
-    tokio::{task::JoinHandle, time::Instant},
-    tracing::{info, warn},
+        }, FromRow, Session, SessionBuilder
+    }, std::{net::IpAddr, sync::Arc, time::Duration}, tokio::{task::JoinHandle, time::Instant}, tracing::{info, warn}, uuid::Uuid,
+    scylla::cql_to_rust::FromCqlVal
 };
 
 const WARNING_SCYLLADB_LATENCY_THRESHOLD: Duration = Duration::from_millis(50);
@@ -29,6 +21,43 @@ const WARNING_SCYLLADB_LATENCY_THRESHOLD: Duration = Duration::from_millis(50);
 const DEFAULT_SHARD_MAX_BUFFER_CAPACITY: usize = 15;
 
 const SHARD_COUNT: usize = 64;
+
+/// Untyped API in scylla will soon be deprecated, this is why we need to implement our own deser logic to
+/// only read the first column returned by a light weight transaction.
+struct LwtSuccess(bool);
+
+impl FromRow for LwtSuccess {
+    fn from_row(row: scylla::frame::response::result::Row) -> Result<Self, scylla::cql_to_rust::FromRowError> {
+        row.columns
+            .first()
+            .ok_or(FromRowError::BadCqlVal { err: FromCqlValError::ValIsNull,  column: 0 })
+            .and_then(|cqlval| 
+                bool::from_cql(cqlval.to_owned())
+                    .map_err(|err|FromRowError::BadCqlVal { err: FromCqlValError::BadCqlType, column: 0 })
+            )
+            .map(LwtSuccess)
+    }
+}
+
+const DROP_PRODUCER_LOCK: &str = r###"
+    DELETE FROM producer_lock
+    WHERE producer_id = ?
+    IF lock_id = ?
+"###;
+
+const TRY_ACQUIRE_PRODUCER_LOCK: &str = r###"
+    INSERT INTO producer_lock (producer_id, lock_id, ifname, ipv4, created_at)
+    VALUES (?, ?, ?, ?, currentTimestamp())
+    IF NOT EXISTS
+"###;
+
+const GET_PRODUCER_INFO_BY_ID: &str = r###"
+    SELECT
+        producer_id,
+        num_shards
+    FROM producer_info
+    WHERE producer_id = ?
+"###;
 
 const SCYLLADB_COMMIT_PRODUCER_PERIOD: &str = r###"
     INSERT INTO producer_period_commit_log (
@@ -95,6 +124,7 @@ pub struct ScyllaSinkConfig {
     pub batch_size_kb_limit: usize,
     pub linger: Duration,
     pub keyspace: String,
+    pub ifname: Option<String>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -339,6 +369,7 @@ impl Shard {
 
 pub struct ScyllaSink {
     router_handle: tokio::sync::mpsc::Sender<ClientCommand>,
+    producer_lock: ProducerLock,
 }
 
 #[derive(Debug)]
@@ -457,6 +488,76 @@ fn spawn_round_robin(
     sender
 }
 
+
+async fn get_producer_info_by_id(session: Arc<Session>, producer_id: ProducerId) -> anyhow::Result<Option<ProducerInfo>> {
+    session
+        .query(GET_PRODUCER_INFO_BY_ID, (producer_id,))
+        .await?
+        .maybe_first_row_typed::<ProducerInfo>()
+        .map_err(anyhow::Error::new)
+}
+
+struct ProducerLock {
+    session: Arc<Session>,
+    lock_id: String,
+    producer_id: ProducerId,
+}
+
+impl ProducerLock {
+
+    async fn release(self) -> anyhow::Result<()> {
+        self.session
+            .query(DROP_PRODUCER_LOCK, (self.producer_id, self.lock_id))
+            .await
+            .map(|_query_result| ())
+            .map_err(anyhow::Error::new)
+    }
+}
+
+async fn try_acquire_lock(session: Arc<Session>, producer_id: ProducerId, ifname: Option<String>) -> anyhow::Result<ProducerLock> {
+    let network_interfaces = list_afinet_netifas()?;
+
+    let (ifname, ipaddr) = if let Some(ifname) = ifname { 
+
+        if let Some((_, ipaddr)) = network_interfaces.iter().find(|(name, ipaddr)| *name == ifname && matches!(ipaddr, IpAddr::V4(_))) {
+            (ifname, ipaddr.to_string())
+        } else {
+            anyhow::bail!("Found not interface named {}", ifname);
+        }
+    } else {
+        let ipaddr = local_ip()?;
+        if !ipaddr.is_ipv4() {
+            anyhow::bail!("ipv6 not support for producer lock info.");
+        }
+        if let Some((ifname, _)) = network_interfaces
+            .iter()
+            .find(|(_, ipaddr2)| ipaddr == *ipaddr2) { 
+            (ifname.to_owned(), ipaddr.to_string())
+        } else {
+            anyhow::bail!("Found not interface matching ip {}", ipaddr);
+        }
+    };
+
+    let lock_id = Uuid::new_v4().to_string();
+    let qr = session
+        .query(TRY_ACQUIRE_PRODUCER_LOCK, (producer_id, lock_id.clone(), ifname, ipaddr))
+        .await?;
+    let lwt_success = qr.single_row_typed::<LwtSuccess>()?;
+
+    if let LwtSuccess(true) = lwt_success {
+        let lock = ProducerLock {
+            session: Arc::clone(&session),
+            lock_id,
+            producer_id: producer_id
+        };
+        Ok(lock)
+    } else {
+        anyhow::bail!("Failed to lock producer {:?}, you may need to release it manually", producer_id);
+    }
+    
+}   
+
+
 impl ScyllaSink {
     pub async fn new(
         config: ScyllaSinkConfig,
@@ -476,7 +577,16 @@ impl ScyllaSink {
 
         let session = Arc::new(session);
 
-        let shard_count = SHARD_COUNT;
+
+        let producer_info = get_producer_info_by_id(Arc::clone(&session), producer_id)
+            .await?
+            .expect(format!("producer {:?} has not yet been registered", producer_id).as_str());
+    
+
+        let producer_lock = try_acquire_lock(Arc::clone(&session), producer_id, config.ifname.to_owned()).await?;
+        
+
+        let shard_count = producer_info.num_shards as usize;
 
         let mut sharders = vec![];
 
@@ -503,7 +613,12 @@ impl ScyllaSink {
 
         Ok(ScyllaSink {
             router_handle: sender,
+            producer_lock,
         })
+    }
+
+    pub async fn shutdown(self) -> anyhow::Result<()> {
+        self.producer_lock.release().await
     }
 
     async fn inner_log(&mut self, cmd: ClientCommand) -> anyhow::Result<()> {

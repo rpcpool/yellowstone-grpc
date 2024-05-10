@@ -213,7 +213,7 @@ impl ArgsAction {
                 };
             }
         }
-        Ok(())
+        sink.shutdown().await
     }
 }
 
