@@ -35,6 +35,7 @@ google-cloud-pubsub = { workspace = true, optional = true }
 hyper = { workspace = true }
 json5 = { workspace = true }
 lazy_static = { workspace = true }
+local-ip-address = { workspace = true, optional = true }
 prometheus = { workspace = true }
 scylla = { workspace = true, optional = true }
 serde = { workspace = true }
@@ -73,4 +74,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize", "uuid"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address"]

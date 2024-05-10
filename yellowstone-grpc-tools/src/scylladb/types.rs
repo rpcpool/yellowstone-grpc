@@ -956,8 +956,6 @@ pub struct ProducerInfo {
     pub producer_id: ProducerId,
     #[allow(dead_code)]
     pub num_shards: ShardId,
-    #[allow(dead_code)]
-    pub is_active: bool,
 }
 
 impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {

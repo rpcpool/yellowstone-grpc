@@ -113,8 +113,7 @@ pub const INSERT_CONSUMER_PRODUCER_MAPPING: &str = r###"
 pub const GET_PRODUCER_INFO_BY_ID_OR_ANY: &str = r###"
     SELECT
         producer_id,
-        num_shards,
-        is_active
+        num_shards
     FROM producer_info
     WHERE producer_id >= ? and producer_id <= ?
     LIMIT 1

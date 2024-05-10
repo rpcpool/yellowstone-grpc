@@ -74,21 +74,29 @@ primary key (producer_id, consumer_id);
 create table if not exists solana.producer_info (
     producer_id blob,
     num_shards smallint,
-    is_active boolean,
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY (producer_id)
 );
 
+create table if not exists solana.producer_lock (
+    producer_id blob,
+    lock_id text,
+    ifname text,
+    ipv4 text,
+    created_at timestamp,
+    primary key (producer_id)
+)
+
 -- # example
 insert into solana.producer_info (
     producer_id, 
     num_shards, 
-    is_active, 
     created_at,
     updated_at
 )
-values (0x00, 256, true, {}, currentTimestamp(), currentTimestamp());
+values (0x00, 256, currentTimestamp(), currentTimestamp());
+
 
 
 create table if not exists solana.producer_period_commit_log (
