@@ -28,7 +28,7 @@ message ConsumeRequest {
   optional string consumer_id = 1;
   InitialOffsetPolicy initial_offset_policy = 2;
   optional int64 at_slot = 3;
-  EventSubscriptionPolicy event_subscription_polocy = 4;
+  EventSubscriptionPolicy event_subscription_policy = 4;
   optional AccountUpdateEventFilter account_update_event_filter = 5;
   optional TransactionEventFilter tx_event_filter = 6;
 }

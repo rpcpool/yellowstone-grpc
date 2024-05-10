@@ -5,10 +5,12 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            AccountUpdate, ProducerId, ShardId, ShardOffset,
-            ShardedAccountUpdate, ShardedTransaction, Transaction, SHARD_OFFSET_MODULO,
+            AccountUpdate, ProducerId, ShardId, ShardOffset, ShardedAccountUpdate,
+            ShardedTransaction, Transaction, SHARD_OFFSET_MODULO,
         },
-    }, deepsize::DeepSizeOf, scylla::{
+    },
+    deepsize::DeepSizeOf,
+    scylla::{
         batch::{Batch, BatchType},
         frame::Compression,
         serialize::{
@@ -16,9 +18,10 @@ use {
             RowWriter,
         },
         Session, SessionBuilder,
-    }, std::{
-        iter::repeat, sync::Arc, time::Duration
-    }, tokio::{task::JoinHandle, time::Instant}, tracing::{info, warn}
+    },
+    std::{sync::Arc, time::Duration},
+    tokio::{task::JoinHandle, time::Instant},
+    tracing::{info, warn},
 };
 
 const WARNING_SCYLLADB_LATENCY_THRESHOLD: Duration = Duration::from_millis(50);
@@ -26,17 +29,6 @@ const WARNING_SCYLLADB_LATENCY_THRESHOLD: Duration = Duration::from_millis(50);
 const DEFAULT_SHARD_MAX_BUFFER_CAPACITY: usize = 15;
 
 const SHARD_COUNT: usize = 64;
-
-const SCYLLADB_GET_LATEST_SHARD_OFFSET_FOR_PRODUCER_ID: &str = r###"
-    SELECT 
-        shard_id, 
-        max(offset) as max_offset
-    FROM shard_max_offset_mv 
-    WHERE 
-        producer_id = ? 
-    GROUP BY producer_id, shard_id 
-    ORDER BY shard_id;
-"###;
 
 const SCYLLADB_COMMIT_PRODUCER_PERIOD: &str = r###"
     INSERT INTO producer_period_commit_log (
@@ -113,15 +105,6 @@ enum ClientCommand {
     InsertTransaction(Transaction),
 }
 
-impl ClientCommand {
-    pub fn slot(&self) -> i64 {
-        match self {
-            Self::InsertAccountUpdate(x) => x.slot,
-            Self::InsertTransaction(x) => x.slot,
-        }
-    }
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, DeepSizeOf)]
 struct ShardedClientCommand {
@@ -144,7 +127,6 @@ impl SerializeRow for ShardedClientCommand {
                     .clone()
                     .as_blockchain_event(self.shard_id, self.producer_id, self.offset)
                     .into();
-                //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }
             ClientCommand::InsertTransaction(val) => {
@@ -152,10 +134,6 @@ impl SerializeRow for ShardedClientCommand {
                     .clone()
                     .as_blockchain_event(self.shard_id, self.producer_id, self.offset)
                     .into();
-                //let foo = val.serialize(ctx, writer);
-                //println!("{:?}", foo);
-                //foo
-                //let serval = SerializedValues::from_serializable(&ctx, &val);
                 val.serialize(ctx, writer)
             }
         }
@@ -167,7 +145,7 @@ impl SerializeRow for ShardedClientCommand {
 }
 
 impl ClientCommand {
-    fn with_shard_info(
+    const fn with_shard_info(
         self,
         shard_id: ShardId,
         producer_id: ProducerId,
@@ -182,17 +160,40 @@ impl ClientCommand {
     }
 }
 
+/// Represents a shard responsible for processing and batching `ClientCommand` messages
+/// before committing them to the database in a background daemon.
+///
+/// This struct encapsulates the state and behavior required to manage message buffering,
+/// batching, and period-based commitment for a specific shard within a distributed system.
 struct Shard {
+    /// Arc-wrapped database session for executing queries.
     session: Arc<Session>,
+
+    /// Unique identifier for the shard.
     shard_id: ShardId,
+
+    /// Unique identifier for the producer associated with this shard.
     producer_id: ProducerId,
+
+    /// The next offset to be assigned for incoming client commands.
     next_offset: ShardOffset,
+
+    /// Buffer to store sharded client commands before batching.
     buffer: Vec<ShardedClientCommand>,
+
+    /// Maximum capacity of the buffer (number of commands it can hold).
     max_buffer_capacity: usize,
+
+    /// Maximum byte size of the buffer (sum of sizes of commands it can hold).
     max_buffer_byte_size: usize,
-   
+
+    /// Batch for executing database statements in bulk.
     scylla_batch: Batch,
+
+    /// Current byte size of the batch being constructed.
     curr_batch_byte_size: usize,
+
+    /// Duration to linger before flushing the buffer.
     buffer_linger: Duration,
 
     // This variable will hold any background (bg) period commit task
@@ -217,7 +218,7 @@ impl Shard {
             buffer: Vec::with_capacity(max_buffer_capacity),
             max_buffer_capacity,
             max_buffer_byte_size,
-             // Since each shard will only batch into a single partition at a time, we can safely disable batch logging
+            // Since each shard will only batch into a single partition at a time, we can safely disable batch logging
             // without losing atomicity guarantee provided by scylla.
             scylla_batch: Batch::new(BatchType::Unlogged),
             buffer_linger,
@@ -250,9 +251,18 @@ impl Shard {
         Ok(())
     }
 
+    /// Converts the current `Shard` instance into a background daemon for processing and batching `ClientCommand` messages.
+    ///
+    /// This method spawns an asynchronous task (`tokio::spawn`) to continuously receive messages from a channel (`receiver`),
+    /// batch process them, and commit periods to the database. It handles message buffering
+    /// and period commitment based on the configured buffer settings and period boundaries.
+    ///
+    /// # Returns
+    /// Returns a `Sender` channel (`tokio::sync::mpsc::Sender<ClientCommand>`) that can be used to send `ClientCommand` messages
+    /// to the background daemon for processing and batching.
     fn into_daemon(mut self) -> tokio::sync::mpsc::Sender<ClientCommand> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<ClientCommand>(16);
-    
+
         let _handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
             let insert_account_ps = self.session.prepare(SCYLLADB_INSERT_ACCOUNT_UPDATE).await?;
             let insert_tx_ps = self.session.prepare(SCYLLADB_INSERT_TRANSACTION).await?;
@@ -268,11 +278,14 @@ impl Shard {
 
                 let is_end_of_period = (offset + 1) % SHARD_OFFSET_MODULO == 0;
 
-                let msg = receiver.recv().await.ok_or(anyhow::anyhow!("Shard mailbox closed"))?;
+                let msg = receiver
+                    .recv()
+                    .await
+                    .ok_or(anyhow::anyhow!("Shard mailbox closed"))?;
                 let sharded_msg = msg.with_shard_info(shard_id, producer_id, offset);
                 let msg_byte_size = sharded_msg.deep_size_of();
 
-                let need_flush =  self.buffer.len() >= self.max_buffer_capacity 
+                let need_flush = self.buffer.len() >= self.max_buffer_capacity
                     || self.curr_batch_byte_size + msg_byte_size >= self.max_buffer_byte_size
                     || buffering_timeout.elapsed() > Duration::ZERO;
 
@@ -292,13 +305,12 @@ impl Shard {
 
                 // Handle the end of a period
                 if is_end_of_period {
-
                     if let Some(task) = self.bg_period_commit_task.take() {
                         task.await??;
                     }
 
                     let session = Arc::clone(&self.session);
-                    
+
                     let handle = tokio::spawn(async move {
                         let result = session
                             .query(
@@ -308,20 +320,21 @@ impl Shard {
                             .await
                             .map(|_qr| ())
                             .map_err(anyhow::Error::new);
-                        info!("shard={},producer_id={:?} committed period: {}", shard_id, self.producer_id, curr_period);
+                        info!(
+                            "shard={},producer_id={:?} committed period: {}",
+                            shard_id, self.producer_id, curr_period
+                        );
                         result
                     });
                     // We put the period commit in background so we don't block the next period.
                     // However, we can not commit the next period until the last period was committed.
                     // By the time we finish the next period, the last period commit should have have happen.
                     self.bg_period_commit_task.replace(handle);
-                    
                 }
             }
         });
         sender
     }
-
 }
 
 pub struct ScyllaSink {
@@ -333,11 +346,25 @@ pub enum ScyllaSinkError {
     SinkClose,
 }
 
+/// Retrieves the latest shard offsets for a specific producer from the `shard_max_offset_mv` materialized view.
+///
+/// This asynchronous function queries the database session to fetch the latest shard offsets associated with
+/// a given `producer_id` from the `shard_max_offset_mv` materialized view. It constructs and executes a SELECT
+/// query to retrieve the shard IDs and corresponding offsets ordered by offset and period.
+///
+/// # Parameters
+/// - `session`: An Arc-wrapped database session (`Arc<Session>`) for executing database queries.
+/// - `producer_id`: The unique identifier (`ProducerId`) of the producer whose shard offsets are being retrieved.
+///
+/// # Returns
+/// - `Ok(None)`: If no shard offsets are found for the specified producer.
+/// - `Ok(Some(rows))`: If shard offsets are found, returns a vector of tuples containing shard IDs and offsets.
+///                      Each tuple represents a shard's latest offset for the producer.
+/// - `Err`: If an error occurs during database query execution or result parsing, returns an `anyhow::Result`.
 async fn get_shard_offsets_for_producer(
     session: Arc<Session>,
     producer_id: ProducerId,
 ) -> anyhow::Result<Option<Vec<ShardOffset>>> {
-
     let shard_bind_markers = (0..SHARD_COUNT)
         .map(|x| format!("{}", x))
         .collect::<Vec<_>>()
@@ -355,18 +382,13 @@ async fn get_shard_offsets_for_producer(
         ORDER BY offset DESC, period DESC
         PER PARTITION LIMIT 1
         "###,
-        shard_bind_markers=shard_bind_markers
+        shard_bind_markers = shard_bind_markers
     );
 
-    let query_result = session
-        .query(
-            query,
-            (producer_id,),
-        )
-        .await?;
+    let query_result = session.query(query, (producer_id,)).await?;
 
     let rows = query_result
-        .rows_typed_or_empty::<(ShardId, ShardOffset,)>()
+        .rows_typed_or_empty::<(ShardId, ShardOffset)>()
         .map(|result| result.map(|typed_row| typed_row.1))
         .collect::<Result<Vec<_>, _>>()
         .map_err(anyhow::Error::new)?;
@@ -375,20 +397,40 @@ async fn get_shard_offsets_for_producer(
         info!("producer {:?} offsets don't exists", producer_id);
         Ok(None)
     } else {
-        info!("producer {:?} offsets already exists: {:?}", producer_id, rows);
+        info!(
+            "producer {:?} offsets already exists: {:?}",
+            producer_id, rows
+        );
         Ok(Some(rows))
     }
 }
 
-
-fn spawn_round_robin(shard_mailboxes: Vec<tokio::sync::mpsc::Sender<ClientCommand>>) -> tokio::sync::mpsc::Sender<ClientCommand> {
-
+/// Spawns a round-robin dispatcher for sending `ClientCommand` messages to a list of shard mailboxes.
+///
+/// This function takes a vector of shard mailboxes (`tokio::sync::mpsc::Sender<ClientCommand>`) and returns
+/// a new `Sender` that can be used to dispatch messages in a round-robin fashion to the provided shard mailboxes.
+///
+/// The dispatcher cycles through the shard mailboxes indefinitely, ensuring each message is sent to the next
+/// available shard without waiting, or falling back to the original shard if all are busy. It increments the
+/// ScyllaDB batch request lag for monitoring purposes.
+///
+/// # Parameters
+/// - `shard_mailboxes`: A vector of `Sender` channels representing shard mailboxes to dispatch messages to.
+///
+/// # Returns
+/// A `Sender` channel that can be used to send `ClientCommand` messages to the shard mailboxes in a round-robin manner.
+fn spawn_round_robin(
+    shard_mailboxes: Vec<tokio::sync::mpsc::Sender<ClientCommand>>,
+) -> tokio::sync::mpsc::Sender<ClientCommand> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(DEFAULT_SHARD_MAX_BUFFER_CAPACITY);
     let _h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         let mut i: usize = 0;
         let total_shards = shard_mailboxes.len();
         loop {
-            let msg = receiver.recv().await.ok_or(anyhow::anyhow!("round robin received end is closed"))?;
+            let msg = receiver
+                .recv()
+                .await
+                .ok_or(anyhow::anyhow!("round robin received end is closed"))?;
             let begin = i;
             let maybe_permit = shard_mailboxes
                 .iter()
@@ -415,7 +457,6 @@ fn spawn_round_robin(shard_mailboxes: Vec<tokio::sync::mpsc::Sender<ClientComman
     sender
 }
 
-
 impl ScyllaSink {
     pub async fn new(
         config: ScyllaSinkConfig,
@@ -440,17 +481,17 @@ impl ScyllaSink {
         let mut sharders = vec![];
 
         info!("Will create {:?} shards", shard_count);
-        let maybe_shard_offsets = get_shard_offsets_for_producer(Arc::clone(&session), producer_id).await?;
+        let maybe_shard_offsets =
+            get_shard_offsets_for_producer(Arc::clone(&session), producer_id).await?;
         let shard_offsets = maybe_shard_offsets.unwrap_or(vec![1; shard_count]);
-        for shard_id in 0..shard_count {
+        for (shard_id, next_offset) in shard_offsets.iter().enumerate() {
             let session = Arc::clone(&session);
-            let next_offset = shard_offsets[shard_id];
             let shard = Shard::new(
-                session, 
-                shard_id as i16, 
-                producer_id, 
-                next_offset, 
-                DEFAULT_SHARD_MAX_BUFFER_CAPACITY, 
+                session,
+                shard_id as i16,
+                producer_id,
+                *next_offset,
+                DEFAULT_SHARD_MAX_BUFFER_CAPACITY,
                 config.batch_size_kb_limit * 1024,
                 config.linger,
             );

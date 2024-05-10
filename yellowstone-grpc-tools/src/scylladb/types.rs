@@ -1,17 +1,19 @@
 use {
-    anyhow::{anyhow, Ok}, deepsize::DeepSizeOf, scylla::{
+    anyhow::{anyhow, Ok},
+    deepsize::DeepSizeOf,
+    scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
-    }, sha2::digest::block_buffer::Block, std::{cmp::Ordering, collections::HashMap, iter::repeat}, yellowstone_grpc_proto::{
+    },
+    std::iter::repeat,
+    yellowstone_grpc_proto::{
         geyser::{
             SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
-        solana::storage::confirmed_block::{
-            self, CompiledInstruction,
-        },
-    }
+        solana::storage::confirmed_block::{self, CompiledInstruction},
+    },
 };
 
 pub const SHARD_COUNT: i16 = 256;
@@ -26,42 +28,6 @@ pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machin
 
 pub const MIN_PROCUDER: ProducerId = [0x00];
 pub const MAX_PRODUCER: ProducerId = [0xFF];
-
-#[derive(SerializeRow, Clone, Debug, FromRow)]
-pub(crate) struct ShardStatistics {
-    pub(crate) shard_id: ShardId,
-    pub(crate) period: ShardPeriod,
-    pub(crate) producer_id: ProducerId,
-    pub(crate) offset: ShardOffset,
-    pub(crate) min_slot: i64,
-    pub(crate) max_slot: i64,
-    pub(crate) total_events: i64,
-    pub(crate) slot_event_counter: HashMap<i64, i32>,
-}
-
-impl ShardStatistics {
-    pub(crate) fn from_slot_event_counter(
-        shard_id: ShardId,
-        period: ShardPeriod,
-        producer_id: ProducerId,
-        offset: ShardOffset,
-        counter_map: &HashMap<i64, i32>,
-    ) -> Self {
-        let min_slot = counter_map.keys().min().copied().unwrap_or(-1);
-        let max_slot = counter_map.keys().max().copied().unwrap_or(-1);
-        let total_events: i64 = counter_map.values().map(|cnt| *cnt as i64).sum();
-        ShardStatistics {
-            shard_id,
-            period,
-            producer_id,
-            offset,
-            min_slot,
-            max_slot,
-            total_events,
-            slot_event_counter: counter_map.clone(),
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
 pub enum BlockchainEventType {
@@ -917,14 +883,22 @@ impl From<BlockchainEvent> for ShardedTransaction {
             slot: val.slot,
             signature: val.signature.expect("signature is none"),
             signatures: val.signatures.expect("signatures is none"),
-            num_required_signatures: val.num_required_signatures.expect("num_required_signature is none"),
-            num_readonly_signed_accounts: val.num_readonly_signed_accounts.expect("num_readonly_signed_accounts is none"),
-            num_readonly_unsigned_accounts: val.num_readonly_unsigned_accounts.expect("num_readonly_unsigned_accounts is none"),
+            num_required_signatures: val
+                .num_required_signatures
+                .expect("num_required_signature is none"),
+            num_readonly_signed_accounts: val
+                .num_readonly_signed_accounts
+                .expect("num_readonly_signed_accounts is none"),
+            num_readonly_unsigned_accounts: val
+                .num_readonly_unsigned_accounts
+                .expect("num_readonly_unsigned_accounts is none"),
             account_keys: val.account_keys.expect("account_keys is none"),
             recent_blockhash: val.recent_blockhash.expect("recent_blockhash is none"),
             instructions: val.instructions.expect("instructions is none"),
             versioned: val.versioned.expect("versioned is none"),
-            address_table_lookups: val.address_table_lookups.expect("address_table_lookups is none"),
+            address_table_lookups: val
+                .address_table_lookups
+                .expect("address_table_lookups is none"),
             meta: val.meta.expect("meta is none"),
             is_vote: val.is_vote.expect("is_vote is none"),
             tx_index: val.tx_index.expect("tx_index is none"),
@@ -938,14 +912,22 @@ impl From<BlockchainEvent> for Transaction {
             slot: val.slot,
             signature: val.signature.expect("signature is none"),
             signatures: val.signatures.expect("signatures is none"),
-            num_required_signatures: val.num_required_signatures.expect("num_required_signature is none"),
-            num_readonly_signed_accounts: val.num_readonly_signed_accounts.expect("num_readonly_signed_accounts is none"),
-            num_readonly_unsigned_accounts: val.num_readonly_unsigned_accounts.expect("num_readonly_unsigned_accounts is none"),
+            num_required_signatures: val
+                .num_required_signatures
+                .expect("num_required_signature is none"),
+            num_readonly_signed_accounts: val
+                .num_readonly_signed_accounts
+                .expect("num_readonly_signed_accounts is none"),
+            num_readonly_unsigned_accounts: val
+                .num_readonly_unsigned_accounts
+                .expect("num_readonly_unsigned_accounts is none"),
             account_keys: val.account_keys.expect("account_keys is none"),
             recent_blockhash: val.recent_blockhash.expect("recent_blockhash is none"),
             instructions: val.instructions.expect("instructions is none"),
             versioned: val.versioned.expect("versioned is none"),
-            address_table_lookups: val.address_table_lookups.expect("address_table_lookups is none"),
+            address_table_lookups: val
+                .address_table_lookups
+                .expect("address_table_lookups is none"),
             meta: val.meta.expect("meta is none"),
             is_vote: val.is_vote.expect("is_vote is none"),
             tx_index: val.tx_index.expect("tx_index is none"),

@@ -1,9 +1,6 @@
 use crate::scylladb::types::{BlockchainEventType, ProducerId, ShardId, ShardOffset};
 
-
-
 pub type OldShardOffset = ShardOffset;
-
 
 pub type ConsumerId = String;
 
