@@ -416,12 +416,12 @@ pub type LogStream = Pin<Box<dyn Stream<Item = Result<SubscribeUpdate, tonic::St
 #[tonic::async_trait]
 impl YellowstoneLog for ScyllaYsLog {
     #[doc = r" Server streaming response type for the consume method."]
-    type consumeStream = LogStream;
+    type ConsumeStream = LogStream;
 
     async fn consume(
         &self,
         request: tonic::Request<ConsumeRequest>,
-    ) -> Result<tonic::Response<Self::consumeStream>, tonic::Status> {
+    ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
         let cr = request.into_inner();
 
         let consumer_id = cr.consumer_id.clone().unwrap_or(Uuid::new_v4().to_string());
@@ -475,7 +475,7 @@ impl YellowstoneLog for ScyllaYsLog {
 
         let ret = ReceiverStream::new(rx);
 
-        let res = Response::new(Box::pin(ret) as Self::consumeStream);
+        let res = Response::new(Box::pin(ret) as Self::ConsumeStream);
         Ok(res)
     }
 }

@@ -8,7 +8,7 @@ option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
 package yellowstone.log;
 
 service YellowstoneLog {
-  rpc consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+  rpc Consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
 }
 
 
