@@ -115,11 +115,11 @@ message ReturnData {
 }
 
 enum RewardType {
-    UNSPECIFIED = 0;
-    FEE = 1;
-    RENT = 2;
-    STAKING = 3;
-    VOTING = 4;
+    Unspecified = 0;
+    Fee = 1;
+    Rent = 2;
+    Staking = 3;
+    Voting = 4;
 }
 
 message Reward {

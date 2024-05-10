@@ -1003,9 +1003,10 @@ impl TryFrom<BlockchainEvent> for SubscribeUpdateAccount {
 impl TryFrom<BlockchainEvent> for SubscribeUpdateTransaction {
     type Error = anyhow::Error;
     fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
-        if value.event_type != BlockchainEventType::NewTransaction {
-            anyhow::bail!("BlockchainEvent is not a Transaction");
-        }
+        anyhow::ensure!(
+            value.event_type != BlockchainEventType::NewTransaction,
+            "BlockchainEvent is not a Transaction"
+        );
         let ret: Transaction = value.into();
         ret.try_into()
     }

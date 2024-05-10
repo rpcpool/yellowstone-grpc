@@ -100,25 +100,14 @@ impl ArgsAction {
         )
         .await?;
 
-        let hexstr = "16daf15e85d893b89d83a8ca7d7f86416f134905d1d79e4f62e3da70a3a20a7d";
-        let _pubkey = (0..hexstr.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hexstr[i..i + 2], 16))
-            .collect::<Result<Vec<_>, _>>()?;
+        // let hexstr = "16daf15e85d893b89d83a8ca7d7f86416f134905d1d79e4f62e3da70a3a20a7d";
+        // let _pubkey = (0..hexstr.len())
+        //     .step_by(2)
+        //     .map(|i| u8::from_str_radix(&hexstr[i..i + 2], 16))
+        //     .collect::<Result<Vec<_>, _>>()?;
         let req = SpawnGrpcConsumerReq {
             session: Arc::clone(&session),
             consumer_info: ci,
-            // account_update_event_filter: Some(
-            //     AccountUpdateEventFilter {
-            //         pubkeys: vec![token_account],
-            //         owners: Default::default(),
-            //     }
-            // ),
-            // tx_event_filter: Some(
-            //     TransactionEventFilter {
-            //         account_keys: vec![pubkey]
-            //     }
-            // ),
             account_update_event_filter: None,
             tx_event_filter: None,
             buffer_capacity: None,
