@@ -3,16 +3,18 @@ use {
         common::{self, ConsumerId, ConsumerInfo, InitialOffsetPolicy},
         shard_iterator::{ShardFilter, ShardIterator},
     },
-    crate::scylladb::types::{
-        BlockchainEventType, ProducerId, ProducerInfo, ShardId, ShardOffset, MAX_PRODUCER,
-        MIN_PROCUDER,
+    crate::scylladb::{
+        sink,
+        types::{
+            BlockchainEventType, ProducerId, ProducerInfo, ShardId, ShardOffset, MAX_PRODUCER,
+            MIN_PROCUDER,
+        },
     },
     futures::Stream,
     scylla::{
         batch::{Batch, BatchType},
         cql_to_rust::FromCqlVal,
         prepared_statement::PreparedStatement,
-        query::Query,
         transport::query_result::SingleRowTypedError,
         Session,
     },
@@ -113,8 +115,7 @@ pub const INSERT_CONSUMER_PRODUCER_MAPPING: &str = r###"
 pub const GET_PRODUCER_INFO_BY_ID_OR_ANY: &str = r###"
     SELECT
         producer_id,
-        num_shards,
-        is_active
+        num_shards
     FROM producer_info
     WHERE producer_id >= ? and producer_id <= ?
     LIMIT 1
@@ -294,37 +295,6 @@ pub async fn get_or_register_consumer(
     Ok(cs)
 }
 
-fn build_offset_per_shard_query(num_shards: ShardId, ordering: &str) -> impl Into<Query> {
-    let shard_bind_markers = (0..num_shards)
-        .map(|x| format!("{}", x))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        r###"
-        SELECT
-            shard_id,
-            offset
-        FROM shard_max_offset_mv
-        WHERE
-            producer_id = ?
-            AND shard_id IN ({shard_bind_markers})
-        ORDER BY offset {ordering}, period {ordering}
-        PER PARTITION LIMIT 1
-        "###,
-        shard_bind_markers = shard_bind_markers,
-        ordering = ordering
-    )
-}
-
-fn get_max_offset_per_shard_query(num_shards: ShardId) -> impl Into<Query> {
-    build_offset_per_shard_query(num_shards, "DESC")
-}
-
-fn get_min_offset_per_shard_query(num_shards: ShardId) -> impl Into<Query> {
-    build_offset_per_shard_query(num_shards, "ASC")
-}
-
 /// Sets the initial shard offsets for a newly created consumer based on [[`InitialOffsetPolicy`]].
 ///
 /// Similar to seeking in a file, we can seek right at the beginning of the log, completly at the end or at first
@@ -343,22 +313,25 @@ async fn set_initial_consumer_shard_offsets(
 
     let num_shards = producer_info.num_shards;
 
-    let shard_offsets_query_result = match initial_offset_policy {
+    let shard_offset_pairs = match initial_offset_policy {
         InitialOffsetPolicy::Latest => {
-            session
-                .query(get_max_offset_per_shard_query(num_shards), (producer_id,))
-                .await?
+            sink::get_max_shard_offsets_for_producer(
+                Arc::clone(&session),
+                producer_id,
+                num_shards as usize,
+            )
+            .await?
         }
-        InitialOffsetPolicy::Earliest => {
-            session
-                .query(get_min_offset_per_shard_query(num_shards), (producer_id,))
-                .await?
-        }
-        InitialOffsetPolicy::SlotApprox(slot) => {
-            session
-                .query(GET_MIN_OFFSET_FOR_SLOT, (slot, producer_id))
-                .await?
-        }
+        InitialOffsetPolicy::Earliest => repeat(0)
+            .take(num_shards as usize)
+            .enumerate()
+            .map(|(i, x)| (i as ShardId, x))
+            .collect::<Vec<_>>(),
+        InitialOffsetPolicy::SlotApprox(slot) => session
+            .query(GET_MIN_OFFSET_FOR_SLOT, (slot, producer_id))
+            .await?
+            .rows_typed_or_empty::<(ShardId, ShardOffset)>()
+            .collect::<Result<Vec<_>, _>>()?,
     };
 
     let adjustment = match initial_offset_policy {
@@ -369,19 +342,16 @@ async fn set_initial_consumer_shard_offsets(
     let insert_consumer_offset_ps: PreparedStatement =
         session.prepare(INSERT_CONSUMER_OFFSET).await?;
 
-    let rows = shard_offsets_query_result
-        .rows_typed_or_empty::<(ShardId, ShardOffset)>()
-        .collect::<Result<Vec<_>, _>>()?;
-
     let mut batch = Batch::new(BatchType::Unlogged);
-    let mut buffer = Vec::with_capacity(rows.len());
+    let mut buffer = Vec::with_capacity(shard_offset_pairs.len());
 
     let ev_types = get_blockchain_event_types(event_sub_policy);
 
     ev_types
         .into_iter()
         .flat_map(|ev_type| {
-            rows.iter()
+            shard_offset_pairs
+                .iter()
                 .cloned()
                 .map(move |(shard_id, offset)| (ev_type, shard_id, offset))
         })

@@ -30,27 +30,6 @@ create table if not exists solana.consumer_info (
     PRIMARY KEY ((consumer_id, producer_id), shard_id, event_type)
 );
 
--- insert into solana.consumer_info (
---     consumer_id,
---     producer_id,
---     shard_id
---     offset,
---     created_at,
---     updated_at
--- )
--- values 
--- ('test_lv', 0x01, [0], currentTimestamp(), currentTimestamp());
-
--- update solana.consumer_info
--- set shard_offset_arrmap = [0,0]
--- where consumer_id = 'test_lv' and producer_id = 0x01;
-
--- update solana.consumer_info
--- set shard_offset_arrmap[0] = 1, updated_at = currentTimestamp()
--- where consumer_id = 'test_lv' and producer_id = 0x01
--- if shard_offset_arrmap[0] = 0;
-
-
 
 create table if not exists solana.consumer_producer_mapping (
     consumer_id text,
@@ -74,30 +53,38 @@ primary key (producer_id, consumer_id);
 create table if not exists solana.producer_info (
     producer_id blob,
     num_shards smallint,
-    is_active boolean,
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY (producer_id)
 );
 
+create table if not exists solana.producer_lock (
+    producer_id blob,
+    lock_id text,
+    ifname text,
+    ipv4 text,
+    created_at timestamp,
+    primary key (producer_id)
+)
+
 -- # example
 insert into solana.producer_info (
     producer_id, 
     num_shards, 
-    is_active, 
     created_at,
     updated_at
 )
-values (0x00, 256, true, {}, currentTimestamp(), currentTimestamp());
+values (0x00, 256, currentTimestamp(), currentTimestamp());
+
 
 
 create table if not exists solana.producer_period_commit_log (
     producer_id blob,
     shard_id smallint,
     period bigint,
-    created_at timestamp,
-    PRIMARY KEY(producer_id, shard_id, period)
-) with CLUSTERING order by (shard_id desc, period desc);
+    updated_at timestamp,
+    PRIMARY KEY(producer_id, shard_id)
+);
 
 create table if not exists solana.shard_statistics (
     shard_id smallint,
@@ -110,42 +97,6 @@ create table if not exists solana.shard_statistics (
     slot_event_counter map<bigint, int>,
     primary key(shard_id, period, offset)
 ) with CLUSTERING order by (period desc, offset desc);
-
-
-create materialized view if not exists solana.shard_max_offset_mv 
-as 
-select 
-    producer_id,
-    shard_id, 
-    offset,
-    period
-from solana.log
-where 
-    shard_id is not null 
-    and offset is not null
-    and period is not null
-    and producer_id is not null
-primary key((producer_id, shard_id), offset, period)
-with clustering order by (offset desc, period desc);
-
-
-create materialized view if not exists solana.slot_map_mv
-as
-select
-    slot,
-    producer_id,
-    shard_id,
-    period,
-    offset
-from solana.log
-where
-    slot is not null
-    and producer_id is not null
-    and shard_id is not null
-    and period is not null
-    and offset is not null
-primary key (slot, producer_id, shard_id, period, offset);
-
 
 create type if not exists solana.message_addr_table_lookup (
     account_key blob,
@@ -263,4 +214,23 @@ create table if not exists solana.log (
     created_at timestamp,
 
     primary key ((shard_id, period, producer_id), offset)
-);
+)
+WITH CLUSTERING ORDER BY (offset desc);
+
+
+create materialized view if not exists solana.slot_map_mv
+as
+select
+    slot,
+    producer_id,
+    shard_id,
+    period,
+    offset
+from solana.log
+where
+    slot is not null
+    and producer_id is not null
+    and shard_id is not null
+    and period is not null
+    and offset is not null
+primary key (slot, producer_id, shard_id, period, offset);

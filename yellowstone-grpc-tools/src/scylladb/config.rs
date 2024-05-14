@@ -62,6 +62,9 @@ pub struct ConfigGrpc2ScyllaDB {
 
     pub producer_id: u8,
 
+    // Optional network interface name used to write in the producer lock table.
+    pub ifname: Option<String>,
+
     #[serde(default = "default_batch_len_limit")]
     pub batch_len_limit: usize,
 
@@ -84,6 +87,7 @@ impl ConfigGrpc2ScyllaDB {
             batch_size_kb_limit: self.batch_size_kb_limit,
             linger: self.linger,
             keyspace: self.keyspace.clone(),
+            ifname: self.ifname.to_owned(),
         }
     }
 }

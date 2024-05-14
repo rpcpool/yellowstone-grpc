@@ -5,7 +5,7 @@ use {
     scylla::{frame::Compression, Session, SessionBuilder},
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::time::Instant,
-    tracing::{info, warn},
+    tracing::{error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::subscribe_update::UpdateOneof, yellowstone::log::EventSubscriptionPolicy,
@@ -96,7 +96,7 @@ impl ArgsAction {
             Arc::clone(&session),
             "test",
             InitialOffsetPolicy::Earliest,
-            EventSubscriptionPolicy::TransactionOnly,
+            EventSubscriptionPolicy::Both,
         )
         .await?;
 
@@ -187,7 +187,7 @@ impl ArgsAction {
                     None => unreachable!("Expect valid message"),
                 };
 
-                match message {
+                let result = match message {
                     UpdateOneof::Account(msg) => {
                         let acc_update = msg.clone().try_into();
                         if acc_update.is_err() {
@@ -199,7 +199,7 @@ impl ArgsAction {
                             continue;
                         }
                         // If the sink is close, let it crash...
-                        sink.log_account_update(acc_update.unwrap()).await.unwrap();
+                        sink.log_account_update(acc_update.unwrap()).await
                     }
                     UpdateOneof::Transaction(msg) => {
                         let tx: Result<Transaction, anyhow::Error> = msg.try_into();
@@ -207,13 +207,18 @@ impl ArgsAction {
                             warn!("failed to convert update tx: {:?}", tx.err().unwrap());
                             continue;
                         }
-                        sink.log_transaction(tx.unwrap()).await.unwrap();
+                        sink.log_transaction(tx.unwrap()).await
                     }
                     _ => continue,
                 };
+
+                if result.is_err() {
+                    error!("errror detected in sink...");
+                    break;
+                }
             }
         }
-        Ok(())
+        sink.shutdown().await
     }
 }
 

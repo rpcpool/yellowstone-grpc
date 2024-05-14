@@ -51,12 +51,11 @@ pub const GET_NEW_TRANSACTION_EVENT: &str = r###"
 
 const PRODUCER_SHARD_PERIOD_COMMIT_EXISTS: &str = r###"
     SELECT
-        producer_id
+        period
     FROM producer_period_commit_log
     WHERE 
         producer_id = ?
         AND shard_id = ?
-        AND period = ?
 "###;
 
 /// Represents the state of a shard iterator, which is used to manage the iteration
@@ -203,12 +202,12 @@ impl ShardIterator {
         let (sender, receiver) = oneshot::channel();
         tokio::spawn(async move {
             let result = session
-                .execute(&ps, (producer_id, shard_id, period))
+                .execute(&ps, (producer_id, shard_id))
                 .await
                 .expect("failed to query period commit state")
-                .maybe_first_row()
+                .maybe_first_row_typed::<(ShardPeriod,)>()
                 .expect("query not elligible to return rows")
-                .map(|_row| true)
+                .map(|row| row.0 >= period)
                 .unwrap_or(false);
             sender.send(result).map_err(|_| ()).unwrap_or_else(|_| {
                 panic!(

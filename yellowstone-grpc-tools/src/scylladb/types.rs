@@ -16,11 +16,11 @@ use {
     },
 };
 
-pub const SHARD_COUNT: i16 = 256;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
 pub type ProgramId = [u8; 32];
 
+pub type Slot = i64;
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
@@ -79,7 +79,7 @@ impl FromCqlVal<CqlValue> for BlockchainEventType {
     }
 }
 
-#[derive(SerializeRow, Clone, Debug, FromRow, DeepSizeOf)]
+#[derive(SerializeRow, Clone, Debug, FromRow, DeepSizeOf, PartialEq)]
 pub struct BlockchainEvent {
     // Common
     pub shard_id: ShardId,
@@ -117,7 +117,7 @@ pub struct BlockchainEvent {
 
 type Pubkey = [u8; 32];
 
-#[derive(SerializeRow, Clone, Debug, DeepSizeOf)]
+#[derive(SerializeRow, Clone, Debug, DeepSizeOf, PartialEq, Eq)]
 pub struct AccountUpdate {
     pub slot: i64,
     pub pubkey: Pubkey,
@@ -137,7 +137,7 @@ where
     it.into_iter().map(|item| item.try_into()).collect()
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, Eq, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct MessageAddrTableLookup {
     pub account_key: Vec<u8>,
@@ -172,7 +172,7 @@ impl From<MessageAddrTableLookup> for confirmed_block::MessageAddressTableLookup
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, Eq, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct CompiledInstr {
     pub program_id_index: i64,
@@ -210,7 +210,7 @@ impl TryFrom<CompiledInstr> for confirmed_block::CompiledInstruction {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, Eq, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct InnerInstr {
     pub program_id_index: i64,
@@ -243,7 +243,7 @@ impl TryFrom<InnerInstr> for confirmed_block::InnerInstruction {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, Eq, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct InnerInstrs {
     pub index: i64,
@@ -275,7 +275,7 @@ impl TryFrom<InnerInstrs> for confirmed_block::InnerInstructions {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct UiTokenAmount {
     pub ui_amount: f64,
@@ -308,7 +308,7 @@ impl TryFrom<UiTokenAmount> for confirmed_block::UiTokenAmount {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct TxTokenBalance {
     pub account_index: i64,
@@ -344,7 +344,7 @@ impl TryFrom<TxTokenBalance> for confirmed_block::TokenBalance {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, Eq, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct Reward {
     pub pubkey: String,
@@ -381,7 +381,7 @@ impl TryFrom<Reward> for confirmed_block::Reward {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, PartialEq, Eq)]
 #[scylla(flavor = "match_by_name")]
 pub struct ReturnData {
     pub program_id: ProgramId,
@@ -410,7 +410,7 @@ impl From<ReturnData> for confirmed_block::ReturnData {
     }
 }
 
-#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default)]
+#[derive(Debug, SerializeCql, Clone, DeepSizeOf, FromUserType, Default, PartialEq)]
 #[scylla(flavor = "match_by_name")]
 pub struct TransactionMeta {
     pub error: Option<Vec<u8>>,
@@ -539,7 +539,7 @@ impl TryFrom<TransactionMeta> for confirmed_block::TransactionStatusMeta {
     }
 }
 
-#[derive(Debug, SerializeRow, Clone, DeepSizeOf)]
+#[derive(Debug, SerializeRow, Clone, DeepSizeOf, PartialEq)]
 pub struct Transaction {
     pub slot: i64,
     pub signature: Vec<u8>,
@@ -954,10 +954,7 @@ impl From<BlockchainEvent> for AccountUpdate {
 #[derive(FromRow, Debug, Clone)]
 pub struct ProducerInfo {
     pub producer_id: ProducerId,
-    #[allow(dead_code)]
     pub num_shards: ShardId,
-    #[allow(dead_code)]
-    pub is_active: bool,
 }
 
 impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
@@ -992,9 +989,10 @@ impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
 impl TryFrom<BlockchainEvent> for SubscribeUpdateAccount {
     type Error = anyhow::Error;
     fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
-        if value.event_type != BlockchainEventType::AccountUpdate {
-            anyhow::bail!("BlockchainEvent is not an AccountUpdate");
-        }
+        anyhow::ensure!(
+            value.event_type == BlockchainEventType::AccountUpdate,
+            "BlockchainEvent is not an AccountUpdate"
+        );
         let ret: AccountUpdate = value.into();
         ret.try_into()
     }
@@ -1004,7 +1002,7 @@ impl TryFrom<BlockchainEvent> for SubscribeUpdateTransaction {
     type Error = anyhow::Error;
     fn try_from(value: BlockchainEvent) -> Result<Self, Self::Error> {
         anyhow::ensure!(
-            value.event_type != BlockchainEventType::NewTransaction,
+            value.event_type == BlockchainEventType::NewTransaction,
             "BlockchainEvent is not a Transaction"
         );
         let ret: Transaction = value.into();
