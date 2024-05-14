@@ -82,9 +82,9 @@ create table if not exists solana.producer_period_commit_log (
     producer_id blob,
     shard_id smallint,
     period bigint,
-    created_at timestamp,
-    PRIMARY KEY(producer_id, shard_id, period)
-) with CLUSTERING order by (shard_id desc, period desc);
+    updated_at timestamp,
+    PRIMARY KEY(producer_id, shard_id)
+);
 
 create table if not exists solana.shard_statistics (
     shard_id smallint,
@@ -214,24 +214,9 @@ create table if not exists solana.log (
     created_at timestamp,
 
     primary key ((shard_id, period, producer_id), offset)
-);
+)
+WITH CLUSTERING ORDER BY (offset desc);
 
-
-create materialized view if not exists solana.shard_max_offset_mv 
-as 
-select 
-    producer_id,
-    shard_id, 
-    offset,
-    period
-from solana.log
-where 
-    shard_id is not null 
-    and offset is not null
-    and period is not null
-    and producer_id is not null
-primary key((producer_id, shard_id), offset, period)
-with clustering order by (offset desc, period desc);
 
 create materialized view if not exists solana.slot_map_mv
 as
