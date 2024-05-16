@@ -18,7 +18,7 @@ use {
             config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
             consumer::{
                 common::InitialOffsetPolicy,
-                grpc::{get_or_register_consumer, spawn_grpc_consumer, SpawnGrpcConsumerReq},
+                grpc::{spawn_grpc_consumer, SpawnGrpcConsumerReq},
             },
             sink::ScyllaSink,
             types::Transaction,
@@ -92,28 +92,20 @@ impl ArgsAction {
             .build()
             .await?;
         let session = Arc::new(session);
-        let ci = get_or_register_consumer(
-            Arc::clone(&session),
-            "test",
-            InitialOffsetPolicy::Earliest,
-            EventSubscriptionPolicy::Both,
-        )
-        .await?;
-
-        // let hexstr = "16daf15e85d893b89d83a8ca7d7f86416f134905d1d79e4f62e3da70a3a20a7d";
-        // let _pubkey = (0..hexstr.len())
-        //     .step_by(2)
-        //     .map(|i| u8::from_str_radix(&hexstr[i..i + 2], 16))
-        //     .collect::<Result<Vec<_>, _>>()?;
         let req = SpawnGrpcConsumerReq {
-            session: Arc::clone(&session),
-            consumer_info: ci,
+            consumer_id: String::from("test"),
             account_update_event_filter: None,
             tx_event_filter: None,
             buffer_capacity: None,
             offset_commit_interval: None,
         };
-        let mut rx = spawn_grpc_consumer(req).await?;
+        let mut rx = spawn_grpc_consumer(
+            session,
+            req,
+            InitialOffsetPolicy::Earliest,
+            EventSubscriptionPolicy::Both,
+        )
+        .await?;
 
         let mut print_tx_secs = Instant::now() + Duration::from_secs(1);
         let mut num_events = 0;
@@ -130,11 +122,6 @@ impl ArgsAction {
                         anyhow::bail!("fail!!!")
                     }
                     let _x = result?.update_oneof.expect("got none");
-                    // match x {
-                    //     UpdateOneof::Account(acc) => println!("acc, slot {:?}", acc.slot),
-                    //     UpdateOneof::Transaction(tx) => panic!("got tx"),
-                    //     _ => unimplemented!()
-                    // }
                     num_events += 1;
                 },
                 _ = tokio::time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
@@ -179,9 +166,14 @@ impl ArgsAction {
                 _ = &mut shutdown => break,
                 message = geyser.next() => message,
             }
-            .transpose()?;
+            .transpose();
 
-            if let Some(message) = message {
+            if let Err(error) = &message {
+                error!("geyser plugin disconnected: {error:?}");
+                break;
+            }
+
+            if let Some(message) = message? {
                 let message = match message.update_oneof {
                     Some(value) => value,
                     None => unreachable!("Expect valid message"),

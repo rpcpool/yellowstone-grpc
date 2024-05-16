@@ -26,6 +26,7 @@ required-features = ["scylladb"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
+chrono = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
 deepsize = { workspace = true, optional = true }
@@ -37,7 +38,7 @@ json5 = { workspace = true }
 lazy_static = { workspace = true }
 local-ip-address = { workspace = true, optional = true }
 prometheus = { workspace = true }
-scylla = { workspace = true, optional = true }
+scylla = { workspace = true, optional = true, features = ["chrono"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true, optional = true }
@@ -73,4 +74,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono"]

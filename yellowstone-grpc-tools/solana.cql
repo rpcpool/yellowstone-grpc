@@ -1,9 +1,9 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 
 drop materialized view if exists solana.producer_consumer_mapping_mv;
-drop materialized view if exists solana.shard_max_offset_mv;
 drop materialized view if exists solana.slot_map;
 
+drop table if exists solana.producer_slot_seen;
 drop table if exists solana.shard_statistics;
 drop table if exists solana.producer_info;
 drop table if exists solana.consumer_info;
@@ -77,14 +77,14 @@ insert into solana.producer_info (
 values (0x00, 256, currentTimestamp(), currentTimestamp());
 
 
-
 create table if not exists solana.producer_period_commit_log (
     producer_id blob,
     shard_id smallint,
     period bigint,
-    updated_at timestamp,
-    PRIMARY KEY(producer_id, shard_id)
-);
+    created_at timestamp,
+    PRIMARY KEY((producer_id, shard_id), period)
+)
+with clustering order by (period DESC);
 
 create table if not exists solana.shard_statistics (
     shard_id smallint,
@@ -234,3 +234,12 @@ where
     and period is not null
     and offset is not null
 primary key (slot, producer_id, shard_id, period, offset);
+
+
+create table if not exists solana.producer_slot_seen (
+    producer_id blob,
+    slot bigint,
+    created_at timestamp,
+    primary key (producer_id, slot)
+)
+with clustering order by (slot DESC);

@@ -1,6 +1,6 @@
 use {
     super::{
-        common::{self, ConsumerId, ConsumerInfo, InitialOffsetPolicy},
+        common::{ConsumerId, ConsumerInfo, InitialOffsetPolicy},
         shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
@@ -10,7 +10,8 @@ use {
             MIN_PROCUDER,
         },
     },
-    futures::Stream,
+    chrono::{DateTime, TimeDelta, Utc},
+    futures::{future::try_join_all, Stream},
     scylla::{
         batch::{Batch, BatchType},
         cql_to_rust::FromCqlVal,
@@ -18,8 +19,14 @@ use {
         transport::query_result::SingleRowTypedError,
         Session,
     },
-    std::{iter::repeat, pin::Pin, sync::Arc, time::Duration},
-    tokio::{sync::mpsc, task::JoinSet, time::Instant},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        iter::repeat,
+        pin::Pin,
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::{sync::mpsc, time::Instant},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
     tracing::{error, info},
@@ -31,6 +38,8 @@ use {
         },
     },
 };
+
+const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
 
 const DEFAULT_OFFSET_COMMIT_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -45,6 +54,18 @@ const UPDATE_CONSUMER_SHARD_OFFSET: &str = r###"
         AND shard_id = ?
         AND event_type = ?
     IF offset = ?
+"###;
+
+///
+/// This query leverage the fact that partition data are always sorted by the clustering key and that scylla
+/// always iterator or scan data in cluster order. In leyman terms that mean per partition limit will always return
+/// the most recent entry for each producer_id.
+pub const LIST_PRODUCER_LAST_HEARBEAT: &str = r###"
+    SELECT
+        producer_id,
+        created_at
+    FROM producer_slot_seen
+    PER PARTITION LIMIT 1
 "###;
 
 pub const GET_MIN_OFFSET_FOR_SLOT: &str = r###"
@@ -90,6 +111,12 @@ pub const GET_SHARD_OFFSETS_FOR_CONSUMER_ID: &str = r###"
     ORDER BY shard_id ASC
 "###;
 
+pub const LIST_PRODUCERS_WITH_LOCK: &str = r###"
+    SELECT
+        producer_id
+    FROM producer_lock
+"###;
+
 pub const GET_PRODUCERS_CONSUMER_COUNT: &str = r###"
     SELECT
         producer_id,
@@ -129,21 +156,24 @@ pub async fn get_shard_offsets_info_for_consumer_id(
     session: Arc<Session>,
     consumer_id: impl AsRef<str>,
     producer_id: ProducerId,
+    ev_types_to_include: &[BlockchainEventType],
 ) -> anyhow::Result<Vec<(ShardId, BlockchainEventType, ShardOffset)>> {
-    let qr = session
+    session
         .query(
             GET_SHARD_OFFSETS_FOR_CONSUMER_ID,
             (consumer_id.as_ref(), producer_id),
         )
-        .await?;
-
-    let mut ret = Vec::new();
-    for result in qr.rows_typed_or_empty::<(ShardId, BlockchainEventType, ShardOffset)>() {
-        let typed_row = result?;
-        ret.push(typed_row);
-    }
-
-    Ok(ret)
+        .await?
+        .rows_typed_or_empty::<(ShardId, BlockchainEventType, ShardOffset)>()
+        .filter(|result| {
+            if let Ok(triplet) = result {
+                ev_types_to_include.contains(&triplet.1)
+            } else {
+                false
+            }
+        })
+        .collect::<Result<Vec<(ShardId, BlockchainEventType, ShardOffset)>, _>>()
+        .map_err(anyhow::Error::new)
 }
 
 ///
@@ -162,20 +192,76 @@ pub async fn get_producer_id_for_consumer(
 }
 
 ///
+/// Returns a list of producer that has a lock
+///
+async fn list_producers_with_lock_held(session: Arc<Session>) -> anyhow::Result<Vec<ProducerId>> {
+    session
+        .query(LIST_PRODUCERS_WITH_LOCK, &[])
+        .await?
+        .rows_typed::<(ProducerId,)>()?
+        .map(|result| result.map(|row| row.0))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::new)
+}
+
+async fn list_producers_heartbeat(
+    session: Arc<Session>,
+    heartbeat_time_dt: Duration,
+) -> anyhow::Result<Vec<ProducerId>> {
+    let utc_now = Utc::now();
+    let min_last_heartbeat = utc_now
+        .checked_sub_signed(TimeDelta::seconds(heartbeat_time_dt.as_secs().try_into()?))
+        .ok_or(anyhow::anyhow!("Invalid heartbeat time delta"))?;
+
+    let producer_id_with_last_hb_datetime_pairs = session
+        .query(LIST_PRODUCER_LAST_HEARBEAT, &[])
+        .await?
+        .rows_typed::<(ProducerId, DateTime<Utc>)>()?
+        //.map(|result| result.map(|row| row.0))
+        .collect::<Result<Vec<_>, _>>()?;
+    //.map_err(anyhow::Error::new)
+
+    Ok(producer_id_with_last_hb_datetime_pairs
+        .into_iter()
+        .filter(|(_, last_hb)| last_hb >= &min_last_heartbeat)
+        .map(|(pid, _)| pid)
+        .collect::<Vec<_>>())
+}
+
+///
 /// Returns the producer id with least consumer assignment.
 ///
-pub async fn get_producer_id_with_least_assigned_consumer(
+async fn get_producer_id_with_least_assigned_consumer(
     session: Arc<Session>,
-) -> anyhow::Result<Option<ProducerId>> {
-    let res = session
+) -> anyhow::Result<ProducerId> {
+    let locked_producers = list_producers_with_lock_held(Arc::clone(&session)).await?;
+    let recently_active_producers = BTreeSet::from_iter(
+        list_producers_heartbeat(Arc::clone(&session), DEFAULT_LAST_HEARTBEAT_TIME_DELTA).await?,
+    );
+
+    let elligible_producers = locked_producers
+        .into_iter()
+        .filter(|producer_id| recently_active_producers.contains(producer_id))
+        .collect::<BTreeSet<_>>();
+
+    let mut producer_count_pairs = session
         .query(GET_PRODUCERS_CONSUMER_COUNT, &[])
         .await?
-        .rows_typed_or_empty::<(ProducerId, i32)>()
-        .map(|result| result.unwrap())
-        .min_by_key(|r| r.1)
-        .map(|r| r.0);
+        .rows_typed::<(ProducerId, i32)>()?
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
-    Ok(res)
+    elligible_producers.iter().for_each(|producer_id| {
+        producer_count_pairs
+            .entry(producer_id.to_owned())
+            .or_insert(0);
+    });
+
+    producer_count_pairs
+        .into_iter()
+        .filter(|(producer_id, _)| elligible_producers.contains(producer_id))
+        .min_by_key(|(_, count)| *count)
+        .map(|(producer_id, _)| producer_id)
+        .ok_or(anyhow::anyhow!("No producer is available right now"))
 }
 
 ///
@@ -214,10 +300,48 @@ fn get_blockchain_event_types(
     }
 }
 
+async fn register_new_consumer(
+    session: Arc<Session>,
+    consumer_id: impl AsRef<str>,
+    initial_offset_policy: InitialOffsetPolicy,
+    event_sub_policy: EventSubscriptionPolicy,
+) -> anyhow::Result<ConsumerInfo> {
+    let producer_id = get_producer_id_with_least_assigned_consumer(Arc::clone(&session)).await?;
+
+    session
+        .query(
+            INSERT_CONSUMER_PRODUCER_MAPPING,
+            (consumer_id.as_ref(), producer_id),
+        )
+        .await?;
+
+    info!(
+        "consumer {:?} successfully assigned producer {:?}",
+        consumer_id.as_ref(),
+        producer_id
+    );
+    let initital_shard_offsets = set_initial_consumer_shard_offsets(
+        Arc::clone(&session),
+        consumer_id.as_ref(),
+        producer_id,
+        initial_offset_policy,
+        event_sub_policy,
+    )
+    .await?;
+    let cs = ConsumerInfo {
+        consumer_id: String::from(consumer_id.as_ref()),
+        producer_id,
+        initital_shard_offsets,
+        subscribed_blockchain_event_types: get_blockchain_event_types(event_sub_policy),
+    };
+
+    Ok(cs)
+}
+
 ///
 /// Gets an existing consumer with id = `consumer_id` if exists, otherwise creates a new consumer.
 ///
-pub async fn get_or_register_consumer(
+async fn get_or_register_consumer(
     session: Arc<Session>,
     consumer_id: impl AsRef<str>,
     initial_offset_policy: InitialOffsetPolicy,
@@ -225,74 +349,41 @@ pub async fn get_or_register_consumer(
 ) -> anyhow::Result<ConsumerInfo> {
     let maybe_producer_id =
         get_producer_id_for_consumer(Arc::clone(&session), consumer_id.as_ref()).await?;
-    let producer_id = if let Some(producer_id) = maybe_producer_id {
+
+    if let Some(producer_id) = maybe_producer_id {
         info!(
             "consumer {:?} exists with producer {:?} assigned to it",
             consumer_id.as_ref(),
             producer_id
         );
-        producer_id
-    } else {
-        let maybe = get_producer_id_with_least_assigned_consumer(Arc::clone(&session)).await?;
 
-        let producer_id = if let Some(producer_id) = maybe {
-            producer_id
-        } else {
-            let producer = get_producer_info_by_id_or_any(Arc::clone(&session), None).await?;
-            producer.expect("No producer registered").producer_id
-        };
-        info!(
-            "consumer {:?} does not exists, will try to assign producer {:?}",
-            consumer_id.as_ref(),
-            producer_id
-        );
-
-        session
-            .query(
-                INSERT_CONSUMER_PRODUCER_MAPPING,
-                (consumer_id.as_ref(), producer_id),
-            )
-            .await?;
-        info!(
-            "consumer {:?} successfully assigned producer {:?}",
-            consumer_id.as_ref(),
-            producer_id
-        );
-        producer_id
-    };
-
-    let ev_types = get_blockchain_event_types(event_sub_policy);
-
-    let shard_offsets = get_shard_offsets_info_for_consumer_id(
-        Arc::clone(&session),
-        consumer_id.as_ref(),
-        producer_id,
-    )
-    .await?;
-    let shard_offsets = if !shard_offsets.is_empty() {
-        shard_offsets
-    } else {
-        info!(
-            "new consumer {:?} initial offset policy {:?}",
-            consumer_id.as_ref(),
-            initial_offset_policy
-        );
-        set_initial_consumer_shard_offsets(
+        let ev_types = get_blockchain_event_types(event_sub_policy);
+        let shard_offsets = get_shard_offsets_info_for_consumer_id(
             Arc::clone(&session),
             consumer_id.as_ref(),
             producer_id,
+            &ev_types,
+        )
+        .await?;
+        if shard_offsets.is_empty() {
+            anyhow::bail!("Consumer state is corrupted, existing consumer should have offset already available.");
+        }
+        let cs = ConsumerInfo {
+            consumer_id: String::from(consumer_id.as_ref()),
+            producer_id,
+            initital_shard_offsets: shard_offsets,
+            subscribed_blockchain_event_types: ev_types,
+        };
+        Ok(cs)
+    } else {
+        register_new_consumer(
+            session,
+            consumer_id,
             initial_offset_policy,
             event_sub_policy,
         )
-        .await?
-    };
-    let cs = ConsumerInfo {
-        consumer_id: String::from(consumer_id.as_ref()),
-        producer_id,
-        shard_offsets,
-        subscribed_blockchain_event_types: ev_types,
-    };
-    Ok(cs)
+        .await
+    }
 }
 
 /// Sets the initial shard offsets for a newly created consumer based on [[`InitialOffsetPolicy`]].
@@ -414,34 +505,22 @@ impl YellowstoneLog for ScyllaYsLog {
         let account_update_event_filter = cr.account_update_event_filter;
         let tx_event_filter = cr.tx_event_filter;
 
-        let session = Arc::clone(&self.session);
-        let consumer_info = get_or_register_consumer(
-            session,
-            consumer_id.as_str(),
-            initial_offset_policy,
-            event_subscription_policy,
-        )
-        .await
-        .map_err(|e| {
-            error!("{:?}", e);
-            tonic::Status::new(
-                tonic::Code::Internal,
-                format!("failed to get or create consumer {:?}", consumer_id),
-            )
-        })?;
-
         let req = SpawnGrpcConsumerReq {
-            session: Arc::clone(&self.session),
-            consumer_info,
+            consumer_id,
             account_update_event_filter,
             tx_event_filter,
             buffer_capacity: None,
             offset_commit_interval: None,
         };
 
-        let rx = spawn_grpc_consumer(req)
-            .await
-            .map_err(|_e| tonic::Status::internal("fail to spawn consumer"))?;
+        let rx = spawn_grpc_consumer(
+            Arc::clone(&self.session),
+            req,
+            initial_offset_policy,
+            event_subscription_policy,
+        )
+        .await
+        .map_err(|_e| tonic::Status::internal("fail to spawn consumer"))?;
 
         let ret = ReceiverStream::new(rx);
 
@@ -450,7 +529,7 @@ impl YellowstoneLog for ScyllaYsLog {
     }
 }
 
-struct GrpcConsumerSession {
+struct GrpcConsumerSource {
     session: Arc<Session>,
     consumer_info: ConsumerInfo,
     sender: mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>,
@@ -460,8 +539,7 @@ struct GrpcConsumerSession {
 }
 
 pub struct SpawnGrpcConsumerReq {
-    pub session: Arc<Session>,
-    pub consumer_info: common::ConsumerInfo,
+    pub consumer_id: ConsumerId,
     pub account_update_event_filter:
         Option<yellowstone_grpc_proto::yellowstone::log::AccountUpdateEventFilter>,
     pub tx_event_filter: Option<yellowstone_grpc_proto::yellowstone::log::TransactionEventFilter>,
@@ -469,11 +547,29 @@ pub struct SpawnGrpcConsumerReq {
     pub offset_commit_interval: Option<Duration>,
 }
 
+type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>;
+
 pub async fn spawn_grpc_consumer(
-    spawnreq: SpawnGrpcConsumerReq,
-) -> anyhow::Result<mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>> {
-    let session = spawnreq.session;
-    let buffer_capacity = spawnreq
+    session: Arc<Session>,
+    req: SpawnGrpcConsumerReq,
+    initial_offset_policy: InitialOffsetPolicy,
+    event_subscription_policy: EventSubscriptionPolicy,
+) -> anyhow::Result<GrpcConsumerReceiver> {
+    let consumer_info = get_or_register_consumer(
+        Arc::clone(&session),
+        req.consumer_id.as_str(),
+        initial_offset_policy,
+        event_subscription_policy,
+    )
+    .await
+    .map_err(|e| {
+        error!("{:?}", e);
+        tonic::Status::new(
+            tonic::Code::Internal,
+            format!("failed to get or create consumer {:?}", req.consumer_id),
+        )
+    })?;
+    let buffer_capacity = req
         .buffer_capacity
         .unwrap_or(DEFAULT_CONSUMER_STREAM_BUFFER_CAPACITY);
     let (sender, receiver) = mpsc::channel(buffer_capacity);
@@ -481,42 +577,28 @@ pub async fn spawn_grpc_consumer(
     let consumer_session = Arc::clone(&session);
 
     let shard_filter = ShardFilter {
-        tx_account_keys: spawnreq
+        tx_account_keys: req
             .tx_event_filter
             .map(|f| f.account_keys)
             .unwrap_or_default(),
-        account_pubkyes: spawnreq
+        account_pubkyes: req
             .account_update_event_filter
             .as_ref()
             .map(|f| f.pubkeys.to_owned())
             .unwrap_or_default(),
-        account_owners: spawnreq
+        account_owners: req
             .account_update_event_filter
             .as_ref()
             .map(|f| f.owners.to_owned())
             .unwrap_or_default(),
     };
 
-    // We pre-warm all the shard iterator before streaming any event
-    let mut prewarm_set: JoinSet<anyhow::Result<ShardIterator>> = JoinSet::new();
-
-    // if the subscription policy requires to listen to both transaction + account update we have to double the amount of shard iterator.
-    let mut account_update_shard_iterators = Vec::new();
-    let mut new_tx_shard_iterators = Vec::new();
-
-    for (shard_id, ev_type, shard_offset) in spawnreq.consumer_info.shard_offsets.iter().cloned() {
-        if !spawnreq
-            .consumer_info
-            .subscribed_blockchain_event_types
-            .contains(&ev_type)
-        {
-            continue;
-        }
-        let session = Arc::clone(&session);
-        let producer_id = spawnreq.consumer_info.producer_id;
-        let shard_filter = shard_filter.clone();
-        prewarm_set.spawn(async move {
-            let mut shard_iterator = ShardIterator::new(
+    let shard_iterators = try_join_all(consumer_info.initital_shard_offsets.iter().cloned().map(
+        |(shard_id, ev_type, shard_offset)| {
+            let session = Arc::clone(&session);
+            let producer_id = consumer_info.producer_id;
+            let shard_filter = shard_filter.clone();
+            ShardIterator::new(
                 session,
                 producer_id,
                 shard_id,
@@ -525,35 +607,15 @@ pub async fn spawn_grpc_consumer(
                 ev_type,
                 Some(shard_filter),
             )
-            .await?;
-            shard_iterator.warm().await?;
-            Ok(shard_iterator)
-        });
-    }
+        },
+    ))
+    .await?;
 
-    info!(
-        "Prewarming shard iterators for consumer {}...",
-        spawnreq.consumer_info.consumer_id
-    );
-    // Wait each shard iterator to finish warming up
-    while let Some(result) = prewarm_set.join_next().await {
-        let shard_iterator = result??;
-        match shard_iterator.event_type {
-            BlockchainEventType::AccountUpdate => {
-                account_update_shard_iterators.push(shard_iterator)
-            }
-            BlockchainEventType::NewTransaction => new_tx_shard_iterators.push(shard_iterator),
-        }
-    }
-
-    let shard_iterators = interleave(account_update_shard_iterators, new_tx_shard_iterators);
-
-    let consumer = GrpcConsumerSession::new(
+    let consumer = GrpcConsumerSource::new(
         consumer_session,
-        spawnreq.consumer_info,
+        consumer_info,
         sender,
-        spawnreq
-            .offset_commit_interval
+        req.offset_commit_interval
             .unwrap_or(DEFAULT_OFFSET_COMMIT_INTERVAL),
         shard_iterators,
     )
@@ -662,37 +724,18 @@ impl UpdateShardOffsetClosure {
     }
 }
 
-fn interleave<IT>(it1: IT, it2: IT) -> Vec<<IT as IntoIterator>::Item>
-where
-    IT: IntoIterator,
-{
-    let mut ret = vec![];
-    let mut iter1 = it1.into_iter();
-    let mut iter2 = it2.into_iter();
-    loop {
-        match (iter1.next(), iter2.next()) {
-            (Some(x), Some(y)) => {
-                ret.push(x);
-                ret.push(y);
-            }
-            (Some(x), None) => ret.push(x),
-            (None, Some(y)) => ret.push(y),
-            (None, None) => break,
-        }
-    }
-
-    ret
-}
-
-impl GrpcConsumerSession {
+impl GrpcConsumerSource {
     async fn new(
         session: Arc<Session>,
         consumer_info: ConsumerInfo,
         sender: mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>,
         offset_commit_interval: Duration,
-        shard_iterators: Vec<ShardIterator>,
+        mut shard_iterators: Vec<ShardIterator>,
     ) -> anyhow::Result<Self> {
-        Ok(GrpcConsumerSession {
+        // Prewarm every shard iterator
+        try_join_all(shard_iterators.iter_mut().map(|shard_it| shard_it.warm())).await?;
+
+        Ok(GrpcConsumerSource {
             session,
             consumer_info,
             sender,
@@ -714,7 +757,7 @@ impl GrpcConsumerSession {
 
         info!("Serving consumer: {:?}", consumer_id);
 
-        let mut last_committed_offsets = self.consumer_info.shard_offsets.clone();
+        let mut last_committed_offsets = self.consumer_info.initital_shard_offsets.clone();
         last_committed_offsets.sort_by_key(|tuple| (tuple.0, tuple.1));
         self.shard_iterators
             .sort_by_key(|it| (it.shard_id, it.event_type));
