@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.11+solana.1.18.12"
+version = "1.0.0-rc.11+solana.1.18.13"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
@@ -52,7 +52,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid = { workspace = true, optional = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
-
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
