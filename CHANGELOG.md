@@ -14,9 +14,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: use runtime instaed of unconstrained ([#332](https://github.com/rpcpool/yellowstone-grpc/pull/332))
-
 ### Breaking
+
+## 2024-05-15
+
+- yellowstone-grpc-client-1.15.0+solana.1.18.13
+- yellowstone-grpc-geyser-1.14.2+solana.1.18.13
+- yellowstone-grpc-proto-1.14.0+solana.1.18.13
+- yellowstone-grpc-tools-1.0.0-rc.11+solana.1.18.13
+
+### Features
+
+- geyser: use runtime instaed of unconstrained ([#332](https://github.com/rpcpool/yellowstone-grpc/pull/332))
+- solana: update to 1.18.13 ([#339](https://github.com/rpcpool/yellowstone-grpc/pull/339))
 
 ## 2024-04-30
 
