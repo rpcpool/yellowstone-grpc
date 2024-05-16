@@ -1,0 +1,12 @@
+{
+    "prometheus": "127.0.0.1:8873",
+    "scylladb": {
+        "hostname": "localhost:9042",
+        "username": "cassandra",
+        "password": "cassandra"
+    },
+    "yellowstone_log_server": {
+        "listen": "localhost:10001",
+        "keyspace": "solana"
+    }
+}

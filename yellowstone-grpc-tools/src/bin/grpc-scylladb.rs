@@ -1,24 +1,31 @@
 use {
     anyhow::Ok,
     clap::{Parser, Subcommand},
-    futures::{future::BoxFuture, stream::StreamExt},
+    futures::{future::BoxFuture, stream::StreamExt, TryFutureExt},
     scylla::{frame::Compression, Session, SessionBuilder},
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::time::Instant,
+    tonic::transport::Server,
     tracing::{error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
-        prelude::subscribe_update::UpdateOneof, yellowstone::log::EventSubscriptionPolicy,
+        prelude::subscribe_update::UpdateOneof,
+        yellowstone::log::{
+            yellowstone_log_server::{self, YellowstoneLog, YellowstoneLogServer},
+            EventSubscriptionPolicy,
+        },
     },
     yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
         create_shutdown,
         prom::run_server as prometheus_run_server,
         scylladb::{
-            config::{Config, ConfigGrpc2ScyllaDB, ScyllaDbConnectionInfo},
+            config::{
+                Config, ConfigGrpc2ScyllaDB, ConfigYellowstoneLogServer, ScyllaDbConnectionInfo,
+            },
             consumer::{
                 common::InitialOffsetPolicy,
-                grpc::{spawn_grpc_consumer, SpawnGrpcConsumerReq},
+                grpc::{spawn_grpc_consumer, ScyllaYsLog, SpawnGrpcConsumerReq},
             },
             sink::ScyllaSink,
             types::Transaction,
@@ -50,9 +57,11 @@ enum ArgsAction {
     /// Receive data from gRPC and send them to the Kafka
     #[command(name = "grpc2scylla")]
     Grpc2Scylla,
+
     /// Receive data from Kafka and send them over gRPC
-    #[command(name = "scylla2grpc")]
-    Scylla2Grpc,
+    #[command(name = "yellowstone-log-server")]
+    YellowstoneLogServer,
+
     #[command(name = "test")]
     Test,
 }
@@ -67,8 +76,11 @@ impl ArgsAction {
                 })?;
                 Self::grpc2scylladb(config2, config.scylladb, shutdown).await
             }
-            ArgsAction::Scylla2Grpc => {
-                unimplemented!();
+            ArgsAction::YellowstoneLogServer => {
+                let config2 = config.yellowstone_log_server.ok_or_else(|| {
+                    anyhow::anyhow!("`grpc2scylladb` section in config should be defined")
+                })?;
+                Self::yellowstone_log_server(config2, config.scylladb, shutdown).await
             }
             ArgsAction::Test => {
                 let config2 = config.grpc2scylladb.ok_or_else(|| {
@@ -76,6 +88,39 @@ impl ArgsAction {
                 })?;
                 Self::test(config2, config.scylladb, shutdown).await
             }
+        }
+    }
+
+    async fn yellowstone_log_server(
+        config: ConfigYellowstoneLogServer,
+        scylladb_conn_config: ScyllaDbConnectionInfo,
+        mut shutdown: BoxFuture<'static, ()>,
+    ) -> anyhow::Result<()> {
+        let addr = config.listen.parse().unwrap();
+
+        let session: Session = SessionBuilder::new()
+            .known_node(scylladb_conn_config.hostname)
+            .user(scylladb_conn_config.username, scylladb_conn_config.password)
+            .compression(Some(Compression::Lz4))
+            .use_keyspace(config.keyspace.clone(), false)
+            .build()
+            .await?;
+
+        let session = Arc::new(session);
+        let scylla_ys_log = ScyllaYsLog::new(session);
+        let ys_log_server = YellowstoneLogServer::new(scylla_ys_log);
+
+        println!("YellowstoneLogServer listening on {}", addr);
+
+        let server_fut = Server::builder()
+            // GrpcWeb is over http1 so we must enable it.
+            .add_service(ys_log_server)
+            .serve(addr)
+            .map_err(anyhow::Error::new);
+
+        tokio::select! {
+            _ = &mut shutdown => Ok(()),
+            result = server_fut => result,
         }
     }
 
