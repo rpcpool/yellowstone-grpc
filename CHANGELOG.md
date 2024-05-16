@@ -26,7 +26,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser: use runtime instaed of unconstrained ([#332](https://github.com/rpcpool/yellowstone-grpc/pull/332))
-- solana: update to 1.18.13 ([#337](https://github.com/rpcpool/yellowstone-grpc/pull/337))
+- solana: update to 1.18.13 ([#339](https://github.com/rpcpool/yellowstone-grpc/pull/339))
 
 ## 2024-04-30
 
