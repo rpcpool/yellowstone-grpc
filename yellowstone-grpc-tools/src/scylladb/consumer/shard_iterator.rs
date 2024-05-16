@@ -7,6 +7,7 @@ use {
     scylla::{prepared_statement::PreparedStatement, Session},
     std::{collections::VecDeque, sync::Arc},
     tokio::sync::oneshot::{self, error::TryRecvError},
+    tracing::warn,
 };
 
 const MICRO_BATCH_SIZE: usize = 40;
@@ -240,12 +241,9 @@ impl ShardIterator {
                 .rows_typed_or_empty::<BlockchainEvent>()
                 .collect::<Result<VecDeque<_>, _>>()
                 .expect("failed to typed scylladb rows");
-            sender
-                .send(micro_batch)
-                .map_err(|_| ())
-                .unwrap_or_else(|_| {
-                    panic!("Failed to send micro batch to shard iterator {}", shard_id)
-                });
+            if sender.send(micro_batch).is_err() {
+                warn!("Shard iterator {shard_id} was fetching micro batch, but client closed its stream half.")
+            }
         });
         receiver
     }

@@ -29,7 +29,7 @@ use {
     tokio::{sync::mpsc, time::Instant},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
-    tracing::{error, info},
+    tracing::{error, info, warn},
     uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -38,6 +38,10 @@ use {
         },
     },
 };
+
+const CLIENT_LAG_WARN_THRESHOLD: Duration = Duration::from_millis(250);
+
+const FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD: Duration = Duration::from_millis(500);
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
 
@@ -235,8 +239,15 @@ async fn get_producer_id_with_least_assigned_consumer(
     session: Arc<Session>,
 ) -> anyhow::Result<ProducerId> {
     let locked_producers = list_producers_with_lock_held(Arc::clone(&session)).await?;
+
+    info!("{} producer lock(s) detected", locked_producers.len());
     let recently_active_producers = BTreeSet::from_iter(
         list_producers_heartbeat(Arc::clone(&session), DEFAULT_LAST_HEARTBEAT_TIME_DELTA).await?,
+    );
+
+    info!(
+        "{} living producer(s) detected",
+        recently_active_producers.len()
     );
 
     let elligible_producers = locked_producers
@@ -244,10 +255,11 @@ async fn get_producer_id_with_least_assigned_consumer(
         .filter(|producer_id| recently_active_producers.contains(producer_id))
         .collect::<BTreeSet<_>>();
 
+    info!("{} elligible producer(s)", recently_active_producers.len());
     let mut producer_count_pairs = session
         .query(GET_PRODUCERS_CONSUMER_COUNT, &[])
         .await?
-        .rows_typed::<(ProducerId, i32)>()?
+        .rows_typed::<(ProducerId, i64)>()?
         .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     elligible_producers.iter().for_each(|producer_id| {
@@ -308,9 +320,10 @@ async fn register_new_consumer(
 ) -> anyhow::Result<ConsumerInfo> {
     let producer_id = get_producer_id_with_least_assigned_consumer(Arc::clone(&session)).await?;
 
+    let insert_consumer_mapping_ps = session.prepare(INSERT_CONSUMER_PRODUCER_MAPPING).await?;
     session
-        .query(
-            INSERT_CONSUMER_PRODUCER_MAPPING,
+        .execute(
+            &insert_consumer_mapping_ps,
             (consumer_id.as_ref(), producer_id),
         )
         .await?;
@@ -376,6 +389,8 @@ async fn get_or_register_consumer(
         };
         Ok(cs)
     } else {
+        let cid = consumer_id.as_ref();
+        info!("Bootstrapping consumer {cid}");
         register_new_consumer(
             session,
             consumer_id,
@@ -472,6 +487,12 @@ pub struct ScyllaYsLog {
     session: Arc<Session>,
 }
 
+impl ScyllaYsLog {
+    pub fn new(session: Arc<Session>) -> Self {
+        ScyllaYsLog { session }
+    }
+}
+
 pub type LogStream = Pin<Box<dyn Stream<Item = Result<SubscribeUpdate, tonic::Status>> + Send>>;
 
 #[tonic::async_trait]
@@ -504,6 +525,12 @@ impl YellowstoneLog for ScyllaYsLog {
         let event_subscription_policy = cr.event_subscription_policy();
         let account_update_event_filter = cr.account_update_event_filter;
         let tx_event_filter = cr.tx_event_filter;
+
+        info!(
+            consumer_id = consumer_id,
+            initital_offset_policy = ?initial_offset_policy,
+            event_subscription_policy = ?event_subscription_policy,
+        );
 
         let req = SpawnGrpcConsumerReq {
             consumer_id,
@@ -762,10 +789,25 @@ impl GrpcConsumerSource {
         self.shard_iterators
             .sort_by_key(|it| (it.shard_id, it.event_type));
 
+        let mut max_seen_slot = -1;
+        let mut num_event_between_two_slots = 0;
+
+        let mut t = Instant::now();
         loop {
             for shard_it in self.shard_iterators.iter_mut() {
                 let maybe = shard_it.try_next().await?;
                 if let Some(block_chain_event) = maybe {
+                    if t.elapsed() >= FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD {
+                        warn!(
+                            "consumer {consumer_id} micro batch took {:?} to fetch.",
+                            t.elapsed()
+                        );
+                    }
+                    if max_seen_slot < block_chain_event.slot {
+                        info!("Consumer {consumer_id} reach slot {max_seen_slot} after {num_event_between_two_slots} blockchain event(s)");
+                        max_seen_slot = block_chain_event.slot;
+                        num_event_between_two_slots = 0;
+                    }
                     let geyser_event = match block_chain_event.event_type {
                         BlockchainEventType::AccountUpdate => {
                             UpdateOneof::Account(block_chain_event.try_into()?)
@@ -778,9 +820,18 @@ impl GrpcConsumerSource {
                         filters: Default::default(),
                         update_oneof: Some(geyser_event),
                     };
-                    self.sender.send(Ok(subscribe_update)).await.map_err(|_| {
-                        anyhow::anyhow!("Failed to deliver message to consumer {}", consumer_id)
-                    })?;
+                    let t_send = Instant::now();
+
+                    if self.sender.send(Ok(subscribe_update)).await.is_err() {
+                        warn!("Consumer {consumer_id} closed its streaming half");
+                        return Ok(());
+                    }
+                    let send_latency = t_send.elapsed();
+                    if send_latency >= CLIENT_LAG_WARN_THRESHOLD {
+                        warn!("Slow read from consumer {consumer_id}, recorded latency: {send_latency:?}")
+                    }
+                    num_event_between_two_slots += 1;
+                    t = Instant::now();
                 }
             }
 
@@ -805,10 +856,7 @@ impl GrpcConsumerSource {
                 if let Err(_actual_offset_in_scylla) = result {
                     anyhow::bail!("two concurrent connections are using the same consumer instance")
                 }
-                info!(
-                    "Successfully committed offsets for consumer {:?}",
-                    consumer_id
-                );
+                info!("Successfully committed offsets for consumer {consumer_id}");
                 std::mem::swap(&mut new_offsets_to_commit, &mut last_committed_offsets);
                 commit_offset_deadline = Instant::now() + self.offset_commit_interval;
             }
