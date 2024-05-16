@@ -40,6 +40,7 @@ pub struct Config {
     pub prometheus: Option<SocketAddr>,
     pub scylladb: ScyllaDbConnectionInfo,
     pub grpc2scylladb: Option<ConfigGrpc2ScyllaDB>,
+    pub yellowstone_log_server: Option<ConfigYellowstoneLogServer>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -51,6 +52,14 @@ pub struct ScyllaDbConnectionInfo {
     pub username: String,
     #[serde(default = "default_scylla_password")]
     pub password: String,
+}
+
+#[serde_as]
+#[derive(Debug, Deserialize)]
+pub struct ConfigYellowstoneLogServer {
+    pub listen: String,
+    #[serde(default = "default_keyspace")]
+    pub keyspace: String,
 }
 
 #[serde_as]

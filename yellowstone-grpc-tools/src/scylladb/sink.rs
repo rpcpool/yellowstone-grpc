@@ -261,10 +261,11 @@ impl Shard {
                         .execute(&commit_period_ps, (producer_id, shard_id, curr_period - 1))
                         .await?;
                     info!(
-                        shard = shard_id,
-                        producer_id = ?self.producer_id,
-                        committed_period = curr_period,
-                        time_to_commit = ?t.elapsed()
+                        "shard={},producer_id={:?} committed period: {}: time to commit: {:?}",
+                        shard_id,
+                        self.producer_id,
+                        curr_period,
+                        t.elapsed()
                     );
                 }
 

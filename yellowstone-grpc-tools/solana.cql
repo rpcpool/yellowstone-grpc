@@ -3,7 +3,7 @@ CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', '
 drop materialized view if exists solana.producer_consumer_mapping_mv;
 drop materialized view if exists solana.slot_map;
 
-drop table if exists solana.producer_slot_seen;
+drop table if exists solana.producer_max_approx_slot;
 drop table if exists solana.shard_statistics;
 drop table if exists solana.producer_info;
 drop table if exists solana.consumer_info;
