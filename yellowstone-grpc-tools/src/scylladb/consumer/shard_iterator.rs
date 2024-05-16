@@ -49,13 +49,15 @@ pub const GET_NEW_TRANSACTION_EVENT: &str = r###"
     ALLOW FILTERING
 "###;
 
-const PRODUCER_SHARD_PERIOD_COMMIT_EXISTS: &str = r###"
+const GET_LAST_SHARD_PERIOD_COMMIT: &str = r###"
     SELECT
         period
     FROM producer_period_commit_log
     WHERE 
         producer_id = ?
         AND shard_id = ?
+    ORDER BY period DESC
+    PER PARTITION LIMIT 1
 "###;
 
 /// Represents the state of a shard iterator, which is used to manage the iteration
@@ -137,7 +139,7 @@ pub(crate) struct ShardIterator {
     inner: ShardIteratorState,
     pub(crate) event_type: BlockchainEventType,
     get_events_prepared_stmt: PreparedStatement,
-    period_commit_exists_prepared_stmt: PreparedStatement,
+    get_last_shard_period_commit_prepared_stmt: PreparedStatement,
     last_period_confirmed: ShardPeriod,
     filter: ShardFilter,
 }
@@ -160,7 +162,7 @@ impl ShardIterator {
             session.prepare(GET_NEW_TRANSACTION_EVENT).await?
         };
 
-        let period_commit_exists_ps = session.prepare(PRODUCER_SHARD_PERIOD_COMMIT_EXISTS).await?;
+        let get_last_shard_period_commit = session.prepare(GET_LAST_SHARD_PERIOD_COMMIT).await?;
 
         Ok(ShardIterator {
             session,
@@ -169,7 +171,7 @@ impl ShardIterator {
             inner: ShardIteratorState::Empty(offset),
             event_type,
             get_events_prepared_stmt: get_events_ps,
-            period_commit_exists_prepared_stmt: period_commit_exists_ps,
+            get_last_shard_period_commit_prepared_stmt: get_last_shard_period_commit,
             last_period_confirmed: (offset / SHARD_OFFSET_MODULO) - 1,
             filter: filter.unwrap_or_default(),
         })
@@ -196,7 +198,7 @@ impl ShardIterator {
     fn is_period_committed(&self, last_offset: ShardOffset) -> oneshot::Receiver<bool> {
         let session = Arc::clone(&self.session);
         let producer_id = self.producer_id;
-        let ps = self.period_commit_exists_prepared_stmt.clone();
+        let ps = self.get_last_shard_period_commit_prepared_stmt.clone();
         let shard_id = self.shard_id;
         let period = last_offset / SHARD_OFFSET_MODULO;
         let (sender, receiver) = oneshot::channel();

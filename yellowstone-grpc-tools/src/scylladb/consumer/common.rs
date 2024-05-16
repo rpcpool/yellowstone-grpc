@@ -18,6 +18,6 @@ pub enum InitialOffsetPolicy {
 pub struct ConsumerInfo {
     pub consumer_id: ConsumerId,
     pub producer_id: ProducerId,
-    pub shard_offsets: Vec<(ShardId, BlockchainEventType, ShardOffset)>,
+    pub initital_shard_offsets: Vec<(ShardId, BlockchainEventType, ShardOffset)>,
     pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
 }
