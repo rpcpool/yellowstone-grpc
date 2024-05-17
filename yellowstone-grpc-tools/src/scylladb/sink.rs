@@ -5,8 +5,7 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            AccountUpdate, BlockchainEvent, ProducerId, ProducerInfo, ShardId, ShardOffset,
-            ShardPeriod, Transaction, SHARD_OFFSET_MODULO,
+            AccountUpdate, BlockchainEvent, ProducerId, ProducerInfo, ShardId, ShardOffset, ShardPeriod, Slot, Transaction, SHARD_OFFSET_MODULO, UNDEFINED_SLOT
         },
     },
     deepsize::DeepSizeOf,
@@ -323,6 +322,9 @@ pub enum ScyllaSinkError {
     SinkClose,
 }
 
+
+
+
 /// Retrieves the latest shard offsets for a specific producer from the `shard_max_offset_mv` materialized view.
 ///
 /// This asynchronous function queries the database session to fetch the latest shard offsets associated with
@@ -343,7 +345,7 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
     session: Arc<Session>,
     producer_id: ProducerId,
     num_shards: usize,
-) -> anyhow::Result<Vec<(ShardId, ShardOffset)>> {
+) -> anyhow::Result<Vec<(ShardId, ShardOffset, Slot)>> {
     let cql_shard_list = (0..num_shards)
         .map(|shard_id| format!("{shard_id}"))
         .collect::<Vec<_>>()
@@ -378,7 +380,8 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
 
     let query_max_offset_for_shard_period = r###"
         SELECT
-            offset
+            offset,
+            slot
         FROM log
         WHERE 
             producer_id = ?
@@ -396,15 +399,14 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
                 let ps = max_offset_for_shard_period_ps.clone();
                 let session = Arc::clone(&session);
                 async move {
-                    let max_offset = session
+                    let (max_offset, slot) = session
                         .execute(&ps, (producer_id, shard_id, curr_period))
                         .await?
-                        .maybe_first_row_typed::<(ShardOffset,)>()?
-                        .map(|tuple| tuple.0)
+                        .maybe_first_row_typed::<(ShardOffset, Slot)>()?
                         // If row is None, it means no period has started since the last period commit.
                         // So we seek at the end of the previous period.
-                        .unwrap_or((curr_period * SHARD_OFFSET_MODULO) - 1);
-                    Ok::<_, anyhow::Error>((*shard_id, max_offset))
+                        .unwrap_or(((curr_period * SHARD_OFFSET_MODULO) - 1, UNDEFINED_SLOT));
+                    Ok::<_, anyhow::Error>((*shard_id, max_offset, slot))
                 }
             },
         ))
@@ -637,7 +639,7 @@ impl ScyllaSink {
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);
-        for (shard_id, last_offset) in shard_offsets.into_iter() {
+        for (shard_id, last_offset, _slot) in shard_offsets.into_iter() {
             let session = Arc::clone(&session);
             let shard = Shard::new(
                 session,

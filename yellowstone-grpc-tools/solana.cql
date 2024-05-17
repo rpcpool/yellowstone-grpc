@@ -6,7 +6,7 @@ drop materialized view if exists solana.slot_map;
 drop table if exists solana.producer_slot_seen;
 drop table if exists solana.shard_statistics;
 drop table if exists solana.producer_info;
-drop table if exists solana.consumer_info;
+drop table if exists solana.consumer_shard_offset;
 drop table if exists solana.consumer_producer_mapping;
 drop table if exists solana.log;
 drop type if exists solana.transaction_meta;
@@ -19,21 +19,23 @@ drop type if exists solana.inner_instr;
 drop type if exists solana.return_data;
 
 
-create table if not exists solana.consumer_info (
+create table if not exists solana.consumer_shard_offset (
     consumer_id text,
     producer_id blob,
     shard_id smallint,
     event_type smallint,
     offset bigint,
+    slot bigint,
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY ((consumer_id, producer_id), shard_id, event_type)
 );
 
 
-create table if not exists solana.consumer_producer_mapping (
+create table if not exists solana.consumer_info (
     consumer_id text,
     producer_id blob,
+    subscribed_event_types frozen<set<smallint>>,
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY (consumer_id)
@@ -44,7 +46,7 @@ as
 select
     producer_id,
     consumer_id
-from solana.consumer_producer_mapping
+from solana.consumer_info
 where 
     consumer_id is not null
     and producer_id is not null
@@ -85,6 +87,8 @@ create table if not exists solana.producer_period_commit_log (
     PRIMARY KEY((producer_id, shard_id), period)
 )
 with clustering order by (period DESC);
+
+create index on solana.producer_period_commit_log((producer_id, shard_id), period);
 
 create table if not exists solana.shard_statistics (
     shard_id smallint,
@@ -236,10 +240,11 @@ where
 primary key (slot, producer_id, shard_id, period, offset);
 
 
-create table if not exists solana.producer_slot_seen (
-    producer_id blob,
-    slot bigint,
-    created_at timestamp,
-    primary key (producer_id, slot)
-)
-with clustering order by (slot DESC);
+-- clear all table
+
+truncate solana.log;
+truncate solana.producer_period_commit_log;
+truncate solana.producer_slot_seen;
+
+truncate solana.consumer_info;
+truncate solana.consumer_shard_offset;

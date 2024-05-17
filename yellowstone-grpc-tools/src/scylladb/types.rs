@@ -2,10 +2,7 @@ use {
     anyhow::{anyhow, Ok},
     deepsize::DeepSizeOf,
     scylla::{
-        cql_to_rust::{FromCqlVal, FromCqlValError},
-        frame::response::result::CqlValue,
-        serialize::value::SerializeCql,
-        FromRow, FromUserType, SerializeCql, SerializeRow,
+        cql_to_rust::{FromCqlVal, FromCqlValError}, frame::response::result::CqlValue, routing::Shard, serialize::value::SerializeCql, FromRow, FromUserType, SerializeCql, SerializeRow
     },
     std::iter::repeat,
     yellowstone_grpc_proto::{
@@ -16,18 +13,39 @@ use {
     },
 };
 
-pub const SHARD_OFFSET_MODULO: i64 = 10000;
 
 pub type ProgramId = [u8; 32];
-
+pub type Pubkey = [u8; 32];
 pub type Slot = i64;
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
 pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machine
-
+pub type ConsumerId = String;
+pub const SHARD_OFFSET_MODULO: i64 = 10000;
 pub const MIN_PROCUDER: ProducerId = [0x00];
 pub const MAX_PRODUCER: ProducerId = [0xFF];
+pub const UNDEFINED_SLOT: Slot = -1;
+
+
+#[derive(Clone, Debug, PartialEq, Eq, FromRow)]
+pub struct ConsumerInfo {
+    pub consumer_id: ConsumerId,
+    pub producer_id: ProducerId,
+    //pub initital_shard_offsets: Vec<ConsumerShardOffset>,
+    pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
+}
+
+
+#[derive(Clone, Debug, PartialEq, Eq, FromRow)]
+pub struct ConsumerShardOffset {
+    pub consumer_id: ConsumerId,
+    pub producer_id: ProducerId,
+    pub shard_id: ShardId,
+    pub event_type: BlockchainEventType,
+    pub offset: ShardOffset,
+    pub slot: Slot
+}
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
 pub enum BlockchainEventType {
@@ -115,7 +133,6 @@ pub struct BlockchainEvent {
     pub tx_index: Option<i64>,
 }
 
-type Pubkey = [u8; 32];
 
 #[derive(SerializeRow, Clone, Debug, DeepSizeOf, PartialEq, Eq)]
 pub struct AccountUpdate {
