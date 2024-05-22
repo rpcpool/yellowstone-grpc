@@ -104,6 +104,8 @@ pub struct ConfigGrpc {
     /// Limits for possible filters
     #[serde(default)]
     pub filters: ConfigGrpcFilters,
+    /// x_token to enforce on connections
+    pub x_token: Option<String>,
 }
 
 impl ConfigGrpc {
