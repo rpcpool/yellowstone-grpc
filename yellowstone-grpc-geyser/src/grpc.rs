@@ -35,7 +35,6 @@ use {
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
-        metadata::MetadataValue,
         service::{interceptor::InterceptedService, Interceptor},
         transport::{
             server::{Server, TcpIncoming},
