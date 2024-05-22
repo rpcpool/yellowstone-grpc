@@ -1470,7 +1470,7 @@ struct XTokenChecker {
 }
 
 impl XTokenChecker {
-    fn new(x_token: Option<String>) -> Self {
+    const fn new(x_token: Option<String>) -> Self {
         Self { x_token }
     }
 }
