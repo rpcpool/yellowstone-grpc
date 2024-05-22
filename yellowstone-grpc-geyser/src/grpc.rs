@@ -35,6 +35,8 @@ use {
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
         codec::CompressionEncoding,
+        metadata::MetadataValue,
+        service::{interceptor::InterceptedService, Interceptor},
         transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
@@ -776,7 +778,7 @@ impl GrpcService {
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let service = GeyserServer::new(Self {
-            config,
+            config: config.clone(),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -786,6 +788,7 @@ impl GrpcService {
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip)
         .max_decoding_message_size(max_decoding_message_size);
+        let service = InterceptedService::new(service, XTokenChecker::new(config.x_token));
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
@@ -1458,5 +1461,29 @@ impl Geyser for GrpcService {
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))
+    }
+}
+
+#[derive(Clone)]
+struct XTokenChecker {
+    x_token: Option<String>,
+}
+
+impl XTokenChecker {
+    fn new(x_token: Option<String>) -> Self {
+        Self { x_token }
+    }
+}
+
+impl Interceptor for XTokenChecker {
+    fn call(&mut self, req: Request<()>) -> Result<Request<()>, Status> {
+        if let Some(x_token) = &self.x_token {
+            match req.metadata().get("x-token") {
+                Some(t) if x_token == t => Ok(req),
+                _ => Err(Status::unauthenticated("No valid auth token")),
+            }
+        } else {
+            Ok(req)
+        }
     }
 }
