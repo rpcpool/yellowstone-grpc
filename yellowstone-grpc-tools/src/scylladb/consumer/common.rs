@@ -1,7 +1,6 @@
-use crate::scylladb::types::{BlockchainEventType, ConsumerId, ConsumerShardOffset, ProducerId, ShardOffset};
+use crate::scylladb::types::{BlockchainEventType, ConsumerId, ProducerId, ShardOffset};
 
 pub type OldShardOffset = ShardOffset;
-
 
 ///
 /// Initial position in the log when creating a new consumer.

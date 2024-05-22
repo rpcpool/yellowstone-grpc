@@ -314,7 +314,8 @@ impl ShardIterator {
                 } else {
                     let curr_period = last_offset / SHARD_OFFSET_MODULO;
                     if curr_period <= self.last_period_confirmed {
-                        let last_offset_for_curr_period = ((curr_period + 1) * SHARD_OFFSET_MODULO) - 1;
+                        let last_offset_for_curr_period =
+                            ((curr_period + 1) * SHARD_OFFSET_MODULO) - 1;
                         (ShardIteratorState::Empty(last_offset_for_curr_period), None)
                     } else {
                         // If a newly loaded row stream is already empty, we must figure out if

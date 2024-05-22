@@ -10,10 +10,7 @@ use {
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::subscribe_update::UpdateOneof,
-        yellowstone::log::{
-            yellowstone_log_server::{self, YellowstoneLog, YellowstoneLogServer},
-            EventSubscriptionPolicy,
-        },
+        yellowstone::log::{yellowstone_log_server::YellowstoneLogServer, EventSubscriptionPolicy},
     },
     yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
@@ -249,8 +246,8 @@ impl ArgsAction {
                     _ => continue,
                 };
 
-                if result.is_err() {
-                    error!("errror detected in sink...");
+                if let Err(e) = result {
+                    error!("error detected in sink: {e}");
                     break;
                 }
             }

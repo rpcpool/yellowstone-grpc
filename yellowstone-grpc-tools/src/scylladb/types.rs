@@ -2,7 +2,10 @@ use {
     anyhow::{anyhow, Ok},
     deepsize::DeepSizeOf,
     scylla::{
-        cql_to_rust::{FromCqlVal, FromCqlValError}, frame::response::result::CqlValue, routing::Shard, serialize::value::SerializeCql, FromRow, FromUserType, SerializeCql, SerializeRow
+        cql_to_rust::{FromCqlVal, FromCqlValError},
+        frame::response::result::CqlValue,
+        serialize::value::SerializeCql,
+        FromRow, FromUserType, SerializeCql, SerializeRow,
     },
     std::iter::repeat,
     yellowstone_grpc_proto::{
@@ -12,7 +15,6 @@ use {
         solana::storage::confirmed_block::{self, CompiledInstruction},
     },
 };
-
 
 pub type ProgramId = [u8; 32];
 pub type Pubkey = [u8; 32];
@@ -27,7 +29,6 @@ pub const MIN_PROCUDER: ProducerId = [0x00];
 pub const MAX_PRODUCER: ProducerId = [0xFF];
 pub const UNDEFINED_SLOT: Slot = -1;
 
-
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
 pub struct ConsumerInfo {
     pub consumer_id: ConsumerId,
@@ -36,7 +37,6 @@ pub struct ConsumerInfo {
     pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
 pub struct ConsumerShardOffset {
     pub consumer_id: ConsumerId,
@@ -44,7 +44,7 @@ pub struct ConsumerShardOffset {
     pub shard_id: ShardId,
     pub event_type: BlockchainEventType,
     pub offset: ShardOffset,
-    pub slot: Slot
+    pub slot: Slot,
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
@@ -132,7 +132,6 @@ pub struct BlockchainEvent {
     pub is_vote: Option<bool>,
     pub tx_index: Option<i64>,
 }
-
 
 #[derive(SerializeRow, Clone, Debug, DeepSizeOf, PartialEq, Eq)]
 pub struct AccountUpdate {
