@@ -44,6 +44,7 @@ serde_json = { workspace = true }
 serde_with = { workspace = true, optional = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["signal", "time"] }
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip"] }
@@ -74,4 +75,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono", "thiserror"]

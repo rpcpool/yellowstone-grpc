@@ -25,11 +25,11 @@ use {
     },
     std::{
         collections::{BTreeMap, BTreeSet},
-        error::Error,
         pin::Pin,
         sync::Arc,
         time::Duration,
     },
+    thiserror::Error,
     tokio::{sync::mpsc, time::Instant},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
@@ -157,7 +157,7 @@ const GET_PRODUCER_INFO_BY_ID: &str = r###"
     WHERE producer_id = ?
 "###;
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, Error, PartialEq, Eq, Copy)]
 struct ImpossibleSlotOffset(Slot);
 
 impl fmt::Display for ImpossibleSlotOffset {
@@ -167,12 +167,8 @@ impl fmt::Display for ImpossibleSlotOffset {
     }
 }
 
-impl Error for ImpossibleSlotOffset {}
-
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, PartialEq, Error, Eq, Copy)]
 struct DeadProducerErr(ProducerId);
-
-impl Error for DeadProducerErr {}
 
 impl fmt::Display for DeadProducerErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -305,18 +301,14 @@ async fn get_producer_id_with_least_assigned_consumer(
     }
 
     if let Some(slot) = slot_requirement {
-        let ret = BTreeSet::from_iter(list_producer_with_slot(Arc::clone(&session), slot).await?);
-        info!("{} producer(s) with required slot {slot}", ret.len());
-        let to_remove = elligible_producers
-            .iter()
-            .cloned()
-            .filter(|k| !ret.contains(k))
-            .collect::<Vec<_>>();
+        let producers_with_slot =
+            BTreeSet::from_iter(list_producer_with_slot(Arc::clone(&session), slot).await?);
+        info!(
+            "{} producer(s) with required slot {slot}",
+            producers_with_slot.len()
+        );
 
-        for k in to_remove {
-            elligible_producers.remove(&k);
-        }
-
+        elligible_producers.retain(|k| producers_with_slot.contains(k));
         if elligible_producers.is_empty() {
             return Err(anyhow::Error::new(ImpossibleSlotOffset(slot)));
         }
