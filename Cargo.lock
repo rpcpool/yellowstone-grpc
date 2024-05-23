@@ -5593,6 +5593,7 @@ dependencies = [
  "serde_with 3.7.0",
  "serde_yaml",
  "sha2 0.10.8",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic 0.10.2",
