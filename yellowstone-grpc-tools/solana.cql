@@ -67,18 +67,12 @@ create table if not exists producer_lock (
     lock_id text,
     ifname text,
     ipv4 text,
+    is_ready boolean,
+    minimum_shard_offset frozen<set<tuple<smallint, bigint, bigint>>>,
     created_at timestamp,
     primary key (producer_id)
 );
 
-create table if not exists producer_period_commit_log (
-    producer_id blob,
-    shard_id smallint,
-    period bigint,
-    created_at timestamp,
-    PRIMARY KEY((producer_id, shard_id), period)
-)
-with clustering order by (period DESC);
 
 create type if not exists message_addr_table_lookup (
     account_key blob,
@@ -197,7 +191,8 @@ create table if not exists log (
 
     primary key ((shard_id, period, producer_id), offset)
 )
-WITH CLUSTERING ORDER BY (offset desc);
+WITH CLUSTERING ORDER BY (offset desc)
+    AND default_time_to_live = 86400;  -- 24 hours
 
 create table if not exists producer_slot_seen (
     producer_id blob,
@@ -206,9 +201,8 @@ create table if not exists producer_slot_seen (
     created_at timestamp,
     primary key (producer_id, slot)
 )
-with clustering order by (slot DESC);
-
-
+with clustering order by (slot DESC)
+     AND default_time_to_live = 82800; -- 23 hours
 
 create materialized view if not exists slot_map_mv
 as
@@ -228,11 +222,21 @@ where
 primary key (slot, producer_id, shard_id, period, offset);
 
 
+create table if not exists producer_period_commit_log (
+    producer_id blob,
+    shard_id smallint,
+    period bigint,
+    created_at timestamp,
+    PRIMARY KEY((producer_id, shard_id), period)
+) with clustering order by (period desc)
+       AND default_time_to_live = 82800; -- 23 hours
+
 -- clear all table
 
 truncate log;
 truncate producer_period_commit_log;
 truncate producer_slot_seen;
+truncate producer_lock;
 
 truncate consumer_info;
 truncate consumer_shard_offset;
