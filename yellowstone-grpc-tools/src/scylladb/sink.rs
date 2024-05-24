@@ -21,7 +21,12 @@ use {
         frame::Compression,
         FromRow, Session, SessionBuilder,
     },
-    std::{collections::BTreeMap, net::IpAddr, sync::Arc, time::Duration},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        net::IpAddr,
+        sync::Arc,
+        time::Duration,
+    },
     tokio::{
         sync::mpsc::{error::SendError, Permit},
         task::{JoinError, JoinHandle},
@@ -71,8 +76,8 @@ const DROP_PRODUCER_LOCK: &str = r###"
 "###;
 
 const TRY_ACQUIRE_PRODUCER_LOCK: &str = r###"
-    INSERT INTO producer_lock (producer_id, lock_id, ifname, ipv4, created_at)
-    VALUES (?, ?, ?, ?, currentTimestamp())
+    INSERT INTO producer_lock (producer_id, lock_id, ifname, ipv4, is_ready, minimum_shard_offset, created_at)
+    VALUES (?, ?, ?, ?, false, null, currentTimestamp())
     IF NOT EXISTS
 "###;
 
@@ -500,6 +505,8 @@ fn spawn_round_robin(
     let h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         let insert_slot_ps = session.prepare(INSERT_PRODUCER_SLOT).await?;
 
+        // One hour worth of slots
+        const SLOT_SEEN_RETENTION: usize = 9000;
         //session.execute(&insert_slot_ps, (producer_id,)).await?;
 
         let iterator = shard_handles.iter().enumerate().cycle();
@@ -507,8 +514,11 @@ fn spawn_round_robin(
         let mut msg_between_slot = 0;
         let mut max_slot_seen = -1;
         let mut time_since_new_max_slot = Instant::now();
-        let mut background_commit_max_slot_seen =
+        let mut background_commit_slot_seen =
             tokio::spawn(future::ready(Ok::<(), anyhow::Error>(())));
+
+        let mut slots_seen = BTreeSet::<Slot>::new();
+
         for (i, shard_sender) in iterator {
             let msg = receiver.recv().await.unwrap_or(ShardCommand::Shutdown);
 
@@ -521,13 +531,22 @@ fn spawn_round_robin(
                 ShardCommand::InsertAccountUpdate(x) => x.slot,
                 ShardCommand::InsertTransaction(x) => x.slot,
             };
-            if max_slot_seen < slot {
-                max_slot_seen = slot;
+
+            if slots_seen.insert(slot) {
+                while slots_seen.len() >= SLOT_SEEN_RETENTION {
+                    slots_seen.pop_first();
+                }
+
+                if max_slot_seen > slot {
+                    warn!("Slot {slot} arrived late after seeing {max_slot_seen}");
+                } else {
+                    max_slot_seen = slot;
+                }
                 let time_elapsed_between_last_max_slot = time_since_new_max_slot.elapsed();
                 // We only commit every 3 slot number
 
                 let t = Instant::now();
-                background_commit_max_slot_seen.await??;
+                background_commit_slot_seen.await??;
 
                 let session = Arc::clone(&session);
                 let insert_slot_ps = insert_slot_ps.clone();
@@ -536,7 +555,7 @@ fn spawn_round_robin(
                     .map(|sh| (sh.shard_id, sh.get_last_committed_offset()))
                     .collect::<Vec<_>>();
 
-                background_commit_max_slot_seen = tokio::spawn(async move {
+                background_commit_slot_seen = tokio::spawn(async move {
                     session
                         .execute(&insert_slot_ps, (producer_id, slot, shard_offset_pairs))
                         .await?;
@@ -657,6 +676,35 @@ async fn try_acquire_lock(
     }
 }
 
+async fn set_minimum_producer_offsets(
+    session: Arc<Session>,
+    producer_lock: &ProducerLock,
+    minimum_shard_offsets: &[(ShardId, ShardOffset, Slot)],
+) -> anyhow::Result<()> {
+    let ps = session
+        .prepare(
+            r###"
+        UPDATE producer_lock
+        SET minimum_shard_offset = ?, is_ready = true
+        WHERE 
+            producer_id = ?
+        IF EXISTS
+        "###,
+        )
+        .await?;
+
+    let lwt = session
+        .execute(&ps, (minimum_shard_offsets, producer_lock.producer_id))
+        .await?
+        .first_row_typed::<LwtSuccess>()?;
+
+    if let LwtSuccess(false) = lwt {
+        anyhow::bail!("Producer lock is corrupted, it may be cause by concurrent lock acquisition");
+    }
+
+    Ok(())
+}
+
 impl ScyllaSink {
     pub async fn new(
         config: ScyllaSinkConfig,
@@ -689,11 +737,23 @@ impl ScyllaSink {
 
         let shard_count = producer_info.num_shards as usize;
 
-        info!("init producer {producer_id:?} period commit log successful.");
-
+        // On init, we collect where the producer left = max shard offsets
+        // Where we left of, it becomes new earliest offset available.
+        // This is to prevent
         let shard_offsets =
             get_max_shard_offsets_for_producer(Arc::clone(&session), producer_id, shard_count)
                 .await?;
+
+        let result =
+            set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets)
+                .await;
+        if let Err(e) = result {
+            let result2 = producer_lock.release().await;
+            if let Err(e2) = result2 {
+                error!("Releasing lock failed during error handling: {e2:?}");
+            }
+            anyhow::bail!(e);
+        }
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);

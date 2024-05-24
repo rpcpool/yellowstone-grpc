@@ -7,8 +7,7 @@ use {
         sink,
         types::{
             BlockchainEventType, ConsumerId, ConsumerInfo, ConsumerShardOffset, ProducerId,
-            ProducerInfo, ShardId, ShardOffset, ShardPeriod, Slot, SHARD_OFFSET_MODULO,
-            UNDEFINED_SLOT,
+            ProducerInfo, ShardId, ShardOffset, Slot, UNDEFINED_SLOT,
         },
     },
     chrono::{DateTime, TimeDelta, Utc},
@@ -42,6 +41,8 @@ use {
         },
     },
 };
+
+type ProducerLockId = String;
 
 const CHECK_PRODUCER_LIVENESS_DELAY: Duration = Duration::from_millis(600);
 
@@ -126,6 +127,8 @@ const LIST_PRODUCERS_WITH_LOCK: &str = r###"
     SELECT
         producer_id
     FROM producer_lock
+    WHERE is_ready = true
+    ALLOW FILTERING
 "###;
 
 const GET_PRODUCERS_CONSUMER_COUNT: &str = r###"
@@ -430,39 +433,21 @@ async fn assign_producer_to_consumer(
 async fn get_min_offset_for_producer(
     session: Arc<Session>,
     producer_id: ProducerId,
-    num_shards: usize,
-) -> anyhow::Result<Vec<(ShardId, ShardOffset)>> {
-    let shard_id_list = (0..num_shards)
-        .map(|x| format!("{x}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r###"
-    SELECT
-        shard_id,
-        period
-    FROM producer_period_commit_log
-    WHERE 
-        producer_id = ? 
-        AND shard_id in ({shard_id_list})
-    ORDER BY period ASC
-    PER PARTITION LIMIT 1
-    "###
-    );
-
+) -> anyhow::Result<Vec<(ShardId, ShardOffset, Slot)>> {
     session
-        .query(query, (producer_id,))
+        .query(
+            "SELECT minimum_shard_offset FROM producer_lock WHERE producer_id = ?",
+            (producer_id,),
+        )
         .await?
-        .rows_typed::<(ShardId, ShardPeriod)>()?
-        .map(|result| {
-            result
-                .map(|(shard_id, period)| (shard_id, (period * SHARD_OFFSET_MODULO) as ShardOffset))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(anyhow::Error::new)
+        .first_row_typed::<(Option<Vec<(ShardId, ShardOffset, Slot)>>,)>()?
+        .0
+        .ok_or(anyhow::anyhow!(
+            "Producer lock exists, but its minimum shard offset is not set."
+        ))
 }
 
-async fn get_slot_shard_offsets2(
+async fn get_slot_shard_offsets(
     session: Arc<Session>,
     slot: Slot,
     producer_id: ProducerId,
@@ -515,20 +500,40 @@ async fn set_initial_consumer_shard_offsets(
             .await?
         }
         InitialOffsetPolicy::Earliest => {
-            get_min_offset_for_producer(Arc::clone(&session), producer_id, num_shards as usize)
-                .await?
-                .into_iter()
-                .map(|(shard_id, shard_offset)| (shard_id, shard_offset, UNDEFINED_SLOT))
-                .collect::<Vec<_>>()
+            get_min_offset_for_producer(Arc::clone(&session), producer_id).await?
         }
         InitialOffsetPolicy::SlotApprox(slot) => {
-            get_slot_shard_offsets2(Arc::clone(&session), slot, producer_id, num_shards)
-                .await?
-                .ok_or(ImpossibleSlotOffset(slot))?
+            let minium_producer_offsets =
+                get_min_offset_for_producer(Arc::clone(&session), producer_id)
+                    .await?
+                    .into_iter()
+                    .map(|(shard_id, shard_offset, slot)| (shard_id, (shard_offset, slot)))
+                    .collect::<BTreeMap<_, _>>();
+
+            let shard_offsets_contain_slot =
+                get_slot_shard_offsets(Arc::clone(&session), slot, producer_id, num_shards)
+                    .await?
+                    .ok_or(ImpossibleSlotOffset(slot))?;
+
+            let are_shard_offset_reachable =
+                shard_offsets_contain_slot
+                    .iter()
+                    .all(|(shard_id, offset1, _)| {
+                        minium_producer_offsets
+                            .get(shard_id)
+                            .filter(|(offset2, _)| offset1 > offset2)
+                            .is_some()
+                    });
+
+            if !are_shard_offset_reachable {
+                anyhow::bail!(ImpossibleSlotOffset(slot))
+            }
+
+            shard_offsets_contain_slot
         }
     };
 
-    if shard_offset_pairs.is_empty() {
+    if shard_offset_pairs.len() != (num_shards as usize) {
         anyhow::bail!("Producer {producer_id:?} shard offsets is incomplete {new_consumer_id}");
     }
 
