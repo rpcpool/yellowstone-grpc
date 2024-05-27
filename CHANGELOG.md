@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-06-05
+
+- yellowstone-grpc-geyser-1.14.3+solana.1.17.33
+
+### Fixes
+
+- geyser: fix getLatestBlockhash unary method ([#349](https://github.com/rpcpool/yellowstone-grpc/pull/349))
+
+### Features
+
+- geyser: add optional x_token check in grpc server ([#345](https://github.com/rpcpool/yellowstone-grpc/pull/345))
+
 ## 2024-05-17
 
 - yellowstone-grpc-client-1.15.0+solana.1.17.33
