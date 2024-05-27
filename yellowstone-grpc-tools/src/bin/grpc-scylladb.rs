@@ -10,7 +10,10 @@ use {
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::subscribe_update::UpdateOneof,
-        yellowstone::log::{yellowstone_log_server::YellowstoneLogServer, EventSubscriptionPolicy},
+        yellowstone::log::{
+            yellowstone_log_server::YellowstoneLogServer, EventSubscriptionPolicy,
+            TimelineTranslationPolicy,
+        },
     },
     yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
@@ -21,11 +24,11 @@ use {
                 Config, ConfigGrpc2ScyllaDB, ConfigYellowstoneLogServer, ScyllaDbConnectionInfo,
             },
             consumer::{
-                common::InitialOffsetPolicy,
+                common::InitialOffset,
                 grpc::{spawn_grpc_consumer, ScyllaYsLog, SpawnGrpcConsumerReq},
             },
             sink::ScyllaSink,
-            types::Transaction,
+            types::{CommitmentLevel, Transaction},
         },
         setup_tracing,
     },
@@ -136,18 +139,17 @@ impl ArgsAction {
         let session = Arc::new(session);
         let req = SpawnGrpcConsumerReq {
             consumer_id: String::from("test"),
+            consumer_ip: None,
             account_update_event_filter: None,
             tx_event_filter: None,
             buffer_capacity: None,
             offset_commit_interval: None,
+            event_subscription_policy: EventSubscriptionPolicy::Both,
+            commitment_level: CommitmentLevel::Processed,
+            timeline_translation_policy: TimelineTranslationPolicy::AllowLag,
+            timeline_translation_allowed_lag: None,
         };
-        let mut rx = spawn_grpc_consumer(
-            session,
-            req,
-            InitialOffsetPolicy::Earliest,
-            EventSubscriptionPolicy::Both,
-        )
-        .await?;
+        let mut rx = spawn_grpc_consumer(session, req, InitialOffset::Earliest).await?;
 
         let mut print_tx_secs = Instant::now() + Duration::from_secs(1);
         let mut num_events = 0;

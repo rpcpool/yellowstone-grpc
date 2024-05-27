@@ -31,12 +31,14 @@ create table if not exists consumer_shard_offset (
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY ((consumer_id, producer_id), shard_id, event_type)
-);
+)
+with default_time_to_live = 3600;
 
 
 create table if not exists consumer_info (
     consumer_id text,
     producer_id blob,
+    consumer_ip: text,
     subscribed_event_types frozen<set<smallint>>,
     created_at timestamp,
     updated_at timestamp,
@@ -56,6 +58,7 @@ primary key (producer_id, consumer_id);
     
 create table if not exists producer_info (
     producer_id blob,
+    commitment smallint,
     num_shards smallint,
     created_at timestamp,
     updated_at timestamp,
@@ -192,7 +195,8 @@ create table if not exists log (
     primary key ((shard_id, period, producer_id), offset)
 )
 WITH CLUSTERING ORDER BY (offset desc)
-    AND default_time_to_live = 86400;  -- 24 hours
+    AND default_time_to_live = 86400
+    and compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size' : 10}; 
 
 create table if not exists producer_slot_seen (
     producer_id blob,
@@ -204,22 +208,14 @@ create table if not exists producer_slot_seen (
 with clustering order by (slot DESC)
      AND default_time_to_live = 82800; -- 23 hours
 
-create materialized view if not exists slot_map_mv
-as
-select
-    slot,
-    producer_id,
-    shard_id,
-    period,
-    offset
-from log
-where
-    slot is not null
-    and producer_id is not null
-    and shard_id is not null
-    and period is not null
-    and offset is not null
-primary key (slot, producer_id, shard_id, period, offset);
+CREATE materialized VIEW if not exists slot_producer_seen_mv
+AS
+SELECT slot, producer_id FROM producer_slot_seen
+WHERE 
+    producer_id is not null
+    and slot is not null
+PRIMARY KEY (slot, producer_id);
+
 
 
 create table if not exists producer_period_commit_log (

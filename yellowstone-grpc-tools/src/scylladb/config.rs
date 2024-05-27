@@ -1,5 +1,5 @@
 use {
-    super::sink::ScyllaSinkConfig,
+    super::{sink::ScyllaSinkConfig, types::CommitmentLevel},
     crate::config::ConfigGrpcRequest,
     serde::Deserialize,
     serde_with::{serde_as, DurationMilliSeconds},
@@ -97,6 +97,11 @@ impl ConfigGrpc2ScyllaDB {
             linger: self.linger,
             keyspace: self.keyspace.clone(),
             ifname: self.ifname.to_owned(),
+            commitment_level: match self.request.commitment.expect("Missing commitment level") {
+                crate::config::ConfigGrpcRequestCommitment::Processed => CommitmentLevel::Processed,
+                crate::config::ConfigGrpcRequestCommitment::Confirmed => CommitmentLevel::Confirmed,
+                crate::config::ConfigGrpcRequestCommitment::Finalized => CommitmentLevel::Finalized,
+            },
         }
     }
 }

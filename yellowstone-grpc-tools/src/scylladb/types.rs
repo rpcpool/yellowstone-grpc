@@ -1,5 +1,6 @@
 use {
     anyhow::{anyhow, Ok},
+    core::fmt,
     deepsize::DeepSizeOf,
     scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
@@ -89,6 +90,72 @@ impl SerializeCql for BlockchainEventType {
 }
 
 impl FromCqlVal<CqlValue> for BlockchainEventType {
+    fn from_cql(cql_val: CqlValue) -> Result<Self, scylla::cql_to_rust::FromCqlValError> {
+        match cql_val {
+            CqlValue::SmallInt(x) => x.try_into().map_err(|_| FromCqlValError::BadVal),
+            _ => Err(FromCqlValError::BadCqlType),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy)]
+pub enum CommitmentLevel {
+    Processed = 0,
+    Confirmed = 1,
+    Finalized = 2,
+}
+
+impl fmt::Display for CommitmentLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommitmentLevel::Processed => f.write_str("Processed"),
+            CommitmentLevel::Confirmed => f.write_str("Confirmed"),
+            CommitmentLevel::Finalized => f.write_str("Finalized"),
+        }
+    }
+}
+
+impl From<CommitmentLevel> for i16 {
+    fn from(val: CommitmentLevel) -> Self {
+        match val {
+            CommitmentLevel::Processed => 0,
+            CommitmentLevel::Confirmed => 1,
+            CommitmentLevel::Finalized => 2,
+        }
+    }
+}
+
+impl TryFrom<i16> for CommitmentLevel {
+    type Error = anyhow::Error;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CommitmentLevel::Processed),
+            1 => Ok(CommitmentLevel::Confirmed),
+            2 => Ok(CommitmentLevel::Finalized),
+            x => Err(anyhow!(
+                "Unknown CommitmentLevel equivalent for code {:?}",
+                x
+            )),
+        }
+    }
+}
+
+impl SerializeCql for CommitmentLevel {
+    fn serialize<'b>(
+        &self,
+        typ: &scylla::frame::response::result::ColumnType,
+        writer: scylla::serialize::CellWriter<'b>,
+    ) -> Result<
+        scylla::serialize::writers::WrittenCellProof<'b>,
+        scylla::serialize::SerializationError,
+    > {
+        let x: i16 = (*self).into();
+        SerializeCql::serialize(&x, typ, writer)
+    }
+}
+
+impl FromCqlVal<CqlValue> for CommitmentLevel {
     fn from_cql(cql_val: CqlValue) -> Result<Self, scylla::cql_to_rust::FromCqlValError> {
         match cql_val {
             CqlValue::SmallInt(x) => x.try_into().map_err(|_| FromCqlValError::BadVal),
@@ -971,6 +1038,7 @@ impl From<BlockchainEvent> for AccountUpdate {
 pub struct ProducerInfo {
     pub producer_id: ProducerId,
     pub num_shards: ShardId,
+    pub commitment_level: CommitmentLevel,
 }
 
 impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
