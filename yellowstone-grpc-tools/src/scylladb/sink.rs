@@ -5,8 +5,8 @@ use {
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
         types::{
-            AccountUpdate, BlockchainEvent, ProducerId, ProducerInfo, ShardId, ShardOffset,
-            ShardPeriod, Slot, Transaction, SHARD_OFFSET_MODULO, UNDEFINED_SLOT,
+            AccountUpdate, BlockchainEvent, CommitmentLevel, ProducerId, ProducerInfo, ShardId,
+            ShardOffset, ShardPeriod, Slot, Transaction, SHARD_OFFSET_MODULO, UNDEFINED_SLOT,
         },
     },
     deepsize::DeepSizeOf,
@@ -84,7 +84,8 @@ const TRY_ACQUIRE_PRODUCER_LOCK: &str = r###"
 const GET_PRODUCER_INFO_BY_ID: &str = r###"
     SELECT
         producer_id,
-        num_shards
+        num_shards,
+        commitment_level
     FROM producer_info
     WHERE producer_id = ?
 "###;
@@ -136,6 +137,7 @@ pub struct ScyllaSinkConfig {
     pub linger: Duration,
     pub keyspace: String,
     pub ifname: Option<String>,
+    pub commitment_level: CommitmentLevel,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -727,6 +729,10 @@ impl ScyllaSink {
         let producer_info = get_producer_info_by_id(Arc::clone(&session), producer_id)
             .await?
             .unwrap_or_else(|| panic!("producer {:?} has not yet been registered", producer_id));
+
+        if producer_info.commitment_level != config.commitment_level {
+            anyhow::bail!("Commitment level in configuration ({:?}) don't match producer info in database ({:?})", config.commitment_level, producer_info.commitment_level);
+        }
 
         info!("Producer {producer_id:?} is registered");
 
