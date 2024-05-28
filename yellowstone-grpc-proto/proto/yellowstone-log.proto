@@ -10,6 +10,12 @@ package yellowstone.log;
 service YellowstoneLog {
   rpc CreateStaticConsumerGroup(CreateStaticConsumerGroupRequest) returns (CreateStaticConsumerGroupResponse) {}
   rpc Consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+  rpc JoinConsumerGroup(JoinRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+message JoinConsumerGroup {
+  string group_id = 1;
+  optional string instance_id = 2;
 }
 
 message CreateStaticConsumerGroupResponse {
