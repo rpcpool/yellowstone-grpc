@@ -35,11 +35,28 @@ create table if not exists consumer_shard_offset (
 with default_time_to_live = 3600;
 
 
+create table if not exists consumer_groups (
+    consumer_group_id blob,
+    group_type smallint,
+    
+    last_access_ip_address text,
+
+    -- fields for static consumer group only
+    instance_id_shard_assignments frozen<map<text, set<smallint>>>,
+    redundant_id_shard_assignments frozen<map<text, set<smallint>>>,
+    
+    created_at timestamp,
+    updated_at timestamp,
+
+    primary key (consumer_group_id)
+);
+
 create table if not exists consumer_info (
     consumer_id text,
     producer_id blob,
     consumer_ip: text,
     subscribed_event_types frozen<set<smallint>>,
+    last_connection timestamp,
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY (consumer_id)
