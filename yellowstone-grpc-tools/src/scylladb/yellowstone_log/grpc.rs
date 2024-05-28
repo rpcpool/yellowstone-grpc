@@ -1,14 +1,17 @@
 use {
     super::{
         common::InitialOffset,
+        consumer_group::repo::ConsumerGroupRepo,
+        consumer_source::{ConsumerSource, FromBlockchainEvent},
         shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
         sink,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerId, ConsumerInfo, ConsumerShardOffset,
-            ProducerId, ProducerInfo, ShardId, ShardOffset, Slot, UNDEFINED_SLOT,
+            ProducerId, ProducerInfo, ShardId, ShardOffset, Slot,
         },
+        yellowstone_log::consumer_source::Interrupted,
     },
     chrono::{DateTime, TimeDelta, Utc},
     core::fmt,
@@ -31,7 +34,7 @@ use {
         time::Duration,
     },
     thiserror::Error,
-    tokio::{sync::mpsc, time::Instant},
+    tokio::sync::{mpsc, oneshot},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
     tracing::{error, info, warn},
@@ -39,17 +42,12 @@ use {
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
         yellowstone::log::{
-            yellowstone_log_server::YellowstoneLog, ConsumeRequest, EventSubscriptionPolicy,
-            TimelineTranslationPolicy,
+            yellowstone_log_server::YellowstoneLog, ConsumeRequest,
+            CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse,
+            EventSubscriptionPolicy, TimelineTranslationPolicy,
         },
     },
 };
-
-const CHECK_PRODUCER_LIVENESS_DELAY: Duration = Duration::from_millis(600);
-
-const CLIENT_LAG_WARN_THRESHOLD: Duration = Duration::from_millis(250);
-
-const FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD: Duration = Duration::from_millis(500);
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
 
@@ -344,6 +342,32 @@ async fn is_producer_still_alive(
     }
 
     Ok(qr2.rows.is_some())
+}
+
+fn wait_for_producer_is_dead(
+    session: Arc<Session>,
+    producer_id: ProducerId,
+) -> oneshot::Receiver<()> {
+    let (sender, receiver) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let session = session;
+        loop {
+            let is_alive = is_producer_still_alive(Arc::clone(&session), producer_id)
+                .await
+                .expect("checking producer is alive failed");
+            if !is_alive {
+                info!("producer {producer_id:?} is dead");
+                sender
+                    .send(())
+                    .expect(format!("the receiveing half closed while waiting for producer({producer_id:?}) liveness status").as_str());
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    });
+
+    receiver
 }
 
 ///
@@ -719,11 +743,16 @@ async fn set_initial_consumer_shard_offsets(
 
 pub struct ScyllaYsLog {
     session: Arc<Session>,
+    consumer_group_repo: ConsumerGroupRepo,
 }
 
 impl ScyllaYsLog {
-    pub fn new(session: Arc<Session>) -> Self {
-        ScyllaYsLog { session }
+    pub async fn new(session: Arc<Session>) -> anyhow::Result<Self> {
+        let consumer_group_repo = ConsumerGroupRepo::new(Arc::clone(&session)).await?;
+        Ok(ScyllaYsLog {
+            session,
+            consumer_group_repo,
+        })
     }
 }
 
@@ -733,6 +762,29 @@ pub type LogStream = Pin<Box<dyn Stream<Item = Result<SubscribeUpdate, tonic::St
 impl YellowstoneLog for ScyllaYsLog {
     #[doc = r" Server streaming response type for the consume method."]
     type ConsumeStream = LogStream;
+
+    async fn create_static_consumer_group(
+        &self,
+        request: tonic::Request<CreateStaticConsumerGroupRequest>,
+    ) -> Result<tonic::Response<CreateStaticConsumerGroupResponse>, tonic::Status> {
+        let remote_ip_addr = request.remote_addr().map(|addr| addr.ip());
+        let request = request.into_inner();
+
+        let instance_ids = request.instance_id_list;
+        let redundant_instance_ids = request.redundancy_instance_id_list;
+
+        let consumer_group_info = self
+            .consumer_group_repo
+            .create_static_consumer_group(&instance_ids, &redundant_instance_ids, remote_ip_addr)
+            .await
+            .map_err(|e| {
+                error!("create_static_consumer_group: {e:?}");
+                tonic::Status::internal("failed to create consumer group")
+            })?;
+        Ok(Response::new(CreateStaticConsumerGroupResponse {
+            group_id: consumer_group_info.consumer_group_id.to_string(),
+        }))
+    }
 
     async fn consume(
         &self,
@@ -825,6 +877,33 @@ pub struct SpawnGrpcConsumerReq {
 
 type GrpcConsumerSender = mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>;
 type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>;
+type GrpcEvent = Result<SubscribeUpdate, tonic::Status>;
+
+impl FromBlockchainEvent for GrpcEvent {
+    type Output = Self;
+    fn from(blockchain_event: crate::scylladb::types::BlockchainEvent) -> Self::Output {
+        let geyser_event = match blockchain_event.event_type {
+            BlockchainEventType::AccountUpdate => {
+                UpdateOneof::Account(blockchain_event.try_into().map_err(|e| {
+                    error!(error=?e);
+                    tonic::Status::internal("corrupted account update event in the stream")
+                })?)
+            }
+            BlockchainEventType::NewTransaction => {
+                UpdateOneof::Transaction(blockchain_event.try_into().map_err(|e| {
+                    error!(error=?e);
+                    tonic::Status::internal("corrupted new transaction event in the stream")
+                })?)
+            }
+        };
+        let subscribe_update = SubscribeUpdate {
+            filters: Default::default(),
+            update_oneof: Some(geyser_event),
+        };
+
+        Ok(subscribe_update)
+    }
+}
 
 async fn build_grpc_consumer_source(
     sender: GrpcConsumerSender,
@@ -832,7 +911,7 @@ async fn build_grpc_consumer_source(
     req: SpawnGrpcConsumerReq,
     initial_offset_policy: InitialOffset,
     is_new: bool,
-) -> anyhow::Result<GrpcConsumerSource> {
+) -> anyhow::Result<ConsumerSource<GrpcEvent>> {
     let (consumer_info, initial_shard_offsets) = assign_producer_to_consumer(
         Arc::clone(&session),
         req.consumer_id.clone(),
@@ -882,7 +961,7 @@ async fn build_grpc_consumer_source(
     ))
     .await?;
 
-    let consumer = GrpcConsumerSource::new(
+    let consumer = ConsumerSource::new(
         consumer_session,
         consumer_info,
         sender,
@@ -921,17 +1000,20 @@ pub async fn spawn_grpc_consumer(
         let sender = sender;
         let session = session;
         while !sender.is_closed() {
-            match grpc_consumer_source.run_forever().await {
+            let current_producer_id = grpc_consumer_source.producer_id();
+            let interrupt_signal =
+                wait_for_producer_is_dead(Arc::clone(&session), current_producer_id);
+
+            match grpc_consumer_source.run(interrupt_signal).await {
                 Ok(_) => break,
                 Err(e) => {
                     warn!("Consumer {consumer_id} source has stop with {e:?}");
-                    if let Some(DeadProducerErr(_producer_id)) = e.downcast_ref::<DeadProducerErr>()
-                    {
+                    if let Some(Interrupted) = e.downcast_ref::<Interrupted>() {
                         let forged_offset_policy = grpc_consumer_source
                             .shard_iterators_slot
                             .into_iter()
                             .min()
-                            .map(|slot| {
+                            .map(|(_shard_id, slot)| {
                                 let min_slot = match &original_req.timeline_translation_policy {
                                     TimelineTranslationPolicy::AllowLag => {
                                         let lag = original_req
@@ -966,147 +1048,4 @@ pub async fn spawn_grpc_consumer(
         }
     });
     Ok(receiver)
-}
-
-struct GrpcConsumerSource {
-    session: Arc<Session>,
-    consumer_info: ConsumerInfo,
-    sender: mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>,
-    // The interval at which we want to commit our Offset progression to Scylla
-    offset_commit_interval: Duration,
-    shard_iterators: Vec<ShardIterator>,
-    shard_iterators_slot: Vec<Slot>,
-    update_consumer_shard_offset_prepared_stmt: PreparedStatement,
-}
-
-impl GrpcConsumerSource {
-    async fn new(
-        session: Arc<Session>,
-        consumer_info: ConsumerInfo,
-        sender: mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>,
-        offset_commit_interval: Duration,
-        mut shard_iterators: Vec<ShardIterator>,
-    ) -> anyhow::Result<Self> {
-        let update_consumer_shard_offset_prepared_stmt =
-            session.prepare(UPDATE_CONSUMER_SHARD_OFFSET).await?;
-        // Prewarm every shard iterator
-        try_join_all(shard_iterators.iter_mut().map(|shard_it| shard_it.warm())).await?;
-        let num_shard_iterators = shard_iterators.len();
-        let shard_iterators_slot = vec![UNDEFINED_SLOT; num_shard_iterators];
-        Ok(GrpcConsumerSource {
-            session,
-            consumer_info,
-            sender,
-            offset_commit_interval,
-            shard_iterators,
-            shard_iterators_slot,
-            update_consumer_shard_offset_prepared_stmt,
-        })
-    }
-
-    async fn update_consumer_shard_offsets(&self) -> anyhow::Result<()> {
-        let mut batch = Batch::new(BatchType::Unlogged);
-        let mut values = Vec::with_capacity(self.shard_iterators_slot.len());
-        for (i, shard_it) in self.shard_iterators.iter().enumerate() {
-            values.push((
-                shard_it.last_offset(),
-                self.shard_iterators_slot[i],
-                self.consumer_info.consumer_id.to_owned(),
-                self.consumer_info.producer_id,
-                shard_it.shard_id,
-                shard_it.event_type,
-            ));
-            batch.append_statement(self.update_consumer_shard_offset_prepared_stmt.clone());
-        }
-
-        self.session.batch(&batch, values).await?;
-        Ok(())
-    }
-
-    async fn run_forever(&mut self) -> anyhow::Result<()> {
-        let producer_id = self.consumer_info.producer_id;
-        let consumer_id = self.consumer_info.consumer_id.to_owned();
-        let mut commit_offset_deadline = Instant::now() + self.offset_commit_interval;
-        const PRINT_CONSUMER_SLOT_REACH_DELAY: Duration = Duration::from_secs(5);
-        info!("Serving consumer: {:?}", consumer_id);
-
-        self.shard_iterators
-            .sort_by_key(|it| (it.shard_id, it.event_type));
-
-        let mut max_seen_slot = UNDEFINED_SLOT;
-        let mut num_event_between_two_slots = 0;
-
-        let mut next_trace_schedule = Instant::now() + PRINT_CONSUMER_SLOT_REACH_DELAY;
-        let mut t = Instant::now();
-        let mut next_producer_live_probing = Instant::now() + CHECK_PRODUCER_LIVENESS_DELAY;
-        let mut producer_is_dead = false;
-        loop {
-            for (i, shard_it) in self.shard_iterators.iter_mut().enumerate() {
-                let maybe = shard_it.try_next().await?;
-                if let Some(block_chain_event) = maybe {
-                    self.shard_iterators_slot[i] = block_chain_event.slot;
-                    if t.elapsed() >= FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD {
-                        warn!(
-                            "consumer {consumer_id} micro batch took {:?} to fetch.",
-                            t.elapsed()
-                        );
-                    }
-                    if max_seen_slot < block_chain_event.slot {
-                        if next_trace_schedule.elapsed() > Duration::ZERO {
-                            info!("Consumer {consumer_id} reach slot {max_seen_slot} after {num_event_between_two_slots} blockchain event(s)");
-                            next_trace_schedule = Instant::now() + PRINT_CONSUMER_SLOT_REACH_DELAY;
-                        }
-                        max_seen_slot = block_chain_event.slot;
-                        num_event_between_two_slots = 0;
-                    }
-                    let geyser_event = match block_chain_event.event_type {
-                        BlockchainEventType::AccountUpdate => {
-                            UpdateOneof::Account(block_chain_event.try_into()?)
-                        }
-                        BlockchainEventType::NewTransaction => {
-                            UpdateOneof::Transaction(block_chain_event.try_into()?)
-                        }
-                    };
-                    let subscribe_update = SubscribeUpdate {
-                        filters: Default::default(),
-                        update_oneof: Some(geyser_event),
-                    };
-                    let t_send = Instant::now();
-
-                    if self.sender.send(Ok(subscribe_update)).await.is_err() {
-                        warn!("Consumer {consumer_id} closed its streaming half");
-                        return Ok(());
-                    }
-                    let send_latency = t_send.elapsed();
-                    if send_latency >= CLIENT_LAG_WARN_THRESHOLD {
-                        warn!("Slow read from consumer {consumer_id}, recorded latency: {send_latency:?}")
-                    }
-                    num_event_between_two_slots += 1;
-                    t = Instant::now();
-                }
-            }
-
-            if next_producer_live_probing.elapsed() > Duration::ZERO {
-                producer_is_dead = !is_producer_still_alive(
-                    Arc::clone(&self.session),
-                    self.consumer_info.producer_id,
-                )
-                .await?;
-                next_producer_live_probing = Instant::now() + CHECK_PRODUCER_LIVENESS_DELAY;
-            }
-
-            // Every now and then, we commit where the consumer is loc
-            if commit_offset_deadline.elapsed() > Duration::ZERO || producer_is_dead {
-                let t = Instant::now();
-                self.update_consumer_shard_offsets().await?;
-                info!("updated consumer shard offset in {:?}", t.elapsed());
-                commit_offset_deadline = Instant::now() + self.offset_commit_interval;
-            }
-
-            if producer_is_dead {
-                warn!("Producer {producer_id:?} is considered dead");
-                return Err(anyhow::Error::new(DeadProducerErr(producer_id)));
-            }
-        }
-    }
 }

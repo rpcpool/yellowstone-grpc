@@ -23,12 +23,12 @@ use {
             config::{
                 Config, ConfigGrpc2ScyllaDB, ConfigYellowstoneLogServer, ScyllaDbConnectionInfo,
             },
-            consumer::{
+            sink::ScyllaSink,
+            types::{CommitmentLevel, Transaction},
+            yellowstone_log::{
                 common::InitialOffset,
                 grpc::{spawn_grpc_consumer, ScyllaYsLog, SpawnGrpcConsumerReq},
             },
-            sink::ScyllaSink,
-            types::{CommitmentLevel, Transaction},
         },
         setup_tracing,
     },
@@ -107,7 +107,7 @@ impl ArgsAction {
             .await?;
 
         let session = Arc::new(session);
-        let scylla_ys_log = ScyllaYsLog::new(session);
+        let scylla_ys_log = ScyllaYsLog::new(session).await?;
         let ys_log_server = YellowstoneLogServer::new(scylla_ys_log);
 
         println!("YellowstoneLogServer listening on {}", addr);

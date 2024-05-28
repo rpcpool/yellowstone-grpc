@@ -8,7 +8,21 @@ option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
 package yellowstone.log;
 
 service YellowstoneLog {
+  rpc CreateStaticConsumerGroup(CreateStaticConsumerGroupRequest) returns (CreateStaticConsumerGroupResponse) {}
   rpc Consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+message CreateStaticConsumerGroupResponse {
+  string group_id = 1;
+}
+
+message CreateStaticConsumerGroupRequest {
+  repeated string instance_id_list = 2;
+  repeated string redundancy_instance_id_list = 3;
+}
+
+enum PartitionAssignmentStrategy {
+  STATIC = 0;
 }
 
 
@@ -96,20 +110,22 @@ enum TimelineTranslationPolicy {
 /// ttp_maximum_slot_lag (9)
 /// An optional uint32 indicating the maximum slot lag allowed for timeline translation.
 message ConsumeRequest {
-  optional string consumer_id = 1;
+  optional string consumer_group_id = 1;
+  optional string consumer_id = 2;
+  optional string instance_id = 3;
   
-  InitialOffsetPolicy initial_offset_policy = 2;
-  optional int64 at_slot = 3;
+  InitialOffsetPolicy initial_offset_policy = 4;
+  geyser.CommitmentLevel commitment_level = 5;
+  EventSubscriptionPolicy event_subscription_policy = 6;
 
-  EventSubscriptionPolicy event_subscription_policy = 4;
-  optional AccountUpdateEventFilter account_update_event_filter = 5;
-  optional TransactionEventFilter tx_event_filter = 6;
-  geyser.CommitmentLevel commitment_level = 7;
+  optional int64 at_slot = 7;
+  optional AccountUpdateEventFilter account_update_event_filter = 8;
+  optional TransactionEventFilter tx_event_filter = 9;
 
   // timelineTranslationPolicy is used when an ingester is out of service and we need to translate a set
   // of consumer to a different ingestion timeline. The policy describe what to do when we need to trigger timeline translation.
-  optional TimelineTranslationPolicy timelineTranslationPolicy = 8;
-  optional uint32 ttp_maximum_slot_lag = 9;
+  optional TimelineTranslationPolicy timelineTranslationPolicy = 10;
+  optional uint32 ttp_maximum_slot_lag = 11;
 }
 
 /// The AccountUpdateEventFilter message defines filters for account update events. It includes the following fields:
