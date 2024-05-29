@@ -1,7 +1,7 @@
 use {
     super::{
         common::InitialOffset,
-        consumer_group::repo::ConsumerGroupRepo,
+        consumer_group::{self, repo::ConsumerGroupRepo},
         consumer_source::{ConsumerSource, FromBlockchainEvent},
         shard_iterator::{ShardFilter, ShardIterator},
     },
@@ -42,9 +42,7 @@ use {
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
         yellowstone::log::{
-            yellowstone_log_server::YellowstoneLog, ConsumeRequest,
-            CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse,
-            EventSubscriptionPolicy, TimelineTranslationPolicy,
+            yellowstone_log_server::YellowstoneLog, ConsumeRequest, CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, EventSubscriptionPolicy, JoinRequest, TimelineTranslationPolicy
         },
     },
 };
@@ -762,6 +760,8 @@ pub type LogStream = Pin<Box<dyn Stream<Item = Result<SubscribeUpdate, tonic::St
 impl YellowstoneLog for ScyllaYsLog {
     #[doc = r" Server streaming response type for the consume method."]
     type ConsumeStream = LogStream;
+    type JoinConsumerGroupStream = LogStream;
+
 
     async fn create_static_consumer_group(
         &self,
@@ -857,6 +857,16 @@ impl YellowstoneLog for ScyllaYsLog {
                 )))
             }
         }
+    }
+
+    async fn join_consumer_group(
+        &self,
+        request: tonic::Request<JoinRequest>,
+    ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
+        let join_request = request.into_inner();
+
+        join_request.group_id;
+        todo!()
     }
 }
 

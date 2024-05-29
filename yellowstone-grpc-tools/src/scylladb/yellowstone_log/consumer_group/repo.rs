@@ -1,20 +1,15 @@
 use {
-    crate::scylladb::types::ShardId,
-    scylla::{
+    super::types::{ConsumerGroupId, InstanceId}, crate::scylladb::types::ShardId, scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         prepared_statement::PreparedStatement,
         serialize::value::SerializeCql,
         Session,
-    },
-    std::{collections::BTreeMap, net::IpAddr, sync::Arc},
-    uuid::Uuid,
+    }, std::{collections::BTreeMap, net::IpAddr, sync::Arc}, uuid::Uuid
 };
 
 const NUM_SHARDS: usize = 64;
 
-type ConsumerGroupId = Uuid;
-type InstanceId = String;
 
 const CREATE_STATIC_CONSUMER_GROUP: &str = r###"
     INSERT INTO consumer_groups (
