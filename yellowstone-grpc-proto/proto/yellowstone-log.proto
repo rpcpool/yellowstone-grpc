@@ -13,7 +13,7 @@ service YellowstoneLog {
   rpc JoinConsumerGroup(JoinRequest) returns (stream geyser.SubscribeUpdate) {}
 }
 
-message JoinConsumerGroup {
+message JoinRequest {
   string group_id = 1;
   optional string instance_id = 2;
 }
@@ -130,7 +130,7 @@ message ConsumeRequest {
 
   // timelineTranslationPolicy is used when an ingester is out of service and we need to translate a set
   // of consumer to a different ingestion timeline. The policy describe what to do when we need to trigger timeline translation.
-  optional TimelineTranslationPolicy timelineTranslationPolicy = 10;
+  optional TimelineTranslationPolicy timeline_translation_policy = 10;
   optional uint32 ttp_maximum_slot_lag = 11;
 }
 

@@ -1,17 +1,15 @@
 use {
     super::{
         common::InitialOffset,
-        consumer_group::{self, repo::ConsumerGroupRepo},
+        consumer_group::{self, repo::ConsumerGroupRepo, lock::InstanceLocker},
         consumer_source::{ConsumerSource, FromBlockchainEvent},
         shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
-        sink,
-        types::{
+        etcd_utils::lock::TryLockError, sink, types::{
             BlockchainEventType, CommitmentLevel, ConsumerId, ConsumerInfo, ConsumerShardOffset,
             ProducerId, ProducerInfo, ShardId, ShardOffset, Slot,
-        },
-        yellowstone_log::consumer_source::Interrupted,
+        }, yellowstone_log::{consumer_group::types::ConsumerGroupId, consumer_source::Interrupted}
     },
     chrono::{DateTime, TimeDelta, Utc},
     core::fmt,
@@ -26,18 +24,13 @@ use {
         Session,
     },
     std::{
-        collections::{BTreeMap, BTreeSet},
-        net::IpAddr,
-        ops::RangeInclusive,
-        pin::Pin,
-        sync::Arc,
-        time::Duration,
+        collections::{BTreeMap, BTreeSet}, net::IpAddr, ops::RangeInclusive, pin::Pin, str::FromStr, sync::Arc, time::Duration
     },
     thiserror::Error,
     tokio::sync::{mpsc, oneshot},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
-    tracing::{error, info, warn},
+    tracing::{error, info, warn, Instrument},
     uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -742,14 +735,19 @@ async fn set_initial_consumer_shard_offsets(
 pub struct ScyllaYsLog {
     session: Arc<Session>,
     consumer_group_repo: ConsumerGroupRepo,
+    instance_locker: InstanceLocker,
 }
 
 impl ScyllaYsLog {
-    pub async fn new(session: Arc<Session>) -> anyhow::Result<Self> {
+    pub async fn new(
+        session: Arc<Session>, 
+        etcd_client: etcd_client::Client
+    ) -> anyhow::Result<Self> {
         let consumer_group_repo = ConsumerGroupRepo::new(Arc::clone(&session)).await?;
         Ok(ScyllaYsLog {
             session,
             consumer_group_repo,
+            instance_locker: InstanceLocker(etcd_client.clone())
         })
     }
 }
@@ -771,11 +769,10 @@ impl YellowstoneLog for ScyllaYsLog {
         let request = request.into_inner();
 
         let instance_ids = request.instance_id_list;
-        let redundant_instance_ids = request.redundancy_instance_id_list;
 
         let consumer_group_info = self
             .consumer_group_repo
-            .create_static_consumer_group(&instance_ids, &redundant_instance_ids, remote_ip_addr)
+            .create_static_consumer_group(&instance_ids, remote_ip_addr)
             .await
             .map_err(|e| {
                 error!("create_static_consumer_group: {e:?}");
@@ -864,7 +861,25 @@ impl YellowstoneLog for ScyllaYsLog {
         request: tonic::Request<JoinRequest>,
     ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
         let join_request = request.into_inner();
+        let cg_id = ConsumerGroupId::from_str(join_request.group_id.as_str())
+            .map_err(|_| tonic::Status::invalid_argument("invalid consumer group id value"))?;
+        let instance_id = join_request.instance_id.ok_or(tonic::Status::invalid_argument("missing instance id from join request"))?;
 
+        let lock = self.instance_locker.try_lock_instance_id(cg_id.clone(), instance_id.clone())
+            .await
+            .map_err(|e| {
+
+                if let Some(e) = e.downcast_ref::<TryLockError>() {
+                    error!("error acquiring lock for {cg_id}/{instance_id}: {e:?}");
+                    match e {
+                        TryLockError::InvalidLockName => tonic::Status::internal("out of service"),
+                        TryLockError::AlreadyTaken => tonic::Status::already_exists("Instance id is already consumed by another connection, try again later") ,
+                        TryLockError::LockingDeadlineExceeded => tonic::Status::deadline_exceeded("failed to acquire exclusive access to instance id in time.")
+                    }
+                } else {
+                    tonic::Status::internal("server failure")
+                }
+            })?;
         join_request.group_id;
         todo!()
     }

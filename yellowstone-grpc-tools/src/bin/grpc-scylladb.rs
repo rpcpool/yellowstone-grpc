@@ -105,9 +105,11 @@ impl ArgsAction {
             .use_keyspace(config.keyspace.clone(), false)
             .build()
             .await?;
-
+        
+        let etcd_endpoints = config.etcd_endpoints;
+        let etcd_client = etcd_client::Client::connect(etcd_endpoints, None).await?;
         let session = Arc::new(session);
-        let scylla_ys_log = ScyllaYsLog::new(session).await?;
+        let scylla_ys_log = ScyllaYsLog::new(session, etcd_client).await?;
         let ys_log_server = YellowstoneLogServer::new(scylla_ys_log);
 
         println!("YellowstoneLogServer listening on {}", addr);

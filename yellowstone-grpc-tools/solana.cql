@@ -28,6 +28,7 @@ create table if not exists consumer_shard_offset (
     event_type smallint,
     offset bigint,
     slot bigint,
+    revision bigint;
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY ((consumer_id, producer_id), shard_id, event_type)
@@ -38,13 +39,16 @@ with default_time_to_live = 3600;
 create table if not exists consumer_groups (
     consumer_group_id blob,
     group_type smallint,
-    
-    last_access_ip_address text,
+    producer_id blob,
+    revision bigint,
+
 
     -- fields for static consumer group only
     instance_id_shard_assignments frozen<map<text, set<smallint>>>,
-    redundant_id_shard_assignments frozen<map<text, set<smallint>>>,
+    -- instance_id_shard_assignments2 frozen<map<text, set<smallint>>>,
     
+
+    last_access_ip_address inet,
     created_at timestamp,
     updated_at timestamp,
 
@@ -53,6 +57,7 @@ create table if not exists consumer_groups (
 
 create table if not exists consumer_info (
     consumer_id text,
+    consumer_group_id blob,
     producer_id blob,
     consumer_ip: text,
     subscribed_event_types frozen<set<smallint>>,
@@ -61,6 +66,18 @@ create table if not exists consumer_info (
     updated_at timestamp,
     PRIMARY KEY (consumer_id)
 );
+
+create materialized view if not exists consumer_group_member_mv
+as
+    select
+        consumer_group_id,
+        consumer_id
+    from consumer_info
+    where
+        consumer_id is not null
+        and consumer_group_id is not null
+primary key (consumer_group_id, consumer_id);
+
 
 create materialized view if not exists producer_consumer_mapping_mv
 as

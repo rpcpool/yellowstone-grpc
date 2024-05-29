@@ -60,6 +60,8 @@ pub struct ConfigYellowstoneLogServer {
     pub listen: String,
     #[serde(default = "default_keyspace")]
     pub keyspace: String,
+
+    pub etcd_endpoints: Vec<String>,
 }
 
 #[serde_as]
