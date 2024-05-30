@@ -1,38 +1,32 @@
-use core::fmt;
-use std::time::Duration;
-
-use etcd_client::{Compare, GetOptions, LockOptions, LockResponse, Txn, WatchOptions};
-use futures::{channel::oneshot, lock};
-use thiserror::Error;
-use tokio::{sync::watch, task::JoinHandle, time::Instant};
-use tracing::{error, warn};
-
-
+use {
+    crate::scylladb::etcd_utils::lease::ManagedLease,
+    core::fmt,
+    etcd_client::{Compare, GetOptions, LockOptions, LockResponse, Txn, WatchOptions},
+    futures::{channel::oneshot, lock},
+    std::time::Duration,
+    thiserror::Error,
+    tokio::{sync::watch, task::JoinHandle, time::Instant},
+    tracing::{error, warn},
+};
 
 const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);
 
 ///
 /// A Lock instance with automatic lease refresh and lock revocation when dropped.
-/// 
+///
 pub struct Lock {
-    lock_key: Vec<u8>,
-    lease_id: i64,
-    // Dropping this sender will cause the etcd lock to be revoke.
-    sender: oneshot::Sender<()>,
-    lifecycle_handle: JoinHandle<()>,
-    keep_alive_response_watch: watch::Receiver<Instant>,
+    pub(crate) lock_key: Vec<u8>,
+    managed_lease: ManagedLease,
 }
 
 impl Lock {
+    pub fn lease_id(&self) -> i64 {
+        self.managed_lease.lease_id
+    }
 
     fn last_keep_alive(&self) -> Instant {
-        self.keep_alive_response_watch.borrow().to_owned()
+        self.managed_lease.last_keep_alive()
     }
-}
-
-
-pub struct LockFactory {
-    etcd_client: etcd_client::Client
 }
 
 #[derive(Debug, PartialEq, Eq, Error)]
@@ -52,18 +46,17 @@ impl fmt::Display for TryLockError {
     }
 }
 
-
 pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Result<Lock> {
-
     const TRY_LOCKING_DURATION: Duration = Duration::from_millis(500);
 
-    let get_response = client.get(name, Some(GetOptions::new().with_from_key())).await?;
+    let get_response = client
+        .get(name, Some(GetOptions::new().with_from_key()))
+        .await?;
     anyhow::ensure!(get_response.count() <= 1, TryLockError::InvalidLockName);
     anyhow::ensure!(get_response.count() == 0, TryLockError::AlreadyTaken);
 
-    let lease_id = client.lease_grant(LOCK_LEASE_DURATION.as_secs() as i64, None).await?.id();
-
-
+    let managed_lease = ManagedLease::new(client.clone(), LOCK_LEASE_DURATION, None).await?;
+    let lease_id = managed_lease.lease_id;
     let lock_key = tokio::select! {
         _ = tokio::time::sleep(TRY_LOCKING_DURATION) => {
             Err(anyhow::Error::new(TryLockError::LockingDeadlineExceeded))
@@ -75,54 +68,9 @@ pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Re
         }
     }?;
 
-    let (sender, receiver) = oneshot::channel();
-
-    let (mut keeper, mut keep_alive_resp_stream) = client.lease_keep_alive(lease_id).await?;
-
-    let lock_id2 = lock_key.clone();
-    let client2 = client.clone();
-    let lifecycle_handle = tokio::spawn(async move {
-        let lock_id = lock_id2;
-        const RENEW_LEASE_INTERVAL: Duration = Duration::from_secs(1);
-        let mut client = client2.clone();
-        let mut receiver = receiver;
-        let next_renewal = Instant::now() + RENEW_LEASE_INTERVAL;
-        loop {
-            tokio::select! {
-                _ = tokio::time::sleep_until(next_renewal) => {
-                    if let Err(e) = keeper.keep_alive().await {
-                        error!("failed to keep alive lease {lease_id:?}, got {e:?}");
-                        break;
-                    }
-                }
-                _ = &mut receiver => {
-                    break;
-                }
-            }
-        }
-        
-        let unlock_result = client.unlock(lock_id.clone()).await;
-        if let Err(e) = unlock_result {
-            error!("failed to unlock {lock_id:?}, got {e:?}");
-        }
-    });
-
-    let (wsender, wreceiver) = watch::channel(Instant::now());
-    tokio::spawn(async move {
-        while let Ok(Some(_msg)) = keep_alive_resp_stream.message().await {
-            if let Err(e) = wsender.send(Instant::now()) {
-                warn!("lock watch closed its receiving half");
-                break;
-            }
-        }
-    });
-
     Ok(Lock {
         lock_key,
-        lease_id,
-        sender,
-        lifecycle_handle,
-        keep_alive_response_watch: wreceiver,
+        managed_lease,
     })
 }
 
@@ -132,29 +80,35 @@ mod tests {
 
     #[tokio::test]
     async fn it_should_acquire_lock() {
-        let mut client = etcd_client::Client::connect(["localhost:2379"], None).await.unwrap();
+        let mut client = etcd_client::Client::connect(["localhost:2379"], None)
+            .await
+            .unwrap();
         let lock = try_lock(client.clone(), "test-lock").await.unwrap();
         let resp = client.get(lock.lock_key.clone(), None).await.unwrap();
 
-
         assert_eq!(resp.count(), 1);
 
-        let actual_key = resp.kvs().iter().map(|kv| String::from_utf8(kv.key().to_vec())).next().unwrap().unwrap();
+        let actual_key = resp
+            .kvs()
+            .iter()
+            .map(|kv| String::from_utf8(kv.key().to_vec()))
+            .next()
+            .unwrap()
+            .unwrap();
         let expected_key = String::from_utf8(lock.lock_key.clone()).unwrap();
         assert_eq!(actual_key, expected_key);
     }
 
-
     #[tokio::test]
     async fn it_should_revoke_lock_on_drop() {
-        let mut client = etcd_client::Client::connect(["localhost:2379"], None).await.unwrap();
+        let mut client = etcd_client::Client::connect(["localhost:2379"], None)
+            .await
+            .unwrap();
 
-        let (lock_key, lifecycle_handle) = {
+        let lock_key = {
             let lock = try_lock(client.clone(), "test-lock2").await.unwrap();
-            (lock.lock_key, lock.lifecycle_handle)
+            lock.lock_key
         };
-
-        lifecycle_handle.await.unwrap();
 
         let resp = client.get(lock_key, None).await.unwrap();
         assert_eq!(resp.count(), 0);
@@ -162,7 +116,9 @@ mod tests {
 
     #[tokio::test]
     async fn it_should_receive_keep_alive() {
-        let mut client = etcd_client::Client::connect(["localhost:2379"], None).await.unwrap();
+        let mut client = etcd_client::Client::connect(["localhost:2379"], None)
+            .await
+            .unwrap();
 
         let lock = try_lock(client.clone(), "test-lock3").await.unwrap();
         let last_keepalive = lock.last_keep_alive();

@@ -1,49 +1,45 @@
-use etcd_client::{Client, GetOptions, LockOptions, ProclaimOptions, ResignOptions};
-use futures::{future::join_all, try_join};
+use {
+    etcd_client::{Client, GetOptions, LockOptions, ProclaimOptions, ResignOptions},
+    futures::{
+        future::{join_all, select_all},
+        try_join, FutureExt,
+    },
+    tokio::sync::mpsc,
+    uuid::Uuid,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut client = Client::connect(["localhost:2379"], None).await?;
+    let mut client2 = client.clone();
+    let lease1 = client.lease_grant(1, None).await?.id();
 
-    println!("try to lock with name \'lock-test\'");
-    let resp = client.lock("lock-test", None).await?;
-    let key = resp.key();
-    let key_str = std::str::from_utf8(key)?;
-    println!("the key is {:?}", key_str);
+    let uuid = Uuid::new_v4();
+    println!("uuid: {uuid:?}");
 
-    let resp = client.get("lock-test", Some(GetOptions::new().with_from_key())).await?;
-    let kvs = resp.kvs().iter().map(|kv| String::from_utf8_lossy(kv.value())).collect::<Vec<_>>();
-    println!("get response: {kvs:?}");
+    let (tx, mut rx) = mpsc::channel(10);
+    tokio::spawn(async move {
+        let mut stream = client2.observe("myleader").await.expect("fail");
+        while let Some(mut msg) = stream.message().await.expect("") {
+            let kv = msg.take_kv().unwrap();
+            if tx
+                .send((kv.key().to_vec(), kv.value().to_vec()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 
+    let resp = client
+        .campaign("myleader", uuid.to_string(), lease1)
+        .await?;
+    println!("{resp:?}");
 
-    println!("try to unlock it");
-    client.unlock(key).await?;
-    println!("finish!");
-    println!();
-
-    // make a lease
-    let resp = client.lease_grant(60, None).await?;
-    println!(
-        "grant a lease with id {:?}, ttl {:?}",
-        resp.id(),
-        resp.ttl()
-    );
-    let lease_id = resp.id();
-
-    // lock with lease
-    println!(
-        "try to lock with name \'lock-test2\' and lease {:?}",
-        lease_id
-    );
-    let lock_options = LockOptions::new().with_lease(lease_id);
-    let resp = client.lock("lock-test2", Some(lock_options)).await?;
-    let key = resp.key();
-    let key_str = std::str::from_utf8(key);
-    println!("the key is {:?}", key_str);
-
-    println!("try to unlock it");
-    client.unlock(key).await?;
-    println!("finish!");
+    let (k, v) = rx.recv().await.unwrap();
+    let v = String::from_utf8(v)?;
+    println!("rx: {v:?}");
 
     Ok(())
 }

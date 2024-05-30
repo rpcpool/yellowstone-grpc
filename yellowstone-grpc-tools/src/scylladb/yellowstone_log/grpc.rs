@@ -1,15 +1,21 @@
 use {
     super::{
         common::InitialOffset,
-        consumer_group::{self, repo::ConsumerGroupRepo, lock::InstanceLocker},
-        consumer_source::{ConsumerSource, FromBlockchainEvent},
+        consumer_group::{
+            consumer_source::{ConsumerSource, FromBlockchainEvent},
+            lock::{InstanceLock, InstanceLocker},
+            repo::ConsumerGroupRepo,
+        },
         shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
-        etcd_utils::lock::TryLockError, sink, types::{
+        etcd_utils::lock::TryLockError,
+        sink,
+        types::{
             BlockchainEventType, CommitmentLevel, ConsumerId, ConsumerInfo, ConsumerShardOffset,
             ProducerId, ProducerInfo, ShardId, ShardOffset, Slot,
-        }, yellowstone_log::{consumer_group::types::ConsumerGroupId, consumer_source::Interrupted}
+        },
+        yellowstone_log::consumer_group::consumer_source::Interrupted,
     },
     chrono::{DateTime, TimeDelta, Utc},
     core::fmt,
@@ -24,37 +30,38 @@ use {
         Session,
     },
     std::{
-        collections::{BTreeMap, BTreeSet}, net::IpAddr, ops::RangeInclusive, pin::Pin, str::FromStr, sync::Arc, time::Duration
+        collections::{BTreeMap, BTreeSet},
+        net::IpAddr,
+        ops::RangeInclusive,
+        pin::Pin,
+        str::FromStr,
+        sync::Arc,
+        time::Duration,
     },
     thiserror::Error,
     tokio::sync::{mpsc, oneshot},
     tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
-    tracing::{error, info, warn, Instrument},
+    tracing::{error, info, warn},
     uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
         yellowstone::log::{
-            yellowstone_log_server::YellowstoneLog, ConsumeRequest, CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, EventSubscriptionPolicy, JoinRequest, TimelineTranslationPolicy
+            yellowstone_log_server::YellowstoneLog, ConsumeRequest,
+            CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse,
+            EventSubscriptionPolicy, JoinRequest, TimelineTranslationPolicy,
         },
     },
 };
+
+const ZERO_CONSUMER_GROUP_ID: Uuid =
+    Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
 
 const DEFAULT_OFFSET_COMMIT_INTERVAL: Duration = Duration::from_secs(10);
 
 const DEFAULT_CONSUMER_STREAM_BUFFER_CAPACITY: usize = 100;
-
-const UPDATE_CONSUMER_SHARD_OFFSET: &str = r###"
-    UPDATE consumer_shard_offset
-    SET offset = ?, slot = ?, updated_at = currentTimestamp() 
-    WHERE 
-        consumer_id = ?
-        AND producer_id = ?
-        AND shard_id = ?
-        AND event_type = ?
-"###;
 
 const LIST_PRODUCER_WITH_COMMITMENT_LEVEL: &str = r###"
     SELECT 
@@ -95,13 +102,14 @@ const INSERT_CONSUMER_OFFSET: &str = r###"
         producer_id,
         shard_id,
         event_type,
+        revision,
         offset,
         slot,
         created_at,
         updated_at
     )
     VALUES
-    (?,?,?,?,?,?, currentTimestamp(), currentTimestamp())
+    (?,?,?,?,?,?,?, currentTimestamp(), currentTimestamp())
 "###;
 
 const GET_CONSUMER_INFO_BY_ID: &str = r###"
@@ -740,14 +748,14 @@ pub struct ScyllaYsLog {
 
 impl ScyllaYsLog {
     pub async fn new(
-        session: Arc<Session>, 
-        etcd_client: etcd_client::Client
+        session: Arc<Session>,
+        etcd_client: etcd_client::Client,
     ) -> anyhow::Result<Self> {
         let consumer_group_repo = ConsumerGroupRepo::new(Arc::clone(&session)).await?;
         Ok(ScyllaYsLog {
             session,
             consumer_group_repo,
-            instance_locker: InstanceLocker(etcd_client.clone())
+            instance_locker: InstanceLocker(etcd_client.clone()),
         })
     }
 }
@@ -760,27 +768,44 @@ impl YellowstoneLog for ScyllaYsLog {
     type ConsumeStream = LogStream;
     type JoinConsumerGroupStream = LogStream;
 
-
     async fn create_static_consumer_group(
         &self,
         request: tonic::Request<CreateStaticConsumerGroupRequest>,
     ) -> Result<tonic::Response<CreateStaticConsumerGroupResponse>, tonic::Status> {
-        let remote_ip_addr = request.remote_addr().map(|addr| addr.ip());
-        let request = request.into_inner();
+        // let remote_ip_addr = request.remote_addr().map(|addr| addr.ip());
+        // let request = request.into_inner();
 
-        let instance_ids = request.instance_id_list;
+        // let instance_ids = request.instance_id_list.clone();
 
-        let consumer_group_info = self
-            .consumer_group_repo
-            .create_static_consumer_group(&instance_ids, remote_ip_addr)
-            .await
-            .map_err(|e| {
-                error!("create_static_consumer_group: {e:?}");
-                tonic::Status::internal("failed to create consumer group")
-            })?;
-        Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: consumer_group_info.consumer_group_id.to_string(),
-        }))
+        // let event_subscription_policy = request.event_subscription_policy();
+
+        // let consumer_group_info = self
+        //     .consumer_group_repo
+        //     .create_static_consumer_group(
+        //         &instance_ids,
+        //         match request.commitment_level() {
+        //             yellowstone_grpc_proto::geyser::CommitmentLevel::Processed => {
+        //                 CommitmentLevel::Processed
+        //             }
+        //             yellowstone_grpc_proto::geyser::CommitmentLevel::Confirmed => {
+        //                 CommitmentLevel::Confirmed
+        //             }
+        //             yellowstone_grpc_proto::geyser::CommitmentLevel::Finalized => {
+        //                 CommitmentLevel::Finalized
+        //             }
+        //         },
+        //         &get_blockchain_event_types(event_subscription_policy),
+        //         remote_ip_addr,
+        //     )
+        //     .await
+        //     .map_err(|e| {
+        //         error!("create_static_consumer_group: {e:?}");
+        //         tonic::Status::internal("failed to create consumer group")
+        //     })?;
+        // Ok(Response::new(CreateStaticConsumerGroupResponse {
+        //     group_id: consumer_group_info.consumer_group_id.to_string(),
+        // }))
+        unimplemented!()
     }
 
     async fn consume(
@@ -826,6 +851,7 @@ impl YellowstoneLog for ScyllaYsLog {
         );
 
         let req: SpawnGrpcConsumerReq = SpawnGrpcConsumerReq {
+            consumer_group_id: ZERO_CONSUMER_GROUP_ID.clone().as_bytes().to_vec(),
             consumer_id: consumer_id.clone(),
             consumer_ip,
             account_update_event_filter,
@@ -838,8 +864,14 @@ impl YellowstoneLog for ScyllaYsLog {
             commitment_level,
         };
 
+        let lock = self
+            .instance_locker
+            .try_lock_instance_id(ZERO_CONSUMER_GROUP_ID.clone(), consumer_id.clone())
+            .await
+            .map_err(map_lock_err_to_tonic_status)?;
+
         let result =
-            spawn_grpc_consumer(Arc::clone(&self.session), req, initial_offset_policy).await;
+            spawn_grpc_consumer(Arc::clone(&self.session), req, initial_offset_policy, lock).await;
 
         match result {
             Ok(rx) => {
@@ -861,32 +893,54 @@ impl YellowstoneLog for ScyllaYsLog {
         request: tonic::Request<JoinRequest>,
     ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
         let join_request = request.into_inner();
-        let cg_id = ConsumerGroupId::from_str(join_request.group_id.as_str())
+        let cg_id = Uuid::from_str(join_request.group_id.as_str())
             .map_err(|_| tonic::Status::invalid_argument("invalid consumer group id value"))?;
-        let instance_id = join_request.instance_id.ok_or(tonic::Status::invalid_argument("missing instance id from join request"))?;
-
-        let lock = self.instance_locker.try_lock_instance_id(cg_id.clone(), instance_id.clone())
+        let instance_id = join_request
+            .instance_id
+            .ok_or(tonic::Status::invalid_argument(
+                "missing instance id from join request",
+            ))?;
+        let maybe = self
+            .consumer_group_repo
+            .get_consumer_group_info(cg_id.clone())
             .await
             .map_err(|e| {
-
-                if let Some(e) = e.downcast_ref::<TryLockError>() {
-                    error!("error acquiring lock for {cg_id}/{instance_id}: {e:?}");
-                    match e {
-                        TryLockError::InvalidLockName => tonic::Status::internal("out of service"),
-                        TryLockError::AlreadyTaken => tonic::Status::already_exists("Instance id is already consumed by another connection, try again later") ,
-                        TryLockError::LockingDeadlineExceeded => tonic::Status::deadline_exceeded("failed to acquire exclusive access to instance id in time.")
-                    }
-                } else {
-                    tonic::Status::internal("server failure")
-                }
+                error!("get_consumer_group_info raised an error: {e:?}");
+                tonic::Status::internal("failed to validate consumer group id")
             })?;
+
+        maybe.ok_or(tonic::Status::invalid_argument("Invalid consumer group id"))?;
+
+        let lock = self
+            .instance_locker
+            .try_lock_instance_id(cg_id.clone(), instance_id.clone())
+            .await
+            .map_err(map_lock_err_to_tonic_status)?;
         join_request.group_id;
         todo!()
     }
 }
 
+fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
+    if let Some(e) = e.downcast_ref::<TryLockError>() {
+        error!("error acquiring lock for {e:?}");
+        match e {
+            TryLockError::InvalidLockName => tonic::Status::internal("out of service"),
+            TryLockError::AlreadyTaken => tonic::Status::already_exists(
+                "Instance id is already consumed by another connection, try again later",
+            ),
+            TryLockError::LockingDeadlineExceeded => tonic::Status::deadline_exceeded(
+                "failed to acquire exclusive access to instance id in time.",
+            ),
+        }
+    } else {
+        tonic::Status::internal("server failure")
+    }
+}
+
 #[derive(Clone)]
 pub struct SpawnGrpcConsumerReq {
+    pub consumer_group_id: Vec<u8>,
     pub consumer_id: ConsumerId,
     pub consumer_ip: Option<IpAddr>,
     pub account_update_event_filter:
@@ -935,6 +989,7 @@ async fn build_grpc_consumer_source(
     session: Arc<Session>,
     req: SpawnGrpcConsumerReq,
     initial_offset_policy: InitialOffset,
+    instance_lock: InstanceLock,
     is_new: bool,
 ) -> anyhow::Result<ConsumerSource<GrpcEvent>> {
     let (consumer_info, initial_shard_offsets) = assign_producer_to_consumer(
@@ -987,12 +1042,16 @@ async fn build_grpc_consumer_source(
     .await?;
 
     let consumer = ConsumerSource::new(
-        consumer_session,
-        consumer_info,
+        session,
+        req.consumer_group_id,
+        consumer_info.consumer_id,
+        consumer_info.producer_id,
+        consumer_info.subscribed_blockchain_event_types,
         sender,
         req.offset_commit_interval
             .unwrap_or(DEFAULT_OFFSET_COMMIT_INTERVAL),
         shard_iterators,
+        instance_lock,
     )
     .await?;
     Ok(consumer)
@@ -1002,6 +1061,7 @@ pub async fn spawn_grpc_consumer(
     session: Arc<Session>,
     req: SpawnGrpcConsumerReq,
     initial_offset_policy: InitialOffset,
+    instance_lock: InstanceLock,
 ) -> anyhow::Result<GrpcConsumerReceiver> {
     let original_req = req.clone();
     let buffer_capacity = req
@@ -1014,6 +1074,7 @@ pub async fn spawn_grpc_consumer(
         Arc::clone(&session),
         req,
         initial_offset_policy,
+        instance_lock,
         true,
     )
     .await?;
@@ -1025,7 +1086,7 @@ pub async fn spawn_grpc_consumer(
         let sender = sender;
         let session = session;
         while !sender.is_closed() {
-            let current_producer_id = grpc_consumer_source.producer_id();
+            let current_producer_id = grpc_consumer_source.producer_id;
             let interrupt_signal =
                 wait_for_producer_is_dead(Arc::clone(&session), current_producer_id);
 
@@ -1036,7 +1097,7 @@ pub async fn spawn_grpc_consumer(
                     if let Some(Interrupted) = e.downcast_ref::<Interrupted>() {
                         let forged_offset_policy = grpc_consumer_source
                             .shard_iterators_slot
-                            .into_iter()
+                            .iter()
                             .min()
                             .map(|(_shard_id, slot)| {
                                 let min_slot = match &original_req.timeline_translation_policy {
@@ -1046,21 +1107,22 @@ pub async fn spawn_grpc_consumer(
                                             .unwrap_or(DEFAULT_ALLOWED_LAG);
                                         slot - (lag as Slot)
                                     }
-                                    TimelineTranslationPolicy::StrictSlot => slot,
+                                    TimelineTranslationPolicy::StrictSlot => *slot,
                                 };
 
                                 InitialOffset::SlotApprox {
-                                    desired_slot: slot,
+                                    desired_slot: *slot,
                                     min_slot,
                                 }
                             })
                             .unwrap_or(initial_offset_policy);
-
+                        let instance_lock = grpc_consumer_source.take_instance_lock();
                         grpc_consumer_source = build_grpc_consumer_source(
                             sender.clone(),
                             Arc::clone(&session),
                             original_req.clone(),
                             forged_offset_policy,
+                            instance_lock,
                             false,
                         )
                         .await

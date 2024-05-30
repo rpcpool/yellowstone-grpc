@@ -1,7 +1,5 @@
-pub(crate) mod repo;
-pub(crate) mod spawner;
-pub(crate) mod types;
-mod leader;
-mod scylla_types;
+pub(crate) mod consumer_source;
+pub(crate) mod leader;
 pub(crate) mod lock;
-
+pub(crate) mod producer_queries;
+pub(crate) mod repo;

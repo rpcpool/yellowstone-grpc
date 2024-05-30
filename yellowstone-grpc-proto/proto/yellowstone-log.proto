@@ -23,8 +23,21 @@ message CreateStaticConsumerGroupResponse {
 }
 
 message CreateStaticConsumerGroupRequest {
-  repeated string instance_id_list = 2;
-  repeated string redundancy_instance_id_list = 3;
+  repeated string instance_id_list = 1;
+  repeated string redundancy_instance_id_list = 2;
+
+  InitialOffsetPolicy initial_offset_policy = 3;
+  geyser.CommitmentLevel commitment_level = 4;
+  EventSubscriptionPolicy event_subscription_policy = 5;
+
+  optional int64 at_slot = 6;
+  optional AccountUpdateEventFilter account_update_event_filter = 7;
+  optional TransactionEventFilter tx_event_filter = 8;
+
+  // timelineTranslationPolicy is used when an ingester is out of service and we need to translate a set
+  // of consumer to a different ingestion timeline. The policy describe what to do when we need to trigger timeline translation.
+  optional TimelineTranslationPolicy timeline_translation_policy = 9;
+  optional uint32 ttp_maximum_slot_lag = 10;
 }
 
 enum PartitionAssignmentStrategy {

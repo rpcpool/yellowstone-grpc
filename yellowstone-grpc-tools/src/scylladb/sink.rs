@@ -4,6 +4,7 @@ use {
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
         },
+        scylladb_utils::LwtResult,
         types::{
             AccountUpdate, BlockchainEvent, CommitmentLevel, ProducerId, ProducerInfo, ShardId,
             ShardOffset, ShardPeriod, Slot, Transaction, SHARD_OFFSET_MODULO, UNDEFINED_SLOT,
@@ -17,9 +18,8 @@ use {
     local_ip_address::{list_afinet_netifas, local_ip},
     scylla::{
         batch::{Batch, BatchType},
-        cql_to_rust::{FromCqlVal, FromCqlValError, FromRowError},
         frame::Compression,
-        FromRow, Session, SessionBuilder,
+        Session, SessionBuilder,
     },
     std::{
         collections::{BTreeMap, BTreeSet},
@@ -42,27 +42,6 @@ const DEFAULT_SHARD_MAX_BUFFER_CAPACITY: usize = 15;
 
 /// Untyped API in scylla will soon be deprecated, this is why we need to implement our own deser logic to
 /// only read the first column returned by a light weight transaction.
-struct LwtSuccess(bool);
-
-impl FromRow for LwtSuccess {
-    fn from_row(
-        row: scylla::frame::response::result::Row,
-    ) -> Result<Self, scylla::cql_to_rust::FromRowError> {
-        row.columns
-            .first()
-            .ok_or(FromRowError::BadCqlVal {
-                err: FromCqlValError::ValIsNull,
-                column: 0,
-            })
-            .and_then(|cqlval| {
-                bool::from_cql(cqlval.to_owned()).map_err(|_err| FromRowError::BadCqlVal {
-                    err: FromCqlValError::BadCqlType,
-                    column: 0,
-                })
-            })
-            .map(LwtSuccess)
-    }
-}
 
 const INSERT_PRODUCER_SLOT: &str = r###"
     INSERT INTO producer_slot_seen (producer_id, slot, shard_offset_map, created_at)
@@ -661,9 +640,9 @@ async fn try_acquire_lock(
             (producer_id, lock_id.clone(), ifname, ipaddr),
         )
         .await?;
-    let lwt_success = qr.single_row_typed::<LwtSuccess>()?;
+    let lwt_success = qr.single_row_typed::<LwtResult>()?;
 
-    if let LwtSuccess(true) = lwt_success {
+    if let LwtResult(true) = lwt_success {
         let lock = ProducerLock {
             session: Arc::clone(&session),
             lock_id,
@@ -698,9 +677,9 @@ async fn set_minimum_producer_offsets(
     let lwt = session
         .execute(&ps, (minimum_shard_offsets, producer_lock.producer_id))
         .await?
-        .first_row_typed::<LwtSuccess>()?;
+        .first_row_typed::<LwtResult>()?;
 
-    if let LwtSuccess(false) = lwt {
+    if let LwtResult(false) = lwt {
         anyhow::bail!("Producer lock is corrupted, it may be cause by concurrent lock acquisition");
     }
 

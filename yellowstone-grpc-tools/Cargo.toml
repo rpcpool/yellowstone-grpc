@@ -11,6 +11,11 @@ keywords = { workspace = true }
 publish = false
 
 [[bin]]
+name = "test-lv"
+required-features = ["scylladb"]
+
+
+[[bin]]
 name = "grpc-google-pubsub"
 required-features = ["google-pubsub"]
 

@@ -27,7 +27,7 @@ use {
             types::{CommitmentLevel, Transaction},
             yellowstone_log::{
                 common::InitialOffset,
-                grpc::{spawn_grpc_consumer, ScyllaYsLog, SpawnGrpcConsumerReq},
+                grpc2::ScyllaYsLog
             },
         },
         setup_tracing,
@@ -105,7 +105,7 @@ impl ArgsAction {
             .use_keyspace(config.keyspace.clone(), false)
             .build()
             .await?;
-        
+
         let etcd_endpoints = config.etcd_endpoints;
         let etcd_client = etcd_client::Client::connect(etcd_endpoints, None).await?;
         let session = Arc::new(session);
@@ -131,50 +131,51 @@ impl ArgsAction {
         scylladb_conn_config: ScyllaDbConnectionInfo,
         mut shutdown: BoxFuture<'static, ()>,
     ) -> anyhow::Result<()> {
-        let session: Session = SessionBuilder::new()
-            .known_node(scylladb_conn_config.hostname)
-            .user(scylladb_conn_config.username, scylladb_conn_config.password)
-            .compression(Some(Compression::Lz4))
-            .use_keyspace(config.keyspace.clone(), false)
-            .build()
-            .await?;
-        let session = Arc::new(session);
-        let req = SpawnGrpcConsumerReq {
-            consumer_id: String::from("test"),
-            consumer_ip: None,
-            account_update_event_filter: None,
-            tx_event_filter: None,
-            buffer_capacity: None,
-            offset_commit_interval: None,
-            event_subscription_policy: EventSubscriptionPolicy::Both,
-            commitment_level: CommitmentLevel::Processed,
-            timeline_translation_policy: TimelineTranslationPolicy::AllowLag,
-            timeline_translation_allowed_lag: None,
-        };
-        let mut rx = spawn_grpc_consumer(session, req, InitialOffset::Earliest).await?;
+        unimplemented!();
+        // let session: Session = SessionBuilder::new()
+        //     .known_node(scylladb_conn_config.hostname)
+        //     .user(scylladb_conn_config.username, scylladb_conn_config.password)
+        //     .compression(Some(Compression::Lz4))
+        //     .use_keyspace(config.keyspace.clone(), false)
+        //     .build()
+        //     .await?;
+        // let session = Arc::new(session);
+        // let req = SpawnGrpcConsumerReq {
+        //     consumer_id: String::from("test"),
+        //     consumer_ip: None,
+        //     account_update_event_filter: None,
+        //     tx_event_filter: None,
+        //     buffer_capacity: None,
+        //     offset_commit_interval: None,
+        //     event_subscription_policy: EventSubscriptionPolicy::Both,
+        //     commitment_level: CommitmentLevel::Processed,
+        //     timeline_translation_policy: TimelineTranslationPolicy::AllowLag,
+        //     timeline_translation_allowed_lag: None,
+        // };
+        // let mut rx = spawn_grpc_consumer(session, req, InitialOffset::Earliest).await?;
 
-        let mut print_tx_secs = Instant::now() + Duration::from_secs(1);
-        let mut num_events = 0;
-        loop {
-            if print_tx_secs.elapsed() > Duration::ZERO {
-                println!("event/second {}", num_events);
-                num_events = 0;
-                print_tx_secs = Instant::now() + Duration::from_secs(1);
-            }
-            tokio::select! {
-                _ = &mut shutdown => return Ok(()),
-                Some(result) = rx.recv() => {
-                    if result.is_err() {
-                        anyhow::bail!("fail!!!")
-                    }
-                    let _x = result?.update_oneof.expect("got none");
-                    num_events += 1;
-                },
-                _ = tokio::time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
-                    warn!("received no event")
-                }
-            }
-        }
+        // let mut print_tx_secs = Instant::now() + Duration::from_secs(1);
+        // let mut num_events = 0;
+        // loop {
+        //     if print_tx_secs.elapsed() > Duration::ZERO {
+        //         println!("event/second {}", num_events);
+        //         num_events = 0;
+        //         print_tx_secs = Instant::now() + Duration::from_secs(1);
+        //     }
+        //     tokio::select! {
+        //         _ = &mut shutdown => return Ok(()),
+        //         Some(result) = rx.recv() => {
+        //             if result.is_err() {
+        //                 anyhow::bail!("fail!!!")
+        //             }
+        //             let _x = result?.update_oneof.expect("got none");
+        //             num_events += 1;
+        //         },
+        //         _ = tokio::time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
+        //             warn!("received no event")
+        //         }
+        //     }
+        // }
     }
 
     async fn grpc2scylladb(
