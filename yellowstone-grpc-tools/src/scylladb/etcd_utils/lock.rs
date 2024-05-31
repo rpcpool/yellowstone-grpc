@@ -1,12 +1,12 @@
 use {
     crate::scylladb::etcd_utils::lease::ManagedLease,
     core::fmt,
-    etcd_client::{Compare, GetOptions, LockOptions, LockResponse, Txn, WatchOptions},
+    etcd_client::{Compare, CompareOp, GetOptions, LockOptions, LockResponse, Txn, TxnOp, TxnOpResponse, TxnResponse, WatchOptions},
     futures::{channel::oneshot, lock},
     std::time::Duration,
     thiserror::Error,
     tokio::{sync::watch, task::JoinHandle, time::Instant},
-    tracing::{error, warn},
+    tracing::{error, trace, warn},
 };
 
 const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);
@@ -14,18 +14,56 @@ const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);
 ///
 /// A Lock instance with automatic lease refresh and lock revocation when dropped.
 ///
-pub struct Lock {
+pub struct ManagedLock {
     pub(crate) lock_key: Vec<u8>,
     managed_lease: ManagedLease,
+    etcd: etcd_client::Client,
 }
 
-impl Lock {
+impl ManagedLock {
     pub fn lease_id(&self) -> i64 {
         self.managed_lease.lease_id
     }
 
     fn last_keep_alive(&self) -> Instant {
         self.managed_lease.last_keep_alive()
+    }
+
+    pub async fn txn(&self, operations: impl Into<Vec<TxnOp>>) -> anyhow::Result<TxnResponse> {
+        let mut client = self.etcd.clone();
+
+        let txn = Txn::new()
+            .when(vec![Compare::version(
+                self.lock_key.clone(),
+                CompareOp::Greater,
+                0,
+            )])
+            .and_then(operations);
+
+        let txn_resp = client.txn(txn).await?;
+        Ok(txn_resp)
+    }
+
+    pub async fn fencing_token(&self, fencing_token_key: impl Into<Vec<u8>>) -> anyhow::Result<i64> {
+        let t = Instant::now();
+        let txn_ops = vec![TxnOp::put(fencing_token_key, [0], None)];
+
+        let txn_resp = self.txn(txn_ops).await?;
+        anyhow::ensure!(txn_resp.succeeded(), "failed to get fencing token");
+
+        let op_resp = txn_resp
+            .op_responses()
+            .pop()
+            .ok_or(anyhow::anyhow!("failed to get fencing token"))?;
+        trace!("get fencing token from etcd latency: {t:?}");
+        match op_resp {
+            etcd_client::TxnOpResponse::Put(put_resp) => put_resp
+                .header()
+                .take()
+                .ok_or(anyhow::anyhow!("put response empty"))
+                .map(|header| header.revision()),
+            _ => panic!("unexpected operation in etcd txn response"),
+        }
     }
 }
 
@@ -46,7 +84,7 @@ impl fmt::Display for TryLockError {
     }
 }
 
-pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Result<Lock> {
+pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Result<ManagedLock> {
     const TRY_LOCKING_DURATION: Duration = Duration::from_millis(500);
 
     let get_response = client
@@ -57,6 +95,7 @@ pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Re
 
     let managed_lease = ManagedLease::new(client.clone(), LOCK_LEASE_DURATION, None).await?;
     let lease_id = managed_lease.lease_id;
+
     let lock_key = tokio::select! {
         _ = tokio::time::sleep(TRY_LOCKING_DURATION) => {
             Err(anyhow::Error::new(TryLockError::LockingDeadlineExceeded))
@@ -68,9 +107,10 @@ pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Re
         }
     }?;
 
-    Ok(Lock {
+    Ok(ManagedLock {
         lock_key,
         managed_lease,
+        etcd: client,
     })
 }
 
