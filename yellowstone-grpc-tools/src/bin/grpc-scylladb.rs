@@ -25,10 +25,7 @@ use {
             },
             sink::ScyllaSink,
             types::{CommitmentLevel, Transaction},
-            yellowstone_log::{
-                common::InitialOffset,
-                grpc2::ScyllaYsLog
-            },
+            yellowstone_log::{common::InitialOffset, grpc2::ScyllaYsLog},
         },
         setup_tracing,
     },
@@ -194,11 +191,12 @@ impl ArgsAction {
             .timeout(Duration::from_secs(5))
             .connect()
             .await?;
-
+        let etcd = etcd_client::Client::connect(config.etcd_endpoints, None).await?;
         let mut geyser = client.subscribe_once(config.request.to_proto()).await?;
         info!("Grpc subscription is successful .");
 
         let mut sink = ScyllaSink::new(
+            etcd,
             sink_config,
             scylladb_conn_config.hostname,
             scylladb_conn_config.username,

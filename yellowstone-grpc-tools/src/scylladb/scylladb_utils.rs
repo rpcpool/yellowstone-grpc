@@ -6,6 +6,12 @@ use scylla::{
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct LwtResult(pub bool);
 
+impl LwtResult {
+    pub fn succeeded(&self) -> bool {
+        self.0
+    }
+}
+
 impl FromRow for LwtResult {
     fn from_row(
         row: scylla::frame::response::result::Row,

@@ -31,6 +31,7 @@ required-features = ["scylladb"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
+bincode = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
@@ -81,4 +82,4 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono", "thiserror", "etcd-client"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono", "thiserror", "etcd-client", "bincode"]

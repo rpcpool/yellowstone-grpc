@@ -120,7 +120,8 @@ create table if not exists producer_info (
 
 create table if not exists producer_lock (
     producer_id blob,
-    lock_id text,
+    execution_id blob,
+    revision bigint,
     ifname text,
     ipv4 text,
     is_ready boolean,
@@ -254,6 +255,7 @@ WITH CLUSTERING ORDER BY (offset desc)
 create table if not exists producer_slot_seen (
     producer_id blob,
     slot bigint,
+    revision bigint,
     shard_offset_map frozen<set<tuple<smallint, bigint>>>,
     created_at timestamp,
     primary key (producer_id, slot)
@@ -269,6 +271,15 @@ WHERE
     and slot is not null
 PRIMARY KEY (slot, producer_id);
 
+
+create table  if not exists last_committed_shard_period (
+    producer_id blob,
+    shard_id smallint,
+    revision bigint,
+    period bigint,
+    updated_at timestamp,
+    primary key ((producer_id, shard_id))
+);
 
 
 create table if not exists producer_period_commit_log (
@@ -289,3 +300,5 @@ truncate producer_lock;
 
 truncate consumer_info;
 truncate consumer_shard_offset;
+truncate consumer_shard_offset_v2;
+truncate shard_tip;

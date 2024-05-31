@@ -1,7 +1,10 @@
 use {
     crate::scylladb::etcd_utils::lease::ManagedLease,
     core::fmt,
-    etcd_client::{Compare, CompareOp, GetOptions, LockOptions, LockResponse, Txn, TxnOp, TxnOpResponse, TxnResponse, WatchOptions},
+    etcd_client::{
+        Compare, CompareOp, GetOptions, LockOptions, LockResponse, Txn, TxnOp, TxnOpResponse,
+        TxnResponse, WatchOptions,
+    },
     futures::{channel::oneshot, lock},
     std::time::Duration,
     thiserror::Error,
@@ -44,7 +47,10 @@ impl ManagedLock {
         Ok(txn_resp)
     }
 
-    pub async fn fencing_token(&self, fencing_token_key: impl Into<Vec<u8>>) -> anyhow::Result<i64> {
+    pub async fn fencing_token(
+        &self,
+        fencing_token_key: impl Into<Vec<u8>>,
+    ) -> anyhow::Result<i64> {
         let t = Instant::now();
         let txn_ops = vec![TxnOp::put(fencing_token_key, [0], None)];
 

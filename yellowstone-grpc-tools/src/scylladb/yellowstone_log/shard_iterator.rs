@@ -61,6 +61,13 @@ const GET_LAST_SHARD_PERIOD_COMMIT: &str = r###"
     PER PARTITION LIMIT 1
 "###;
 
+const GET_LAST_SHARD_PERIOD_COMMIT_V2: &str = r###"
+    SELECT period FROM last_committed_shard_period
+    WHERE
+        producer_id = ?
+        ADN shard_id = ?
+"###;
+
 /// Represents the state of a shard iterator, which is used to manage the iteration
 /// and retrieval of blockchain events from a shard.
 ///

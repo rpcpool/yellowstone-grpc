@@ -71,6 +71,8 @@ pub struct ConfigGrpc2ScyllaDB {
     pub x_token: Option<String>,
     pub request: ConfigGrpcRequest,
 
+    pub etcd_endpoints: Vec<String>,
+
     pub producer_id: u8,
 
     // Optional network interface name used to write in the producer lock table.

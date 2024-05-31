@@ -1,5 +1,6 @@
 use {
     super::{
+        etcd_utils::lock::ManagedLock,
         prom::{
             scylladb_batch_request_lag_inc, scylladb_batch_request_lag_sub,
             scylladb_batch_sent_inc, scylladb_batch_size_observe, scylladb_batchitem_sent_inc_by,
@@ -9,26 +10,44 @@ use {
             AccountUpdate, BlockchainEvent, CommitmentLevel, ProducerId, ProducerInfo, ShardId,
             ShardOffset, ShardPeriod, Slot, Transaction, SHARD_OFFSET_MODULO, UNDEFINED_SLOT,
         },
+        yellowstone_log::consumer_group::etcd_path::get_shard_fencing_token_key_path_v1,
     },
+    crate::scylladb::{
+        etcd_utils,
+        yellowstone_log::{
+            self,
+            consumer_group::etcd_path::{
+                get_producer_fencing_token_key_path_v1, get_producer_lock_path_v1,
+            },
+        },
+    },
+    anyhow::anyhow,
     deepsize::DeepSizeOf,
     futures::{
         future::{self, try_join_all},
         Future,
     },
+    lazy_static::initialize,
     local_ip_address::{list_afinet_netifas, local_ip},
+    rdkafka::producer,
     scylla::{
         batch::{Batch, BatchType},
         frame::Compression,
+        serialize::{batch::BatchValues, row::SerializeRow},
         Session, SessionBuilder,
     },
     std::{
+        cell::RefCell,
         collections::{BTreeMap, BTreeSet},
         net::IpAddr,
         sync::Arc,
         time::Duration,
     },
     tokio::{
-        sync::mpsc::{error::SendError, Permit},
+        sync::{
+            mpsc::{error::SendError, Permit},
+            Mutex, RwLock,
+        },
         task::{JoinError, JoinHandle},
         time::Instant,
     },
@@ -48,16 +67,24 @@ const INSERT_PRODUCER_SLOT: &str = r###"
     VALUES (?, ?, ?, currentTimestamp())
 "###;
 
-const DROP_PRODUCER_LOCK: &str = r###"
-    DELETE FROM producer_lock
-    WHERE producer_id = ?
-    IF lock_id = ?
+const INSERT_INITIAL_PRODUCER_LOCK_STATE: &str = r###"
+    INSERT INTO producer_lock (producer_id, execution_id, revision, ifname, ipv4, is_ready, minimum_shard_offset, created_at)
+    VALUES (?, ?, ?, ?, ?, false, null, currentTimestamp())
+    IF NOT EXISTS
 "###;
 
-const TRY_ACQUIRE_PRODUCER_LOCK: &str = r###"
-    INSERT INTO producer_lock (producer_id, lock_id, ifname, ipv4, is_ready, minimum_shard_offset, created_at)
-    VALUES (?, ?, ?, ?, false, null, currentTimestamp())
-    IF NOT EXISTS
+const UPDATE_PRODUCER_LOCK_EXECUTION_ID: &str = r###"
+    UPDATE producer_lock
+    SET revision = ?, execution_id = ?
+    WHERE producer_id = ?
+    IF revision < ?
+"###;
+
+const UPDATE_PRODUCER_LOCK_REVISION: &str = r###"
+    UPDATE producer_lock
+    SET revision = ?
+    WHERE producer_id = ?
+    IF revision < ?
 "###;
 
 const GET_PRODUCER_INFO_BY_ID: &str = r###"
@@ -106,6 +133,25 @@ const INSERT_BLOCKCHAIN_EVENT: &str = r###"
         created_at
     )
     VALUES (?,?,?, ?,?,?,  ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?, currentTimestamp())
+"###;
+
+const UPDATE_SHARD_TIP: &str = r###"
+    UPDATE last_committed_shard_period 
+    SET period = ?, revision = ?, updated_at = currentTimestamp()
+    WHERE producer_id = ? AND shard_id = ?
+    IF revision < ?
+"###;
+
+const INSERT_INITIAL_SHARD_TIP: &str = r###"
+    INSERT INTO last_committed_shard_period(
+        producer_id,
+        shard_id,
+        revision,
+        period,
+        updated_at
+    )
+    VALUES (?, ?, ?, ?, currentTimestamp())
+    IF NOT EXISTS
 "###;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -234,15 +280,16 @@ impl Shard {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<ShardCommand>(16);
         let shard_id = self.shard_id;
         let (wsender, wreceiver) = tokio::sync::watch::channel(self.next_offset - 1);
+        let fencing_token_path = get_shard_fencing_token_key_path_v1(self.producer_id, shard_id);
 
         let handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+            let shard_id = self.shard_id;
+            let producer_id = self.producer_id;
             let insert_event_ps = self.session.prepare(INSERT_BLOCKCHAIN_EVENT).await?;
             let commit_period_ps = self.session.prepare(COMMIT_SHARD_PERIOD).await?;
-
+            let update_last_committed_period = self.session.prepare(UPDATE_SHARD_TIP).await?;
             let mut buffering_timeout = Instant::now() + self.buffer_linger;
             loop {
-                let shard_id = self.shard_id;
-                let producer_id = self.producer_id;
                 let offset = self.next_offset;
                 let curr_period = offset / SHARD_OFFSET_MODULO;
                 let prev_period = curr_period - 1;
@@ -477,6 +524,7 @@ fn spawn_round_robin(
     session: Arc<Session>,
     producer_id: ProducerId,
     shard_handles: Vec<ShardHandle>,
+    managed_lock: Arc<ManagedLock>,
 ) -> (
     tokio::sync::mpsc::Sender<ShardCommand>,
     JoinHandle<anyhow::Result<()>>,
@@ -485,7 +533,7 @@ fn spawn_round_robin(
 
     let h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         let insert_slot_ps = session.prepare(INSERT_PRODUCER_SLOT).await?;
-
+        let update_producer_lock_ps = session.prepare(UPDATE_PRODUCER_LOCK_REVISION).await?;
         // One hour worth of slots
         const SLOT_SEEN_RETENTION: usize = 9000;
         //session.execute(&insert_slot_ps, (producer_id,)).await?;
@@ -499,6 +547,7 @@ fn spawn_round_robin(
             tokio::spawn(future::ready(Ok::<(), anyhow::Error>(())));
 
         let mut slots_seen = BTreeSet::<Slot>::new();
+        let fencing_token_path = get_producer_fencing_token_key_path_v1(producer_id);
 
         for (i, shard_sender) in iterator {
             let msg = receiver.recv().await.unwrap_or(ShardCommand::Shutdown);
@@ -531,12 +580,28 @@ fn spawn_round_robin(
 
                 let session = Arc::clone(&session);
                 let insert_slot_ps = insert_slot_ps.clone();
+                let update_producer_lock_ps = update_producer_lock_ps.clone();
                 let shard_offset_pairs = shard_handles
                     .iter()
                     .map(|sh| (sh.shard_id, sh.get_last_committed_offset()))
                     .collect::<Vec<_>>();
 
+                let managed_lock = Arc::clone(&managed_lock);
+                let fencing_token_path = fencing_token_path.clone();
                 background_commit_slot_seen = tokio::spawn(async move {
+                    // Asking a fencing token will fail if the lock is revoked.
+                    let revision = managed_lock.fencing_token(fencing_token_path).await?;
+
+                    let lwt_result = session
+                        .execute(&update_producer_lock_ps, (revision, producer_id, revision))
+                        .await?
+                        .first_row_typed::<LwtResult>()?;
+
+                    anyhow::ensure!(
+                        lwt_result.succeeded(),
+                        "failed to update producer lock, etcd lock may be compromised"
+                    );
+
                     session
                         .execute(&insert_slot_ps, (producer_id, slot, shard_offset_pairs))
                         .await?;
@@ -588,24 +653,16 @@ async fn get_producer_info_by_id(
 
 struct ProducerLock {
     session: Arc<Session>,
-    lock_id: String,
+    execution_id: Uuid,
     producer_id: ProducerId,
 }
 
-impl ProducerLock {
-    async fn release(self) -> anyhow::Result<()> {
-        self.session
-            .query(DROP_PRODUCER_LOCK, (self.producer_id, self.lock_id))
-            .await
-            .map(|_query_result| ())
-            .map_err(anyhow::Error::new)
-    }
-}
-
-async fn try_acquire_lock(
+async fn load_producer_lock_state(
     session: Arc<Session>,
     producer_id: ProducerId,
+    execution_id: Uuid,
     ifname: Option<String>,
+    initital_revision: i64,
 ) -> anyhow::Result<ProducerLock> {
     let network_interfaces = list_afinet_netifas()?;
 
@@ -633,28 +690,40 @@ async fn try_acquire_lock(
         }
     };
 
-    let lock_id = Uuid::new_v4().to_string();
-    let qr = session
+    let lwt_result = session
         .query(
-            TRY_ACQUIRE_PRODUCER_LOCK,
-            (producer_id, lock_id.clone(), ifname, ipaddr),
+            INSERT_INITIAL_PRODUCER_LOCK_STATE,
+            (
+                producer_id,
+                execution_id.as_bytes(),
+                initital_revision,
+                ifname,
+                ipaddr,
+            ),
         )
-        .await?;
-    let lwt_success = qr.single_row_typed::<LwtResult>()?;
-
-    if let LwtResult(true) = lwt_success {
-        let lock = ProducerLock {
-            session: Arc::clone(&session),
-            lock_id,
-            producer_id,
-        };
-        Ok(lock)
-    } else {
-        anyhow::bail!(
-            "Failed to lock producer {:?}, you may need to release it manually",
-            producer_id
-        );
+        .await?
+        .first_row_typed::<LwtResult>()?;
+    if !lwt_result.succeeded() {
+        let lwt_result = session
+            .query(
+                UPDATE_PRODUCER_LOCK_EXECUTION_ID,
+                (
+                    initital_revision,
+                    execution_id.as_bytes(),
+                    producer_id,
+                    initital_revision,
+                ),
+            )
+            .await?
+            .first_row_typed::<LwtResult>()?;
+        anyhow::ensure!(lwt_result.succeeded(), "producer lock is compromised");
     }
+    let lock = ProducerLock {
+        session: Arc::clone(&session),
+        execution_id,
+        producer_id,
+    };
+    Ok(lock)
 }
 
 async fn set_minimum_producer_offsets(
@@ -688,13 +757,13 @@ async fn set_minimum_producer_offsets(
 
 impl ScyllaSink {
     pub async fn new(
+        etcd: etcd_client::Client,
         config: ScyllaSinkConfig,
         hostname: impl AsRef<str>,
         username: impl Into<String>,
         password: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let producer_id = [config.producer_id];
-
         let session: Session = SessionBuilder::new()
             .known_node(hostname)
             .user(username, password)
@@ -715,8 +784,20 @@ impl ScyllaSink {
 
         info!("Producer {producer_id:?} is registered");
 
-        let producer_lock =
-            try_acquire_lock(Arc::clone(&session), producer_id, config.ifname.to_owned()).await?;
+        let etcd_lock_path = get_producer_lock_path_v1(producer_id);
+        let fencing_token_path = get_producer_fencing_token_key_path_v1(producer_id);
+        let managed_lock = etcd_utils::lock::try_lock(etcd.clone(), &etcd_lock_path).await?;
+        let managed_lock = Arc::new(managed_lock);
+        let execution_id = Uuid::new_v4();
+        let initital_fencing_token = managed_lock.fencing_token(fencing_token_path).await?;
+        let producer_lock = load_producer_lock_state(
+            Arc::clone(&session),
+            producer_id,
+            execution_id,
+            config.ifname.to_owned(),
+            initital_fencing_token,
+        )
+        .await?;
 
         info!("Producer {producer_id:?} lock acquired!");
 
@@ -729,16 +810,8 @@ impl ScyllaSink {
             get_max_shard_offsets_for_producer(Arc::clone(&session), producer_id, shard_count)
                 .await?;
 
-        let result =
-            set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets)
-                .await;
-        if let Err(e) = result {
-            let result2 = producer_lock.release().await;
-            if let Err(e2) = result2 {
-                error!("Releasing lock failed during error handling: {e2:?}");
-            }
-            anyhow::bail!(e);
-        }
+        set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets)
+            .await?;
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);
@@ -757,8 +830,12 @@ impl ScyllaSink {
             shard_handles.push(shard_handle);
         }
 
-        let (sender, router_handle) =
-            spawn_round_robin(Arc::clone(&session), producer_id, shard_handles);
+        let (sender, router_handle) = spawn_round_robin(
+            Arc::clone(&session),
+            producer_id,
+            shard_handles,
+            Arc::clone(&managed_lock),
+        );
 
         Ok(ScyllaSink {
             router_sender: sender,
@@ -773,10 +850,7 @@ impl ScyllaSink {
         if router_result.is_err() {
             error!("router was closed before we could gracefully shutdown all sharders.");
         }
-        if let Err(e) = self.router_handle.await? {
-            error!("router error {e}");
-        }
-        self.producer_lock.release().await
+        self.router_handle.await?
     }
 
     async fn inner_log(&mut self, cmd: ShardCommand) -> anyhow::Result<()> {

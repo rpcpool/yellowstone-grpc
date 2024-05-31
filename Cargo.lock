@@ -5587,6 +5587,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "atty",
+ "bincode",
  "cargo-lock",
  "chrono",
  "clap",

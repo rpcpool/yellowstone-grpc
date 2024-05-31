@@ -216,11 +216,10 @@ impl ConsumerGroupRepo {
             .await?;
         let mut values = Vec::with_capacity(static_cgroup_info.instance_id_assignments.len());
         for (consumer_id, assigned_shards) in static_cgroup_info.instance_id_assignments.iter() {
-            
             let shard_offset_map = shard_offset_lookup_index
                 .iter()
                 .filter(|(k, _)| assigned_shards.contains(k))
-                .map(|(k,v)| (*k, v.to_owned()))
+                .map(|(k, v)| (*k, v.to_owned()))
                 .collect::<BTreeMap<_, _>>();
 
             let acc_shard_offset_map = if static_cgroup_info
@@ -293,7 +292,7 @@ impl ConsumerGroupRepo {
                 ),
             )
             .await?;
-        
+
         info!("created consumer group row -- {consumer_group_id:?}");
         let static_consumer_group_info = StaticConsumerGroupInfo {
             consumer_group_id: consumer_group_id,
