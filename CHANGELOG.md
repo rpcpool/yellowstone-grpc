@@ -30,7 +30,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser: add optional x_token check in grpc server ([#345](https://github.com/rpcpool/yellowstone-grpc/pull/345))
-- solana: update to 1.18.15 ([#352](https://github.com/rpcpool/yellowstone-grpc/pull/352))
+- solana: update to 1.18.15 ([#354](https://github.com/rpcpool/yellowstone-grpc/pull/354))
 
 ## 2024-05-21
 
