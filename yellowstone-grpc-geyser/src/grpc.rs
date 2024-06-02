@@ -776,8 +776,9 @@ impl GrpcService {
 
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
+        let x_token = XTokenChecker::new(config.x_token.clone());
         let service = GeyserServer::new(Self {
-            config: config.clone(),
+            config,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -787,7 +788,7 @@ impl GrpcService {
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip)
         .max_decoding_message_size(max_decoding_message_size);
-        let service = InterceptedService::new(service, XTokenChecker::new(config.x_token));
+        let service = InterceptedService::new(service, x_token);
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
@@ -1479,7 +1480,7 @@ impl Interceptor for XTokenChecker {
     fn call(&mut self, req: Request<()>) -> Result<Request<()>, Status> {
         if let Some(x_token) = &self.x_token {
             match req.metadata().get("x-token") {
-                Some(t) if x_token == t => Ok(req),
+                Some(token) if x_token == token => Ok(req),
                 _ => Err(Status::unauthenticated("No valid auth token")),
             }
         } else {

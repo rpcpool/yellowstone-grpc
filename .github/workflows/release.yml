@@ -61,7 +61,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsasl2-dev
+          sudo apt-get install -y libsasl2-dev protobuf-compiler
 
       - name: Check Solana version
         run: |
