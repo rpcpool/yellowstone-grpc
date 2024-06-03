@@ -45,6 +45,7 @@ json5 = { workspace = true }
 lazy_static = { workspace = true }
 local-ip-address = { workspace = true, optional = true }
 prometheus = { workspace = true }
+prost = { workspace = true, optional = true }
 scylla = { workspace = true, optional = true, features = ["chrono"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -77,9 +78,12 @@ anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
+protobuf-src = { workspace = true }
+tonic-build = { workspace = true }
+
 
 [features]
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
-scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono", "thiserror", "etcd-client", "bincode"]
+scylladb = ["scylla", "serde_with", "deepsize", "uuid", "local-ip-address", "chrono", "thiserror", "etcd-client", "bincode", "prost"]

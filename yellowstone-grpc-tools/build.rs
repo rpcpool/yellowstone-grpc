@@ -22,6 +22,9 @@ fn main() -> anyhow::Result<()> {
         get_pkg_version(&lockfile, "yellowstone-grpc-proto")
     );
 
+    std::env::set_var("PROTOC", protobuf_src::protoc());
+    tonic_build::compile_protos("proto/yellowstone-log-consumer-group.proto")?;
+
     Ok(())
 }
 

@@ -810,8 +810,7 @@ impl ScyllaSink {
             get_max_shard_offsets_for_producer(Arc::clone(&session), producer_id, shard_count)
                 .await?;
 
-        set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets)
-            .await?;
+        set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets).await?;
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);

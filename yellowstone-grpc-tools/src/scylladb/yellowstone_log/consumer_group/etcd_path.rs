@@ -9,6 +9,12 @@ pub fn get_instance_lock_name_path_v1(
     format!("v1/lock/cg-{uuid_str}/i-{instance_id}")
 }
 
+pub fn get_instance_lock_prefix_v1(consumer_group_id: ConsumerGroupId) -> String {
+    let uuid_str = String::from_utf8(consumer_group_id.into())
+        .expect("consumer group id is not proper utf8 uuid");
+    format!("v1/lock/cg-{uuid_str}/i-")
+}
+
 pub fn get_instance_fencing_token_key_path_v1(
     consumer_group_id: ConsumerGroupId,
     instance_id: InstanceId,
@@ -34,4 +40,11 @@ pub fn get_shard_fencing_token_key_path_v1(producer_id: ProducerId, shard_id: Sh
         "v1/fencing-token/shards/p-{:0>4}/s-{:0>5}",
         producer_id_num, shard_id
     )
+}
+
+pub fn get_leader_state_log_key_v1(consumer_group_id: ConsumerGroupId) -> String {
+    let uuid_str = String::from_utf8(consumer_group_id.into())
+        .expect("consumer group id is not proper utf8 uuid");
+
+    format!("v1/leader-log/cg-{uuid_str}")
 }

@@ -1,5 +1,5 @@
 use {
-    etcd_client::{Client, GetOptions, LockOptions, ProclaimOptions, ResignOptions},
+    etcd_client::{Client, GetOptions, LeaderKey, LockOptions, ProclaimOptions, ResignOptions},
     futures::{
         future::{join_all, select_all},
         try_join, FutureExt,
@@ -32,6 +32,22 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let resp = client
+        .campaign("myleader", uuid.to_string(), lease1)
+        .await?;
+    let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
+    println!("{resp:?}");
+
+    let (k, v) = rx.recv().await.unwrap();
+    let v = String::from_utf8(v)?;
+    println!("rx: {v:?}");
+
+    let lk = LeaderKey::new().with_key(leader_key).with_name("myleader");
+    client
+        .resign(Some(ResignOptions::new().with_leader(lk)))
+        .await?;
+
+    let uuid = Uuid::new_v4();
     let resp = client
         .campaign("myleader", uuid.to_string(), lease1)
         .await?;

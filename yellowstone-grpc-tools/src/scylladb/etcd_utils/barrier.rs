@@ -1,0 +1,129 @@
+use {
+    etcd_client::{GetOptions, KvClientPrefix, PutOptions, WatchFilterType, WatchOptions, Watcher},
+    futures::channel::oneshot,
+};
+
+pub struct Barrier {
+    key: Vec<u8>,
+    watch_handle: Watcher,
+    watch_stream_kill_signal: oneshot::Sender<()>,
+    etcd_response: oneshot::Receiver<()>,
+}
+
+impl Barrier {
+    pub async fn wait(mut self) {
+        self.etcd_response.await;
+    }
+}
+
+pub async fn get_barrier(
+    mut etcd: etcd_client::Client,
+    barrier_key: &[u8],
+) -> anyhow::Result<Barrier> {
+    let mut wc = etcd.watch_client();
+    let (watch_handle, mut watch_stream) = wc
+        .watch(
+            barrier_key,
+            Some(
+                WatchOptions::new()
+                    .with_prefix()
+                    .with_filters([WatchFilterType::NoPut]),
+            ),
+        )
+        .await?;
+
+    let total = etcd
+        .get(barrier_key, Some(GetOptions::new().with_prefix()))
+        .await?
+        .kvs()
+        .len();
+
+    let (tx, mut rx) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut counter = total;
+
+        while counter > 0 {
+            tokio::select! {
+                _ = &mut rx => (),
+                Ok(Some(_)) = watch_stream.message() => {
+                    counter -= 1;
+                }
+            }
+        }
+        let _ = tx2.send(());
+    });
+
+    Ok(Barrier {
+        key: barrier_key.to_vec(),
+        watch_handle,
+        watch_stream_kill_signal: tx,
+        etcd_response: rx2,
+    })
+}
+
+pub async fn new_barrier<S>(
+    etcd: etcd_client::Client,
+    barrier_key: &[u8],
+    children: &[S],
+    lease_id: i64,
+) -> anyhow::Result<Barrier>
+where
+    S: AsRef<[u8]>,
+{
+    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.to_vec());
+
+    let mut revision_to_watch_from = 1;
+    for child in children {
+        let revision = dir
+            .put(
+                child.as_ref(),
+                [],
+                Some(PutOptions::new().with_lease(lease_id)),
+            )
+            .await?
+            .take_header()
+            .map(|h| h.revision())
+            .ok_or(anyhow::anyhow!("failed to create barrier children"))?;
+        revision_to_watch_from = revision + 1;
+    }
+
+    let mut wc = etcd.watch_client();
+
+    let (watch_handle, mut watch_stream) = wc
+        .watch(
+            barrier_key,
+            Some(
+                WatchOptions::new()
+                    .with_prefix()
+                    .with_start_revision(revision_to_watch_from)
+                    .with_filters([WatchFilterType::NoPut]),
+            ),
+        )
+        .await?;
+
+    let total = children.len();
+
+    let (tx, mut rx) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut counter = total;
+
+        while counter > 0 {
+            tokio::select! {
+                _ = &mut rx => (),
+                Ok(Some(_)) = watch_stream.message() => {
+                    counter -= 1;
+                }
+            }
+        }
+        let _ = tx2.send(());
+    });
+
+    Ok(Barrier {
+        key: barrier_key.to_vec(),
+        watch_handle,
+        watch_stream_kill_signal: tx,
+        etcd_response: rx2,
+    })
+}

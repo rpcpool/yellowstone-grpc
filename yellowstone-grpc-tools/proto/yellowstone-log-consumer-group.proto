@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+
+package yellowstone.log.consumer_group;
+
+service ConsumerGroupService {
+  rpc StopConsumption(StopConsumptionRequest) returns (StopConsumptionResponse) {}
+
+  //rpc MemberHealthCheck(MemberHealthCheckRequest) returns () {MemberHealthCheckResponse} {}
+}
+
+
+message MemberHealthCheckRequest {
+    bytes consumer_group_id = 1;
+    bytes member_id = 2;
+}
+
+message MemberHealthCheckResponse {
+    bytes status = 1;
+}
+
+message StopConsumptionRequest {
+    bytes request_id = 1;
+    bytes consumer_group_id = 2;
+    bytes leader_key = 3;
+    bytes leader_log_key = 4;
+    int64 leader_log_key_revision = 5;
+}
+
+message StopConsumptionResponse {
+    repeated string instance_ids_stopped = 1;
+}
