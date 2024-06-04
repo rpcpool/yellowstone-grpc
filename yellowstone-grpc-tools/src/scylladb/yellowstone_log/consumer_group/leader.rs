@@ -1,23 +1,23 @@
 use {
-    super::etcd_path::{get_instance_lock_prefix_v1, get_leader_state_log_key_v1},
+    super::{etcd_path::{get_instance_lock_prefix_v1, get_leader_state_log_key_v1}, manager::ConsumerGroupManager, producer_queries::ProducerQueries},
     crate::scylladb::{
         etcd_utils::{
             self,
             barrier::{get_barrier, Barrier},
             lease::ManagedLease,
         },
-        types::{ConsumerGroupId, ProducerId},
-        yellowstone_log::consumer_group::etcd_path::get_producer_lock_path_v1,
+        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, InstanceId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot},
+        yellowstone_log::{common::SeekLocation, consumer_group::etcd_path::get_producer_lock_path_v1},
     },
     bincode::{deserialize, serialize},
-    etcd_client::{Compare, GetOptions, PutOptions, TxnOp, WatchOptions},
+    etcd_client::{Client, Compare, GetOptions, PutOptions, TxnOp, WatchOptions},
     futures::{future, Future, FutureExt},
     serde::{Deserialize, Serialize},
-    std::{fmt, time::Duration},
+    std::{collections::BTreeMap, fmt, time::Duration},
     thiserror::Error,
     tokio::sync::oneshot::{self, error::RecvError},
     tracing::warn,
-    uuid::Uuid,
+    uuid::Uuid
 };
 
 // enum ConsumerGroupLeaderLocation(
@@ -128,8 +128,8 @@ async fn get_producer_dead_signal(
 
 type EtcdKey = Vec<u8>;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-enum ConsumerGroupLeaderSM {
+#[derive(Serialize, Deserialize, Clone)]
+enum ConsumerGroupStateMachine {
     Init,
     LostProducer {
         lost_producer_id: ProducerId,
@@ -137,20 +137,39 @@ enum ConsumerGroupLeaderSM {
     },
     WaitingBarrier {
         lease_id: i64,
-        barrier_key: EtcdKey,
-        wait_for: Vec<EtcdKey>,
+        barrier_key: Vec<u8>,
+        wait_for: Vec<Vec<u8>>,
     },
     ComputingProducerSelection,
+    ProducerProposition {
+        producer_id: ProducerId,
+        execution_id: Vec<u8>,
+        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>
+    },
+    ProducerUpdatedAtGroupLevel {
+        producer_id: ProducerId,
+        execution_id: Vec<u8>,
+        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>
+    },
+    ProducerUpdatedAtShardLevel {
+        producer_id: ProducerId,
+        execution_id: Vec<u8>,
+        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>
+    },
     Idle {
         producer_id: ProducerId,
         execution_id: Vec<u8>,
+        initial_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
     },
 }
 
-#[derive(Serialize, Deserialize)]
-struct ConsumerGroupLeaderState {
+#[derive(Serialize, Deserialize, Clone)]
+struct EtcdConsumerGroupState {
     consumer_group_id: ConsumerGroupId,
-    state_machine: ConsumerGroupLeaderSM,
+    commitment_level: CommitmentLevel,
+    subscribed_blockchain_event_types: Vec<BlockchainEventType>,
+    shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
+    state_machine: ConsumerGroupStateMachine,
 }
 
 pub struct ConsumerGroupLeaderNode {
@@ -158,11 +177,15 @@ pub struct ConsumerGroupLeaderNode {
     etcd: etcd_client::Client,
     leader_key: EtcdKey,
     leader_lease: ManagedLease,
-    state_machine: ConsumerGroupLeaderSM,
+    state_log_key: EtcdKey,
+    state: EtcdConsumerGroupState,
     last_revision: i64,
     producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
+    consumer_group_store: ConsumerGroupManager,
+    producer_queries: ProducerQueries,
 }
+
 
 ///
 /// This error is raised when there is no active producer for the desired commitment level.
@@ -180,75 +203,155 @@ impl fmt::Display for LeaderInitError {
     }
 }
 
+
+pub async fn setup_new_consumer_group(etcd: etcd_client::Client, consumer_group_id: ConsumerGroupId) {
+
+}
+
+
 impl ConsumerGroupLeaderNode {
+
     pub async fn new(
-        mut etcd: etcd_client::Client,
+        consumer_group_id: ConsumerGroupId,
         leader_key: EtcdKey,
         leader_lease: ManagedLease,
-        consumer_group_id: ConsumerGroupId,
+        state_log_key: Vec<u8>,
+        mut etcd: etcd_client::Client,
+        consumer_group_store: ConsumerGroupManager,
+        producer_queries: ProducerQueries,
     ) -> anyhow::Result<Self> {
-        let leader_log_key = get_leader_state_log_key_v1(consumer_group_id.clone());
-        let get_resp = etcd.get(leader_log_key.as_str(), None).await?;
-        let maybe_last_leader_state = get_resp
+
+        let get_resp = etcd.get(state_log_key.as_slice(), None).await?;
+        let (last_revision, state) = get_resp
             .kvs()
             .first()
             .map(|kv| {
-                deserialize::<ConsumerGroupLeaderSM>(kv.value()).map(|sm| (kv.mod_revision(), sm))
+                deserialize::<EtcdConsumerGroupState>(kv.value()).map(|sm| (kv.mod_revision(), sm))
             })
-            .transpose()?;
+            .transpose()?
+            .ok_or(anyhow::anyhow!("consumer group leader found no state in {state_log_key:?}"))?;
 
-        let (last_revision, state_machine) = match maybe_last_leader_state {
-            Some((revision, last_leader_state)) => (revision, last_leader_state),
-            None => {
-                let init_state = ConsumerGroupLeaderSM::Init;
-                let txn = etcd_client::Txn::new()
-                    .when(vec![
-                        Compare::version(leader_key.as_slice(), etcd_client::CompareOp::Greater, 0),
-                        Compare::version(leader_log_key.as_str(), etcd_client::CompareOp::Equal, 0),
-                    ])
-                    .and_then(vec![TxnOp::put(
-                        leader_log_key.as_str(),
-                        serialize(&init_state)?,
-                        None,
-                    )]);
-                let txn_resp = etcd.txn(txn).await?;
-                let revision = txn_resp
-                    .op_responses()
-                    .pop()
-                    .and_then(|op| match op {
-                        etcd_client::TxnOpResponse::Put(put_resp) => {
-                            put_resp.header().map(|header| header.revision())
-                        }
-                        _ => panic!("unexpected op"),
-                    })
-                    .ok_or(LeaderInitError::FailedToUpdateStateLog)?;
-                (revision, init_state)
-            }
-        };
-
-        //let producer_dead_signal = get_producer_dead_signal(etcd.clone(), producer_id).await?;
+        // let (last_revision, state_machine) = match maybe_last_leader_state {
+        //     Some((revision, last_leader_state)) => (revision, last_leader_state),
+        //     None => {
+        //         let init_state = ConsumerGroupStateMachine::Init;
+        //         let txn = etcd_client::Txn::new()
+        //             .when(vec![
+        //                 Compare::version(leader_key.as_slice(), etcd_client::CompareOp::Greater, 0),
+        //                 Compare::version(leader_log_key.as_str(), etcd_client::CompareOp::Equal, 0),
+        //             ])
+        //             .and_then(vec![TxnOp::put(
+        //                 leader_log_key.as_str(),
+        //                 serialize(&init_state)?,
+        //                 None,
+        //             )]);
+        //         let txn_resp = etcd.txn(txn).await?;
+        //         let revision = txn_resp
+        //             .op_responses()
+        //             .pop()
+        //             .and_then(|op| match op {
+        //                 etcd_client::TxnOpResponse::Put(put_resp) => {
+        //                     put_resp.header().map(|header| header.revision())
+        //                 }
+        //                 _ => panic!("unexpected op"),
+        //             })
+        //             .ok_or(LeaderInitError::FailedToUpdateStateLog)?;
+        //         (revision, init_state)
+        //     }
+        // };
         let ret = ConsumerGroupLeaderNode {
             consumer_group_id,
             etcd,
             leader_key,
             leader_lease,
             producer_dead_signal: None,
-            state_machine,
+            state,
             last_revision,
             barrier: None,
+            consumer_group_store,
+            state_log_key,
+            producer_queries,
         };
         Ok(ret)
+    }
+
+
+    async fn compute_next_producer(&self) -> anyhow::Result<(ProducerId, ExecutionId, ShardOffsetMap)> {
+        let (lcs, _max_revision) = self.consumer_group_store
+            .get_lowest_common_slot_number(
+                self.consumer_group_id.clone(), 
+                Some(self.last_revision)
+            )
+            .await?;
+        let slot_ranges = Some(lcs-10..=lcs);
+        let (producer_id, execution_id) = self.producer_queries
+            .get_producer_id_with_least_assigned_consumer(
+                slot_ranges, 
+                self.state.commitment_level
+            )
+            .await?;
+
+        let seek_loc = SeekLocation::SlotApprox { 
+            desired_slot: lcs,
+            min_slot: lcs - 10,
+        };
+        let shard_offset_map = self.producer_queries.compute_offset(
+            producer_id, 
+            seek_loc, 
+            None
+        ).await?;
+
+        Ok((producer_id, execution_id, shard_offset_map))
+    }
+
+    async fn update_state_machine(&mut self, next_step: ConsumerGroupStateMachine) -> anyhow::Result<()> {
+        let leader_log_key = get_leader_state_log_key_v1(self.consumer_group_id.clone());
+        let mut state2 = self.state.clone();
+        state2.state_machine = next_step;
+        let txn = etcd_client::Txn::new()
+            .when(vec![
+                Compare::version(
+                    self.leader_key.as_slice(),
+                    etcd_client::CompareOp::Greater,
+                    0,
+                ),
+                Compare::mod_revision(
+                    leader_log_key.as_str(),
+                    etcd_client::CompareOp::Less,
+                    self.last_revision,
+                ),
+            ])
+            .and_then(vec![TxnOp::put(
+                leader_log_key.as_str(),
+                serialize(&state2)?,
+                None,
+            )]);
+
+        let txn_resp = self.etcd.txn(txn).await?;
+        let revision = txn_resp
+            .op_responses()
+            .pop()
+            .and_then(|op| match op {
+                etcd_client::TxnOpResponse::Put(put_resp) => {
+                    put_resp.header().map(|header| header.revision())
+                }
+                _ => panic!("unexpected op"),
+            })
+            .ok_or(LeaderInitError::FailedToUpdateStateLog)?;
+
+        self.last_revision = revision;
+        self.state = state2;
+        Ok(())
     }
 
     pub async fn leader_loop(
         &mut self,
         mut interrupt_signal: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-        let leader_log_key = get_leader_state_log_key_v1(self.consumer_group_id.clone());
         loop {
-            let next_state = match &self.state_machine {
-                ConsumerGroupLeaderSM::Init => ConsumerGroupLeaderSM::ComputingProducerSelection,
-                ConsumerGroupLeaderSM::LostProducer {
+            let next_state = match &self.state.state_machine {
+                ConsumerGroupStateMachine::Init => ConsumerGroupStateMachine::ComputingProducerSelection,
+                ConsumerGroupStateMachine::LostProducer {
                     lost_producer_id,
                     execution_id,
                 } => {
@@ -274,14 +377,14 @@ impl ConsumerGroupLeaderNode {
                     .await?;
                     self.barrier = Some(barrier);
 
-                    let next_state = ConsumerGroupLeaderSM::WaitingBarrier {
+                    let next_state = ConsumerGroupStateMachine::WaitingBarrier {
                         lease_id,
                         barrier_key: barrier_key.as_bytes().to_vec(),
                         wait_for,
                     };
                     next_state
                 }
-                ConsumerGroupLeaderSM::WaitingBarrier {
+                ConsumerGroupStateMachine::WaitingBarrier {
                     barrier_key,
                     wait_for,
                     lease_id,
@@ -296,14 +399,26 @@ impl ConsumerGroupLeaderNode {
                         _ = &mut interrupt_signal => return Ok(()),
                         _ = barrier.wait() => ()
                     }
-                    ConsumerGroupLeaderSM::ComputingProducerSelection
+                    ConsumerGroupStateMachine::ComputingProducerSelection
                 }
-                ConsumerGroupLeaderSM::ComputingProducerSelection => {
-                    todo!()
-                }
-                ConsumerGroupLeaderSM::Idle {
+                ConsumerGroupStateMachine::ComputingProducerSelection => {
+                    let (producer_id, execution_id, new_shard_offsets) = self.compute_next_producer().await?;
+                    ConsumerGroupStateMachine::ProducerProposition { producer_id, execution_id, new_shard_offsets }
+                },
+                ConsumerGroupStateMachine::ProducerProposition { producer_id, execution_id, new_shard_offsets: new_shard_offset } => {
+                    // self.consumer_group_store
+                    //     .update_consumer_group_producer(
+                            
+                    //     )
+                    //     .await?;
+                    todo!();
+                },
+                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel { producer_id, execution_id, new_shard_offsets: new_shard_offset } => todo!(),
+                ConsumerGroupStateMachine::ProducerUpdatedAtShardLevel { producer_id, execution_id, new_shard_offsets: new_shard_offset } => todo!(),
+                ConsumerGroupStateMachine::Idle {
                     producer_id,
                     execution_id,
+                    initial_shard_offset,
                 } => {
                     let signal = self.producer_dead_signal.get_or_insert(
                         get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
@@ -316,47 +431,17 @@ impl ConsumerGroupLeaderNode {
                             let lease_id = self.etcd.lease_grant(10, None).await?.id();
                             self.etcd.put(barrier_key.as_bytes(), [], Some(PutOptions::new().with_lease(lease_id))).await?;
 
-                            ConsumerGroupLeaderSM::LostProducer {
+                            ConsumerGroupStateMachine::LostProducer {
                                 lost_producer_id: *producer_id,
                                 execution_id: execution_id.clone()
                             }
                         }
                     }
                 }
+                
             };
 
-            let txn = etcd_client::Txn::new()
-                .when(vec![
-                    Compare::version(
-                        self.leader_key.as_slice(),
-                        etcd_client::CompareOp::Greater,
-                        0,
-                    ),
-                    Compare::mod_revision(
-                        leader_log_key.as_str(),
-                        etcd_client::CompareOp::Less,
-                        self.last_revision,
-                    ),
-                ])
-                .and_then(vec![TxnOp::put(
-                    leader_log_key.as_str(),
-                    serialize(&next_state)?,
-                    None,
-                )]);
-            let txn_resp = self.etcd.txn(txn).await?;
-            let revision = txn_resp
-                .op_responses()
-                .pop()
-                .and_then(|op| match op {
-                    etcd_client::TxnOpResponse::Put(put_resp) => {
-                        put_resp.header().map(|header| header.revision())
-                    }
-                    _ => panic!("unexpected op"),
-                })
-                .ok_or(LeaderInitError::FailedToUpdateStateLog)?;
-
-            self.last_revision = revision;
-            self.state_machine = next_state;
+            self.update_state_machine(next_state).await?;
 
             match interrupt_signal.try_recv() {
                 Ok(_) => return Ok(()),

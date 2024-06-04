@@ -1,20 +1,15 @@
 use {
-    anyhow::{anyhow, Ok},
-    core::fmt,
-    deepsize::DeepSizeOf,
-    scylla::{
+    anyhow::{anyhow, Ok}, core::fmt, deepsize::DeepSizeOf, scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
-    },
-    std::{collections::BTreeMap, iter::repeat, net::IpAddr},
-    yellowstone_grpc_proto::{
+    }, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, iter::repeat, net::IpAddr}, yellowstone_grpc_proto::{
         geyser::{
             SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         solana::storage::confirmed_block::{self, CompiledInstruction},
-    },
+    }
 };
 
 pub type ProgramId = [u8; 32];
@@ -48,7 +43,7 @@ pub struct ConsumerShardOffset {
     pub slot: Slot,
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
 pub enum BlockchainEventType {
     AccountUpdate = 0,
     NewTransaction = 1,
@@ -98,7 +93,7 @@ impl FromCqlVal<CqlValue> for BlockchainEventType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy)]
 pub enum CommitmentLevel {
     Processed = 0,
     Confirmed = 1,
@@ -1035,6 +1030,15 @@ impl From<BlockchainEvent> for AccountUpdate {
 }
 
 #[derive(FromRow, Debug, Clone)]
+pub struct ProducerExecutionInfo {
+    pub producer_id: Vec<u8>,
+    pub execution_id: Vec<u8>,
+    pub revision: i64,
+    pub ipv4: IpAddr,
+    pub minimum_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
+}
+
+#[derive(FromRow, Debug, Clone)]
 pub struct ProducerInfo {
     pub producer_id: ProducerId,
     pub num_shards: ShardId,
@@ -1146,23 +1150,28 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
 
 pub type ConsumerGroupId = Vec<u8>;
 pub type InstanceId = String;
+pub type ExecutionId = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct ConsumerGroupInfo {
-    consumer_group_id: ConsumerGroupId,
-    group_type: ConsumerGroupType,
-    producer_id: Option<ProducerId>,
-    revision: Option<i64>,
-    commitment_level: CommitmentLevel,
-    instance_id_shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
-    last_access_ip_address: Option<IpAddr>,
+    pub consumer_group_id: ConsumerGroupId,
+    pub group_type: ConsumerGroupType,
+    pub producer_id: Option<ProducerId>,
+    pub execution_id: Option<ExecutionId>,
+    pub revision: i64,
+    pub commitment_level: CommitmentLevel,
+    pub instance_id_shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
+    pub subscribed_event_types: Vec<BlockchainEventType>,
+    pub last_access_ip_address: Option<IpAddr>,
 }
+
+pub type ShardOffsetMap = BTreeMap<ShardId, (ShardOffset, Slot)>;
 
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
 pub struct ConsumerShardOffsetV2 {
     pub consumer_groupd_id: ConsumerGroupId,
     pub consumer_id: ConsumerId,
     pub producer_id: ProducerId,
-    pub acc_shard_offset_map: BTreeMap<ShardId, (ShardOffset, Slot)>,
-    pub tx_shard_offset_map: BTreeMap<ShardId, (ShardOffset, Slot)>,
+    pub acc_shard_offset_map: ShardOffsetMap,
+    pub tx_shard_offset_map: ShardOffsetMap,
     pub revision: i64,
 }

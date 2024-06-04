@@ -66,6 +66,8 @@ const INSERT_INITIAL_CONSUMER_SHARD_OFFSET_IF_NOT_EXISTS: &str = r###"
     IF NOT EXISTS
 "###;
 
+
+
 pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
     session: Arc<Session>,
     pub(crate) consumer_group_id: ConsumerGroupId,
@@ -228,7 +230,6 @@ impl<T: FromBlockchainEvent<Output = T>> ConsumerSource<T> {
                         num_event_between_two_slots = 0;
                     }
                     let t_send = Instant::now();
-
                     if self.sender.send(T::from(block_chain_event)).await.is_err() {
                         warn!("Consumer {consumer_id} closed its streaming half");
                         return Ok(());

@@ -1,10 +1,10 @@
 use {
     super::{
-        common::InitialOffset,
+        common::SeekLocation,
         consumer_group::{
             consumer_source::{ConsumerSource, FromBlockchainEvent},
             lock::{InstanceLock, InstanceLocker},
-            repo::ConsumerGroupRepo,
+            manager::ConsumerGroupManager,
         },
         shard_iterator::{ShardFilter, ShardIterator},
     },
@@ -488,12 +488,12 @@ async fn assign_producer_to_consumer(
     session: Arc<Session>,
     consumer_id: ConsumerId,
     consumer_ip: Option<IpAddr>,
-    initial_offset: InitialOffset,
+    initial_offset: SeekLocation,
     event_sub_policy: EventSubscriptionPolicy,
     commitment_level: CommitmentLevel,
     is_new: bool,
 ) -> anyhow::Result<(ConsumerInfo, Vec<ConsumerShardOffset>)> {
-    let maybe_slot_range = if let InitialOffset::SlotApprox {
+    let maybe_slot_range = if let SeekLocation::SlotApprox {
         desired_slot,
         min_slot,
     } = initial_offset
@@ -612,7 +612,7 @@ async fn set_initial_consumer_shard_offsets(
     session: Arc<Session>,
     new_consumer_id: impl AsRef<str>,
     producer_id: ProducerId,
-    initial_offset_policy: InitialOffset,
+    initial_offset_policy: SeekLocation,
     event_sub_policy: EventSubscriptionPolicy,
 ) -> anyhow::Result<Vec<ConsumerShardOffset>> {
     // Create all the shards counter
@@ -625,7 +625,7 @@ async fn set_initial_consumer_shard_offsets(
     let num_shards = producer_info.num_shards;
 
     let shard_offset_pairs = match initial_offset_policy {
-        InitialOffset::Latest => {
+        SeekLocation::Latest => {
             sink::get_max_shard_offsets_for_producer(
                 Arc::clone(&session),
                 producer_id,
@@ -633,10 +633,10 @@ async fn set_initial_consumer_shard_offsets(
             )
             .await?
         }
-        InitialOffset::Earliest => {
+        SeekLocation::Earliest => {
             get_min_offset_for_producer(Arc::clone(&session), producer_id).await?
         }
-        InitialOffset::SlotApprox {
+        SeekLocation::SlotApprox {
             desired_slot,
             min_slot,
         } => {
@@ -684,12 +684,12 @@ async fn set_initial_consumer_shard_offsets(
     }
     info!("Shard offset has been computed successfully");
     let adjustment = match initial_offset_policy {
-        InitialOffset::Earliest
-        | InitialOffset::SlotApprox {
+        SeekLocation::Earliest
+        | SeekLocation::SlotApprox {
             desired_slot: _,
             min_slot: _,
         } => -1,
-        InitialOffset::Latest => 0,
+        SeekLocation::Latest => 0,
     };
 
     let insert_consumer_offset_ps: PreparedStatement =
@@ -742,7 +742,7 @@ async fn set_initial_consumer_shard_offsets(
 
 pub struct ScyllaYsLog {
     session: Arc<Session>,
-    consumer_group_repo: ConsumerGroupRepo,
+    consumer_group_repo: ConsumerGroupManager,
     instance_locker: InstanceLocker,
 }
 
@@ -751,7 +751,7 @@ impl ScyllaYsLog {
         session: Arc<Session>,
         etcd_client: etcd_client::Client,
     ) -> anyhow::Result<Self> {
-        let consumer_group_repo = ConsumerGroupRepo::new(Arc::clone(&session)).await?;
+        let consumer_group_repo = ConsumerGroupManager::new(Arc::clone(&session),etcd_client.clone()).await?;
         Ok(ScyllaYsLog {
             session,
             consumer_group_repo,
@@ -818,16 +818,16 @@ impl YellowstoneLog for ScyllaYsLog {
         let consumer_id = cr.consumer_id.clone().unwrap_or(Uuid::new_v4().to_string());
         let initial_offset_policy = match cr.initial_offset_policy() {
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Earliest => {
-                InitialOffset::Earliest
+                SeekLocation::Earliest
             }
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Latest => {
-                InitialOffset::Latest
+                SeekLocation::Latest
             }
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Slot => {
                 let slot = cr.at_slot.ok_or(tonic::Status::invalid_argument(
                     "Expected at_lot when initital_offset_policy is to `Slot`",
                 ))?;
-                InitialOffset::SlotApprox {
+                SeekLocation::SlotApprox {
                     desired_slot: slot,
                     min_slot: slot,
                 }
@@ -988,7 +988,7 @@ async fn build_grpc_consumer_source(
     sender: GrpcConsumerSender,
     session: Arc<Session>,
     req: SpawnGrpcConsumerReq,
-    initial_offset_policy: InitialOffset,
+    initial_offset_policy: SeekLocation,
     instance_lock: InstanceLock,
     is_new: bool,
 ) -> anyhow::Result<ConsumerSource<GrpcEvent>> {
@@ -1060,7 +1060,7 @@ async fn build_grpc_consumer_source(
 pub async fn spawn_grpc_consumer(
     session: Arc<Session>,
     req: SpawnGrpcConsumerReq,
-    initial_offset_policy: InitialOffset,
+    initial_offset_policy: SeekLocation,
     instance_lock: InstanceLock,
 ) -> anyhow::Result<GrpcConsumerReceiver> {
     let original_req = req.clone();
@@ -1110,7 +1110,7 @@ pub async fn spawn_grpc_consumer(
                                     TimelineTranslationPolicy::StrictSlot => *slot,
                                 };
 
-                                InitialOffset::SlotApprox {
+                                SeekLocation::SlotApprox {
                                     desired_slot: *slot,
                                     min_slot,
                                 }

@@ -29,6 +29,17 @@ pub fn get_producer_lock_path_v1(producer_id: ProducerId) -> String {
     format!("v1/lock/producers/p-{:0>4}", producer_id_num)
 }
 
+pub fn get_producer_id_from_lock_key_v1(lock_key: &[u8]) -> anyhow::Result<ProducerId> {
+    let s = String::from_utf8_lossy(lock_key);
+    let tail_loc = s.char_indices().nth_back(4).expect("Invalid producer lock key").0;
+    let producer_id = &s[tail_loc..].parse::<u8>()?;
+    Ok([*producer_id])
+}
+
+pub fn get_producer_lock_prefix_v1() -> String {
+    String::from("v1/lock/producers/p-")
+}
+
 pub fn get_producer_fencing_token_key_path_v1(producer_id: ProducerId) -> String {
     let producer_id_num = u8::from_be_bytes(producer_id);
     format!("v1/fencing-token/producers/p-{:0>4}", producer_id_num)

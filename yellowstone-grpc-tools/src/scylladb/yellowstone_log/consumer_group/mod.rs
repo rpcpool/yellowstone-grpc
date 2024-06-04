@@ -1,9 +1,10 @@
 pub(crate) mod consumer_source;
+pub(crate) mod error;
 pub(crate) mod etcd_path;
 pub(crate) mod leader;
 pub(crate) mod lock;
 pub(crate) mod producer_queries;
-pub(crate) mod repo;
+pub(crate) mod manager;
 pub(crate) mod consumer_group_service {
     tonic::include_proto!("yellowstone.log.consumer_group");
 }

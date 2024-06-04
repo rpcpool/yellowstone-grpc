@@ -1,8 +1,8 @@
 use {
     super::{
-        common::InitialOffset,
+        common::SeekLocation,
         consumer_group::{
-            consumer_source::FromBlockchainEvent, lock::InstanceLocker, repo::ConsumerGroupRepo,
+            consumer_source::FromBlockchainEvent, lock::InstanceLocker, manager::ConsumerGroupManager,
         },
     },
     crate::scylladb::{
@@ -44,7 +44,7 @@ fn get_blockchain_event_types(
 
 pub struct ScyllaYsLog {
     session: Arc<Session>,
-    consumer_group_repo: ConsumerGroupRepo,
+    consumer_group_repo: ConsumerGroupManager,
     instance_locker: InstanceLocker,
 }
 
@@ -53,7 +53,7 @@ impl ScyllaYsLog {
         session: Arc<Session>,
         etcd_client: etcd_client::Client,
     ) -> anyhow::Result<Self> {
-        let consumer_group_repo = ConsumerGroupRepo::new(Arc::clone(&session)).await?;
+        let consumer_group_repo = ConsumerGroupManager::new(Arc::clone(&session), etcd_client.clone()).await?;
         Ok(ScyllaYsLog {
             session,
             consumer_group_repo,
@@ -82,16 +82,16 @@ impl YellowstoneLog for ScyllaYsLog {
         let event_subscription_policy = request.event_subscription_policy();
         let initial_offset = match request.initial_offset_policy() {
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Earliest => {
-                InitialOffset::Earliest
+                SeekLocation::Earliest
             }
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Latest => {
-                InitialOffset::Latest
+                SeekLocation::Latest
             }
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Slot => {
                 let slot = request.at_slot.ok_or(tonic::Status::invalid_argument(
                     "Expected at_lot when initital_offset_policy is to `Slot`",
                 ))?;
-                InitialOffset::SlotApprox {
+                SeekLocation::SlotApprox {
                     desired_slot: slot,
                     min_slot: slot,
                 }
@@ -123,7 +123,11 @@ impl YellowstoneLog for ScyllaYsLog {
                 tonic::Status::internal("failed to create consumer group")
             })?;
         Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: consumer_group_info.consumer_group_id.to_string(),
+            group_id: String::from_utf8(consumer_group_info.consumer_group_id)
+            .map_err(|e| {
+                error!("consumer group id is not utf8!");
+                tonic::Status::internal("failed to create consumer group")
+            })?,
         }))
     }
 

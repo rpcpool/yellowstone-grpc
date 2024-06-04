@@ -1,6 +1,5 @@
 use scylla::{
-    cql_to_rust::{FromCqlVal, FromCqlValError, FromRowError},
-    FromRow,
+    cql_to_rust::{FromCqlVal, FromCqlValError, FromRowError}, serialize::{row::SerializeRow, value::SerializeCql}, FromRow, Session
 };
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]

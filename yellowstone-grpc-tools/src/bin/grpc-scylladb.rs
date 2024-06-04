@@ -25,7 +25,7 @@ use {
             },
             sink::ScyllaSink,
             types::{CommitmentLevel, Transaction},
-            yellowstone_log::{common::InitialOffset, grpc2::ScyllaYsLog},
+            yellowstone_log::{common::SeekLocation, grpc2::ScyllaYsLog},
         },
         setup_tracing,
     },

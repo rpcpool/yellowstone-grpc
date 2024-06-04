@@ -63,8 +63,8 @@ const DEFAULT_SHARD_MAX_BUFFER_CAPACITY: usize = 15;
 /// only read the first column returned by a light weight transaction.
 
 const INSERT_PRODUCER_SLOT: &str = r###"
-    INSERT INTO producer_slot_seen (producer_id, slot, shard_offset_map, created_at)
-    VALUES (?, ?, ?, currentTimestamp())
+    INSERT INTO producer_slot_seen (producer_id, slot, revision, shard_offset_map, created_at)
+    VALUES (?, ?, ?, ?, currentTimestamp())
 "###;
 
 const INSERT_INITIAL_PRODUCER_LOCK_STATE: &str = r###"
@@ -76,13 +76,6 @@ const INSERT_INITIAL_PRODUCER_LOCK_STATE: &str = r###"
 const UPDATE_PRODUCER_LOCK_EXECUTION_ID: &str = r###"
     UPDATE producer_lock
     SET revision = ?, execution_id = ?
-    WHERE producer_id = ?
-    IF revision < ?
-"###;
-
-const UPDATE_PRODUCER_LOCK_REVISION: &str = r###"
-    UPDATE producer_lock
-    SET revision = ?
     WHERE producer_id = ?
     IF revision < ?
 "###;
@@ -430,7 +423,7 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
     session: Arc<Session>,
     producer_id: ProducerId,
     num_shards: usize,
-) -> anyhow::Result<Vec<(ShardId, ShardOffset, Slot)>> {
+) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
     let cql_shard_list = (0..num_shards)
         .map(|shard_id| format!("{shard_id}"))
         .collect::<Vec<_>>()
@@ -501,9 +494,12 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
         panic!("missing shard period commit information, make sure the period commit is initialize before computing shard offsets");
     }
 
-    shard_max_offset_pairs.sort_by_key(|pair| pair.0);
+    let ret = shard_max_offset_pairs
+        .into_iter()
+        .map(|(a,b,c)| (a, (b,c)))
+        .collect();
 
-    Ok(shard_max_offset_pairs)
+    Ok(ret)
 }
 
 /// Spawns a round-robin dispatcher for sending `ShardCommand` messages to a list of shard mailboxes.
@@ -533,10 +529,8 @@ fn spawn_round_robin(
 
     let h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         let insert_slot_ps = session.prepare(INSERT_PRODUCER_SLOT).await?;
-        let update_producer_lock_ps = session.prepare(UPDATE_PRODUCER_LOCK_REVISION).await?;
         // One hour worth of slots
         const SLOT_SEEN_RETENTION: usize = 9000;
-        //session.execute(&insert_slot_ps, (producer_id,)).await?;
 
         let iterator = shard_handles.iter().enumerate().cycle();
         info!("Started round robin router");
@@ -580,7 +574,7 @@ fn spawn_round_robin(
 
                 let session = Arc::clone(&session);
                 let insert_slot_ps = insert_slot_ps.clone();
-                let update_producer_lock_ps = update_producer_lock_ps.clone();
+                //let update_producer_lock_ps = update_producer_lock_ps.clone();
                 let shard_offset_pairs = shard_handles
                     .iter()
                     .map(|sh| (sh.shard_id, sh.get_last_committed_offset()))
@@ -592,18 +586,8 @@ fn spawn_round_robin(
                     // Asking a fencing token will fail if the lock is revoked.
                     let revision = managed_lock.fencing_token(fencing_token_path).await?;
 
-                    let lwt_result = session
-                        .execute(&update_producer_lock_ps, (revision, producer_id, revision))
-                        .await?
-                        .first_row_typed::<LwtResult>()?;
-
-                    anyhow::ensure!(
-                        lwt_result.succeeded(),
-                        "failed to update producer lock, etcd lock may be compromised"
-                    );
-
                     session
-                        .execute(&insert_slot_ps, (producer_id, slot, shard_offset_pairs))
+                        .execute(&insert_slot_ps, (producer_id, slot, revision, shard_offset_pairs))
                         .await?;
 
                     let time_to_commit_slot = t.elapsed();
@@ -662,7 +646,7 @@ async fn load_producer_lock_state(
     producer_id: ProducerId,
     execution_id: Uuid,
     ifname: Option<String>,
-    initital_revision: i64,
+    revision: i64,
 ) -> anyhow::Result<ProducerLock> {
     let network_interfaces = list_afinet_netifas()?;
 
@@ -696,7 +680,7 @@ async fn load_producer_lock_state(
             (
                 producer_id,
                 execution_id.as_bytes(),
-                initital_revision,
+                revision,
                 ifname,
                 ipaddr,
             ),
@@ -708,10 +692,10 @@ async fn load_producer_lock_state(
             .query(
                 UPDATE_PRODUCER_LOCK_EXECUTION_ID,
                 (
-                    initital_revision,
+                    revision,
                     execution_id.as_bytes(),
                     producer_id,
-                    initital_revision,
+                    revision,
                 ),
             )
             .await?
@@ -729,7 +713,7 @@ async fn load_producer_lock_state(
 async fn set_minimum_producer_offsets(
     session: Arc<Session>,
     producer_lock: &ProducerLock,
-    minimum_shard_offsets: &[(ShardId, ShardOffset, Slot)],
+    minimum_shard_offsets: &BTreeMap<ShardId, (ShardOffset, Slot)>,
 ) -> anyhow::Result<()> {
     let ps = session
         .prepare(
@@ -814,7 +798,7 @@ impl ScyllaSink {
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);
-        for (shard_id, last_offset, _slot) in shard_offsets.into_iter() {
+        for (shard_id, (last_offset, _slot)) in shard_offsets.into_iter() {
             let session = Arc::clone(&session);
             let shard = Shard::new(
                 session,

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::scylladb::types::{BlockchainEventType, ConsumerId, ProducerId, ShardOffset, Slot};
 
 pub type OldShardOffset = ShardOffset;
@@ -5,8 +7,8 @@ pub type OldShardOffset = ShardOffset;
 ///
 /// Initial position in the log when creating a new consumer.
 ///  
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitialOffset {
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekLocation {
     Earliest,
     #[default]
     Latest,
