@@ -79,7 +79,7 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     IF revision < ?
 "###;
 
-pub(crate) struct ConsumerGroupManager {
+pub(crate) struct ConsumerGroupStore {
     session: Arc<Session>,
     etcd: etcd_client::Client,
     producer_queries: ProducerQueries,
@@ -104,7 +104,7 @@ fn assign_shards(ids: &[InstanceId], num_shards: usize) -> BTreeMap<InstanceId, 
     ids.into_iter().zip(chunk_it).collect()
 }
 
-impl ConsumerGroupManager {
+impl ConsumerGroupStore {
     pub async fn new(session: Arc<Session>, etcd: etcd_client::Client) -> anyhow::Result<Self> {
         let create_static_consumer_group_ps = session.prepare(CREATE_STATIC_CONSUMER_GROUP).await?;
 
@@ -115,7 +115,7 @@ impl ConsumerGroupManager {
 
         let insert_consumer_shard_offset_ps_if_not_exists = session.prepare(INSERT_STATIC_GROUP_MEMBER_OFFSETS).await?;
         let update_consumer_shard_offset_ps = session.prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2).await?;
-        let this = ConsumerGroupManager {
+        let this = ConsumerGroupStore {
             session: Arc::clone(&session),
             create_static_consumer_group_ps,
             get_static_consumer_group_ps,
@@ -130,9 +130,9 @@ impl ConsumerGroupManager {
 
     pub async fn update_consumer_group_producer(
         &self, 
-        consumer_group_id: ConsumerGroupId,
-        producer_id: ProducerId,
-        execution_id: Vec<u8>, 
+        consumer_group_id: &ConsumerGroupId,
+        producer_id: &ProducerId,
+        execution_id: &ExecutionId, 
         revision: i64
     ) -> anyhow::Result<()> {
         let bind_values = (
@@ -152,9 +152,8 @@ impl ConsumerGroupManager {
 
     pub async fn get_consumer_group_info(
         &self,
-        consumer_group_id: impl Into<Vec<u8>>,
+        consumer_group_id: &ConsumerGroupId,
     ) -> anyhow::Result<Option<ConsumerGroupInfo>> {
-        let consumer_group_id = consumer_group_id.into();
         self.session
             .execute(&self.get_static_consumer_group_ps, (consumer_group_id,))
             .await?
@@ -164,10 +163,10 @@ impl ConsumerGroupManager {
 
     pub async fn get_lowest_common_slot_number(
         &self, 
-        consumer_group_id: ConsumerGroupId,
+        consumer_group_id: &ConsumerGroupId,
         max_revision_opt: Option<i64>,
     ) -> anyhow::Result<(Slot, i64)> {
-        let consumer_group_info= self.get_consumer_group_info(consumer_group_id.clone())
+        let consumer_group_info= self.get_consumer_group_info(consumer_group_id)
             .await?
             .ok_or(anyhow::anyhow!("consumer group id not found"))?;
         if let Some(max_revision) = max_revision_opt {
@@ -238,20 +237,20 @@ impl ConsumerGroupManager {
 
     pub async fn set_static_group_members_shard_offset(
         &self,
-        consumer_group_id: ConsumerGroupId,    
-        producer_id: ProducerId,
-        execution_id: ExecutionId,
-        shard_offset_map: BTreeMap<ShardId, (ShardOffset, Slot)>,
+        consumer_group_id: &ConsumerGroupId,    
+        producer_id: &ProducerId,
+        execution_id: &ExecutionId,
+        shard_offset_map: &BTreeMap<ShardId, (ShardOffset, Slot)>,
         current_revision: i64,
     ) -> anyhow::Result<()> {
         let cg_info = self
-            .get_consumer_group_info(consumer_group_id.clone())
+            .get_consumer_group_info(consumer_group_id)
             .await?
             .ok_or(anyhow::anyhow!("consumer group does not exists"))?;
 
         anyhow::ensure!(cg_info.revision < current_revision, "consumer group is more up to date then current operation");
-        anyhow::ensure!(cg_info.producer_id == Some(producer_id), "producer id mismatch");
-        anyhow::ensure!(cg_info.execution_id == Some(execution_id), "execution id mismatch");
+        anyhow::ensure!(cg_info.producer_id == Some(*producer_id), "producer id mismatch");
+        anyhow::ensure!(cg_info.execution_id == Some(execution_id.clone()), "execution id mismatch");
 
         for consumer_id in cg_info.instance_id_shard_assignments.keys() {
             let values = (
@@ -309,10 +308,10 @@ impl ConsumerGroupManager {
         
         info!("Shard offset has been computed successfully");
         self.set_static_group_members_shard_offset(
-            consumer_group_info.consumer_group_id.clone(), 
-            producer_id,
-            execution_id,
-            shard_offset_map, 
+            &consumer_group_info.consumer_group_id, 
+            &producer_id,
+            &execution_id,
+            &shard_offset_map, 
             0
         ).await
     }

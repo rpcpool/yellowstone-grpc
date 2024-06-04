@@ -2,7 +2,7 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::scylladb::types::{CommitmentLevel, Slot};
+use crate::scylladb::types::{CommitmentLevel, ConsumerGroupId, Slot};
 
 ///
 /// This error is raised when no lock is held by any producer.
@@ -68,3 +68,16 @@ impl fmt::Display for StaleRevision {
         f.write_fmt(format_args!("StaleRevision({})", stale_revision))
     }
 }
+
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub struct StaleConsumerGroup(pub ConsumerGroupId);
+
+impl fmt::Display for StaleConsumerGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cg_id = &self.0;
+        f.write_fmt(format_args!("StaleConsumerGroup({:?})", cg_id))
+    }
+}
+
+

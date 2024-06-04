@@ -1,16 +1,16 @@
 use {
-    super::{etcd_path::{get_instance_lock_prefix_v1, get_leader_state_log_key_v1}, manager::ConsumerGroupManager, producer_queries::ProducerQueries},
+    super::{etcd_path::{get_instance_lock_prefix_v1, get_leader_state_log_key_v1}, consumer_group_store::ConsumerGroupStore, producer_queries::ProducerQueries},
     crate::scylladb::{
         etcd_utils::{
             self,
             barrier::{get_barrier, Barrier},
             lease::ManagedLease,
         },
-        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, InstanceId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot},
-        yellowstone_log::{common::SeekLocation, consumer_group::etcd_path::get_producer_lock_path_v1},
+        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ExecutionId, InstanceId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot},
+        yellowstone_log::{common::SeekLocation, consumer_group::{error::StaleConsumerGroup, etcd_path::get_producer_lock_path_v1}},
     },
     bincode::{deserialize, serialize},
-    etcd_client::{Client, Compare, GetOptions, PutOptions, TxnOp, WatchOptions},
+    etcd_client::{Client, Compare, GetOptions, PutOptions, Txn, TxnOp, WatchOptions},
     futures::{future, Future, FutureExt},
     serde::{Deserialize, Serialize},
     std::{collections::BTreeMap, fmt, time::Duration},
@@ -29,19 +29,6 @@ use {
 enum LeaderCommand {
     Join { lock_key: Vec<u8> },
 }
-
-// enum ConsumerGroupLeaderState {
-//     Idle,
-//     HandlingJoinRequest {
-//         lock_key: Vec<u8>,
-//         instance_id: InstanceId,
-//     },
-//     HandlingTimelineTranslation {
-//         from_producer_id: ProducerId,
-//         target_producer_id: Produ
-//     },
-//     Poisoned,
-// }
 
 ///
 /// Cancel safe producer dead signal
@@ -151,16 +138,12 @@ enum ConsumerGroupStateMachine {
         execution_id: Vec<u8>,
         new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>
     },
-    ProducerUpdatedAtShardLevel {
-        producer_id: ProducerId,
-        execution_id: Vec<u8>,
-        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>
-    },
     Idle {
         producer_id: ProducerId,
         execution_id: Vec<u8>,
-        initial_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
+        //initial_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
     },
+    Dead
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -182,7 +165,7 @@ pub struct ConsumerGroupLeaderNode {
     last_revision: i64,
     producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
-    consumer_group_store: ConsumerGroupManager,
+    consumer_group_store: ConsumerGroupStore,
     producer_queries: ProducerQueries,
 }
 
@@ -217,7 +200,7 @@ impl ConsumerGroupLeaderNode {
         leader_lease: ManagedLease,
         state_log_key: Vec<u8>,
         mut etcd: etcd_client::Client,
-        consumer_group_store: ConsumerGroupManager,
+        consumer_group_store: ConsumerGroupStore,
         producer_queries: ProducerQueries,
     ) -> anyhow::Result<Self> {
 
@@ -279,7 +262,7 @@ impl ConsumerGroupLeaderNode {
     async fn compute_next_producer(&self) -> anyhow::Result<(ProducerId, ExecutionId, ShardOffsetMap)> {
         let (lcs, _max_revision) = self.consumer_group_store
             .get_lowest_common_slot_number(
-                self.consumer_group_id.clone(), 
+                &self.consumer_group_id, 
                 Some(self.last_revision)
             )
             .await?;
@@ -305,7 +288,7 @@ impl ConsumerGroupLeaderNode {
     }
 
     async fn update_state_machine(&mut self, next_step: ConsumerGroupStateMachine) -> anyhow::Result<()> {
-        let leader_log_key = get_leader_state_log_key_v1(self.consumer_group_id.clone());
+        let leader_log_key = get_leader_state_log_key_v1(&self.consumer_group_id);
         let mut state2 = self.state.clone();
         state2.state_machine = next_step;
         let txn = etcd_client::Txn::new()
@@ -406,19 +389,42 @@ impl ConsumerGroupLeaderNode {
                     ConsumerGroupStateMachine::ProducerProposition { producer_id, execution_id, new_shard_offsets }
                 },
                 ConsumerGroupStateMachine::ProducerProposition { producer_id, execution_id, new_shard_offsets: new_shard_offset } => {
-                    // self.consumer_group_store
-                    //     .update_consumer_group_producer(
-                            
-                    //     )
-                    //     .await?;
-                    todo!();
+
+                    let remote_state  = self.producer_queries.get_execution_id(*producer_id).await?;
+                    match remote_state {
+                        Some((_remote_revision, remote_execution_id)) => {
+                            if *execution_id != remote_execution_id {
+                                ConsumerGroupStateMachine::ComputingProducerSelection
+                            } else {
+                                self.consumer_group_store.update_consumer_group_producer(
+                                    &self.consumer_group_id, 
+                                    producer_id, 
+                                    execution_id, 
+                                    self.last_revision
+                                ).await?;
+
+                                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel { producer_id: *producer_id, execution_id: execution_id.clone(), new_shard_offsets: new_shard_offset.clone() }
+                            }
+                        },
+                        None => ConsumerGroupStateMachine::ComputingProducerSelection
+                    }
                 },
-                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel { producer_id, execution_id, new_shard_offsets: new_shard_offset } => todo!(),
-                ConsumerGroupStateMachine::ProducerUpdatedAtShardLevel { producer_id, execution_id, new_shard_offsets: new_shard_offset } => todo!(),
+                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel { producer_id, execution_id, new_shard_offsets: new_shard_offset } => {
+                    self.consumer_group_store.set_static_group_members_shard_offset(
+                        &self.consumer_group_id, 
+                        producer_id, 
+                        execution_id, 
+                        new_shard_offset, 
+                        self.last_revision
+                    ).await;
+                    ConsumerGroupStateMachine::Idle {
+                        producer_id: *producer_id,
+                        execution_id: execution_id.clone(),
+                    }
+                },
                 ConsumerGroupStateMachine::Idle {
                     producer_id,
                     execution_id,
-                    initial_shard_offset,
                 } => {
                     let signal = self.producer_dead_signal.get_or_insert(
                         get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
@@ -438,6 +444,9 @@ impl ConsumerGroupLeaderNode {
                         }
                     }
                 }
+                ConsumerGroupStateMachine::Dead => {
+                    anyhow::bail!(StaleConsumerGroup(self.consumer_group_id.clone()))
+                }
                 
             };
 
@@ -452,6 +461,34 @@ impl ConsumerGroupLeaderNode {
     }
 }
 
-// pub struct LeaderStateLog {
-//     watcher,
-// }
+
+pub async fn create_leader_state_log(etcd: &etcd_client::Client, consumer_group_info: &ConsumerGroupInfo) -> anyhow::Result<()> {
+
+    let state = EtcdConsumerGroupState {
+        consumer_group_id: consumer_group_info.consumer_group_id.clone(),
+        commitment_level: consumer_group_info.commitment_level.clone(),
+        subscribed_blockchain_event_types: consumer_group_info.subscribed_event_types.clone(),
+        shard_assignments: consumer_group_info.instance_id_shard_assignments.clone(),
+        state_machine: ConsumerGroupStateMachine::Idle { 
+            producer_id: consumer_group_info.producer_id.clone().expect("missing producer id"), 
+            execution_id: consumer_group_info.execution_id.clone().expect("missing execution id") 
+        },
+    };
+
+    let state_log_key = get_leader_state_log_key_v1(&consumer_group_info.consumer_group_id);
+
+    let txn = Txn::new()
+        .when(vec![
+            Compare::version(state_log_key.clone(), etcd_client::CompareOp::Equal, 0)
+        ])
+        .and_then(vec![
+            TxnOp::put(state_log_key, serialize(&state)?, None)
+        ]);
+
+    let txn_resp = etcd
+        .kv_client()
+        .txn(txn)
+        .await?;
+    anyhow::ensure!(txn_resp.succeeded(), "failed to create state log");
+    Ok(())
+}

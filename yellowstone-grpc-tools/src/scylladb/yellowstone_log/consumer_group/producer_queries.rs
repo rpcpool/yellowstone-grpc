@@ -37,7 +37,6 @@ const LIST_PRODUCER_LOCKS: &str = r###"
         minimum_shard_offset
     FROM producer_lock
     WHERE is_ready = true
-    PER PARTITION LIMIT 1
     ALLOW FILTERING
 "###;
 
@@ -78,7 +77,6 @@ const GET_MIN_PRODUCER_OFFSET: &str = r###"
         minimum_shard_offset 
     FROM producer_lock 
     WHERE producer_id = ?
-    PER PARTITION LIMIT 1
 "###;
 
 const GET_PRODUCER_EXECUTION_ID: &str = r###"

@@ -2,7 +2,7 @@ use {
     super::{
         common::SeekLocation,
         consumer_group::{
-            consumer_source::FromBlockchainEvent, lock::InstanceLocker, manager::ConsumerGroupManager,
+            consumer_group_store::ConsumerGroupStore, consumer_source::FromBlockchainEvent, leader::create_leader_state_log, lock::InstanceLocker
         },
     },
     crate::scylladb::{
@@ -44,7 +44,8 @@ fn get_blockchain_event_types(
 
 pub struct ScyllaYsLog {
     session: Arc<Session>,
-    consumer_group_repo: ConsumerGroupManager,
+    etcd: etcd_client::Client,
+    consumer_group_repo: ConsumerGroupStore,
     instance_locker: InstanceLocker,
 }
 
@@ -53,9 +54,10 @@ impl ScyllaYsLog {
         session: Arc<Session>,
         etcd_client: etcd_client::Client,
     ) -> anyhow::Result<Self> {
-        let consumer_group_repo = ConsumerGroupManager::new(Arc::clone(&session), etcd_client.clone()).await?;
+        let consumer_group_repo = ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
         Ok(ScyllaYsLog {
             session,
+            etcd: etcd_client.clone(),
             consumer_group_repo,
             instance_locker: InstanceLocker(etcd_client.clone()),
         })
@@ -122,6 +124,13 @@ impl YellowstoneLog for ScyllaYsLog {
                 error!("create_static_consumer_group: {e:?}");
                 tonic::Status::internal("failed to create consumer group")
             })?;
+        
+        create_leader_state_log(&self.etcd, &consumer_group_info)
+            .await
+            .map_err(|e| {
+                error!("create_static_consumer_group: {e:?}");
+                tonic::Status::internal("failed to create consumer group")
+            })?;
         Ok(Response::new(CreateStaticConsumerGroupResponse {
             group_id: String::from_utf8(consumer_group_info.consumer_group_id)
             .map_err(|e| {
@@ -144,7 +153,9 @@ impl YellowstoneLog for ScyllaYsLog {
     ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
         let join_request = request.into_inner();
         let cg_id = Uuid::from_str(join_request.group_id.as_str())
-            .map_err(|_| tonic::Status::invalid_argument("invalid consumer group id value"))?;
+            .map_err(|_| tonic::Status::invalid_argument("invalid consumer group id value"))?
+            .as_bytes()
+            .to_vec();
         let instance_id = join_request
             .instance_id
             .ok_or(tonic::Status::invalid_argument(
@@ -152,7 +163,7 @@ impl YellowstoneLog for ScyllaYsLog {
             ))?;
         let maybe = self
             .consumer_group_repo
-            .get_consumer_group_info(cg_id.clone())
+            .get_consumer_group_info(&cg_id)
             .await
             .map_err(|e| {
                 error!("get_consumer_group_info raised an error: {e:?}");
@@ -170,6 +181,8 @@ impl YellowstoneLog for ScyllaYsLog {
         todo!()
     }
 }
+
+
 
 fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
     if let Some(e) = e.downcast_ref::<TryLockError>() {

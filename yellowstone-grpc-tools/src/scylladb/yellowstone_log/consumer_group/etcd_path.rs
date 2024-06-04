@@ -53,8 +53,8 @@ pub fn get_shard_fencing_token_key_path_v1(producer_id: ProducerId, shard_id: Sh
     )
 }
 
-pub fn get_leader_state_log_key_v1(consumer_group_id: ConsumerGroupId) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.into())
+pub fn get_leader_state_log_key_v1(consumer_group_id: &ConsumerGroupId) -> String {
+    let uuid_str = String::from_utf8(consumer_group_id.clone())
         .expect("consumer group id is not proper utf8 uuid");
 
     format!("v1/leader-log/cg-{uuid_str}")
