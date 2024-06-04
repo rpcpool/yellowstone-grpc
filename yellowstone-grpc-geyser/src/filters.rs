@@ -96,6 +96,31 @@ impl Filter {
         Ok(vec)
     }
 
+    pub fn get_metrics(&self) -> [(&'static str, usize); 8] {
+        [
+            ("accounts", self.accounts.filters.len()),
+            ("slots", self.slots.filters.len()),
+            ("transactions", self.transactions.filters.len()),
+            (
+                "transactions_status",
+                self.transactions_status.filters.len(),
+            ),
+            ("entry", self.entry.filters.len()),
+            ("blocks", self.blocks.filters.len()),
+            ("blocks_meta", self.blocks_meta.filters.len()),
+            (
+                "all",
+                self.accounts.filters.len()
+                    + self.slots.filters.len()
+                    + self.transactions.filters.len()
+                    + self.transactions_status.filters.len()
+                    + self.entry.filters.len()
+                    + self.blocks.filters.len()
+                    + self.blocks_meta.filters.len(),
+            ),
+        ]
+    }
+
     pub const fn get_commitment_level(&self) -> CommitmentLevel {
         self.commitment
     }
