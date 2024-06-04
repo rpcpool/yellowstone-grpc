@@ -49,7 +49,12 @@ lazy_static::lazy_static! {
     ).unwrap();
 
     pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
-        "connections_total", "Total number of connections to GRPC service"
+        "connections_total", "Total number of connections to gRPC service"
+    ).unwrap();
+
+    static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
+        &["subscription"]
     ).unwrap();
 }
 
@@ -181,6 +186,7 @@ impl PrometheusService {
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
+            register!(SUBSCRIPTIONS_TOTAL);
 
             VERSION
                 .with_label_values(&[
@@ -297,4 +303,20 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
         .with_label_values(&[reason.as_ref()])
         .inc();
     INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+}
+
+pub fn update_subscriptions(old: Option<&Filter>, new: Option<&Filter>) {
+    for (multiplier, filter) in [(-1, old), (1, new)] {
+        if let Some(filter) = filter {
+            SUBSCRIPTIONS_TOTAL
+                .with_label_values(&["grpc_total"])
+                .add(multiplier);
+
+            for (name, value) in filter.get_metrics() {
+                SUBSCRIPTIONS_TOTAL
+                    .with_label_values(&[name])
+                    .add((value as i64) * multiplier);
+            }
+        }
+    }
 }

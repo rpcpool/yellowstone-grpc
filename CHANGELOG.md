@@ -18,6 +18,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2024-06-05
 
+- yellowstone-grpc-geyser-1.14.4+solana.1.17.33
+
+### Features
+
+- geyser: add metric `subscriptions_total` ([#355](https://github.com/rpcpool/yellowstone-grpc/pull/355))
+
+## 2024-06-05
+
 - yellowstone-grpc-geyser-1.14.3+solana.1.17.33
 
 ### Fixes

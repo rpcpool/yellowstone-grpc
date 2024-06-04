@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::{ConfigBlockFailAction, ConfigGrpc},
+        config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
         filters::{Filter, FilterAccountsDataSlice},
         prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
@@ -710,6 +710,7 @@ impl SlotMessages {
 #[derive(Debug)]
 pub struct GrpcService {
     config: ConfigGrpc,
+    config_filters: Arc<ConfigGrpcFilters>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Option<Message>>>>,
@@ -772,8 +773,11 @@ impl GrpcService {
 
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
+        let x_token = XTokenChecker::new(config.x_token.clone());
+        let config_filters = Arc::new(config.filters.clone());
         let service = GeyserServer::new(Self {
-            config: config.clone(),
+            config,
+            config_filters,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -783,7 +787,7 @@ impl GrpcService {
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip)
         .max_decoding_message_size(max_decoding_message_size);
-        let service = InterceptedService::new(service, XTokenChecker::new(config.x_token));
+        let service = InterceptedService::new(service, x_token);
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
@@ -1089,7 +1093,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
-        mut filter: Filter,
+        config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
@@ -1097,6 +1101,24 @@ impl GrpcService {
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
+        let mut filter = Filter::new(
+            &SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: HashMap::new(),
+                transactions_status: HashMap::new(),
+                blocks: HashMap::new(),
+                blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
+                commitment: None,
+                accounts_data_slice: Vec::new(),
+                ping: None,
+            },
+            &config_filters,
+        )
+        .expect("empty filter");
+        prom::update_subscriptions(None, Some(&filter));
+
         CONNECTIONS_TOTAL.inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
@@ -1121,6 +1143,7 @@ impl GrpcService {
                             continue;
                         }
 
+                        prom::update_subscriptions(Some(&filter), Some(&filter_new));
                         filter = filter_new;
                         info!("client #{id}: filter updated");
                     }
@@ -1177,6 +1200,7 @@ impl GrpcService {
                                     continue;
                                 }
 
+                                prom::update_subscriptions(Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
@@ -1239,6 +1263,7 @@ impl GrpcService {
 
         CONNECTIONS_TOTAL.dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
+        prom::update_subscriptions(Some(&filter), None);
         info!("client #{id}: removed");
         drop_client();
     }
@@ -1253,22 +1278,6 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
-        let filter = Filter::new(
-            &SubscribeRequest {
-                accounts: HashMap::new(),
-                slots: HashMap::new(),
-                transactions: HashMap::new(),
-                transactions_status: HashMap::new(),
-                blocks: HashMap::new(),
-                blocks_meta: HashMap::new(),
-                entry: HashMap::new(),
-                commitment: None,
-                accounts_data_slice: Vec::new(),
-                ping: None,
-            },
-            &self.config.filters,
-        )
-        .expect("empty filter");
         let snapshot_rx = self.snapshot_rx.lock().await.take();
         let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
             self.config.snapshot_client_channel_capacity
@@ -1310,7 +1319,7 @@ impl Geyser for GrpcService {
             }
         });
 
-        let config_filters_limit = self.config.filters.clone();
+        let config_filters = Arc::clone(&self.config_filters);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
@@ -1325,7 +1334,7 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            if let Err(error) = match Filter::new(&request, &config_filters_limit) {
+                            if let Err(error) = match Filter::new(&request, &config_filters) {
                                 Ok(filter) => match incoming_client_tx.send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
@@ -1354,7 +1363,7 @@ impl Geyser for GrpcService {
 
         tokio::spawn(Self::client_loop(
             id,
-            filter,
+            Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
             snapshot_rx,
