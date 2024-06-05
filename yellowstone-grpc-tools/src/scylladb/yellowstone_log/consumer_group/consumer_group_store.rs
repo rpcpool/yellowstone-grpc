@@ -1,13 +1,42 @@
 use {
-    super::{etcd_path::get_producer_id_from_lock_key_v1, producer_queries::ProducerQueries}, crate::scylladb::{
-        etcd_utils, scylladb_utils::LwtResult, sink, types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ConsumerGroupType, ConsumerId, ExecutionId, InstanceId, ProducerExecutionInfo, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot
-        }, yellowstone_log::{
-            common::SeekLocation, consumer_group::{error::StaleRevision, etcd_path::{get_producer_lock_path_v1, get_producer_lock_prefix_v1}},
-        }
-    }, anyhow::anyhow, etcd_client::GetOptions, rdkafka::{consumer::Consumer, producer}, scylla::{
-        batch::{Batch, BatchType}, prepared_statement::PreparedStatement, statement::Consistency, Session
-    }, serde::{Deserialize, Serialize}, std::{cell::BorrowMutError, collections::{self, btree_map, BTreeMap}, iter, net::IpAddr, sync::Arc, thread::current}, tracing::info, uuid::Uuid
+    super::{etcd_path::get_producer_id_from_lock_key_v1, producer_queries::ProducerQueries},
+    crate::scylladb::{
+        etcd_utils,
+        scylladb_utils::LwtResult,
+        sink,
+        types::{
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
+            ConsumerGroupType, ConsumerId, ExecutionId, InstanceId, ProducerExecutionInfo,
+            ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
+        },
+        yellowstone_log::{
+            common::SeekLocation,
+            consumer_group::{
+                error::StaleRevision,
+                etcd_path::{get_producer_lock_path_v1, get_producer_lock_prefix_v1},
+            },
+        },
+    },
+    anyhow::anyhow,
+    etcd_client::GetOptions,
+    rdkafka::{consumer::Consumer, producer},
+    scylla::{
+        batch::{Batch, BatchType},
+        prepared_statement::PreparedStatement,
+        statement::Consistency,
+        Session,
+    },
+    serde::{Deserialize, Serialize},
+    std::{
+        cell::BorrowMutError,
+        collections::{self, btree_map, BTreeMap},
+        iter,
+        net::IpAddr,
+        sync::Arc,
+        thread::current,
+    },
+    tracing::info,
+    uuid::Uuid,
 };
 
 const NUM_SHARDS: usize = 64;
@@ -113,8 +142,10 @@ impl ConsumerGroupStore {
 
         let update_static_consumer_group_ps = session.prepare(UPDATE_STATIC_CONSUMER_GROUP).await?;
 
-        let insert_consumer_shard_offset_ps_if_not_exists = session.prepare(INSERT_STATIC_GROUP_MEMBER_OFFSETS).await?;
-        let update_consumer_shard_offset_ps = session.prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2).await?;
+        let insert_consumer_shard_offset_ps_if_not_exists =
+            session.prepare(INSERT_STATIC_GROUP_MEMBER_OFFSETS).await?;
+        let update_consumer_shard_offset_ps =
+            session.prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2).await?;
         let this = ConsumerGroupStore {
             session: Arc::clone(&session),
             create_static_consumer_group_ps,
@@ -129,24 +160,28 @@ impl ConsumerGroupStore {
     }
 
     pub async fn update_consumer_group_producer(
-        &self, 
+        &self,
         consumer_group_id: &ConsumerGroupId,
         producer_id: &ProducerId,
-        execution_id: &ExecutionId, 
-        revision: i64
+        execution_id: &ExecutionId,
+        revision: i64,
     ) -> anyhow::Result<()> {
         let bind_values = (
             producer_id,
             execution_id,
             revision,
             consumer_group_id,
-            revision
+            revision,
         );
-        let lwt_result = self.session
+        let lwt_result = self
+            .session
             .execute(&self.update_static_consumer_group_ps, bind_values)
             .await?
             .first_row_typed::<LwtResult>()?;
-        anyhow::ensure!(lwt_result == LwtResult(true), "failed to update consumer group producer");
+        anyhow::ensure!(
+            lwt_result == LwtResult(true),
+            "failed to update consumer group producer"
+        );
         Ok(())
     }
 
@@ -162,18 +197,21 @@ impl ConsumerGroupStore {
     }
 
     pub async fn get_lowest_common_slot_number(
-        &self, 
+        &self,
         consumer_group_id: &ConsumerGroupId,
         max_revision_opt: Option<i64>,
     ) -> anyhow::Result<(Slot, i64)> {
-        let consumer_group_info= self.get_consumer_group_info(consumer_group_id)
+        let consumer_group_info = self
+            .get_consumer_group_info(consumer_group_id)
             .await?
             .ok_or(anyhow::anyhow!("consumer group id not found"))?;
         if let Some(max_revision) = max_revision_opt {
             let remote_revision = consumer_group_info.revision;
             anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
         }
-        let execution_id = consumer_group_info.execution_id.expect("cannot compute LCS of unused consumer group");
+        let execution_id = consumer_group_info
+            .execution_id
+            .expect("cannot compute LCS of unused consumer group");
         let instance_id_in_clause = consumer_group_info
             .instance_id_shard_assignments
             .keys()
@@ -182,7 +220,8 @@ impl ConsumerGroupStore {
 
         // TODO: handle the possible CQL injection here.
         // the rust driver support little-to know support for IN c
-        let query = format!(r###"
+        let query = format!(
+            r###"
             SELECT
                 consumer_id,
                 revision,
@@ -197,8 +236,12 @@ impl ConsumerGroupStore {
         );
 
         let subscribed_events = consumer_group_info.subscribed_event_types;
-        let rows = self.session
-            .query(query, (consumer_group_id, instance_id_in_clause, execution_id))
+        let rows = self
+            .session
+            .query(
+                query,
+                (consumer_group_id, instance_id_in_clause, execution_id),
+            )
             .await?
             .rows_typed::<(ConsumerGroupId, i64, ShardOffsetMap, ShardOffsetMap)>()?
             .collect::<Result<Vec<_>, _>>()?;
@@ -211,14 +254,21 @@ impl ConsumerGroupStore {
         let min_slot = rows
             .iter()
             .map(|(_, _, acc_offset, tx_offset)| {
-                
                 let min1 = if subscribed_events.contains(&BlockchainEventType::AccountUpdate) {
-                    acc_offset.iter().map(|(_, (_, slot))| *slot).min().unwrap_or(i64::MAX)
+                    acc_offset
+                        .iter()
+                        .map(|(_, (_, slot))| *slot)
+                        .min()
+                        .unwrap_or(i64::MAX)
                 } else {
                     i64::MAX
                 };
                 let min2 = if subscribed_events.contains(&BlockchainEventType::NewTransaction) {
-                    tx_offset.iter().map(|(_, (_, slot))| *slot).min().unwrap_or(i64::MAX)
+                    tx_offset
+                        .iter()
+                        .map(|(_, (_, slot))| *slot)
+                        .min()
+                        .unwrap_or(i64::MAX)
                 } else {
                     i64::MAX
                 };
@@ -226,9 +276,12 @@ impl ConsumerGroupStore {
             })
             .min()
             .unwrap_or(i64::MAX);
-        
+
         if let Some(max_revision) = max_revision_opt {
-            anyhow::ensure!(max_revision >= shard_max_revision, StaleRevision(max_revision));
+            anyhow::ensure!(
+                max_revision >= shard_max_revision,
+                StaleRevision(max_revision)
+            );
         }
 
         anyhow::ensure!(min_slot < i64::MAX, "found not shard offset map content");
@@ -237,7 +290,7 @@ impl ConsumerGroupStore {
 
     pub async fn set_static_group_members_shard_offset(
         &self,
-        consumer_group_id: &ConsumerGroupId,    
+        consumer_group_id: &ConsumerGroupId,
         producer_id: &ProducerId,
         execution_id: &ExecutionId,
         shard_offset_map: &BTreeMap<ShardId, (ShardOffset, Slot)>,
@@ -248,9 +301,18 @@ impl ConsumerGroupStore {
             .await?
             .ok_or(anyhow::anyhow!("consumer group does not exists"))?;
 
-        anyhow::ensure!(cg_info.revision < current_revision, "consumer group is more up to date then current operation");
-        anyhow::ensure!(cg_info.producer_id == Some(*producer_id), "producer id mismatch");
-        anyhow::ensure!(cg_info.execution_id == Some(execution_id.clone()), "execution id mismatch");
+        anyhow::ensure!(
+            cg_info.revision < current_revision,
+            "consumer group is more up to date then current operation"
+        );
+        anyhow::ensure!(
+            cg_info.producer_id == Some(*producer_id),
+            "producer id mismatch"
+        );
+        anyhow::ensure!(
+            cg_info.execution_id == Some(execution_id.clone()),
+            "execution id mismatch"
+        );
 
         for consumer_id in cg_info.instance_id_shard_assignments.keys() {
             let values = (
@@ -260,14 +322,14 @@ impl ConsumerGroupStore {
                 &cg_info.execution_id,
                 &shard_offset_map,
                 &shard_offset_map,
-                current_revision
+                current_revision,
             );
-            let lwt_result = self.session
+            let lwt_result = self
+                .session
                 .execute(&self.insert_consumer_shard_offset_ps_if_not_exists, values)
                 .await?
                 .single_row_typed::<LwtResult>()?;
             if lwt_result == LwtResult(false) {
-
                 let values2 = (
                     &shard_offset_map,
                     &shard_offset_map,
@@ -275,19 +337,22 @@ impl ConsumerGroupStore {
                     consumer_group_id.clone(),
                     consumer_id,
                     &cg_info.execution_id,
-                    current_revision
+                    current_revision,
                 );
-                let lwt_result2 = self.session
+                let lwt_result2 = self
+                    .session
                     .execute(&self.update_consumer_shard_offset_ps, values2)
                     .await?
                     .single_row_typed::<LwtResult>()?;
 
-                anyhow::ensure!(lwt_result2 == LwtResult(true), "failed to update {consumer_id} shard offset");
+                anyhow::ensure!(
+                    lwt_result2 == LwtResult(true),
+                    "failed to update {consumer_id} shard offset"
+                );
             }
         }
         Ok(())
     }
-
 
     async fn create_static_group_members(
         &self,
@@ -303,17 +368,20 @@ impl ConsumerGroupStore {
             .clone()
             .expect("consumer group does not have any execution id assigned yet");
 
-        let shard_offset_map = self.producer_queries
-            .compute_offset(producer_id, seek_loc, None).await?;
-        
+        let shard_offset_map = self
+            .producer_queries
+            .compute_offset(producer_id, seek_loc, None)
+            .await?;
+
         info!("Shard offset has been computed successfully");
         self.set_static_group_members_shard_offset(
-            &consumer_group_info.consumer_group_id, 
+            &consumer_group_info.consumer_group_id,
             &producer_id,
             &execution_id,
-            &shard_offset_map, 
-            0
-        ).await
+            &shard_offset_map,
+            0,
+        )
+        .await
     }
 
     pub async fn create_static_consumer_group(
@@ -354,7 +422,7 @@ impl ConsumerGroupStore {
                     subscribed_blockchain_event_types,
                     &shard_assignments,
                     remote_ip_addr,
-                    0_i64
+                    0_i64,
                 ),
             )
             .await?;
@@ -372,18 +440,16 @@ impl ConsumerGroupStore {
             execution_id: Some(execution_id),
         };
 
-        self.create_static_group_members(&static_consumer_group_info, initial_offset).await?;
+        self.create_static_group_members(&static_consumer_group_info, initial_offset)
+            .await?;
 
         info!("created consumer group static members -- {consumer_group_id:?}");
         Ok(static_consumer_group_info)
     }
 }
 
-
-
 pub struct ConsumerGroupManagerV2 {
     etcd: etcd_client::Client,
     session: Arc<Session>,
     producer_queries: ProducerQueries,
 }
-

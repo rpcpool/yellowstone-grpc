@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
-
-use crate::scylladb::types::{BlockchainEventType, ConsumerId, ProducerId, ShardOffset, Slot};
+use {
+    crate::scylladb::types::{BlockchainEventType, ConsumerId, ProducerId, ShardOffset, Slot},
+    serde::{Deserialize, Serialize},
+};
 
 pub type OldShardOffset = ShardOffset;
 

@@ -2,7 +2,8 @@ use {
     super::{
         common::SeekLocation,
         consumer_group::{
-            consumer_group_store::ConsumerGroupStore, consumer_source::FromBlockchainEvent, leader::create_leader_state_log, lock::InstanceLocker
+            consumer_group_store::ConsumerGroupStore, consumer_source::FromBlockchainEvent,
+            leader::create_leader_state_log, lock::InstanceLocker,
         },
     },
     crate::scylladb::{
@@ -54,7 +55,8 @@ impl ScyllaYsLog {
         session: Arc<Session>,
         etcd_client: etcd_client::Client,
     ) -> anyhow::Result<Self> {
-        let consumer_group_repo = ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
+        let consumer_group_repo =
+            ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
         Ok(ScyllaYsLog {
             session,
             etcd: etcd_client.clone(),
@@ -124,7 +126,7 @@ impl YellowstoneLog for ScyllaYsLog {
                 error!("create_static_consumer_group: {e:?}");
                 tonic::Status::internal("failed to create consumer group")
             })?;
-        
+
         create_leader_state_log(&self.etcd, &consumer_group_info)
             .await
             .map_err(|e| {
@@ -132,8 +134,7 @@ impl YellowstoneLog for ScyllaYsLog {
                 tonic::Status::internal("failed to create consumer group")
             })?;
         Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: String::from_utf8(consumer_group_info.consumer_group_id)
-            .map_err(|e| {
+            group_id: String::from_utf8(consumer_group_info.consumer_group_id).map_err(|e| {
                 error!("consumer group id is not utf8!");
                 tonic::Status::internal("failed to create consumer group")
             })?,
@@ -182,8 +183,6 @@ impl YellowstoneLog for ScyllaYsLog {
     }
 }
 
-
-
 fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
     if let Some(e) = e.downcast_ref::<TryLockError>() {
         error!("error acquiring lock for {e:?}");
@@ -201,32 +200,32 @@ fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
     }
 }
 
-// type GrpcConsumerSender = mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>;
-// type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>;
-// //type GrpcEvent = Result<SubscribeUpdate, tonic::Status>;
+type GrpcConsumerSender = mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>;
+type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>;
+type GrpcEvent = Result<SubscribeUpdate, tonic::Status>;
 
-// impl FromBlockchainEvent for GrpcEvent2 {
-//     type Output = Self;
-//     fn from(blockchain_event: crate::scylladb::types::BlockchainEvent) -> Self::Output {
-//         let geyser_event = match blockchain_event.event_type {
-//             BlockchainEventType::AccountUpdate => {
-//                 UpdateOneof::Account(blockchain_event.try_into().map_err(|e| {
-//                     error!(error=?e);
-//                     tonic::Status::internal("corrupted account update event in the stream")
-//                 })?)
-//             }
-//             BlockchainEventType::NewTransaction => {
-//                 UpdateOneof::Transaction(blockchain_event.try_into().map_err(|e| {
-//                     error!(error=?e);
-//                     tonic::Status::internal("corrupted new transaction event in the stream")
-//                 })?)
-//             }
-//         };
-//         let subscribe_update = SubscribeUpdate {
-//             filters: Default::default(),
-//             update_oneof: Some(geyser_event),
-//         };
+impl FromBlockchainEvent for GrpcEvent {
+    type Output = Self;
+    fn from(blockchain_event: crate::scylladb::types::BlockchainEvent) -> Self::Output {
+        let geyser_event = match blockchain_event.event_type {
+            BlockchainEventType::AccountUpdate => {
+                UpdateOneof::Account(blockchain_event.try_into().map_err(|e| {
+                    error!(error=?e);
+                    tonic::Status::internal("corrupted account update event in the stream")
+                })?)
+            }
+            BlockchainEventType::NewTransaction => {
+                UpdateOneof::Transaction(blockchain_event.try_into().map_err(|e| {
+                    error!(error=?e);
+                    tonic::Status::internal("corrupted new transaction event in the stream")
+                })?)
+            }
+        };
+        let subscribe_update = SubscribeUpdate {
+            filters: Default::default(),
+            update_oneof: Some(geyser_event),
+        };
 
-//         Ok(subscribe_update)
-//     }
-// }
+        Ok(subscribe_update)
+    }
+}

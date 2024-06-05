@@ -1,15 +1,21 @@
 use {
-    anyhow::{anyhow, Ok}, core::fmt, deepsize::DeepSizeOf, scylla::{
+    anyhow::{anyhow, Ok},
+    core::fmt,
+    deepsize::DeepSizeOf,
+    scylla::{
         cql_to_rust::{FromCqlVal, FromCqlValError},
         frame::response::result::CqlValue,
         serialize::value::SerializeCql,
         FromRow, FromUserType, SerializeCql, SerializeRow,
-    }, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, iter::repeat, net::IpAddr}, yellowstone_grpc_proto::{
+    },
+    serde::{Deserialize, Serialize},
+    std::{collections::BTreeMap, iter::repeat, net::IpAddr},
+    yellowstone_grpc_proto::{
         geyser::{
             SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         solana::storage::confirmed_block::{self, CompiledInstruction},
-    }
+    },
 };
 
 pub type ProgramId = [u8; 32];
@@ -43,7 +49,9 @@ pub struct ConsumerShardOffset {
     pub slot: Slot,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, DeepSizeOf,
+)]
 pub enum BlockchainEventType {
     AccountUpdate = 0,
     NewTransaction = 1,
@@ -1035,7 +1043,7 @@ pub struct ProducerExecutionInfo {
     pub execution_id: Vec<u8>,
     pub revision: i64,
     pub ipv4: IpAddr,
-    pub minimum_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
+    pub minimum_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>,
 }
 
 #[derive(FromRow, Debug, Clone)]

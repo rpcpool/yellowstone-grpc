@@ -496,7 +496,7 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
 
     let ret = shard_max_offset_pairs
         .into_iter()
-        .map(|(a,b,c)| (a, (b,c)))
+        .map(|(a, b, c)| (a, (b, c)))
         .collect();
 
     Ok(ret)
@@ -587,7 +587,10 @@ fn spawn_round_robin(
                     let revision = managed_lock.fencing_token(fencing_token_path).await?;
 
                     session
-                        .execute(&insert_slot_ps, (producer_id, slot, revision, shard_offset_pairs))
+                        .execute(
+                            &insert_slot_ps,
+                            (producer_id, slot, revision, shard_offset_pairs),
+                        )
                         .await?;
 
                     let time_to_commit_slot = t.elapsed();
@@ -691,12 +694,7 @@ async fn load_producer_lock_state(
         let lwt_result = session
             .query(
                 UPDATE_PRODUCER_LOCK_EXECUTION_ID,
-                (
-                    revision,
-                    execution_id.as_bytes(),
-                    producer_id,
-                    revision,
-                ),
+                (revision, execution_id.as_bytes(), producer_id, revision),
             )
             .await?
             .first_row_typed::<LwtResult>()?;

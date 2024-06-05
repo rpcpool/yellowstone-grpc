@@ -31,7 +31,11 @@ pub fn get_producer_lock_path_v1(producer_id: ProducerId) -> String {
 
 pub fn get_producer_id_from_lock_key_v1(lock_key: &[u8]) -> anyhow::Result<ProducerId> {
     let s = String::from_utf8_lossy(lock_key);
-    let tail_loc = s.char_indices().nth_back(4).expect("Invalid producer lock key").0;
+    let tail_loc = s
+        .char_indices()
+        .nth_back(4)
+        .expect("Invalid producer lock key")
+        .0;
     let producer_id = &s[tail_loc..].parse::<u8>()?;
     Ok([*producer_id])
 }

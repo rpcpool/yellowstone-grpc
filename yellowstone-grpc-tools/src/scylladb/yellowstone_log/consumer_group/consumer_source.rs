@@ -66,8 +66,6 @@ const INSERT_INITIAL_CONSUMER_SHARD_OFFSET_IF_NOT_EXISTS: &str = r###"
     IF NOT EXISTS
 "###;
 
-
-
 pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
     session: Arc<Session>,
     pub(crate) consumer_group_id: ConsumerGroupId,

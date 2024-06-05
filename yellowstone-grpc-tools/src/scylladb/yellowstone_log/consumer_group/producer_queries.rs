@@ -1,7 +1,37 @@
 use {
-    super::{error::ImpossibleSlotOffset, etcd_path::{get_producer_id_from_lock_key_v1, get_producer_lock_prefix_v1}}, crate::scylladb::{sink, types::{CommitmentLevel, ExecutionId, ProducerExecutionInfo, ProducerId, ProducerInfo, ShardId, ShardOffset, Slot}, yellowstone_log::{common::SeekLocation, consumer_group::error::{ImpossibleCommitmentLevel, ImpossibleTimelineSelection, NoActiveProducer, StaleRevision}}}, chrono::{DateTime, TimeDelta, Utc}, etcd_client::GetOptions, rdkafka::producer, scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session}, std::{
-        any, collections::{BTreeMap, BTreeSet}, fmt, ops::RangeInclusive, sync::{mpsc::RecvTimeoutError, Arc}, thread::current, time::Duration
-    }, thiserror::Error, tracing::info
+    super::{
+        error::ImpossibleSlotOffset,
+        etcd_path::{get_producer_id_from_lock_key_v1, get_producer_lock_prefix_v1},
+    },
+    crate::scylladb::{
+        sink,
+        types::{
+            CommitmentLevel, ExecutionId, ProducerExecutionInfo, ProducerId, ProducerInfo, ShardId,
+            ShardOffset, Slot,
+        },
+        yellowstone_log::{
+            common::SeekLocation,
+            consumer_group::error::{
+                ImpossibleCommitmentLevel, ImpossibleTimelineSelection, NoActiveProducer,
+                StaleRevision,
+            },
+        },
+    },
+    chrono::{DateTime, TimeDelta, Utc},
+    etcd_client::GetOptions,
+    rdkafka::producer,
+    scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
+    std::{
+        any,
+        collections::{BTreeMap, BTreeSet},
+        fmt,
+        ops::RangeInclusive,
+        sync::{mpsc::RecvTimeoutError, Arc},
+        thread::current,
+        time::Duration,
+    },
+    thiserror::Error,
+    tracing::info,
 };
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
@@ -60,7 +90,6 @@ const LIST_PRODUCER_LAST_HEARBEAT: &str = r###"
     PER PARTITION LIMIT 1
 "###;
 
-
 const GET_PRODUCER_INFO_BY_ID: &str = r###"
     SELECT 
         producer_id,
@@ -69,7 +98,6 @@ const GET_PRODUCER_INFO_BY_ID: &str = r###"
     FROM producer_info
     WHERE producer_id = ?
 "###;
-
 
 const GET_MIN_PRODUCER_OFFSET: &str = r###"
     SELECT
@@ -105,7 +133,8 @@ impl ProducerQueries {
         get_producer_by_id_ps.set_consistency(Consistency::Serial);
         let mut list_producer_locks_ps = session.prepare(LIST_PRODUCER_LOCKS).await?;
         list_producer_locks_ps.set_consistency(Consistency::Serial);
-        let mut get_shard_offset_in_slot_range_ps= session.prepare(GET_SHARD_OFFSET_AT_SLOT_APPROX).await?;
+        let mut get_shard_offset_in_slot_range_ps =
+            session.prepare(GET_SHARD_OFFSET_AT_SLOT_APPROX).await?;
         get_shard_offset_in_slot_range_ps.set_consistency(Consistency::Serial);
 
         let mut get_min_producer_offset_ps = session.prepare(GET_MIN_PRODUCER_OFFSET).await?;
@@ -113,7 +142,7 @@ impl ProducerQueries {
 
         let mut get_producer_execution_id_ps = session.prepare(GET_PRODUCER_EXECUTION_ID).await?;
         get_producer_execution_id_ps.set_consistency(Consistency::Serial);
-        Ok(ProducerQueries { 
+        Ok(ProducerQueries {
             session,
             etcd,
             get_producer_by_id_ps,
@@ -124,41 +153,43 @@ impl ProducerQueries {
         })
     }
 
-    pub async fn list_living_producers(&self) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
-
-        let mut producer_exec_infos: BTreeMap<[u8; 1], ProducerExecutionInfo> = self
-            .list_producer_locks()
-            .await?;
+    pub async fn list_living_producers(
+        &self,
+    ) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
+        let mut producer_exec_infos: BTreeMap<[u8; 1], ProducerExecutionInfo> =
+            self.list_producer_locks().await?;
         let producer_lock_prefix = get_producer_lock_prefix_v1();
         let get_resp = self
             .etcd
             .kv_client()
-            .get(producer_lock_prefix, Some(GetOptions::new().with_prefix())).await?;
+            .get(producer_lock_prefix, Some(GetOptions::new().with_prefix()))
+            .await?;
 
         let etcd_producer_lock = get_resp
             .kvs()
             .iter()
-            .map(|kv| (
-                get_producer_id_from_lock_key_v1(kv.key())
-                    .map(|pid| (pid, kv.mod_revision()))
-            ))
+            .map(|kv| {
+                (get_producer_id_from_lock_key_v1(kv.key()).map(|pid| (pid, kv.mod_revision())))
+            })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        
+
         // join
-        producer_exec_infos
-            .retain(|pid, lock_info| {
-                let maybe = etcd_producer_lock.get(pid).cloned();
-                if let Some(current_etcd_revision) = maybe {
-                    lock_info.revision == current_etcd_revision
-                } else {
-                    return false
-                }
-            });
+        producer_exec_infos.retain(|pid, lock_info| {
+            let maybe = etcd_producer_lock.get(pid).cloned();
+            if let Some(current_etcd_revision) = maybe {
+                lock_info.revision == current_etcd_revision
+            } else {
+                return false;
+            }
+        });
 
         Ok(producer_exec_infos)
     }
 
-    pub async fn get_producer_info(&self, producer_id: ProducerId) -> anyhow::Result<Option<ProducerInfo>> {
+    pub async fn get_producer_info(
+        &self,
+        producer_id: ProducerId,
+    ) -> anyhow::Result<Option<ProducerInfo>> {
         self.session
             .execute(&self.get_producer_by_id_ps, (producer_id,))
             .await?
@@ -166,7 +197,9 @@ impl ProducerQueries {
             .map_err(anyhow::Error::new)
     }
 
-    pub async fn list_producer_locks(&self) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
+    pub async fn list_producer_locks(
+        &self,
+    ) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
         self.session
             .execute(&self.list_producer_locks_ps, &[])
             .await?
@@ -271,8 +304,7 @@ impl ProducerQueries {
             anyhow::bail!(ImpossibleCommitmentLevel(commitment_level))
         }
 
-
-        let mut elligible_producers = producers_with_commitment_level 
+        let mut elligible_producers = producers_with_commitment_level
             .into_iter()
             .filter_map(|producer_id| {
                 living_producers
@@ -313,9 +345,7 @@ impl ProducerQueries {
 
         elligible_producers
             .into_iter()
-            .min_by_key(|(k, _)| {
-                producer_count_pairs.get(k).cloned().unwrap_or(0)
-            })
+            .min_by_key(|(k, _)| producer_count_pairs.get(k).cloned().unwrap_or(0))
             .ok_or(anyhow::anyhow!("No producer is available right now"))
     }
 
@@ -324,13 +354,11 @@ impl ProducerQueries {
         producer_id: ProducerId,
         max_revision_opt: Option<i64>,
     ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
-        let (remote_revision, offsets) = self.session
-            .execute(
-                &self.get_min_producer_offset_ps,
-                (producer_id,),
-            )
+        let (remote_revision, offsets) = self
+            .session
+            .execute(&self.get_min_producer_offset_ps, (producer_id,))
             .await?
-            .first_row_typed::<(i64, Option<Vec<(ShardId, ShardOffset, Slot)>>,)>()?;
+            .first_row_typed::<(i64, Option<Vec<(ShardId, ShardOffset, Slot)>>)>()?;
 
         if let Some(max_revision) = max_revision_opt {
             anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
@@ -340,17 +368,12 @@ impl ProducerQueries {
             .ok_or(anyhow::anyhow!(
                 "Producer lock exists, but its minimum shard offset is not set."
             ))
-            .map(|vec| 
-                vec
-                    .into_iter()
-                    .map(|(a,b,c)| (a, (b, c)))
-                    .collect()
-            )
+            .map(|vec| vec.into_iter().map(|(a, b, c)| (a, (b, c))).collect())
     }
 
     pub async fn get_execution_id(
         &self,
-        producer_id: ProducerId
+        producer_id: ProducerId,
     ) -> anyhow::Result<Option<(i64, ExecutionId)>> {
         self.session
             .execute(&self.get_producer_execution_id_ps, (producer_id,))
@@ -395,14 +418,16 @@ impl ProducerQueries {
         }
     }
 
-
     pub async fn compute_offset(
-        &self, 
-        producer_id: ProducerId, 
+        &self,
+        producer_id: ProducerId,
         seek_loc: SeekLocation,
         max_revision_opt: Option<i64>,
     ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
-        let producer_info = self.get_producer_info(producer_id).await?.ok_or(anyhow::anyhow!("producer does not exists"))?;
+        let producer_info = self
+            .get_producer_info(producer_id)
+            .await?
+            .ok_or(anyhow::anyhow!("producer does not exists"))?;
         let mut shard_offset_pairs: BTreeMap<ShardId, (ShardOffset, Slot)> = match seek_loc {
             SeekLocation::Latest => {
                 sink::get_max_shard_offsets_for_producer(
@@ -413,7 +438,7 @@ impl ProducerQueries {
                 .await?
             }
             SeekLocation::Earliest => {
-                self.get_min_offset_for_producer(producer_id,  max_revision_opt)
+                self.get_min_offset_for_producer(producer_id, max_revision_opt)
                     .await?
             }
             SeekLocation::SlotApprox {
@@ -425,12 +450,7 @@ impl ProducerQueries {
                     .await?;
 
                 let shard_offsets_contain_slot = self
-                    .get_slot_shard_offsets(
-                        desired_slot,
-                        min_slot,
-                        producer_id,
-                        max_revision_opt
-                    )
+                    .get_slot_shard_offsets(desired_slot, min_slot, producer_id, max_revision_opt)
                     .await?
                     .ok_or(ImpossibleSlotOffset(desired_slot))?;
 

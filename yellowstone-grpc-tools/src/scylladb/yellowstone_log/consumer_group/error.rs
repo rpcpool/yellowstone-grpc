@@ -1,8 +1,8 @@
-use core::fmt;
-
-use thiserror::Error;
-
-use crate::scylladb::types::{CommitmentLevel, ConsumerGroupId, Slot};
+use {
+    crate::scylladb::types::{CommitmentLevel, ConsumerGroupId, Slot},
+    core::fmt,
+    thiserror::Error,
+};
 
 ///
 /// This error is raised when no lock is held by any producer.
@@ -15,7 +15,6 @@ impl fmt::Display for NoActiveProducer {
         f.write_str("NoActiveProducer")
     }
 }
-
 
 ///
 /// This error is raised when there is no active producer for the desired commitment level.
@@ -54,9 +53,8 @@ impl fmt::Display for ImpossibleSlotOffset {
     }
 }
 
-
 ///
-/// This error is raised when a query to a remote store return data that is more up to date 
+/// This error is raised when a query to a remote store return data that is more up to date
 /// then what the current process timeline is expecting.
 ///
 #[derive(Clone, Debug, Error, PartialEq, Eq, Copy)]
@@ -69,15 +67,22 @@ impl fmt::Display for StaleRevision {
     }
 }
 
-
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub struct StaleConsumerGroup(pub ConsumerGroupId);
 
 impl fmt::Display for StaleConsumerGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cg_id = &self.0;
-        f.write_fmt(format_args!("StaleConsumerGroup({:?})", cg_id))
+        let cg_id = String::from_utf8_lossy(self.0.as_slice());
+        f.write_fmt(format_args!("StaleConsumerGroup({})", cg_id))
     }
 }
 
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub struct LeaderStateLogNotFound(pub ConsumerGroupId);
 
+impl fmt::Display for LeaderStateLogNotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cg_id = String::from_utf8_lossy(self.0.as_slice());
+        f.write_fmt(format_args!("LeaderStateLogNotFound({})", cg_id))
+    }
+}
