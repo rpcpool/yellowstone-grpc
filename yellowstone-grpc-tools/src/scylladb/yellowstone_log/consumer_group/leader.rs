@@ -564,7 +564,7 @@ pub async fn observe_consumer_group_state(
     Ok(rx)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LeaderInfo {
     ipaddr: IpAddr,
     id: Vec<u8>,
@@ -574,6 +574,8 @@ fn leader_name_v1(consumer_group_id: &ConsumerGroupId) -> String {
     let cg = String::from_utf8_lossy(&consumer_group_id.as_slice());
     format!("cg-leader-{cg}")
 }
+
+
 
 pub async fn observe_leader_changes(
     etcd: &etcd_client::Client,
@@ -623,18 +625,18 @@ pub async fn observe_leader_changes(
     Ok(rx)
 }
 
-pub async fn try_become_leader(
+pub fn try_become_leader(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
     wait_for: Duration,
-    leader_ifname: String,
+    leader_ifname: &String,
 ) -> anyhow::Result<oneshot::Receiver<Option<(LeaderKey, ManagedLease)>>> {
     let network_interfaces = list_afinet_netifas()?;
 
     let ipaddr = network_interfaces
         .iter()
         .find_map(|(name, ipaddr)| {
-            if *name == leader_ifname {
+            if name == leader_ifname {
                 Some(ipaddr)
             } else {
                 None

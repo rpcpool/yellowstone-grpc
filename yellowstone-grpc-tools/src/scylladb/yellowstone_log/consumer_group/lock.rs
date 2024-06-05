@@ -33,7 +33,7 @@ impl InstanceLocker {
     pub async fn try_lock_instance_id(
         &self,
         consumer_group_id: impl Into<Vec<u8>>,
-        instance_id: InstanceId,
+        instance_id: &InstanceId,
     ) -> anyhow::Result<InstanceLock> {
         let consumer_group_id = consumer_group_id.into();
         let client = self.0.clone();
@@ -45,7 +45,7 @@ impl InstanceLocker {
         let lock = etcd_utils::lock::try_lock(client, lock_name.as_str()).await?;
         Ok(InstanceLock {
             lock,
-            instance_id,
+            instance_id: instance_id.clone(),
             fencing_token_key: fencing_token_key.as_bytes().to_vec(),
             etcd_client: self.0.clone(),
             consumer_group_id,
