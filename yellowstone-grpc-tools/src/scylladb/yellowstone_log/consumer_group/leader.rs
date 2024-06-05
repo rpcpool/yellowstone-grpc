@@ -25,9 +25,10 @@ use {
     },
     bincode::{deserialize, serialize},
     etcd_client::{
-        Client, Compare, EventType, GetOptions, PutOptions, Txn, TxnOp, WatchOptions, Watcher,
+        Compare, EventType, GetOptions, LeaderKey, PutOptions, Txn, TxnOp, WatchOptions,
     },
-    futures::{future, Future, FutureExt},
+    futures::Future,
+    local_ip_address::list_afinet_netifas,
     serde::{Deserialize, Serialize},
     std::{collections::BTreeMap, fmt, net::IpAddr, time::Duration},
     thiserror::Error,
@@ -42,10 +43,7 @@ use {
     uuid::Uuid,
 };
 
-// enum ConsumerGroupLeaderLocation(
-//     Local,
-//     Remote()
-// )
+const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize)]
 enum LeaderCommand {
@@ -207,19 +205,13 @@ impl fmt::Display for LeaderInitError {
     }
 }
 
-pub async fn setup_new_consumer_group(
-    etcd: etcd_client::Client,
-    consumer_group_id: ConsumerGroupId,
-) {
-}
-
 impl ConsumerGroupLeaderNode {
     pub async fn new(
+        mut etcd: etcd_client::Client,
         consumer_group_id: ConsumerGroupId,
         leader_key: EtcdKey,
         leader_lease: ManagedLease,
         state_log_key: Vec<u8>,
-        mut etcd: etcd_client::Client,
         consumer_group_store: ConsumerGroupStore,
         producer_queries: ProducerQueries,
     ) -> anyhow::Result<Self> {
@@ -631,4 +623,54 @@ pub async fn observe_leader_changes(
     Ok(rx)
 }
 
-// pub async fn try_become_leader(etcd: &etcd_client::Client, consumer_group_id: &ConsumerGroupId) -> oneshot::Receiver<>
+pub async fn try_become_leader(
+    etcd: &etcd_client::Client,
+    consumer_group_id: &ConsumerGroupId,
+    wait_for: Duration,
+    leader_ifname: String,
+) -> anyhow::Result<oneshot::Receiver<Option<(LeaderKey, ManagedLease)>>> {
+    let network_interfaces = list_afinet_netifas()?;
+
+    let ipaddr = network_interfaces
+        .iter()
+        .find_map(|(name, ipaddr)| {
+            if *name == leader_ifname {
+                Some(ipaddr)
+            } else {
+                None
+            }
+        })
+        .ok_or(anyhow::anyhow!(
+            "Found no interface named {}",
+            leader_ifname
+        ))?
+        .to_owned();
+
+    let mut ec = etcd.election_client();
+    let leader_name = leader_name_v1(consumer_group_id);
+
+    let id = Uuid::new_v4();
+    let leader_info = LeaderInfo {
+        ipaddr,
+        id: id.as_bytes().to_vec(),
+    };
+    const LEASE_TTL: Duration = Duration::from_secs(60);
+    let (tx, rx) = oneshot::channel();
+    let etcd2 = etcd.clone();
+    let _: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+        let lease = ManagedLease::new(etcd2, LEADER_LEASE_TTL, None).await?;
+        tokio::select! {
+            _ = tokio::time::sleep(wait_for) => {
+                let _ = tx.send(None);
+            },
+            Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serialize(&leader_info)?, lease.lease_id) => {
+                let payload = campaign_resp
+                    .take_leader()
+                    .map(|lk| (lk, lease));
+                let _= tx.send(payload);
+            },
+        }
+        Ok(())
+    });
+    Ok(rx)
+}

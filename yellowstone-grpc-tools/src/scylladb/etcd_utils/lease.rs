@@ -9,10 +9,8 @@ use {
     tracing::{error, warn},
 };
 
-const RENEW_LEASE_INTERVAL: Duration = Duration::from_secs(1);
-
 pub struct ManagedLease {
-    pub(crate) lease_id: i64,
+    pub lease_id: i64,
     keep_alive_response_watch: watch::Receiver<Instant>,
     _sender: oneshot::Sender<()>,
     _lifecycle_handle: JoinHandle<()>,
@@ -25,14 +23,17 @@ impl ManagedLease {
         keepalive_interval: Option<Duration>,
     ) -> anyhow::Result<Self> {
         let mut client = etcd_client;
-        let ttl = ttl.as_secs() as i64;
+        let ttl: i64 = ttl.as_secs() as i64;
+        anyhow::ensure!(ttl >= 2, "lease ttl must be at least two (2) seconds");
         let lease_id = client.lease_grant(ttl, None).await?.id();
+
         let (mut keeper, mut keep_alive_resp_stream) = client.lease_keep_alive(lease_id).await?;
 
         let (sender, receiver) = oneshot::channel();
         let lifecycle_handle = tokio::spawn(async move {
             let mut receiver = receiver;
-            let keepalive_interval = keepalive_interval.unwrap_or(RENEW_LEASE_INTERVAL);
+            let keepalive_interval =
+                keepalive_interval.unwrap_or(Duration::from_secs((ttl / 2) as u64));
             let next_renewal = Instant::now() + keepalive_interval;
             loop {
                 tokio::select! {

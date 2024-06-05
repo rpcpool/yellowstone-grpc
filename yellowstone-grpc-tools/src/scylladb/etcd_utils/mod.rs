@@ -1,5 +1,5 @@
-pub(crate) mod barrier;
-pub(crate) mod lease;
-pub(crate) mod lock;
+pub mod barrier;
+pub mod lease;
+pub mod lock;
 
 pub type Revision = i64;

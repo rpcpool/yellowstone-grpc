@@ -1,5 +1,5 @@
 pub mod config;
-pub(crate) mod etcd_utils;
+pub mod etcd_utils;
 pub mod prom;
 pub(crate) mod scylladb_utils;
 pub mod sink;

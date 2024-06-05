@@ -6,15 +6,22 @@ use {
         future::{join_all, select_all},
         try_join, FutureExt,
     },
+    std::time::Duration,
     tokio::sync::mpsc,
     uuid::Uuid,
+    yellowstone_grpc_tools::scylladb::etcd_utils::lease::ManagedLease,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut client = Client::connect(["localhost:2379"], None).await?;
     let mut client2 = client.clone();
-    let lease1 = client.lease_grant(10, None).await?.id();
+    let lease1 = ManagedLease::new(
+        client.clone(),
+        Duration::from_secs(2),
+        Some(Duration::from_secs(1)),
+    )
+    .await?;
 
     let uuid = Uuid::new_v4();
     println!("uuid: {uuid:?}");
@@ -43,17 +50,18 @@ async fn main() -> anyhow::Result<()> {
     println!("try recv1 : {res:?}");
 
     let resp = client
-        .campaign("myleader", uuid.to_string(), lease1)
+        .campaign("myleader", uuid.to_string(), lease1.lease_id)
         .await?;
     let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
     println!("leader key: {leader_key:?}");
 
-    let (ev_type, k, v) = rx.recv().await.unwrap();
-    let v = String::from_utf8(v)?;
-    println!("rx: {ev_type:?} {v:?}");
+    // let (ev_type, k, v) = rx.recv().await.unwrap();
+    // let v = String::from_utf8(v)?;
+    // println!("rx: {ev_type:?} {v:?}");
 
     let lk = LeaderKey::new().with_key(leader_key).with_name("myleader");
-    //  client.lease_revoke(lease1).await?;
+    //client.lease_revoke(lease1).await?;
+
     client
         .resign(Some(ResignOptions::new().with_leader(lk.clone())))
         .await?;
@@ -64,13 +72,12 @@ async fn main() -> anyhow::Result<()> {
     let (ev_type, k, v) = rx.recv().await.unwrap();
     println!("after resign recv1 : {ev_type:?} {v:?}");
 
-    let lease1 = client.lease_grant(1, None).await?.id();
+    let lease2 = client.lease_grant(1, None).await?.id();
     let uuid = Uuid::new_v4();
-    let resp = client
-        .campaign("myleader", uuid.to_string(), lease1)
-        .await?;
-    let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
-    println!("leader key: {leader_key:?}");
+    let resp = client.campaign("myleader", uuid.to_string(), lease2).await;
+    println!("campaign result: {resp:?}");
+    //let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
+    //println!("leader key: {leader_key:?}");
 
     let (ev_type, k, v) = rx.recv().await.unwrap();
     let v = String::from_utf8(v)?;
