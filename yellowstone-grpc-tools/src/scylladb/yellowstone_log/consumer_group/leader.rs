@@ -510,82 +510,66 @@ pub async fn create_leader_state_log(
     Ok(())
 }
 
-pub struct LeaderStateLogWatch {
-    etcd_watcher: Watcher,
-    rx: watch::Receiver<(Revision, ConsumerGroupState)>,
-}
+pub async fn observe_consumer_group_state(
+    etcd: &etcd_client::Client,
+    consumer_group_id: &ConsumerGroupId,
+) -> anyhow::Result<watch::Receiver<(Revision, ConsumerGroupState)>> {
+    let key = get_leader_state_log_key_v1(&consumer_group_id);
+    let mut wc = etcd.watch_client();
 
-impl LeaderStateLogWatch {
-    pub async fn new(
-        etcd: etcd_client::Client,
-        consumer_group_id: ConsumerGroupId,
-    ) -> anyhow::Result<Self> {
-        let key = get_leader_state_log_key_v1(&consumer_group_id);
-        let mut wc = etcd.watch_client();
-        let (watcher, mut stream) = wc.watch(key, None).await?;
+    let mut kv_client = etcd.kv_client();
+    let get_resp = kv_client.get(consumer_group_id.as_slice(), None).await?;
 
-        let mut kv_client = etcd.kv_client();
-        let get_resp = kv_client.get(consumer_group_id.as_slice(), None).await?;
+    anyhow::ensure!(
+        get_resp.count() == 1,
+        LeaderStateLogNotFound(consumer_group_id.clone())
+    );
 
-        anyhow::ensure!(
-            get_resp.count() == 1,
-            LeaderStateLogNotFound(consumer_group_id.clone())
-        );
+    let initial_state = deserialize::<ConsumerGroupState>(get_resp.kvs()[0].value())?;
+    let initial_revision = get_resp.kvs()[0].mod_revision();
+    let (tx, rx) = watch::channel((initial_revision, initial_state));
 
-        let initial_state = deserialize::<ConsumerGroupState>(get_resp.kvs()[0].value())?;
-        let initial_revision = get_resp.kvs()[0].mod_revision();
-        let (tx, rx) = watch::channel((initial_revision, initial_state));
-
-        tokio::spawn(async move {
-            while let Some(message) = stream
-                .message()
-                .await
-                .expect("leader state log watch error")
+    tokio::spawn(async move {
+        let (mut watcher, mut stream) = wc
+            .watch(key.as_str(), None)
+            .await
+            .expect(format!("failed to watch {key}").as_str());
+        while let Some(message) = stream
+            .message()
+            .await
+            .expect("leader state log watch error")
+        {
+            let events = message.events();
+            if events
+                .iter()
+                .find(|ev| ev.event_type() == EventType::Delete)
+                .is_some()
             {
-                let events = message.events();
-                if events
-                    .iter()
-                    .find(|ev| ev.event_type() == EventType::Delete)
-                    .is_some()
-                {
-                    panic!("remote state log has been deleted")
-                }
-                events
-                    .iter()
-                    .map(|ev| {
-                        ev.kv().map(|kv| {
-                            (
-                                kv.mod_revision(),
-                                deserialize::<ConsumerGroupState>(kv.value())
-                                    .expect("failed to deser consumer group state from leader log"),
-                            )
-                        })
-                    })
-                    .map(|opt| opt.expect("kv from state log is None"))
-                    .for_each(|(revision, state)| {
-                        if tx.send((revision, state)).is_err() {
-                            warn!("receiver half of LeaderStateLogObserver has been close");
-                            return;
-                        }
-                    })
+                panic!("remote state log has been deleted")
             }
-        });
+            events
+                .iter()
+                .map(|ev| {
+                    ev.kv().map(|kv| {
+                        (
+                            kv.mod_revision(),
+                            deserialize::<ConsumerGroupState>(kv.value())
+                                .expect("failed to deser consumer group state from leader log"),
+                        )
+                    })
+                })
+                .map(|opt| opt.expect("kv from state log is None"))
+                .for_each(|(revision, state)| {
+                    if tx.send((revision, state)).is_err() {
+                        warn!("receiver half of LeaderStateLogObserver has been close");
+                        return;
+                    }
+                })
+        }
+        let _ = watcher.cancel().await;
+    });
 
-        let ret = LeaderStateLogWatch {
-            etcd_watcher: watcher,
-            rx,
-        };
-
-        Ok(ret)
-    }
-
-    pub async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
-        self.rx.changed().await
-    }
-
-    pub async fn own_and_update(&mut self) -> (Revision, ConsumerGroupState) {
-        self.rx.borrow_and_update().to_owned()
-    }
+    Ok(rx)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -646,3 +630,5 @@ pub async fn observe_leader_changes(
 
     Ok(rx)
 }
+
+// pub async fn try_become_leader(etcd: &etcd_client::Client, consumer_group_id: &ConsumerGroupId) -> oneshot::Receiver<>
