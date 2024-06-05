@@ -9,6 +9,7 @@ use {
             self,
             barrier::{get_barrier, Barrier},
             lease::ManagedLease,
+            Revision,
         },
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ExecutionId,
@@ -28,7 +29,7 @@ use {
     },
     futures::{future, Future, FutureExt},
     serde::{Deserialize, Serialize},
-    std::{collections::BTreeMap, fmt, time::Duration},
+    std::{collections::BTreeMap, fmt, net::IpAddr, time::Duration},
     thiserror::Error,
     tokio::{
         sync::{
@@ -183,7 +184,7 @@ pub struct ConsumerGroupLeaderNode {
     leader_lease: ManagedLease,
     state_log_key: EtcdKey,
     state: ConsumerGroupState,
-    last_revision: i64,
+    last_revision: Revision,
     producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
     consumer_group_store: ConsumerGroupStore,
@@ -511,7 +512,7 @@ pub async fn create_leader_state_log(
 
 pub struct LeaderStateLogWatch {
     etcd_watcher: Watcher,
-    rx: watch::Receiver<(i64, ConsumerGroupState)>,
+    rx: watch::Receiver<(Revision, ConsumerGroupState)>,
 }
 
 impl LeaderStateLogWatch {
@@ -582,7 +583,66 @@ impl LeaderStateLogWatch {
         self.rx.changed().await
     }
 
-    pub async fn own_and_update(&mut self) -> (i64, ConsumerGroupState) {
+    pub async fn own_and_update(&mut self) -> (Revision, ConsumerGroupState) {
         self.rx.borrow_and_update().to_owned()
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LeaderInfo {
+    ipaddr: IpAddr,
+    id: Vec<u8>,
+}
+
+fn leader_name_v1(consumer_group_id: &ConsumerGroupId) -> String {
+    let cg = String::from_utf8_lossy(&consumer_group_id.as_slice());
+    format!("cg-leader-{cg}")
+}
+
+pub async fn observe_leader_changes(
+    etcd: &etcd_client::Client,
+    consumer_group_id: &ConsumerGroupId,
+) -> anyhow::Result<watch::Receiver<Option<LeaderInfo>>> {
+    let mut kv_client = etcd.kv_client();
+    let mut wc = etcd.watch_client();
+    let leader = leader_name_v1(consumer_group_id);
+
+    let mut get_resp = kv_client
+        .get(leader.as_str(), Some(GetOptions::new().with_prefix()))
+        .await?;
+
+    let initital_value = get_resp
+        .take_kvs()
+        .into_iter()
+        .max_by_key(|kv| kv.mod_revision())
+        .map(|kv| deserialize::<LeaderInfo>(kv.value()))
+        .transpose()?;
+
+    let (tx, rx) = watch::channel(initital_value);
+    tokio::spawn(async move {
+        let watch_opts = WatchOptions::new().with_prefix();
+        let (mut watcher, mut stream) = wc
+            .watch(leader.as_str(), Some(watch_opts))
+            .await
+            .expect(format!("fail to watch {leader}").as_str());
+
+        'outer: while let Some(mut msg) = stream.message().await.expect("") {
+            for ev in msg.events() {
+                let payload = match ev.event_type() {
+                    EventType::Put => ev.kv().map(|kv| {
+                        deserialize::<LeaderInfo>(kv.value())
+                            .expect("invalid leader state log format")
+                    }),
+                    EventType::Delete => None,
+                };
+                if tx.send(payload).is_err() {
+                    break 'outer;
+                }
+            }
+        }
+
+        let _ = watcher.cancel().await;
+    });
+
+    Ok(rx)
 }
