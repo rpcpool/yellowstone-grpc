@@ -2,97 +2,114 @@ use {
     super::{
         consumer_group_store::ConsumerGroupStore,
         consumer_source::{ConsumerSource, FromBlockchainEvent},
-        leader::{ConsumerGroupState, LeaderInfo, WaitingBarrierState},
+        leader::{ConsumerGroupState, IdleState, LeaderInfo, WaitingBarrierState},
         lock::InstanceLock,
         shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
         etcd_utils::{barrier::release_child, Revision},
-        types::InstanceId,
-        yellowstone_log::consumer_group::leader::{self, ConsumerGroupStateMachine},
+        types::{ConsumerGroupId, InstanceId},
+        yellowstone_log::consumer_group::error::DeadConsumerGroup,
     },
-    futures::{future::try_join_all, FutureExt},
-    rdkafka::consumer::{self, Consumer},
+    futures::{future::try_join_all, Future},
     scylla::Session,
     std::{f64::consts::E, future, sync::Arc},
     tokio::{
         sync::{mpsc, oneshot, watch},
-        task::JoinHandle,
+        task::{JoinError, JoinHandle},
     },
     tracing::{error, info, warn},
 };
 
-struct ConsumerSourceSupervisor<T: FromBlockchainEvent> {
+pub struct ConsumerSourceSupervisor<T: FromBlockchainEvent> {
     etcd: etcd_client::Client,
     session: Arc<Session>,
+    consumer_groupd_id: ConsumerGroupId,
     consumer_group_store: ConsumerGroupStore,
     instance_id: InstanceId,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
-    leader_info_watch: watch::Receiver<Option<LeaderInfo>>,
     new_tx_filter: Option<ShardFilter>,
     acc_update_filter: Option<ShardFilter>,
     rx_terminate: oneshot::Receiver<()>,
     reusable_sink: mpsc::Sender<T>,
 }
 
-struct ConsumerSourceSupervisorHandle {
+pub struct ConsumerSourceSupervisorHandle {
+    consumer_group_id: ConsumerGroupId,
+    instance_id: InstanceId,
     tx_terminate: oneshot::Sender<()>,
+    handle: JoinHandle<anyhow::Result<()>>,
+}
+
+impl Future for ConsumerSourceSupervisorHandle {
+    type Output = Result<anyhow::Result<()>, JoinError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let handle = &mut self.handle;
+        tokio::pin!(handle);
+        handle.poll(cx)
+    }
 }
 
 impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
     pub async fn spawn(
-        &self,
         etcd: etcd_client::Client,
         session: Arc<Session>,
         consumer_group_store: ConsumerGroupStore,
         leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
-        leader_info_watch: watch::Receiver<Option<LeaderInfo>>,
         instance_lock: InstanceLock,
         new_tx_filter: Option<ShardFilter>,
         acc_update_filter: Option<ShardFilter>,
         reusable_sink: mpsc::Sender<T>,
     ) -> anyhow::Result<ConsumerSourceSupervisorHandle> {
         let (tx_terminate, rx_terminate) = oneshot::channel();
+
+        let instance_id = instance_lock.instance_id.clone();
+        let consumer_group_id = instance_lock.consumer_group_id.clone();
         let mut supervisor = ConsumerSourceSupervisor {
             etcd,
             session,
             consumer_group_store,
             leader_state_watch,
-            leader_info_watch,
             new_tx_filter,
             acc_update_filter,
             rx_terminate,
             reusable_sink,
-            instance_id: instance_lock.instance_id.clone(),
+            instance_id: instance_id.clone(),
+            consumer_groupd_id: consumer_group_id.clone(),
         };
 
-        tokio::spawn(async move {
-            supervisor.run(instance_lock).await;
-        });
+        let handle = tokio::spawn(async move { supervisor.run(instance_lock).await });
 
-        Ok(ConsumerSourceSupervisorHandle { tx_terminate })
+        Ok(ConsumerSourceSupervisorHandle {
+            instance_id: instance_id,
+            consumer_group_id: consumer_group_id,
+            tx_terminate,
+            handle,
+        })
     }
 
     async fn build_consumer_source(
         &mut self,
-        state: ConsumerGroupState,
+        state: IdleState,
         instance_lock: InstanceLock,
     ) -> anyhow::Result<ConsumerSource<T>> {
-        let producer_id = state
-            .decided_producer_id()
-            .expect("decided producer id must be set");
-        let execution_id = state
-            .decided_execution_id()
-            .expect("decided execution id must be set");
-
         let mut shard_iterators = Vec::with_capacity(64);
-        for ev_type in state.subscribed_blockchain_event_types.iter().cloned() {
+        for ev_type in state
+            .header
+            .subscribed_blockchain_event_types
+            .iter()
+            .cloned()
+        {
             let (_revision, shard_offsets) = self
                 .consumer_group_store
                 .get_shard_offset(
-                    &state.consumer_group_id,
-                    &instance_lock.instance_id,
-                    &execution_id,
+                    &self.consumer_groupd_id,
+                    &self.instance_id,
+                    &state.execution_id,
                     ev_type,
                 )
                 .await?;
@@ -101,7 +118,7 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
                 |(shard_id, (offset, _slot))| {
                     ShardIterator::new(
                         Arc::clone(&self.session),
-                        producer_id,
+                        state.producer_id,
                         shard_id,
                         offset,
                         ev_type,
@@ -115,9 +132,9 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
 
         let consumer_source = ConsumerSource::new(
             Arc::clone(&self.session),
-            state.consumer_group_id,
-            producer_id,
-            state.subscribed_blockchain_event_types,
+            self.consumer_groupd_id.clone(),
+            state.producer_id,
+            state.header.subscribed_blockchain_event_types.clone(),
             self.reusable_sink.clone(),
             shard_iterators,
             instance_lock,
@@ -127,60 +144,73 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
         Ok(consumer_source)
     }
 
-    fn try_become_leader_bg(&self) {
-        todo!()
-    }
-
     fn wait_for_state_change(
         &self,
-        curr_state: ConsumerGroupState,
-    ) -> oneshot::Receiver<ConsumerGroupState> {
+        current_revision: Revision,
+    ) -> oneshot::Receiver<(Revision, ConsumerGroupState)> {
         let (tx, rx) = oneshot::channel();
         let mut state_watch = self.leader_state_watch.clone();
         let _h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
-            let (_revision, new_state) = state_watch
-                .wait_for(|(_, new_state)| &curr_state != new_state)
+            let (revision, new_state) = state_watch
+                .wait_for(|(revision, _)| *revision > current_revision)
                 .await?
                 .to_owned();
-            tx.send(new_state);
+            tx.send((revision, new_state));
             Ok(())
         });
         rx
+    }
+
+    async fn handle_wait_barrier(&self, state: &WaitingBarrierState) -> anyhow::Result<()> {
+        let is_in_wait_for = state
+            .wait_for
+            .iter()
+            .any(|instance_id_blob| instance_id_blob.as_slice() == self.instance_id.as_bytes());
+        if is_in_wait_for {
+            release_child(self.etcd.clone(), &state.barrier_key, &self.instance_id).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn wait_for_idle_state(&self) -> anyhow::Result<(Revision, IdleState)> {
+        let mut state_watch = self.leader_state_watch.clone();
+
+        state_watch.mark_changed();
+        loop {
+            state_watch.changed().await?;
+
+            let (revision, state) = state_watch.borrow_and_update().to_owned();
+
+            match state {
+                ConsumerGroupState::WaitingBarrier(waiting_barrier_state) => {
+                    self.handle_wait_barrier(&waiting_barrier_state).await?
+                }
+                ConsumerGroupState::Idle(idle_state) => return Ok((revision, idle_state)),
+                ConsumerGroupState::Dead(_) => {
+                    anyhow::bail!(DeadConsumerGroup(self.consumer_groupd_id.clone()))
+                }
+                _ => continue,
+            }
+        }
     }
 
     async fn run(&mut self, instance_lock: InstanceLock) -> anyhow::Result<()> {
         let mut instance_lock_holder = Some(instance_lock);
         loop {
             self.leader_state_watch.mark_changed();
-            self.leader_info_watch.mark_changed();
-            self.leader_info_watch.changed().await?;
-            let maybe = self.leader_info_watch.borrow_and_update().to_owned();
-            let leader_info = match maybe {
-                Some(leader_info) => leader_info,
-                None => {
-                    self.try_become_leader_bg();
-                    self.leader_info_watch
-                        .wait_for(Option::is_some)
-                        .await?
-                        .to_owned()
-                        .expect("unexpected None when wait_for LeaderInfo to be defined")
-                }
-            };
 
-            let (_revision, state) = self
-                .leader_state_watch
-                .wait_for(|(_revison, state)| state.is_idle())
-                .await?
-                .to_owned();
+            let (revision, idle_state) = self.wait_for_idle_state().await?;
 
-            let mut new_state_signal = self.wait_for_state_change(state.clone());
+            let mut new_state_signal = self.wait_for_state_change(revision);
             let (tx_interrupt, rx_interrupt) = oneshot::channel();
 
             let instance_lock = instance_lock_holder
                 .take()
                 .expect("instance lock no longer exists");
+
             let mut consumer_source = self
-                .build_consumer_source(state, instance_lock)
+                .build_consumer_source(idle_state, instance_lock)
                 .await
                 .expect("failed to build consumer source");
 
@@ -201,25 +231,19 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
                     consumer_fut.await??;
                     return Ok(())
                 },
-                Ok(new_state) = &mut new_state_signal => {
-                    info!("ConsumerSourceSupervisor received stop barrier signal");
+                Ok((revision, new_state)) = &mut new_state_signal => {
+                    info!("ConsumerSourceSupervisor received new state with revision {revision}");
                     let _ = tx_interrupt.send(());
                     let instance_lock = consumer_fut.await??;
                     instance_lock_holder.replace(instance_lock);
-
-                    match new_state.state_machine {
-                        ConsumerGroupStateMachine::WaitingBarrier(WaitingBarrierState { lease_id, barrier_key, wait_for }) => {
-                            let is_in_wait_for = wait_for
-                                .iter()
-                                .any(|instance_id_blob| instance_id_blob.as_slice() == self.instance_id.as_bytes());
-                            if is_in_wait_for {
-                                release_child(self.etcd.clone(), &barrier_key, &self.instance_id).await?;
-                            }
+                    match new_state {
+                        ConsumerGroupState::WaitingBarrier(wait_barrier_state) => {
+                            self.handle_wait_barrier(&wait_barrier_state).await?;
                         },
-                        ConsumerGroupStateMachine::Dead => anyhow::bail!("ConsumerSourceSupervisor detected remote consumer group state machine is dead"),
+                        ConsumerGroupState::Dead(_) => anyhow::bail!(DeadConsumerGroup(self.consumer_groupd_id.clone())),
                         _ => (),
-                    }
-                }
+                    };
+                },
             }
         }
     }

@@ -15,7 +15,7 @@ pub struct InstanceLock {
     lock: ManagedLock,
     pub instance_id: InstanceId,
     fencing_token_key: Vec<u8>,
-    consumer_group_id: Vec<u8>,
+    pub consumer_group_id: Vec<u8>,
     etcd_client: etcd_client::Client,
 }
 

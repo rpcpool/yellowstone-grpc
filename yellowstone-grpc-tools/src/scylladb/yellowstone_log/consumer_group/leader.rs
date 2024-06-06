@@ -1,10 +1,10 @@
 use {
     super::{
-        consumer_group_store::ConsumerGroupStore,
-        etcd_path::{get_instance_lock_prefix_v1, get_leader_state_log_key_v1},
+        consumer_group_store::ConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
         producer_queries::ProducerQueries,
     },
     crate::scylladb::{
+        self,
         etcd_utils::{
             self,
             barrier::{get_barrier, Barrier},
@@ -18,8 +18,9 @@ use {
         yellowstone_log::{
             common::SeekLocation,
             consumer_group::{
-                error::{LeaderStateLogNotFound, StaleConsumerGroup},
+                error::{DeadConsumerGroup, LeaderStateLogNotFound},
                 etcd_path::get_producer_lock_path_v1,
+                leader,
             },
         },
     },
@@ -136,25 +137,42 @@ async fn get_producer_dead_signal(
 type EtcdKey = Vec<u8>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum ConsumerGroupStateMachine {
-    Init,
+pub enum ConsumerGroupState {
+    Init(ConsumerGroupHeader),
     LostProducer(LostProducerState),
     WaitingBarrier(WaitingBarrierState),
-    ComputingProducerSelection,
+    ComputingProducerSelection(ConsumerGroupHeader),
     ProducerProposition(ProducerPropositionState),
     ProducerUpdatedAtGroupLevel(ProducerUpdatedAtGroupLevelState),
     Idle(IdleState),
-    Dead,
+    Dead(ConsumerGroupHeader),
+}
+
+impl ConsumerGroupState {
+    pub fn header(&self) -> &ConsumerGroupHeader {
+        match self {
+            ConsumerGroupState::Init(header) => header,
+            ConsumerGroupState::LostProducer(x) => &x.header,
+            ConsumerGroupState::WaitingBarrier(x) => &x.header,
+            ConsumerGroupState::ComputingProducerSelection(header) => header,
+            ConsumerGroupState::ProducerProposition(x) => &x.header,
+            ConsumerGroupState::ProducerUpdatedAtGroupLevel(x) => &x.header,
+            ConsumerGroupState::Idle(x) => &x.header,
+            ConsumerGroupState::Dead(header) => header,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LostProducerState {
+    pub header: ConsumerGroupHeader,
     pub lost_producer_id: ProducerId,
     pub execution_id: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct WaitingBarrierState {
+    pub header: ConsumerGroupHeader,
     pub lease_id: i64,
     pub barrier_key: Vec<u8>,
     pub wait_for: Vec<Vec<u8>>,
@@ -162,6 +180,7 @@ pub struct WaitingBarrierState {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ProducerPropositionState {
+    pub header: ConsumerGroupHeader,
     pub producer_id: ProducerId,
     pub execution_id: Vec<u8>,
     pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
@@ -169,6 +188,7 @@ pub struct ProducerPropositionState {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ProducerUpdatedAtGroupLevelState {
+    pub header: ConsumerGroupHeader,
     pub producer_id: ProducerId,
     pub execution_id: Vec<u8>,
     pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
@@ -176,54 +196,25 @@ pub struct ProducerUpdatedAtGroupLevelState {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct IdleState {
+    pub header: ConsumerGroupHeader,
     pub producer_id: ProducerId,
     pub execution_id: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct ConsumerGroupState {
+pub struct ConsumerGroupHeader {
     pub consumer_group_id: ConsumerGroupId,
     pub commitment_level: CommitmentLevel,
     pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
     pub shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
-    pub state_machine: ConsumerGroupStateMachine,
-}
-
-impl ConsumerGroupState {
-    pub fn decided_producer_id(&self) -> Option<ProducerId> {
-        match &self.state_machine {
-            ConsumerGroupStateMachine::Idle(IdleState {
-                producer_id,
-                execution_id,
-            }) => Some(producer_id.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn decided_execution_id(&self) -> Option<Vec<u8>> {
-        match &self.state_machine {
-            ConsumerGroupStateMachine::Idle(IdleState {
-                producer_id,
-                execution_id,
-            }) => Some(execution_id.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn is_idle(&self) -> bool {
-        match &self.state_machine {
-            ConsumerGroupStateMachine::Idle { .. } => true,
-            _ => false,
-        }
-    }
 }
 
 pub struct ConsumerGroupLeaderNode {
     consumer_group_id: ConsumerGroupId,
     etcd: etcd_client::Client,
-    leader_key: EtcdKey,
+    leader_key: LeaderKey,
     leader_lease: ManagedLease,
-    state_log_key: EtcdKey,
+    state_log_key: String,
     state: ConsumerGroupState,
     last_revision: Revision,
     producer_dead_signal: Option<ProducerDeadSignal>,
@@ -251,14 +242,13 @@ impl fmt::Display for LeaderInitError {
 impl ConsumerGroupLeaderNode {
     pub async fn new(
         mut etcd: etcd_client::Client,
-        consumer_group_id: ConsumerGroupId,
-        leader_key: EtcdKey,
+        leader_key: LeaderKey,
         leader_lease: ManagedLease,
-        state_log_key: Vec<u8>,
         consumer_group_store: ConsumerGroupStore,
         producer_queries: ProducerQueries,
     ) -> anyhow::Result<Self> {
-        let get_resp = etcd.get(state_log_key.as_slice(), None).await?;
+        let state_log_key = leader_log_name_from_leader_key_v1(&leader_key);
+        let get_resp = etcd.get(state_log_key.as_bytes(), None).await?;
         let (last_revision, state) = get_resp
             .kvs()
             .first()
@@ -270,6 +260,7 @@ impl ConsumerGroupLeaderNode {
                 "consumer group leader found no state in {state_log_key:?}"
             ))?;
 
+        let consumer_group_id = state.header().consumer_group_id.clone();
         let ret = ConsumerGroupLeaderNode {
             consumer_group_id,
             etcd,
@@ -280,7 +271,7 @@ impl ConsumerGroupLeaderNode {
             last_revision,
             barrier: None,
             consumer_group_store,
-            state_log_key,
+            state_log_key: state_log_key,
             producer_queries,
         };
         Ok(ret)
@@ -296,7 +287,10 @@ impl ConsumerGroupLeaderNode {
         let slot_ranges = Some(lcs - 10..=lcs);
         let (producer_id, execution_id) = self
             .producer_queries
-            .get_producer_id_with_least_assigned_consumer(slot_ranges, self.state.commitment_level)
+            .get_producer_id_with_least_assigned_consumer(
+                slot_ranges,
+                self.state.header().commitment_level,
+            )
             .await?;
 
         let seek_loc = SeekLocation::SlotApprox {
@@ -311,20 +305,12 @@ impl ConsumerGroupLeaderNode {
         Ok((producer_id, execution_id, shard_offset_map))
     }
 
-    async fn update_state_machine(
-        &mut self,
-        next_step: ConsumerGroupStateMachine,
-    ) -> anyhow::Result<()> {
-        let leader_log_key = get_leader_state_log_key_v1(&self.consumer_group_id);
+    async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
+        let leader_log_key = &self.state_log_key;
         let mut state2 = self.state.clone();
-        state2.state_machine = next_step;
         let txn = etcd_client::Txn::new()
             .when(vec![
-                Compare::version(
-                    self.leader_key.as_slice(),
-                    etcd_client::CompareOp::Greater,
-                    0,
-                ),
+                Compare::version(self.leader_key.key(), etcd_client::CompareOp::Greater, 0),
                 Compare::mod_revision(
                     leader_log_key.as_str(),
                     etcd_client::CompareOp::Less,
@@ -372,11 +358,12 @@ impl ConsumerGroupLeaderNode {
         mut interrupt_signal: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
         loop {
-            let next_state = match &self.state.state_machine {
-                ConsumerGroupStateMachine::Init => {
-                    ConsumerGroupStateMachine::ComputingProducerSelection
+            let next_state = match &self.state {
+                ConsumerGroupState::Init(header) => {
+                    ConsumerGroupState::ComputingProducerSelection(header.clone())
                 }
-                ConsumerGroupStateMachine::LostProducer(LostProducerState {
+                ConsumerGroupState::LostProducer(LostProducerState {
+                    header,
                     lost_producer_id,
                     execution_id,
                 }) => {
@@ -402,15 +389,16 @@ impl ConsumerGroupLeaderNode {
                     .await?;
                     self.barrier = Some(barrier);
 
-                    let next_state =
-                        ConsumerGroupStateMachine::WaitingBarrier(WaitingBarrierState {
-                            lease_id,
-                            barrier_key: barrier_key.as_bytes().to_vec(),
-                            wait_for,
-                        });
+                    let next_state = ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
+                        header: header.clone(),
+                        lease_id,
+                        barrier_key: barrier_key.as_bytes().to_vec(),
+                        wait_for,
+                    });
                     next_state
                 }
-                ConsumerGroupStateMachine::WaitingBarrier(WaitingBarrierState {
+                ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
+                    header,
                     barrier_key,
                     wait_for,
                     lease_id,
@@ -425,18 +413,20 @@ impl ConsumerGroupLeaderNode {
                         _ = &mut interrupt_signal => return Ok(()),
                         _ = barrier.wait() => ()
                     }
-                    ConsumerGroupStateMachine::ComputingProducerSelection
+                    ConsumerGroupState::ComputingProducerSelection(header.clone())
                 }
-                ConsumerGroupStateMachine::ComputingProducerSelection => {
+                ConsumerGroupState::ComputingProducerSelection(header) => {
                     let (producer_id, execution_id, new_shard_offsets) =
                         self.compute_next_producer().await?;
-                    ConsumerGroupStateMachine::ProducerProposition(ProducerPropositionState {
+                    ConsumerGroupState::ProducerProposition(ProducerPropositionState {
+                        header: header.clone(),
                         producer_id,
                         execution_id,
                         new_shard_offsets,
                     })
                 }
-                ConsumerGroupStateMachine::ProducerProposition(ProducerPropositionState {
+                ConsumerGroupState::ProducerProposition(ProducerPropositionState {
+                    header,
                     producer_id,
                     execution_id,
                     new_shard_offsets: new_shard_offset,
@@ -445,7 +435,7 @@ impl ConsumerGroupLeaderNode {
                     match remote_state {
                         Some((_remote_revision, remote_execution_id)) => {
                             if *execution_id != remote_execution_id {
-                                ConsumerGroupStateMachine::ComputingProducerSelection
+                                ConsumerGroupState::ComputingProducerSelection(header.clone())
                             } else {
                                 self.consumer_group_store
                                     .update_consumer_group_producer(
@@ -456,8 +446,9 @@ impl ConsumerGroupLeaderNode {
                                     )
                                     .await?;
 
-                                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel(
+                                ConsumerGroupState::ProducerUpdatedAtGroupLevel(
                                     ProducerUpdatedAtGroupLevelState {
+                                        header: header.clone(),
                                         producer_id: *producer_id,
                                         execution_id: execution_id.clone(),
                                         new_shard_offsets: new_shard_offset.clone(),
@@ -465,11 +456,12 @@ impl ConsumerGroupLeaderNode {
                                 )
                             }
                         }
-                        None => ConsumerGroupStateMachine::ComputingProducerSelection,
+                        None => ConsumerGroupState::ComputingProducerSelection(header.clone()),
                     }
                 }
-                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel(
+                ConsumerGroupState::ProducerUpdatedAtGroupLevel(
                     ProducerUpdatedAtGroupLevelState {
+                        header,
                         producer_id,
                         execution_id,
                         new_shard_offsets: new_shard_offset,
@@ -484,12 +476,14 @@ impl ConsumerGroupLeaderNode {
                             self.last_revision,
                         )
                         .await?;
-                    ConsumerGroupStateMachine::Idle(IdleState {
+                    ConsumerGroupState::Idle(IdleState {
+                        header: header.clone(),
                         producer_id: *producer_id,
                         execution_id: execution_id.clone(),
                     })
                 }
-                ConsumerGroupStateMachine::Idle(IdleState {
+                ConsumerGroupState::Idle(IdleState {
+                    header,
                     producer_id,
                     execution_id,
                 }) => {
@@ -504,15 +498,16 @@ impl ConsumerGroupLeaderNode {
                             let lease_id = self.etcd.lease_grant(10, None).await?.id();
                             self.etcd.put(barrier_key.as_bytes(), [], Some(PutOptions::new().with_lease(lease_id))).await?;
 
-                            ConsumerGroupStateMachine::LostProducer (LostProducerState {
+                            ConsumerGroupState::LostProducer (LostProducerState {
+                                header: header.clone(),
                                 lost_producer_id: *producer_id,
                                 execution_id: execution_id.clone()
                             })
                         }
                     }
                 }
-                ConsumerGroupStateMachine::Dead => {
-                    anyhow::bail!(StaleConsumerGroup(self.consumer_group_id.clone()))
+                ConsumerGroupState::Dead(_) => {
+                    anyhow::bail!(DeadConsumerGroup(self.consumer_group_id.clone()))
                 }
             };
 
@@ -545,27 +540,33 @@ impl ConsumerGroupLeaderNode {
 /// A result indicating whether the state log was successfully created.
 pub async fn create_leader_state_log(
     etcd: &etcd_client::Client,
-    consumer_group_info: &ConsumerGroupInfo,
+    scylla_consumer_group_info: &scylladb::types::ConsumerGroupInfo,
 ) -> anyhow::Result<()> {
-    let state = ConsumerGroupState {
-        consumer_group_id: consumer_group_info.consumer_group_id.clone(),
-        commitment_level: consumer_group_info.commitment_level.clone(),
-        subscribed_blockchain_event_types: consumer_group_info.subscribed_event_types.clone(),
-        shard_assignments: consumer_group_info.instance_id_shard_assignments.clone(),
-        state_machine: ConsumerGroupStateMachine::Idle(IdleState {
-            producer_id: consumer_group_info
-                .producer_id
-                .clone()
-                .expect("missing producer id"),
-
-            execution_id: consumer_group_info
-                .execution_id
-                .clone()
-                .expect("missing execution id"),
-        }),
+    let header = ConsumerGroupHeader {
+        consumer_group_id: scylla_consumer_group_info.consumer_group_id.clone(),
+        commitment_level: scylla_consumer_group_info.commitment_level.clone(),
+        subscribed_blockchain_event_types: scylla_consumer_group_info
+            .subscribed_event_types
+            .clone(),
+        shard_assignments: scylla_consumer_group_info
+            .instance_id_shard_assignments
+            .clone(),
     };
+    let state = ConsumerGroupState::Idle(IdleState {
+        header,
+        producer_id: scylla_consumer_group_info
+            .producer_id
+            .clone()
+            .expect("missing producer id"),
 
-    let state_log_key = get_leader_state_log_key_v1(&consumer_group_info.consumer_group_id);
+        execution_id: scylla_consumer_group_info
+            .execution_id
+            .clone()
+            .expect("missing execution id"),
+    });
+
+    let state_log_key =
+        leader_log_name_from_cg_id_v1(&scylla_consumer_group_info.consumer_group_id);
 
     let txn = Txn::new()
         .when(vec![Compare::version(
@@ -594,7 +595,7 @@ pub async fn observe_consumer_group_state(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<(Revision, ConsumerGroupState)>> {
-    let key = get_leader_state_log_key_v1(&consumer_group_id);
+    let key = leader_log_name_from_cg_id_v1(&consumer_group_id);
     let mut wc = etcd.watch_client();
 
     let mut kv_client = etcd.kv_client();
@@ -658,8 +659,17 @@ pub struct LeaderInfo {
     id: Vec<u8>,
 }
 
-fn leader_name_v1(consumer_group_id: &ConsumerGroupId) -> String {
-    let cg = String::from_utf8_lossy(&consumer_group_id.as_slice());
+fn leader_log_name_from_leader_key_v1(lk: &LeaderKey) -> String {
+    let lk_name = lk.name_str().expect("invalid leader key name");
+    format!("{lk_name}/log",)
+}
+
+fn leader_log_name_from_cg_id_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
+    format!("{}/log", leader_name_v1(consumer_group_id))
+}
+
+fn leader_name_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
+    let cg = String::from_utf8_lossy(consumer_group_id.as_ref());
     format!("cg-leader-{cg}")
 }
 
@@ -721,17 +731,11 @@ pub async fn observe_leader_changes(
     Ok(rx)
 }
 
-/// Attempts to become the leader of the given consumer group. If successful, returns a oneshot receiver
+/// Attempts to become the leader of the given consumer group. Returns a oneshot receiver
 /// that will receive the leader key and managed lease. If the attempt times out, the receiver will
 /// receive `None`.
-///
-/// The function first finds the IP address of the specified network interface, then creates a new
-/// leader campaign in etcd using the IP address and a randomly generated ID. The campaign is
-/// started with a 60-second lease, and the function will wait up to the specified `wait_for`
-/// duration for the campaign to succeed. If the campaign succeeds, the function returns the
-/// leader key and managed lease; otherwise, it returns `None`.
 pub fn try_become_leader(
-    etcd: &etcd_client::Client,
+    etcd: etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
     wait_for: Duration,
     leader_ifname: &String,

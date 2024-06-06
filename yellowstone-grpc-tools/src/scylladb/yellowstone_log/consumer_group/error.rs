@@ -68,12 +68,12 @@ impl fmt::Display for StaleRevision {
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub struct StaleConsumerGroup(pub ConsumerGroupId);
+pub struct DeadConsumerGroup(pub ConsumerGroupId);
 
-impl fmt::Display for StaleConsumerGroup {
+impl fmt::Display for DeadConsumerGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let cg_id = String::from_utf8_lossy(self.0.as_slice());
-        f.write_fmt(format_args!("StaleConsumerGroup({})", cg_id))
+        f.write_fmt(format_args!("DeadConsumerGroup({})", cg_id))
     }
 }
 
