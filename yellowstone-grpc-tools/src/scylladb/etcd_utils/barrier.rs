@@ -11,7 +11,7 @@ pub struct Barrier {
 }
 
 impl Barrier {
-    pub async fn wait(mut self) {
+    pub async fn wait(self) {
         self.etcd_response.await;
     }
 }

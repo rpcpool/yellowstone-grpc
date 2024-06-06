@@ -4,15 +4,13 @@ use {
     futures::{future::BoxFuture, stream::StreamExt, TryFutureExt},
     scylla::{frame::Compression, Session, SessionBuilder},
     std::{net::SocketAddr, sync::Arc, time::Duration},
-    tokio::time::Instant,
     tonic::transport::Server,
     tracing::{error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::subscribe_update::UpdateOneof,
         yellowstone::log::{
-            yellowstone_log_server::YellowstoneLogServer, EventSubscriptionPolicy,
-            TimelineTranslationPolicy,
+            yellowstone_log_server::YellowstoneLogServer,
         },
     },
     yellowstone_grpc_tools::{
@@ -24,8 +22,8 @@ use {
                 Config, ConfigGrpc2ScyllaDB, ConfigYellowstoneLogServer, ScyllaDbConnectionInfo,
             },
             sink::ScyllaSink,
-            types::{CommitmentLevel, Transaction},
-            yellowstone_log::{common::SeekLocation, grpc2::ScyllaYsLog},
+            types::{Transaction},
+            yellowstone_log::{grpc2::ScyllaYsLog},
         },
         setup_tracing,
     },
@@ -124,9 +122,9 @@ impl ArgsAction {
     }
 
     async fn test(
-        config: ConfigGrpc2ScyllaDB,
-        scylladb_conn_config: ScyllaDbConnectionInfo,
-        mut shutdown: BoxFuture<'static, ()>,
+        _config: ConfigGrpc2ScyllaDB,
+        _scylladb_conn_config: ScyllaDbConnectionInfo,
+        _shutdown: BoxFuture<'static, ()>,
     ) -> anyhow::Result<()> {
         unimplemented!();
         // let session: Session = SessionBuilder::new()

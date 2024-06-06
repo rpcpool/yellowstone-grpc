@@ -2,7 +2,7 @@ use {
     super::{
         consumer_group_store::ConsumerGroupStore,
         consumer_source::{ConsumerSource, FromBlockchainEvent},
-        leader::{ConsumerGroupState, IdleState, LeaderInfo, WaitingBarrierState},
+        leader::{ConsumerGroupState, IdleState, WaitingBarrierState},
         lock::InstanceLock,
         shard_iterator::{ShardFilter, ShardIterator},
     },
@@ -13,12 +13,12 @@ use {
     },
     futures::{future::try_join_all, Future},
     scylla::Session,
-    std::{f64::consts::E, future, sync::Arc},
+    std::{sync::Arc},
     tokio::{
         sync::{mpsc, oneshot, watch},
         task::{JoinError, JoinHandle},
     },
-    tracing::{error, info, warn},
+    tracing::{error, info},
 };
 
 pub struct ConsumerSourceSupervisor<T: FromBlockchainEvent> {
@@ -85,8 +85,8 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
         let handle = tokio::spawn(async move { supervisor.run(instance_lock).await });
 
         Ok(ConsumerSourceSupervisorHandle {
-            instance_id: instance_id,
-            consumer_group_id: consumer_group_id,
+            instance_id,
+            consumer_group_id,
             tx_terminate,
             handle,
         })

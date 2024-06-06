@@ -12,17 +12,17 @@ use {
     },
     futures::Stream,
     scylla::Session,
-    std::{pin::Pin, str::FromStr, sync::Arc, time::Duration},
+    std::{pin::Pin, str::FromStr, sync::Arc},
     tokio::sync::mpsc,
     tonic::Response,
-    tracing::{error, info, warn},
+    tracing::{error},
     uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
         yellowstone::log::{
             yellowstone_log_server::YellowstoneLog, ConsumeRequest,
             CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse,
-            EventSubscriptionPolicy, JoinRequest, TimelineTranslationPolicy,
+            EventSubscriptionPolicy, JoinRequest,
         },
     },
 };
@@ -134,7 +134,7 @@ impl YellowstoneLog for ScyllaYsLog {
                 tonic::Status::internal("failed to create consumer group")
             })?;
         Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: String::from_utf8(consumer_group_info.consumer_group_id).map_err(|e| {
+            group_id: String::from_utf8(consumer_group_info.consumer_group_id).map_err(|_e| {
                 error!("consumer group id is not utf8!");
                 tonic::Status::internal("failed to create consumer group")
             })?,
@@ -143,7 +143,7 @@ impl YellowstoneLog for ScyllaYsLog {
 
     async fn consume(
         &self,
-        request: tonic::Request<ConsumeRequest>,
+        _request: tonic::Request<ConsumeRequest>,
     ) -> Result<tonic::Response<Self::ConsumeStream>, tonic::Status> {
         unimplemented!()
     }
@@ -173,7 +173,7 @@ impl YellowstoneLog for ScyllaYsLog {
 
         maybe.ok_or(tonic::Status::invalid_argument("Invalid consumer group id"))?;
 
-        let lock = self
+        let _lock = self
             .instance_locker
             .try_lock_instance_id(cg_id.clone(), &instance_id)
             .await

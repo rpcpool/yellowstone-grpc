@@ -19,18 +19,13 @@ use {
     },
     chrono::{DateTime, TimeDelta, Utc},
     etcd_client::GetOptions,
-    rdkafka::producer,
     scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
     std::{
-        any,
         collections::{BTreeMap, BTreeSet},
-        fmt,
         ops::RangeInclusive,
-        sync::{mpsc::RecvTimeoutError, Arc},
-        thread::current,
+        sync::{Arc},
         time::Duration,
     },
-    thiserror::Error,
     tracing::info,
 };
 
@@ -169,7 +164,7 @@ impl ProducerQueries {
             .kvs()
             .iter()
             .map(|kv| {
-                (get_producer_id_from_lock_key_v1(kv.key()).map(|pid| (pid, kv.mod_revision())))
+                get_producer_id_from_lock_key_v1(kv.key()).map(|pid| (pid, kv.mod_revision()))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
@@ -179,7 +174,7 @@ impl ProducerQueries {
             if let Some(current_etcd_revision) = maybe {
                 lock_info.revision == current_etcd_revision
             } else {
-                return false;
+                false
             }
         });
 
@@ -482,7 +477,7 @@ impl ProducerQueries {
 
         shard_offset_pairs
             .iter_mut()
-            .for_each(|(k, v)| (*v).0 += adjustment);
+            .for_each(|(_k, v)| v.0 += adjustment);
 
         if shard_offset_pairs.len() != (producer_info.num_shards as usize) {
             anyhow::bail!("mismatch producer num shards and computed shard offset");

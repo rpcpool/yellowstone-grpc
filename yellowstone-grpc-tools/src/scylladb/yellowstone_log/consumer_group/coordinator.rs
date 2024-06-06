@@ -37,7 +37,7 @@ pub struct LocalConsumerGroupCoordinator {
 
 impl LocalConsumerGroupCoordinator {
     async fn try_become_leader(&self, consumer_group_id: &ConsumerGroupId) -> anyhow::Result<()> {
-        let mut rx = try_become_leader(
+        let _rx = try_become_leader(
             self.etcd.clone(),
             consumer_group_id,
             Duration::from_secs(5),
@@ -83,7 +83,7 @@ impl LocalConsumerGroupCoordinator {
         }
     }
 
-    async fn register_consumer_handle(&self, consumer_handle: ConsumerSourceSupervisorHandle) {}
+    async fn register_consumer_handle(&self, _consumer_handle: ConsumerSourceSupervisorHandle) {}
 
     pub async fn try_spawn_consumer_member<T: FromBlockchainEvent + Send + 'static>(
         &self,
@@ -98,9 +98,9 @@ impl LocalConsumerGroupCoordinator {
             .try_lock_instance_id(consumer_group_id.as_slice(), instance_id)
             .await?;
 
-        let mut leader_election_watch = self.get_leader_election_watch(&consumer_group_id).await?;
+        let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
 
-        let mut leader_state_watch = self.get_leader_state_watch(&consumer_group_id).await?;
+        let mut leader_state_watch = self.get_leader_state_watch(consumer_group_id).await?;
 
         leader_election_watch.mark_changed();
         leader_state_watch.mark_changed();
@@ -112,7 +112,7 @@ impl LocalConsumerGroupCoordinator {
             self.try_become_leader(consumer_group_id).await;
         }
 
-        let consumer_handle = ConsumerSourceSupervisor::spawn(
+        let _consumer_handle = ConsumerSourceSupervisor::spawn(
             self.etcd.clone(),
             Arc::clone(&self.session),
             self.consumer_group_store.clone(),

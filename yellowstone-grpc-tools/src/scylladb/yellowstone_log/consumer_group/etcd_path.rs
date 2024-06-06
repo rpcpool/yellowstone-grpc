@@ -4,13 +4,13 @@ pub fn get_instance_lock_name_path_v1(
     consumer_group_id: ConsumerGroupId,
     instance_id: InstanceId,
 ) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.into())
+    let uuid_str = String::from_utf8(consumer_group_id)
         .expect("consumer group id is not proper utf8 uuid");
     format!("v1/lock/cg-{uuid_str}/i-{instance_id}")
 }
 
 pub fn get_instance_lock_prefix_v1(consumer_group_id: ConsumerGroupId) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.into())
+    let uuid_str = String::from_utf8(consumer_group_id)
         .expect("consumer group id is not proper utf8 uuid");
     format!("v1/lock/cg-{uuid_str}/i-")
 }
@@ -19,7 +19,7 @@ pub fn get_instance_fencing_token_key_path_v1(
     consumer_group_id: ConsumerGroupId,
     instance_id: InstanceId,
 ) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.into())
+    let uuid_str = String::from_utf8(consumer_group_id)
         .expect("consumer group id is not proper utf8 uuid");
     format!("v1/fencing-token/cg-{uuid_str}/i-{instance_id}")
 }

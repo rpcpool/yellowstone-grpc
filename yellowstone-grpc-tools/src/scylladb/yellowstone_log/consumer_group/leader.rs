@@ -12,7 +12,7 @@ use {
             Revision,
         },
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ExecutionId,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId,
             InstanceId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{
@@ -20,7 +20,6 @@ use {
             consumer_group::{
                 error::{DeadConsumerGroup, LeaderStateLogNotFound},
                 etcd_path::get_producer_lock_path_v1,
-                leader,
             },
         },
     },
@@ -271,7 +270,7 @@ impl ConsumerGroupLeaderNode {
             last_revision,
             barrier: None,
             consumer_group_store,
-            state_log_key: state_log_key,
+            state_log_key,
             producer_queries,
         };
         Ok(ret)
@@ -305,9 +304,9 @@ impl ConsumerGroupLeaderNode {
         Ok((producer_id, execution_id, shard_offset_map))
     }
 
-    async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
+    async fn update_state_machine(&mut self, _next_step: ConsumerGroupState) -> anyhow::Result<()> {
         let leader_log_key = &self.state_log_key;
-        let mut state2 = self.state.clone();
+        let state2 = self.state.clone();
         let txn = etcd_client::Txn::new()
             .when(vec![
                 Compare::version(self.leader_key.key(), etcd_client::CompareOp::Greater, 0),
@@ -364,8 +363,8 @@ impl ConsumerGroupLeaderNode {
                 }
                 ConsumerGroupState::LostProducer(LostProducerState {
                     header,
-                    lost_producer_id,
-                    execution_id,
+                    lost_producer_id: _,
+                    execution_id: _,
                 }) => {
                     let barrier_key = Uuid::new_v4();
                     let lease_id = self.etcd.lease_grant(10, None).await?.id();
@@ -400,13 +399,13 @@ impl ConsumerGroupLeaderNode {
                 ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
                     header,
                     barrier_key,
-                    wait_for,
-                    lease_id,
+                    wait_for: _,
+                    lease_id: _,
                 }) => {
                     let barrier = if let Some(barrier) = self.barrier.take() {
                         barrier
                     } else {
-                        get_barrier(self.etcd.clone(), &barrier_key).await?
+                        get_barrier(self.etcd.clone(), barrier_key).await?
                     };
 
                     tokio::select! {
@@ -544,7 +543,7 @@ pub async fn create_leader_state_log(
 ) -> anyhow::Result<()> {
     let header = ConsumerGroupHeader {
         consumer_group_id: scylla_consumer_group_info.consumer_group_id.clone(),
-        commitment_level: scylla_consumer_group_info.commitment_level.clone(),
+        commitment_level: scylla_consumer_group_info.commitment_level,
         subscribed_blockchain_event_types: scylla_consumer_group_info
             .subscribed_event_types
             .clone(),
@@ -556,7 +555,6 @@ pub async fn create_leader_state_log(
         header,
         producer_id: scylla_consumer_group_info
             .producer_id
-            .clone()
             .expect("missing producer id"),
 
         execution_id: scylla_consumer_group_info
@@ -595,7 +593,7 @@ pub async fn observe_consumer_group_state(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<(Revision, ConsumerGroupState)>> {
-    let key = leader_log_name_from_cg_id_v1(&consumer_group_id);
+    let key = leader_log_name_from_cg_id_v1(consumer_group_id);
     let mut wc = etcd.watch_client();
 
     let mut kv_client = etcd.kv_client();
@@ -614,7 +612,7 @@ pub async fn observe_consumer_group_state(
         let (mut watcher, mut stream) = wc
             .watch(key.as_str(), None)
             .await
-            .expect(format!("failed to watch {key}").as_str());
+            .unwrap_or_else(|_| panic!("failed to watch {key}"));
         while let Some(message) = stream
             .message()
             .await
@@ -623,8 +621,7 @@ pub async fn observe_consumer_group_state(
             let events = message.events();
             if events
                 .iter()
-                .find(|ev| ev.event_type() == EventType::Delete)
-                .is_some()
+                .any(|ev| ev.event_type() == EventType::Delete)
             {
                 panic!("remote state log has been deleted")
             }
@@ -643,7 +640,6 @@ pub async fn observe_consumer_group_state(
                 .for_each(|(revision, state)| {
                     if tx.send((revision, state)).is_err() {
                         warn!("receiver half of LeaderStateLogObserver has been close");
-                        return;
                     }
                 })
         }
@@ -708,9 +704,9 @@ pub async fn observe_leader_changes(
         let (mut watcher, mut stream) = wc
             .watch(leader.as_str(), Some(watch_opts))
             .await
-            .expect(format!("fail to watch {leader}").as_str());
+            .unwrap_or_else(|_| panic!("fail to watch {leader}"));
 
-        'outer: while let Some(mut msg) = stream.message().await.expect("") {
+        'outer: while let Some(msg) = stream.message().await.expect("") {
             for ev in msg.events() {
                 let payload = match ev.event_type() {
                     EventType::Put => ev.kv().map(|kv| {

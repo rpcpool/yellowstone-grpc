@@ -1,10 +1,6 @@
 use {
     etcd_client::{
-        Client, GetOptions, LeaderKey, LockOptions, ProclaimOptions, ResignOptions, WatchOptions,
-    },
-    futures::{
-        future::{join_all, select_all},
-        try_join, FutureExt,
+        Client, LeaderKey, ResignOptions, WatchOptions,
     },
     std::time::Duration,
     tokio::sync::mpsc,
@@ -28,11 +24,11 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(10);
     tokio::spawn(async move {
-        let (watcher, mut stream) = client2
+        let (_watcher, mut stream) = client2
             .watch("myleader", Some(WatchOptions::new().with_prefix()))
             .await
             .expect("fail");
-        while let Some(mut msg) = stream.message().await.expect("") {
+        while let Some(msg) = stream.message().await.expect("") {
             let ev = &msg.events()[0];
             let kv = ev.kv().unwrap();
 
@@ -69,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     //     .resign(Some(ResignOptions::new().with_leader(lk)))
     //     .await?;
 
-    let (ev_type, k, v) = rx.recv().await.unwrap();
+    let (ev_type, _k, v) = rx.recv().await.unwrap();
     println!("after resign recv1 : {ev_type:?} {v:?}");
 
     let lease2 = client.lease_grant(1, None).await?.id();
@@ -79,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     //let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
     //println!("leader key: {leader_key:?}");
 
-    let (ev_type, k, v) = rx.recv().await.unwrap();
+    let (ev_type, _k, v) = rx.recv().await.unwrap();
     let v = String::from_utf8(v)?;
     println!("rx: {ev_type:?} {v:?}");
 

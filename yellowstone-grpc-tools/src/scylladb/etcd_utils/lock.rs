@@ -2,14 +2,13 @@ use {
     crate::scylladb::etcd_utils::lease::ManagedLease,
     core::fmt,
     etcd_client::{
-        Compare, CompareOp, GetOptions, LockOptions, LockResponse, Txn, TxnOp, TxnOpResponse,
-        TxnResponse, WatchOptions,
+        Compare, CompareOp, GetOptions, LockOptions, Txn, TxnOp,
+        TxnResponse,
     },
-    futures::{channel::oneshot, lock},
     std::time::Duration,
     thiserror::Error,
-    tokio::{sync::watch, task::JoinHandle, time::Instant},
-    tracing::{error, trace, warn},
+    tokio::{time::Instant},
+    tracing::{trace},
 };
 
 const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);
@@ -162,7 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_should_receive_keep_alive() {
-        let mut client = etcd_client::Client::connect(["localhost:2379"], None)
+        let client = etcd_client::Client::connect(["localhost:2379"], None)
             .await
             .unwrap();
 

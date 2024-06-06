@@ -1,14 +1,11 @@
 use {
     super::etcd_path::{
-        self, get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1,
+        get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1,
     },
     crate::scylladb::{
         etcd_utils::{self, lock::ManagedLock},
         types::InstanceId,
     },
-    etcd_client::{Compare, CompareOp, Txn, TxnOp},
-    tokio::time::Instant,
-    tracing::trace,
 };
 
 pub struct InstanceLock {

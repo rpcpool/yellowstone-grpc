@@ -1,39 +1,28 @@
 use {
-    super::{etcd_path::get_producer_id_from_lock_key_v1, producer_queries::ProducerQueries},
+    super::{producer_queries::ProducerQueries},
     crate::scylladb::{
-        etcd_utils,
         scylladb_utils::LwtResult,
-        sink,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
-            ConsumerGroupType, ConsumerId, ExecutionId, InstanceId, ProducerExecutionInfo,
+            ConsumerGroupType, ExecutionId, InstanceId,
             ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{
             common::SeekLocation,
             consumer_group::{
                 error::StaleRevision,
-                etcd_path::{get_producer_lock_path_v1, get_producer_lock_prefix_v1},
             },
         },
     },
-    anyhow::anyhow,
-    etcd_client::GetOptions,
-    rdkafka::{consumer::Consumer, producer},
     scylla::{
-        batch::{Batch, BatchType},
         prepared_statement::PreparedStatement,
         statement::Consistency,
         Session,
     },
-    serde::{Deserialize, Serialize},
     std::{
-        cell::BorrowMutError,
-        collections::{self, btree_map, BTreeMap},
-        iter,
+        collections::{BTreeMap},
         net::IpAddr,
         sync::Arc,
-        thread::current,
     },
     tracing::info,
     uuid::Uuid,
@@ -152,8 +141,7 @@ fn assign_shards(ids: &[InstanceId], num_shards: usize) -> BTreeMap<InstanceId, 
     let shard_vec = (0..num_shards).map(|x| x as ShardId).collect::<Vec<_>>();
     let chunk_it = shard_vec
         .chunks(num_parts_per_id)
-        .into_iter()
-        .map(|chunk| chunk.iter().cloned().collect());
+        .map(|chunk| chunk.to_vec());
 
     ids.into_iter().zip(chunk_it).collect()
 }
@@ -277,8 +265,7 @@ impl ConsumerGroupStore {
 
         // TODO: handle the possible CQL injection here.
         // the rust driver support little-to know support for IN c
-        let query = format!(
-            r###"
+        let query = r###"
             SELECT
                 consumer_id,
                 revision,
@@ -289,8 +276,7 @@ impl ConsumerGroupStore {
                 consumer_group_id = ?
                 AND consumer_id IN ?
                 AND execution_id = ?
-            "###
-        );
+            "###.to_string();
 
         let subscribed_events = consumer_group_info.subscribed_event_types;
         let rows = self
@@ -468,7 +454,7 @@ impl ConsumerGroupStore {
         remote_ip_addr: Option<IpAddr>,
     ) -> anyhow::Result<ConsumerGroupInfo> {
         let consumer_group_id = Uuid::new_v4();
-        let shard_assignments = assign_shards(&instance_ids, NUM_SHARDS);
+        let shard_assignments = assign_shards(instance_ids, NUM_SHARDS);
 
         let maybe_slot_range = if let SeekLocation::SlotApprox {
             desired_slot,

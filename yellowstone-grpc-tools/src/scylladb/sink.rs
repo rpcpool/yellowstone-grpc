@@ -15,29 +15,23 @@ use {
     crate::scylladb::{
         etcd_utils,
         yellowstone_log::{
-            self,
             consumer_group::etcd_path::{
                 get_producer_fencing_token_key_path_v1, get_producer_lock_path_v1,
             },
         },
     },
-    anyhow::anyhow,
     deepsize::DeepSizeOf,
     futures::{
         future::{self, try_join_all},
         Future,
     },
-    lazy_static::initialize,
     local_ip_address::{list_afinet_netifas, local_ip},
-    rdkafka::producer,
     scylla::{
         batch::{Batch, BatchType},
         frame::Compression,
-        serialize::{batch::BatchValues, row::SerializeRow},
         Session, SessionBuilder,
     },
     std::{
-        cell::RefCell,
         collections::{BTreeMap, BTreeSet},
         net::IpAddr,
         sync::Arc,
@@ -46,7 +40,6 @@ use {
     tokio::{
         sync::{
             mpsc::{error::SendError, Permit},
-            Mutex, RwLock,
         },
         task::{JoinError, JoinHandle},
         time::Instant,
@@ -273,14 +266,14 @@ impl Shard {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<ShardCommand>(16);
         let shard_id = self.shard_id;
         let (wsender, wreceiver) = tokio::sync::watch::channel(self.next_offset - 1);
-        let fencing_token_path = get_shard_fencing_token_key_path_v1(self.producer_id, shard_id);
+        let _fencing_token_path = get_shard_fencing_token_key_path_v1(self.producer_id, shard_id);
 
         let handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
             let shard_id = self.shard_id;
             let producer_id = self.producer_id;
             let insert_event_ps = self.session.prepare(INSERT_BLOCKCHAIN_EVENT).await?;
             let commit_period_ps = self.session.prepare(COMMIT_SHARD_PERIOD).await?;
-            let update_last_committed_period = self.session.prepare(UPDATE_SHARD_TIP).await?;
+            let _update_last_committed_period = self.session.prepare(UPDATE_SHARD_TIP).await?;
             let mut buffering_timeout = Instant::now() + self.buffer_linger;
             loop {
                 let offset = self.next_offset;
@@ -471,7 +464,7 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
     let max_offset_for_shard_period_ps = session.prepare(query_max_offset_for_shard_period).await?;
 
     //let mut js: JoinSet<anyhow::Result<(i16, i64)>> = JoinSet::new();
-    let mut shard_max_offset_pairs =
+    let shard_max_offset_pairs =
         futures::future::try_join_all(current_period_foreach_shard.iter().map(
             |(shard_id, curr_period)| {
                 let ps = max_offset_for_shard_period_ps.clone();

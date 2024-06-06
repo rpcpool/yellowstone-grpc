@@ -1,5 +1,4 @@
 use {
-    etcd_client::LeaseGrantOptions,
     std::time::Duration,
     tokio::{
         sync::{oneshot, watch},
@@ -57,7 +56,7 @@ impl ManagedLease {
         let (wsender, wreceiver) = watch::channel(Instant::now());
         tokio::spawn(async move {
             while let Ok(Some(_msg)) = keep_alive_resp_stream.message().await {
-                if let Err(e) = wsender.send(Instant::now()) {
+                if let Err(_e) = wsender.send(Instant::now()) {
                     warn!("lock watch closed its receiving half");
                     break;
                 }
