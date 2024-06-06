@@ -6,6 +6,7 @@ use {
     solana_sdk::pubkey::Pubkey,
     std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path},
     tokio::sync::Semaphore,
+    tonic::codec::CompressionEncoding,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +68,9 @@ pub struct ConfigGrpc {
     pub address: SocketAddr,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
+    /// Possible compression options
+    #[serde(default)]
+    pub compression: ConfigGrpcCompression,
     /// Limits the maximum size of a decoded message, default is 4MiB
     #[serde(
         default = "ConfigGrpc::max_decoding_message_size_default",
@@ -135,6 +139,53 @@ impl ConfigGrpc {
 pub struct ConfigGrpcServerTls {
     pub cert_path: String,
     pub key_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigGrpcCompression {
+    #[serde(
+        deserialize_with = "ConfigGrpcCompression::deserialize_compression",
+        default = "ConfigGrpcCompression::default_compression"
+    )]
+    pub accept: Vec<CompressionEncoding>,
+    #[serde(
+        deserialize_with = "ConfigGrpcCompression::deserialize_compression",
+        default = "ConfigGrpcCompression::default_compression"
+    )]
+    pub send: Vec<CompressionEncoding>,
+}
+
+impl Default for ConfigGrpcCompression {
+    fn default() -> Self {
+        Self {
+            accept: Self::default_compression(),
+            send: Self::default_compression(),
+        }
+    }
+}
+
+impl ConfigGrpcCompression {
+    fn deserialize_compression<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<CompressionEncoding>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Vec::<&str>::deserialize(deserializer)?
+            .into_iter()
+            .map(|value| match value {
+                "gzip" => Ok(CompressionEncoding::Gzip),
+                value => Err(de::Error::custom(format!(
+                    "Unknown compression format: {value}"
+                ))),
+            })
+            .collect::<Result<_, _>>()
+    }
+
+    fn default_compression() -> Vec<CompressionEncoding> {
+        vec![CompressionEncoding::Gzip]
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
