@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser: add compression option to config ([#356](https://github.com/rpcpool/yellowstone-grpc/pull/356))
+
 ### Breaking
 
 ## 2024-06-05
