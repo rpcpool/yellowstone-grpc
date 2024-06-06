@@ -135,44 +135,87 @@ async fn get_producer_dead_signal(
 
 type EtcdKey = Vec<u8>;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ConsumerGroupStateMachine {
     Init,
-    LostProducer {
-        lost_producer_id: ProducerId,
-        execution_id: Vec<u8>,
-    },
-    WaitingBarrier {
-        lease_id: i64,
-        barrier_key: Vec<u8>,
-        wait_for: Vec<Vec<u8>>,
-    },
+    LostProducer(LostProducerState),
+    WaitingBarrier(WaitingBarrierState),
     ComputingProducerSelection,
-    ProducerProposition {
-        producer_id: ProducerId,
-        execution_id: Vec<u8>,
-        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
-    },
-    ProducerUpdatedAtGroupLevel {
-        producer_id: ProducerId,
-        execution_id: Vec<u8>,
-        new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
-    },
-    Idle {
-        producer_id: ProducerId,
-        execution_id: Vec<u8>,
-        //initial_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>
-    },
+    ProducerProposition(ProducerPropositionState),
+    ProducerUpdatedAtGroupLevel(ProducerUpdatedAtGroupLevelState),
+    Idle(IdleState),
     Dead,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LostProducerState {
+    pub lost_producer_id: ProducerId,
+    pub execution_id: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct WaitingBarrierState {
+    pub lease_id: i64,
+    pub barrier_key: Vec<u8>,
+    pub wait_for: Vec<Vec<u8>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProducerPropositionState {
+    pub producer_id: ProducerId,
+    pub execution_id: Vec<u8>,
+    pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProducerUpdatedAtGroupLevelState {
+    pub producer_id: ProducerId,
+    pub execution_id: Vec<u8>,
+    pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct IdleState {
+    pub producer_id: ProducerId,
+    pub execution_id: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ConsumerGroupState {
     pub consumer_group_id: ConsumerGroupId,
     pub commitment_level: CommitmentLevel,
     pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
     pub shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
     pub state_machine: ConsumerGroupStateMachine,
+}
+
+impl ConsumerGroupState {
+    pub fn decided_producer_id(&self) -> Option<ProducerId> {
+        match &self.state_machine {
+            ConsumerGroupStateMachine::Idle(IdleState {
+                producer_id,
+                execution_id,
+            }) => Some(producer_id.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn decided_execution_id(&self) -> Option<Vec<u8>> {
+        match &self.state_machine {
+            ConsumerGroupStateMachine::Idle(IdleState {
+                producer_id,
+                execution_id,
+            }) => Some(execution_id.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn is_idle(&self) -> bool {
+        match &self.state_machine {
+            ConsumerGroupStateMachine::Idle { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 pub struct ConsumerGroupLeaderNode {
@@ -311,6 +354,19 @@ impl ConsumerGroupLeaderNode {
         Ok(())
     }
 
+    /// Runs the leader loop for the consumer group.
+    ///
+    /// This function is responsible for managing the state machine of the consumer group leader. It
+    /// handles various states such as computing the next producer, waiting for a barrier, updating the
+    /// producer at the group level, and handling a lost producer. The function runs in a loop and
+    /// updates the state machine as necessary, until an interrupt signal is received.
+    ///
+    /// # Arguments
+    /// * `self` - A mutable reference to the `ConsumerGroupLeader` instance.
+    /// * `interrupt_signal` - A oneshot receiver that can be used to interrupt the loop.
+    ///
+    /// # Returns
+    /// A result indicating whether the leader loop completed successfully.
     pub async fn leader_loop(
         &mut self,
         mut interrupt_signal: oneshot::Receiver<()>,
@@ -320,10 +376,10 @@ impl ConsumerGroupLeaderNode {
                 ConsumerGroupStateMachine::Init => {
                     ConsumerGroupStateMachine::ComputingProducerSelection
                 }
-                ConsumerGroupStateMachine::LostProducer {
+                ConsumerGroupStateMachine::LostProducer(LostProducerState {
                     lost_producer_id,
                     execution_id,
-                } => {
+                }) => {
                     let barrier_key = Uuid::new_v4();
                     let lease_id = self.etcd.lease_grant(10, None).await?.id();
                     let lock_prefix = get_instance_lock_prefix_v1(self.consumer_group_id.clone());
@@ -346,18 +402,19 @@ impl ConsumerGroupLeaderNode {
                     .await?;
                     self.barrier = Some(barrier);
 
-                    let next_state = ConsumerGroupStateMachine::WaitingBarrier {
-                        lease_id,
-                        barrier_key: barrier_key.as_bytes().to_vec(),
-                        wait_for,
-                    };
+                    let next_state =
+                        ConsumerGroupStateMachine::WaitingBarrier(WaitingBarrierState {
+                            lease_id,
+                            barrier_key: barrier_key.as_bytes().to_vec(),
+                            wait_for,
+                        });
                     next_state
                 }
-                ConsumerGroupStateMachine::WaitingBarrier {
+                ConsumerGroupStateMachine::WaitingBarrier(WaitingBarrierState {
                     barrier_key,
                     wait_for,
                     lease_id,
-                } => {
+                }) => {
                     let barrier = if let Some(barrier) = self.barrier.take() {
                         barrier
                     } else {
@@ -373,17 +430,17 @@ impl ConsumerGroupLeaderNode {
                 ConsumerGroupStateMachine::ComputingProducerSelection => {
                     let (producer_id, execution_id, new_shard_offsets) =
                         self.compute_next_producer().await?;
-                    ConsumerGroupStateMachine::ProducerProposition {
+                    ConsumerGroupStateMachine::ProducerProposition(ProducerPropositionState {
                         producer_id,
                         execution_id,
                         new_shard_offsets,
-                    }
+                    })
                 }
-                ConsumerGroupStateMachine::ProducerProposition {
+                ConsumerGroupStateMachine::ProducerProposition(ProducerPropositionState {
                     producer_id,
                     execution_id,
                     new_shard_offsets: new_shard_offset,
-                } => {
+                }) => {
                     let remote_state = self.producer_queries.get_execution_id(*producer_id).await?;
                     match remote_state {
                         Some((_remote_revision, remote_execution_id)) => {
@@ -399,21 +456,25 @@ impl ConsumerGroupLeaderNode {
                                     )
                                     .await?;
 
-                                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel {
-                                    producer_id: *producer_id,
-                                    execution_id: execution_id.clone(),
-                                    new_shard_offsets: new_shard_offset.clone(),
-                                }
+                                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel(
+                                    ProducerUpdatedAtGroupLevelState {
+                                        producer_id: *producer_id,
+                                        execution_id: execution_id.clone(),
+                                        new_shard_offsets: new_shard_offset.clone(),
+                                    },
+                                )
                             }
                         }
                         None => ConsumerGroupStateMachine::ComputingProducerSelection,
                     }
                 }
-                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel {
-                    producer_id,
-                    execution_id,
-                    new_shard_offsets: new_shard_offset,
-                } => {
+                ConsumerGroupStateMachine::ProducerUpdatedAtGroupLevel(
+                    ProducerUpdatedAtGroupLevelState {
+                        producer_id,
+                        execution_id,
+                        new_shard_offsets: new_shard_offset,
+                    },
+                ) => {
                     self.consumer_group_store
                         .set_static_group_members_shard_offset(
                             &self.consumer_group_id,
@@ -423,15 +484,15 @@ impl ConsumerGroupLeaderNode {
                             self.last_revision,
                         )
                         .await?;
-                    ConsumerGroupStateMachine::Idle {
+                    ConsumerGroupStateMachine::Idle(IdleState {
                         producer_id: *producer_id,
                         execution_id: execution_id.clone(),
-                    }
+                    })
                 }
-                ConsumerGroupStateMachine::Idle {
+                ConsumerGroupStateMachine::Idle(IdleState {
                     producer_id,
                     execution_id,
-                } => {
+                }) => {
                     let signal = self.producer_dead_signal.get_or_insert(
                         get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
                     );
@@ -443,10 +504,10 @@ impl ConsumerGroupLeaderNode {
                             let lease_id = self.etcd.lease_grant(10, None).await?.id();
                             self.etcd.put(barrier_key.as_bytes(), [], Some(PutOptions::new().with_lease(lease_id))).await?;
 
-                            ConsumerGroupStateMachine::LostProducer {
+                            ConsumerGroupStateMachine::LostProducer (LostProducerState {
                                 lost_producer_id: *producer_id,
                                 execution_id: execution_id.clone()
-                            }
+                            })
                         }
                     }
                 }
@@ -466,6 +527,22 @@ impl ConsumerGroupLeaderNode {
     }
 }
 
+/// Creates a new leader state log for the given consumer group in etcd.
+///
+/// This function creates a new leader state log entry in etcd for the given consumer group. The
+/// state log contains the current state of the consumer group, including the commitment level,
+/// subscribed event types, shard assignments, and the current state of the consumer group state
+/// machine.
+///
+/// The function uses a transaction to ensure that the state log is only created if it does not
+/// already exist. If the state log already exists, the function will return an error.
+///
+/// # Arguments
+/// * `etcd` - A reference to the etcd client to use for interacting with etcd.
+/// * `consumer_group_info` - The consumer group information to use for creating the state log.
+///
+/// # Returns
+/// A result indicating whether the state log was successfully created.
 pub async fn create_leader_state_log(
     etcd: &etcd_client::Client,
     consumer_group_info: &ConsumerGroupInfo,
@@ -475,16 +552,17 @@ pub async fn create_leader_state_log(
         commitment_level: consumer_group_info.commitment_level.clone(),
         subscribed_blockchain_event_types: consumer_group_info.subscribed_event_types.clone(),
         shard_assignments: consumer_group_info.instance_id_shard_assignments.clone(),
-        state_machine: ConsumerGroupStateMachine::Idle {
+        state_machine: ConsumerGroupStateMachine::Idle(IdleState {
             producer_id: consumer_group_info
                 .producer_id
                 .clone()
                 .expect("missing producer id"),
+
             execution_id: consumer_group_info
                 .execution_id
                 .clone()
                 .expect("missing execution id"),
-        },
+        }),
     };
 
     let state_log_key = get_leader_state_log_key_v1(&consumer_group_info.consumer_group_id);
@@ -502,6 +580,16 @@ pub async fn create_leader_state_log(
     Ok(())
 }
 
+/// Observes changes to the consumer group state stored in the leader state log. Returns a watch
+/// receiver that will receive updates whenever the state changes.
+///
+/// This function first retrieves the current consumer group state from etcd, and then starts a watch
+/// on the leader state log key. Whenever the state log is updated or deleted, the watch receiver
+/// will receive the new state or `None` if the state log has been deleted.
+///
+/// The function returns a `watch::Receiver` that can be used to observe the state changes. The
+/// receiver will initially receive the current state, and then receive updates whenever the state
+/// changes.
 pub async fn observe_consumer_group_state(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
@@ -575,8 +663,16 @@ fn leader_name_v1(consumer_group_id: &ConsumerGroupId) -> String {
     format!("cg-leader-{cg}")
 }
 
-
-
+/// Observes changes to the leader of the given consumer group. Returns a watch receiver that will
+/// receive updates whenever the leader changes.
+///
+/// This function first retrieves the current leader information from etcd, and then starts a watch
+/// on the leader key. Whenever the leader key is updated or deleted, the watch receiver will
+/// receive the new leader information or `None` if the leader has been deleted.
+///
+/// The function returns a `watch::Receiver` that can be used to observe the leader changes. The
+/// receiver will initially receive the current leader information, and then receive updates
+/// whenever the leader changes.
 pub async fn observe_leader_changes(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,
@@ -625,6 +721,15 @@ pub async fn observe_leader_changes(
     Ok(rx)
 }
 
+/// Attempts to become the leader of the given consumer group. If successful, returns a oneshot receiver
+/// that will receive the leader key and managed lease. If the attempt times out, the receiver will
+/// receive `None`.
+///
+/// The function first finds the IP address of the specified network interface, then creates a new
+/// leader campaign in etcd using the IP address and a randomly generated ID. The campaign is
+/// started with a 60-second lease, and the function will wait up to the specified `wait_for`
+/// duration for the campaign to succeed. If the campaign succeeds, the function returns the
+/// leader key and managed lease; otherwise, it returns `None`.
 pub fn try_become_leader(
     etcd: &etcd_client::Client,
     consumer_group_id: &ConsumerGroupId,

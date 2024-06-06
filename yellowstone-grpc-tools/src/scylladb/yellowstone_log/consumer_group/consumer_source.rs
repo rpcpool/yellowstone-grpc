@@ -1,12 +1,8 @@
 use {
-    super::lock::InstanceLock,
-    crate::scylladb::{
-        scylladb_utils::LwtResult,
-        types::{
-            BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ProducerId, ShardId,
-            Slot, UNDEFINED_SLOT,
-        },
-        yellowstone_log::shard_iterator::ShardIterator,
+    super::{lock::InstanceLock, shard_iterator::ShardIterator},
+    crate::scylladb::types::{
+        BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ProducerId, ShardId,
+        Slot, UNDEFINED_SLOT,
     },
     core::fmt,
     futures::future::try_join_all,
@@ -28,6 +24,8 @@ use {
 };
 
 const CLIENT_LAG_WARN_THRESHOLD: Duration = Duration::from_millis(250);
+
+const DEFAULT_OFFSET_COMMIT_INTERVAL: Duration = Duration::from_millis(500);
 
 const FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD: Duration = Duration::from_millis(500);
 
@@ -92,23 +90,20 @@ impl fmt::Display for Interrupted {
     }
 }
 
-pub(crate) trait FromBlockchainEvent {
-    type Output;
-
-    fn from(blockchain_event: BlockchainEvent) -> Self::Output;
+pub(crate) trait FromBlockchainEvent: Send + 'static {
+    fn from(blockchain_event: BlockchainEvent) -> Self;
 }
 
-impl<T: FromBlockchainEvent<Output = T>> ConsumerSource<T> {
+impl<T: FromBlockchainEvent> ConsumerSource<T> {
     pub(crate) async fn new(
         session: Arc<Session>,
         consumer_group_id: ConsumerGroupId,
-        consumer_id: ConsumerId,
         producer_id: ProducerId,
         subscribed_event_types: Vec<BlockchainEventType>,
         sender: mpsc::Sender<T>,
-        offset_commit_interval: Duration,
         mut shard_iterators: Vec<ShardIterator>,
         instance_lock: InstanceLock,
+        offset_commit_interval: Option<Duration>,
     ) -> anyhow::Result<Self> {
         let update_consumer_shard_offset_prepared_stmt =
             session.prepare(UPDATE_CONSUMER_SHARD_OFFSET).await?;
@@ -121,11 +116,12 @@ impl<T: FromBlockchainEvent<Output = T>> ConsumerSource<T> {
         Ok(ConsumerSource {
             session,
             consumer_group_id,
-            consumer_id,
+            consumer_id: instance_lock.instance_id.clone(),
             producer_id,
             subscribed_event_types,
             sender,
-            offset_commit_interval,
+            offset_commit_interval: offset_commit_interval
+                .unwrap_or(DEFAULT_OFFSET_COMMIT_INTERVAL),
             shard_iterators: shard_iterators
                 .into_iter()
                 .map(|shard_it| (shard_it.shard_id, shard_it))
@@ -202,7 +198,7 @@ impl<T: FromBlockchainEvent<Output = T>> ConsumerSource<T> {
                     Ok(_) => {
                         warn!("consumer {consumer_id} received an interrupted signal");
                         self.update_consumer_shard_offsets().await?;
-                        anyhow::bail!(Interrupted)
+                        return Ok(());
                     }
                     Err(TryRecvError::Closed) => anyhow::bail!("detected orphan consumer source"),
                     Err(TryRecvError::Empty) => (),
@@ -229,8 +225,7 @@ impl<T: FromBlockchainEvent<Output = T>> ConsumerSource<T> {
                     }
                     let t_send = Instant::now();
                     if self.sender.send(T::from(block_chain_event)).await.is_err() {
-                        warn!("Consumer {consumer_id} closed its streaming half");
-                        return Ok(());
+                        anyhow::bail!("consumer {consumer_id} closed its streaming half");
                     }
                     let send_latency = t_send.elapsed();
                     if send_latency >= CLIENT_LAG_WARN_THRESHOLD {

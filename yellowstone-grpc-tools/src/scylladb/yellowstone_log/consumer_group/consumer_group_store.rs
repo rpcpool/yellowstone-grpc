@@ -108,6 +108,29 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     IF revision < ?
 "###;
 
+const GET_ACC_UPDATE_SHARD_OFFSET: &str = r###"
+    SELECT
+        revision,
+        acc_shard_offset_map
+    FROM consumer_shard_offset_v2
+    WHERE 
+        consumer_group_id = ?
+        AND consumer_id = ?
+        AND execution_id = ?
+"###;
+
+const GET_NEW_TX_SHARD_OFFSET: &str = r###"
+    SELECT
+        revision,
+        tx_shard_offset_map
+    FROM consumer_shard_offset_v2
+    WHERE 
+        consumer_group_id = ?
+        AND consumer_id = ?
+        AND execution_id = ?
+"###;
+
+#[derive(Clone)]
 pub(crate) struct ConsumerGroupStore {
     session: Arc<Session>,
     etcd: etcd_client::Client,
@@ -117,6 +140,8 @@ pub(crate) struct ConsumerGroupStore {
     update_static_consumer_group_ps: PreparedStatement,
     insert_consumer_shard_offset_ps_if_not_exists: PreparedStatement,
     update_consumer_shard_offset_ps: PreparedStatement,
+    get_acc_update_shard_offset_ps: PreparedStatement,
+    get_new_tx_shard_offset_ps: PreparedStatement,
 }
 
 fn assign_shards(ids: &[InstanceId], num_shards: usize) -> BTreeMap<InstanceId, Vec<ShardId>> {
@@ -146,6 +171,14 @@ impl ConsumerGroupStore {
             session.prepare(INSERT_STATIC_GROUP_MEMBER_OFFSETS).await?;
         let update_consumer_shard_offset_ps =
             session.prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2).await?;
+
+        let mut get_acc_update_shard_offset_ps =
+            session.prepare(GET_ACC_UPDATE_SHARD_OFFSET).await?;
+        let mut get_new_tx_shard_offset_ps = session.prepare(GET_NEW_TX_SHARD_OFFSET).await?;
+
+        get_acc_update_shard_offset_ps.set_consistency(Consistency::Serial);
+        get_new_tx_shard_offset_ps.set_consistency(Consistency::Serial);
+
         let this = ConsumerGroupStore {
             session: Arc::clone(&session),
             create_static_consumer_group_ps,
@@ -155,8 +188,32 @@ impl ConsumerGroupStore {
             etcd,
             insert_consumer_shard_offset_ps_if_not_exists,
             update_consumer_shard_offset_ps,
+            get_acc_update_shard_offset_ps,
+            get_new_tx_shard_offset_ps,
         };
         Ok(this)
+    }
+
+    pub async fn get_shard_offset(
+        &self,
+        consumer_group_id: &ConsumerGroupId,
+        instance_id: &InstanceId,
+        execution_id: &ExecutionId,
+        blockchain_event_types: BlockchainEventType,
+    ) -> anyhow::Result<(i64, ShardOffsetMap)> {
+        let ps = match blockchain_event_types {
+            BlockchainEventType::AccountUpdate => &self.get_acc_update_shard_offset_ps,
+            BlockchainEventType::NewTransaction => &self.get_new_tx_shard_offset_ps,
+        };
+        let bind_values = (consumer_group_id, instance_id, execution_id);
+
+        let row = self
+            .session
+            .execute(ps, bind_values)
+            .await?
+            .first_row_typed::<(i64, ShardOffsetMap)>()?;
+
+        Ok(row)
     }
 
     pub async fn update_consumer_group_producer(
@@ -288,6 +345,24 @@ impl ConsumerGroupStore {
         Ok((min_slot, shard_max_revision))
     }
 
+    /// Sets the shard offset for the static members of a consumer group.
+    ///
+    /// This function updates the shard offset for each consumer instance in the
+    /// consumer group. It ensures that the consumer group is more up-to-date than
+    /// the current operation, and that the producer ID and execution ID match the
+    /// consumer group information.
+    ///
+    /// # Arguments
+    /// * `consumer_group_id` - The ID of the consumer group.
+    /// * `producer_id` - The ID of the producer.
+    /// * `execution_id` - The execution ID.
+    /// * `shard_offset_map` - A map of shard IDs to their corresponding shard offset and slot.
+    /// * `current_revision` - The current revision of the consumer group.
+    ///
+    /// # Errors
+    /// Returns an error if the consumer group does not exist, the consumer group is
+    /// more up-to-date than the current operation, or the producer ID or execution
+    /// ID does not match the consumer group information.
     pub async fn set_static_group_members_shard_offset(
         &self,
         consumer_group_id: &ConsumerGroupId,

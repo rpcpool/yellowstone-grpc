@@ -62,6 +62,16 @@ pub async fn get_barrier(
     })
 }
 
+pub async fn release_child(
+    etcd: etcd_client::Client,
+    barrier_key: &[u8],
+    child: impl AsRef<[u8]>,
+) -> anyhow::Result<()> {
+    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.to_vec());
+    dir.delete(child.as_ref(), None).await?;
+    Ok(())
+}
+
 pub async fn new_barrier<S>(
     etcd: etcd_client::Client,
     barrier_key: &[u8],

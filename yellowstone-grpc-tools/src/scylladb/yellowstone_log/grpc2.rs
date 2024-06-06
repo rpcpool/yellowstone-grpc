@@ -175,7 +175,7 @@ impl YellowstoneLog for ScyllaYsLog {
 
         let lock = self
             .instance_locker
-            .try_lock_instance_id(cg_id.clone(), instance_id.clone())
+            .try_lock_instance_id(cg_id.clone(), &instance_id)
             .await
             .map_err(map_lock_err_to_tonic_status)?;
         join_request.group_id;
@@ -205,8 +205,7 @@ type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status
 type GrpcEvent = Result<SubscribeUpdate, tonic::Status>;
 
 impl FromBlockchainEvent for GrpcEvent {
-    type Output = Self;
-    fn from(blockchain_event: crate::scylladb::types::BlockchainEvent) -> Self::Output {
+    fn from(blockchain_event: crate::scylladb::types::BlockchainEvent) -> Self {
         let geyser_event = match blockchain_event.event_type {
             BlockchainEventType::AccountUpdate => {
                 UpdateOneof::Account(blockchain_event.try_into().map_err(|e| {
