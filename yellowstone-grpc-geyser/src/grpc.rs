@@ -34,7 +34,6 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        codec::CompressionEncoding,
         service::{interceptor::InterceptedService, Interceptor},
         transport::{
             server::{Server, TcpIncoming},
@@ -712,7 +711,8 @@ impl SlotMessages {
 
 #[derive(Debug)]
 pub struct GrpcService {
-    config: ConfigGrpc,
+    config_snapshot_client_channel_capacity: usize,
+    config_channel_capacity: usize,
     config_filters: Arc<ConfigGrpcFilters>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
@@ -777,21 +777,24 @@ impl GrpcService {
 
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
-        let x_token = XTokenChecker::new(config.x_token.clone());
-        let config_filters = Arc::new(config.filters.clone());
-        let service = GeyserServer::new(Self {
-            config,
-            config_filters,
+        let mut service = GeyserServer::new(Self {
+            config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
+            config_channel_capacity: config.channel_capacity,
+            config_filters: Arc::new(config.filters),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
             debug_clients_tx,
         })
-        .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip)
         .max_decoding_message_size(max_decoding_message_size);
-        let service = InterceptedService::new(service, x_token);
+        for encoding in config.compression.accept {
+            service = service.accept_compressed(encoding);
+        }
+        for encoding in config.compression.send {
+            service = service.send_compressed(encoding);
+        }
+        let service = InterceptedService::new(service, XTokenChecker::new(config.x_token));
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
@@ -1284,9 +1287,9 @@ impl Geyser for GrpcService {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
         let snapshot_rx = self.snapshot_rx.lock().await.take();
         let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
-            self.config.snapshot_client_channel_capacity
+            self.config_snapshot_client_channel_capacity
         } else {
-            self.config.channel_capacity
+            self.config_channel_capacity
         });
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let notify_exit1 = Arc::new(Notify::new());

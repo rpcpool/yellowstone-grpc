@@ -9,6 +9,14 @@
             "cert_path": "",
             "key_path": ""
         },
+        "compression": {
+            "accept": [
+                "gzip"
+            ],
+            "send": [
+                "gzip"
+            ]
+        },
         "max_decoding_message_size": "4_194_304",
         "snapshot_plugin_channel_capacity": null,
         "snapshot_client_channel_capacity": "50_000_000",
@@ -20,9 +28,13 @@
                 "max": 1,
                 "any": false,
                 "account_max": 10,
-                "account_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "account_reject": [
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                ],
                 "owner_max": 10,
-                "owner_reject": ["11111111111111111111111111111111"]
+                "owner_reject": [
+                    "11111111111111111111111111111111"
+                ]
             },
             "slots": {
                 "max": 1
@@ -31,7 +43,9 @@
                 "max": 1,
                 "any": false,
                 "account_include_max": 10,
-                "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "account_include_reject": [
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                ],
                 "account_exclude_max": 10,
                 "account_required_max": 10
             },
@@ -39,7 +53,9 @@
                 "max": 1,
                 "any": false,
                 "account_include_max": 10,
-                "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "account_include_reject": [
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                ],
                 "account_exclude_max": 10,
                 "account_required_max": 10
             },
@@ -47,10 +63,12 @@
                 "max": 1,
                 "account_include_max": 10,
                 "account_include_any": false,
-                "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+                "account_include_reject": [
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                ],
                 "include_transactions": true,
-                "include_accounts" : false,
-                "include_entries" : false
+                "include_accounts": false,
+                "include_entries": false
             },
             "blocks_meta": {
                 "max": 1
