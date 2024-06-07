@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser: add compression option to config ([#356](https://github.com/rpcpool/yellowstone-grpc/pull/356))
+- geyser: add `x-endpoint` to `subscriptions_total` ([#358](https://github.com/rpcpool/yellowstone-grpc/pull/358))
 
 ### Breaking
 

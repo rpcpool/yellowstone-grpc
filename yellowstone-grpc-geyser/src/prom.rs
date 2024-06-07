@@ -54,7 +54,7 @@ lazy_static::lazy_static! {
 
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
-        &["subscription"]
+        &["endpoint", "subscription"]
     ).unwrap();
 }
 
@@ -305,16 +305,16 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
     INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
 }
 
-pub fn update_subscriptions(old: Option<&Filter>, new: Option<&Filter>) {
+pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
             SUBSCRIPTIONS_TOTAL
-                .with_label_values(&["grpc_total"])
+                .with_label_values(&[endpoint, "grpc_total"])
                 .add(multiplier);
 
             for (name, value) in filter.get_metrics() {
                 SUBSCRIPTIONS_TOTAL
-                    .with_label_values(&[name])
+                    .with_label_values(&[endpoint, name])
                     .add((value as i64) * multiplier);
             }
         }
