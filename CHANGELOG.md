@@ -14,10 +14,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add compression option to config ([#356](https://github.com/rpcpool/yellowstone-grpc/pull/356))
-- geyser: add `x-endpoint` to `subscriptions_total` ([#358](https://github.com/rpcpool/yellowstone-grpc/pull/358))
-
 ### Breaking
+
+## 2024-06-07
+
+- yellowstone-grpc-geyser-1.15.0+solana.1.18.15
+
+### Features
+
+- geyser: add compression option to config ([#356](https://github.com/rpcpool/yellowstone-grpc/pull/356))
+- geyser: add `x-endpoint` to metric `subscriptions_total` ([#358](https://github.com/rpcpool/yellowstone-grpc/pull/358))
+- geyser: check `x-token` for health service too ([#359](https://github.com/rpcpool/yellowstone-grpc/pull/359))
 
 ## 2024-06-05
 

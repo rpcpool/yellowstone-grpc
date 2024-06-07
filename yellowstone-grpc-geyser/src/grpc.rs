@@ -34,7 +34,7 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        service::{interceptor::InterceptedService, Interceptor},
+        service::interceptor::interceptor,
         transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
@@ -794,7 +794,6 @@ impl GrpcService {
         for encoding in config.compression.send {
             service = service.send_compressed(encoding);
         }
-        let service = InterceptedService::new(service, XTokenChecker::new(config.x_token));
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
@@ -823,6 +822,16 @@ impl GrpcService {
 
             server_builder
                 .http2_keepalive_interval(Some(Duration::from_secs(5)))
+                .layer(interceptor(move |request: Request<()>| {
+                    if let Some(x_token) = &config.x_token {
+                        match request.metadata().get("x-token") {
+                            Some(token) if x_token == token => Ok(request),
+                            _ => Err(Status::unauthenticated("No valid auth token")),
+                        }
+                    } else {
+                        Ok(request)
+                    }
+                }))
                 .add_service(health_service)
                 .add_service(service)
                 .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
@@ -1481,29 +1490,5 @@ impl Geyser for GrpcService {
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))
-    }
-}
-
-#[derive(Clone)]
-struct XTokenChecker {
-    x_token: Option<String>,
-}
-
-impl XTokenChecker {
-    const fn new(x_token: Option<String>) -> Self {
-        Self { x_token }
-    }
-}
-
-impl Interceptor for XTokenChecker {
-    fn call(&mut self, req: Request<()>) -> Result<Request<()>, Status> {
-        if let Some(x_token) = &self.x_token {
-            match req.metadata().get("x-token") {
-                Some(token) if x_token == token => Ok(req),
-                _ => Err(Status::unauthenticated("No valid auth token")),
-            }
-        } else {
-            Ok(req)
-        }
     }
 }
