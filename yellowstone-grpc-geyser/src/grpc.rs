@@ -1100,6 +1100,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
+        endpoint: String,
         config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
@@ -1124,7 +1125,7 @@ impl GrpcService {
             &config_filters,
         )
         .expect("empty filter");
-        prom::update_subscriptions(None, Some(&filter));
+        prom::update_subscriptions(&endpoint, None, Some(&filter));
 
         CONNECTIONS_TOTAL.inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
@@ -1150,7 +1151,7 @@ impl GrpcService {
                             continue;
                         }
 
-                        prom::update_subscriptions(Some(&filter), Some(&filter_new));
+                        prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                         filter = filter_new;
                         info!("client #{id}: filter updated");
                     }
@@ -1207,7 +1208,7 @@ impl GrpcService {
                                     continue;
                                 }
 
-                                prom::update_subscriptions(Some(&filter), Some(&filter_new));
+                                prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
@@ -1270,7 +1271,7 @@ impl GrpcService {
 
         CONNECTIONS_TOTAL.dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
-        prom::update_subscriptions(Some(&filter), None);
+        prom::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
         drop_client();
     }
@@ -1326,6 +1327,12 @@ impl Geyser for GrpcService {
             }
         });
 
+        let endpoint = request
+            .metadata()
+            .get("x-endpoint")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .unwrap_or_else(|| "".to_owned());
+
         let config_filters = Arc::clone(&self.config_filters);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
@@ -1370,6 +1377,7 @@ impl Geyser for GrpcService {
 
         tokio::spawn(Self::client_loop(
             id,
+            endpoint,
             Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
