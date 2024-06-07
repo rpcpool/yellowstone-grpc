@@ -2,20 +2,19 @@ use {
     super::{
         common::SeekLocation,
         consumer_group::{
-            consumer_group_store::ConsumerGroupStore, consumer_source::FromBlockchainEvent,
-            leader::create_leader_state_log, lock::InstanceLocker,
+            consumer_source::FromBlockchainEvent, coordinator::ConsumerGroupCoordinator,
         },
     },
     crate::scylladb::{
         etcd_utils::lock::TryLockError,
         types::{BlockchainEventType, CommitmentLevel},
     },
-    futures::Stream,
-    scylla::Session,
-    std::{pin::Pin, str::FromStr, sync::Arc},
+    futures::{Stream, TryFutureExt},
+    std::{pin::Pin, str::FromStr},
     tokio::sync::mpsc,
+    tokio_stream::wrappers::ReceiverStream,
     tonic::Response,
-    tracing::{error},
+    tracing::error,
     uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
@@ -44,25 +43,12 @@ fn get_blockchain_event_types(
 }
 
 pub struct ScyllaYsLog {
-    session: Arc<Session>,
-    etcd: etcd_client::Client,
-    consumer_group_repo: ConsumerGroupStore,
-    instance_locker: InstanceLocker,
+    coordinator: ConsumerGroupCoordinator,
 }
 
 impl ScyllaYsLog {
-    pub async fn new(
-        session: Arc<Session>,
-        etcd_client: etcd_client::Client,
-    ) -> anyhow::Result<Self> {
-        let consumer_group_repo =
-            ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
-        Ok(ScyllaYsLog {
-            session,
-            etcd: etcd_client.clone(),
-            consumer_group_repo,
-            instance_locker: InstanceLocker(etcd_client.clone()),
-        })
+    pub async fn new(coordinator: ConsumerGroupCoordinator) -> anyhow::Result<Self> {
+        Ok(ScyllaYsLog { coordinator })
     }
 }
 
@@ -84,7 +70,7 @@ impl YellowstoneLog for ScyllaYsLog {
         let instance_ids = request.instance_id_list.clone();
 
         let event_subscription_policy = request.event_subscription_policy();
-        let initial_offset = match request.initial_offset_policy() {
+        let seek_loc = match request.initial_offset_policy() {
             yellowstone_grpc_proto::yellowstone::log::InitialOffsetPolicy::Earliest => {
                 SeekLocation::Earliest
             }
@@ -102,39 +88,32 @@ impl YellowstoneLog for ScyllaYsLog {
             }
         };
 
-        let consumer_group_info = self
-            .consumer_group_repo
-            .create_static_consumer_group(
-                &instance_ids,
-                match request.commitment_level() {
-                    yellowstone_grpc_proto::geyser::CommitmentLevel::Processed => {
-                        CommitmentLevel::Processed
-                    }
-                    yellowstone_grpc_proto::geyser::CommitmentLevel::Confirmed => {
-                        CommitmentLevel::Confirmed
-                    }
-                    yellowstone_grpc_proto::geyser::CommitmentLevel::Finalized => {
-                        CommitmentLevel::Finalized
-                    }
-                },
-                &get_blockchain_event_types(event_subscription_policy),
-                initial_offset,
+        let commitment_level = match request.commitment_level() {
+            yellowstone_grpc_proto::geyser::CommitmentLevel::Processed => {
+                CommitmentLevel::Processed
+            }
+            yellowstone_grpc_proto::geyser::CommitmentLevel::Confirmed => {
+                CommitmentLevel::Confirmed
+            }
+            yellowstone_grpc_proto::geyser::CommitmentLevel::Finalized => {
+                CommitmentLevel::Finalized
+            }
+        };
+
+        let consumer_group_id = self
+            .coordinator
+            .create_consumer_group(
+                seek_loc,
+                get_blockchain_event_types(event_subscription_policy),
+                instance_ids,
+                commitment_level,
                 remote_ip_addr,
             )
             .await
-            .map_err(|e| {
-                error!("create_static_consumer_group: {e:?}");
-                tonic::Status::internal("failed to create consumer group")
-            })?;
+            .map_err(map_lock_err_to_tonic_status)?;
 
-        create_leader_state_log(&self.etcd, &consumer_group_info)
-            .await
-            .map_err(|e| {
-                error!("create_static_consumer_group: {e:?}");
-                tonic::Status::internal("failed to create consumer group")
-            })?;
         Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: String::from_utf8(consumer_group_info.consumer_group_id).map_err(|_e| {
+            group_id: String::from_utf8(consumer_group_id).map_err(|_e| {
                 error!("consumer group id is not utf8!");
                 tonic::Status::internal("failed to create consumer group")
             })?,
@@ -162,24 +141,23 @@ impl YellowstoneLog for ScyllaYsLog {
             .ok_or(tonic::Status::invalid_argument(
                 "missing instance id from join request",
             ))?;
-        let maybe = self
-            .consumer_group_repo
-            .get_consumer_group_info(&cg_id)
-            .await
-            .map_err(|e| {
-                error!("get_consumer_group_info raised an error: {e:?}");
-                tonic::Status::internal("failed to validate consumer group id")
-            })?;
+        let (tx, rx) = mpsc::channel(10);
 
-        maybe.ok_or(tonic::Status::invalid_argument("Invalid consumer group id"))?;
+        self.coordinator
+            .try_join_consumer_group::<GrpcEvent>(
+                cg_id,
+                instance_id,
+                // TODO: add filtering
+                None,
+                None,
+                tx,
+            )
+            .map_err(map_lock_err_to_tonic_status)
+            .await?;
 
-        let _lock = self
-            .instance_locker
-            .try_lock_instance_id(cg_id.clone(), &instance_id)
-            .await
-            .map_err(map_lock_err_to_tonic_status)?;
-        join_request.group_id;
-        todo!()
+        let ret = ReceiverStream::new(rx);
+        let res = Response::new(Box::pin(ret) as Self::JoinConsumerGroupStream);
+        Ok(res)
     }
 }
 
@@ -200,8 +178,6 @@ fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
     }
 }
 
-type GrpcConsumerSender = mpsc::Sender<Result<SubscribeUpdate, tonic::Status>>;
-type GrpcConsumerReceiver = mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>;
 type GrpcEvent = Result<SubscribeUpdate, tonic::Status>;
 
 impl FromBlockchainEvent for GrpcEvent {

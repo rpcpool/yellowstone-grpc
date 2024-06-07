@@ -23,7 +23,7 @@ use {
     std::{
         collections::{BTreeMap, BTreeSet},
         ops::RangeInclusive,
-        sync::{Arc},
+        sync::Arc,
         time::Duration,
     },
     tracing::info,

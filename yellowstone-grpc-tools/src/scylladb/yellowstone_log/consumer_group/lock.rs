@@ -1,7 +1,5 @@
 use {
-    super::etcd_path::{
-        get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1,
-    },
+    super::etcd_path::{get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1},
     crate::scylladb::{
         etcd_utils::{self, lock::ManagedLock},
         types::InstanceId,

@@ -2,6 +2,7 @@ use {
     anyhow::Ok,
     clap::{Parser, Subcommand},
     futures::{future::BoxFuture, stream::StreamExt, TryFutureExt},
+    rdkafka::mocking::MockCoordinator,
     scylla::{frame::Compression, Session, SessionBuilder},
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tonic::transport::Server,
@@ -9,9 +10,7 @@ use {
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::subscribe_update::UpdateOneof,
-        yellowstone::log::{
-            yellowstone_log_server::YellowstoneLogServer,
-        },
+        yellowstone::log::yellowstone_log_server::YellowstoneLogServer,
     },
     yellowstone_grpc_tools::{
         config::{load as config_load, GrpcRequestToProto},
@@ -22,8 +21,15 @@ use {
                 Config, ConfigGrpc2ScyllaDB, ConfigYellowstoneLogServer, ScyllaDbConnectionInfo,
             },
             sink::ScyllaSink,
-            types::{Transaction},
-            yellowstone_log::{grpc2::ScyllaYsLog},
+            types::Transaction,
+            yellowstone_log::{
+                consumer_group::{
+                    consumer_group_store::ConsumerGroupStore,
+                    coordinator::ConsumerGroupCoordinatorBackend,
+                    producer_queries::{self, ProducerQueries},
+                },
+                grpc2::ScyllaYsLog,
+            },
         },
         setup_tracing,
     },
@@ -104,7 +110,18 @@ impl ArgsAction {
         let etcd_endpoints = config.etcd_endpoints;
         let etcd_client = etcd_client::Client::connect(etcd_endpoints, None).await?;
         let session = Arc::new(session);
-        let scylla_ys_log = ScyllaYsLog::new(session, etcd_client).await?;
+        let consumer_group_store =
+            ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
+        let producer_queries =
+            ProducerQueries::new(Arc::clone(&session), etcd_client.clone()).await?;
+        let coordinator = ConsumerGroupCoordinatorBackend::spawn(
+            etcd_client.clone(),
+            Arc::clone(&session),
+            consumer_group_store,
+            producer_queries,
+            String::from("rpcpool"),
+        );
+        let scylla_ys_log = ScyllaYsLog::new(coordinator).await?;
         let ys_log_server = YellowstoneLogServer::new(scylla_ys_log);
 
         println!("YellowstoneLogServer listening on {}", addr);

@@ -1,9 +1,3 @@
-
-
-
-
-
-
 // struct ConsumerGroupServer {
 //     tx_stop_consumption: mpsc::Sender<()>,
 // }

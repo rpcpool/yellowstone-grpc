@@ -13,7 +13,7 @@ use {
     },
     futures::{future::try_join_all, Future},
     scylla::Session,
-    std::{sync::Arc},
+    std::sync::Arc,
     tokio::{
         sync::{mpsc, oneshot, watch},
         task::{JoinError, JoinHandle},
@@ -35,8 +35,8 @@ pub struct ConsumerSourceSupervisor<T: FromBlockchainEvent> {
 }
 
 pub struct ConsumerSourceSupervisorHandle {
-    consumer_group_id: ConsumerGroupId,
-    instance_id: InstanceId,
+    pub consumer_group_id: ConsumerGroupId,
+    pub instance_id: InstanceId,
     tx_terminate: oneshot::Sender<()>,
     handle: JoinHandle<anyhow::Result<()>>,
 }

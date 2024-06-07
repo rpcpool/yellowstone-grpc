@@ -1,14 +1,11 @@
 use {
     crate::scylladb::etcd_utils::lease::ManagedLease,
     core::fmt,
-    etcd_client::{
-        Compare, CompareOp, GetOptions, LockOptions, Txn, TxnOp,
-        TxnResponse,
-    },
+    etcd_client::{Compare, CompareOp, GetOptions, LockOptions, Txn, TxnOp, TxnResponse},
     std::time::Duration,
     thiserror::Error,
-    tokio::{time::Instant},
-    tracing::{trace},
+    tokio::time::Instant,
+    tracing::trace,
 };
 
 const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);

@@ -1,7 +1,5 @@
 use {
-    etcd_client::{
-        Client, LeaderKey, ResignOptions, WatchOptions,
-    },
+    etcd_client::{Client, LeaderKey, ResignOptions, WatchOptions},
     std::time::Duration,
     tokio::sync::mpsc,
     uuid::Uuid,

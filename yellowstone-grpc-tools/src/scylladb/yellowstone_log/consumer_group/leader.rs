@@ -12,8 +12,8 @@ use {
             Revision,
         },
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId,
-            InstanceId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, InstanceId,
+            ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{
             common::SeekLocation,
@@ -619,10 +619,7 @@ pub async fn observe_consumer_group_state(
             .expect("leader state log watch error")
         {
             let events = message.events();
-            if events
-                .iter()
-                .any(|ev| ev.event_type() == EventType::Delete)
-            {
+            if events.iter().any(|ev| ev.event_type() == EventType::Delete) {
                 panic!("remote state log has been deleted")
             }
             events
@@ -727,21 +724,18 @@ pub async fn observe_leader_changes(
     Ok(rx)
 }
 
-/// Attempts to become the leader of the given consumer group. Returns a oneshot receiver
-/// that will receive the leader key and managed lease. If the attempt times out, the receiver will
-/// receive `None`.
-pub fn try_become_leader(
+pub async fn try_become_leader(
     etcd: etcd_client::Client,
-    consumer_group_id: &ConsumerGroupId,
+    consumer_group_id: ConsumerGroupId,
     wait_for: Duration,
-    leader_ifname: &String,
-) -> anyhow::Result<oneshot::Receiver<Option<(LeaderKey, ManagedLease)>>> {
+    leader_ifname: String,
+) -> anyhow::Result<Option<(LeaderKey, ManagedLease)>> {
     let network_interfaces = list_afinet_netifas()?;
 
     let ipaddr = network_interfaces
         .iter()
         .find_map(|(name, ipaddr)| {
-            if name == leader_ifname {
+            if name == &leader_ifname {
                 Some(ipaddr)
             } else {
                 None
@@ -762,22 +756,17 @@ pub fn try_become_leader(
         id: id.as_bytes().to_vec(),
     };
     const LEASE_TTL: Duration = Duration::from_secs(60);
-    let (tx, rx) = oneshot::channel();
     let etcd2 = etcd.clone();
-    let _: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
-        let lease = ManagedLease::new(etcd2, LEADER_LEASE_TTL, None).await?;
-        tokio::select! {
-            _ = tokio::time::sleep(wait_for) => {
-                let _ = tx.send(None);
-            },
-            Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serialize(&leader_info)?, lease.lease_id) => {
-                let payload = campaign_resp
-                    .take_leader()
-                    .map(|lk| (lk, lease));
-                let _= tx.send(payload);
-            },
-        }
-        Ok(())
-    });
-    Ok(rx)
+    let lease = ManagedLease::new(etcd2, LEADER_LEASE_TTL, None).await?;
+    tokio::select! {
+        _ = tokio::time::sleep(wait_for) => {
+            return Ok(None)
+        },
+        Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serialize(&leader_info)?, lease.lease_id) => {
+            let payload = campaign_resp
+                .take_leader()
+                .map(|lk| (lk, lease));
+            return Ok(payload)
+        },
+    }
 }

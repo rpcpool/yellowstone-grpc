@@ -14,10 +14,8 @@ use {
     },
     crate::scylladb::{
         etcd_utils,
-        yellowstone_log::{
-            consumer_group::etcd_path::{
-                get_producer_fencing_token_key_path_v1, get_producer_lock_path_v1,
-            },
+        yellowstone_log::consumer_group::etcd_path::{
+            get_producer_fencing_token_key_path_v1, get_producer_lock_path_v1,
         },
     },
     deepsize::DeepSizeOf,
@@ -38,9 +36,7 @@ use {
         time::Duration,
     },
     tokio::{
-        sync::{
-            mpsc::{error::SendError, Permit},
-        },
+        sync::mpsc::{error::SendError, Permit},
         task::{JoinError, JoinHandle},
         time::Instant,
     },

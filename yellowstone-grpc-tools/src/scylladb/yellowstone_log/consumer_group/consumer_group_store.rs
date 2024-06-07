@@ -1,29 +1,16 @@
 use {
-    super::{producer_queries::ProducerQueries},
+    super::producer_queries::ProducerQueries,
     crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
-            ConsumerGroupType, ExecutionId, InstanceId,
-            ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
+            ConsumerGroupType, ExecutionId, InstanceId, ProducerId, ShardId, ShardOffset,
+            ShardOffsetMap, Slot,
         },
-        yellowstone_log::{
-            common::SeekLocation,
-            consumer_group::{
-                error::StaleRevision,
-            },
-        },
+        yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
     },
-    scylla::{
-        prepared_statement::PreparedStatement,
-        statement::Consistency,
-        Session,
-    },
-    std::{
-        collections::{BTreeMap},
-        net::IpAddr,
-        sync::Arc,
-    },
+    scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
+    std::{collections::BTreeMap, net::IpAddr, sync::Arc},
     tracing::info,
     uuid::Uuid,
 };
@@ -120,7 +107,7 @@ const GET_NEW_TX_SHARD_OFFSET: &str = r###"
 "###;
 
 #[derive(Clone)]
-pub(crate) struct ConsumerGroupStore {
+pub struct ConsumerGroupStore {
     session: Arc<Session>,
     etcd: etcd_client::Client,
     producer_queries: ProducerQueries,
@@ -276,7 +263,8 @@ impl ConsumerGroupStore {
                 consumer_group_id = ?
                 AND consumer_id IN ?
                 AND execution_id = ?
-            "###.to_string();
+            "###
+        .to_string();
 
         let subscribed_events = consumer_group_info.subscribed_event_types;
         let rows = self
