@@ -112,11 +112,9 @@ impl YellowstoneLog for ScyllaYsLog {
             .await
             .map_err(map_lock_err_to_tonic_status)?;
 
+        
         Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: String::from_utf8(consumer_group_id).map_err(|_e| {
-                error!("consumer group id is not utf8!");
-                tonic::Status::internal("failed to create consumer group")
-            })?,
+            group_id: Uuid::from_bytes(consumer_group_id).to_string(),
         }))
     }
 
@@ -134,8 +132,7 @@ impl YellowstoneLog for ScyllaYsLog {
         let join_request = request.into_inner();
         let cg_id = Uuid::from_str(join_request.group_id.as_str())
             .map_err(|_| tonic::Status::invalid_argument("invalid consumer group id value"))?
-            .as_bytes()
-            .to_vec();
+            .into_bytes();
         let instance_id = join_request
             .instance_id
             .ok_or(tonic::Status::invalid_argument(
@@ -174,6 +171,9 @@ fn map_lock_err_to_tonic_status(e: anyhow::Error) -> tonic::Status {
             ),
         }
     } else {
+        error!(
+            error=%e
+        );
         tonic::Status::internal("server failure")
     }
 }

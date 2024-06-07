@@ -2,9 +2,8 @@ use {
     anyhow::Ok,
     clap::{Parser, Subcommand},
     futures::{future::BoxFuture, stream::StreamExt, TryFutureExt},
-    rdkafka::mocking::MockCoordinator,
     scylla::{frame::Compression, Session, SessionBuilder},
-    std::{net::SocketAddr, sync::Arc, time::Duration},
+    std::{convert::identity, net::SocketAddr, sync::Arc, time::Duration},
     tonic::transport::Server,
     tracing::{error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
@@ -114,7 +113,7 @@ impl ArgsAction {
             ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
         let producer_queries =
             ProducerQueries::new(Arc::clone(&session), etcd_client.clone()).await?;
-        let coordinator = ConsumerGroupCoordinatorBackend::spawn(
+        let (coordinator, coordinator_backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
             etcd_client.clone(),
             Arc::clone(&session),
             consumer_group_store,
@@ -135,6 +134,7 @@ impl ArgsAction {
         tokio::select! {
             _ = &mut shutdown => Ok(()),
             result = server_fut => result,
+            result = coordinator_backend_handle => result.map_err(anyhow::Error::new).and_then(identity),
         }
     }
 

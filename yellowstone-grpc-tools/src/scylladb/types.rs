@@ -1049,8 +1049,8 @@ pub struct ProducerExecutionInfo {
 #[derive(FromRow, Debug, Clone)]
 pub struct ProducerInfo {
     pub producer_id: ProducerId,
-    pub num_shards: ShardId,
     pub commitment_level: CommitmentLevel,
+    pub num_shards: ShardId,
 }
 
 impl TryFrom<AccountUpdate> for SubscribeUpdateAccount {
@@ -1107,7 +1107,7 @@ impl TryFrom<BlockchainEvent> for SubscribeUpdateTransaction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
-pub(crate) enum ConsumerGroupType {
+pub enum ConsumerGroupType {
     Static = 0,
 }
 
@@ -1156,7 +1156,7 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
     }
 }
 
-pub type ConsumerGroupId = Vec<u8>;
+pub type ConsumerGroupId = [u8; 16];
 pub type InstanceId = String;
 pub type ExecutionId = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -1167,8 +1167,8 @@ pub struct ConsumerGroupInfo {
     pub execution_id: Option<ExecutionId>,
     pub revision: i64,
     pub commitment_level: CommitmentLevel,
-    pub instance_id_shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
     pub subscribed_event_types: Vec<BlockchainEventType>,
+    pub instance_id_shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
     pub last_access_ip_address: Option<IpAddr>,
 }
 

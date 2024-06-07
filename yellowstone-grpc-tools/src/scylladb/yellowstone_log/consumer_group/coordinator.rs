@@ -17,7 +17,7 @@ use {
         yellowstone_log::common::SeekLocation,
     },
     etcd_client::LeaderKey,
-    futures::{future::select_all, Future, FutureExt},
+    futures::{future::{self, select_all, BoxFuture}, Future, FutureExt},
     scylla::Session,
     std::{
         collections::{BTreeMap, HashMap},
@@ -52,6 +52,7 @@ pub struct ConsumerGroupCoordinatorBackend {
         HashMap<ConsumerGroupId, watch::Receiver<(Revision, ConsumerGroupState)>>,
 }
 
+
 pub struct JoinGroupArgs {
     consumer_group_id: ConsumerGroupId,
     instance_id: InstanceId,
@@ -77,6 +78,7 @@ struct LeaderHandle {
 }
 
 impl LeaderHandle {
+
     fn kill(self) -> () {
         self.inner.abort();
     }
@@ -174,7 +176,7 @@ pub enum CoordinatorCommand {
     JoinGroup(JoinGroupArgs, CommandCallback<anyhow::Result<JoinPermit>>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConsumerGroupCoordinator {
     sender: mpsc::Sender<CoordinatorCommand>,
 }
@@ -198,8 +200,9 @@ impl ConsumerGroupCoordinator {
 
         let (tx, rx) = oneshot::channel();
 
-        self.sender
-            .send(CoordinatorCommand::CreateConsumerGroup(args, tx));
+        if let Err(e) = self.sender.send(CoordinatorCommand::CreateConsumerGroup(args, tx)).await {
+            panic!("ConsumerGroupCoordinatorBackend channel is closed")
+        }
         rx.await?
     }
 
@@ -235,7 +238,7 @@ impl ConsumerGroupCoordinatorBackend {
         consumer_group_store: ConsumerGroupStore,
         producer_queries: ProducerQueries,
         leader_ifname: String,
-    ) -> ConsumerGroupCoordinator {
+    ) -> (ConsumerGroupCoordinator, JoinHandle<anyhow::Result<()>>) {
         let (tx, rx) = mpsc::channel(10);
         let mut backend = ConsumerGroupCoordinatorBackend {
             rx,
@@ -252,19 +255,18 @@ impl ConsumerGroupCoordinatorBackend {
             leader_state_watch_map: Default::default(),
         };
 
-        tokio::spawn(async move { backend.run().await });
+        let h = tokio::spawn(async move { backend.run().await });
 
-        ConsumerGroupCoordinator { sender: tx }
+        (ConsumerGroupCoordinator { sender: tx }, h)
     }
 
-    fn try_become_leader_bg(&mut self, consumer_group_id: &ConsumerGroupId) {
+    fn try_become_leader_bg(&mut self, consumer_group_id: ConsumerGroupId) {
         let etcd = self.etcd.clone();
         let leader_ifname = self.leader_ifname.clone();
-        let consumer_group_id2 = consumer_group_id.clone();
         let fut = async move {
             try_become_leader(
                 etcd,
-                consumer_group_id2,
+                consumer_group_id,
                 Duration::from_secs(5),
                 leader_ifname,
             )
@@ -272,13 +274,13 @@ impl ConsumerGroupCoordinatorBackend {
         };
 
         self.background_leader_attempt
-            .entry(consumer_group_id.clone())
-            .or_insert_with(|| ElectionHandle::wrap(consumer_group_id.clone(), tokio::spawn(fut)));
+            .entry(consumer_group_id)
+            .or_insert_with(|| ElectionHandle::wrap(consumer_group_id, tokio::spawn(fut)));
     }
 
     async fn get_leader_state_watch(
         &mut self,
-        consumer_group_id: &ConsumerGroupId,
+        consumer_group_id: ConsumerGroupId,
     ) -> anyhow::Result<watch::Receiver<(i64, ConsumerGroupState)>> {
         match self.leader_state_watch_map.entry(consumer_group_id.clone()) {
             std::collections::hash_map::Entry::Occupied(o) => Ok(o.get().clone()),
@@ -291,7 +293,7 @@ impl ConsumerGroupCoordinatorBackend {
 
     async fn get_leader_election_watch(
         &mut self,
-        consumer_group_id: &ConsumerGroupId,
+        consumer_group_id: ConsumerGroupId,
     ) -> anyhow::Result<watch::Receiver<Option<LeaderInfo>>> {
         match self
             .leader_election_watch_map
@@ -316,11 +318,11 @@ impl ConsumerGroupCoordinatorBackend {
         oneshot::Receiver<ConsumerSourceSupervisorHandle>,
         JoinPermit,
     )> {
-        let consumer_group_id = &join_args.consumer_group_id;
+        let consumer_group_id = join_args.consumer_group_id;
         let instance_id = &join_args.instance_id;
         let instance_lock = self
             .instance_locker
-            .try_lock_instance_id(consumer_group_id.as_slice(), instance_id)
+            .try_lock_instance_id(consumer_group_id, instance_id)
             .await?;
 
         let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
@@ -383,6 +385,7 @@ impl ConsumerGroupCoordinatorBackend {
     async fn interpret_command(&mut self, cmd: CoordinatorCommand) -> anyhow::Result<()> {
         match cmd {
             CoordinatorCommand::JoinGroup(args, callback) => {
+                info!("processing JoinGroup command");
                 let result = self.try_spawn_consumer_member(args).await;
 
                 match result {
@@ -395,12 +398,13 @@ impl ConsumerGroupCoordinatorBackend {
                         }
                     }
                     Err(e) => {
-                        callback.send(Err(e));
+                        let _ = callback.send(Err(e));
                     }
                 }
                 Ok(())
             }
             CoordinatorCommand::CreateConsumerGroup(args, callback) => {
+                info!("processing CreateConsumerGroup command");
                 let result = self.create_consumer_group(args).await;
                 let _ = callback.send(result);
                 Ok(())
@@ -444,25 +448,40 @@ impl ConsumerGroupCoordinatorBackend {
         };
     }
 
+
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            let leader_attempt_pins = self
-                .background_leader_attempt
-                .values_mut()
-                .map(|h| Pin::new(h));
+            let wait_for_election_result = if !self.background_leader_attempt.is_empty() {
+                let iter = self
+                    .background_leader_attempt
+                    .values_mut()
+                    .map(|h| Pin::new(h));
+                select_all(iter).boxed()
+            } else {
+                future::pending().boxed()
+            };
 
-            let consumer_handle_pins = self.consumer_handles.iter_mut().map(|h| Pin::new(h));
+            let wait_for_consumer_to_quit = if !self.consumer_handles.is_empty() {
+                let iter = self.consumer_handles.iter_mut().map(|h| Pin::new(h));
+                select_all(iter).boxed()
+            } else {
+                future::pending().boxed()
+            };
 
-            let leader_pins = self.leader_handles.values_mut().map(|v| Pin::new(v));
+            let wait_for_leader_to_quit = if !self.leader_handles.is_empty() {
+                select_all(self.leader_handles.values_mut().map(|v| Pin::new(v))).boxed()
+            } else {
+                future::pending().boxed()
+            };
 
             tokio::select! {
                 Some(cmd) = self.rx.recv() => {
+                    info!("receive a command");
                     self.interpret_command(cmd).await?;
                 },
-                ((cg_id, result), _, _) = select_all(leader_attempt_pins) => {
-
+                ((cg_id, result), _, _) = wait_for_election_result => {
                     self.background_leader_attempt.remove(&cg_id);
-                    let cg_id_text = String::from_utf8(cg_id.clone())?;
+                    let cg_id_text = String::from_utf8(cg_id.to_vec())?;
                     match result {
                         Ok(Some((leader_key, leader_lease))) => {
                             info!("won leader election for cg-{cg_id_text}");
@@ -472,15 +491,15 @@ impl ConsumerGroupCoordinatorBackend {
                         Err(e) => warn!("a leader attempt failed with: {e:?}"),
                     }
                 }
-                (result, i, _remaining_futs) = select_all(consumer_handle_pins) => {
+                (result, i, _remaining_futs) = wait_for_consumer_to_quit => {
                     let resolved_handle = self.consumer_handles.remove(i);
                     if let Err(supervisor_error) = result? {
                         error!("supervisor failed with : {supervisor_error:?}");
                     }
-                    info!("group={}, instance={} finished", String::from_utf8(resolved_handle.consumer_group_id)?, resolved_handle.instance_id);
+                    info!("group={}, instance={} finished", String::from_utf8(resolved_handle.consumer_group_id.to_vec())?, resolved_handle.instance_id);
                 },
-                ((cg_id, result), _, _) = select_all(leader_pins) => {
-                    let cg_id_text = String::from_utf8(cg_id)?;
+                ((cg_id, result), _, _) = wait_for_leader_to_quit => {
+                    let cg_id_text = String::from_utf8(cg_id.to_vec())?;
                     match result {
                         Ok(_) => info!("leader {cg_id_text} closed gracefully"),
                         Err(e) => error!("leader {cg_id_text}a "),

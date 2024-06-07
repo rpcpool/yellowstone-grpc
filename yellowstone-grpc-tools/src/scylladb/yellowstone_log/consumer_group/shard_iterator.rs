@@ -133,7 +133,7 @@ impl ShardIteratorState {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct ShardFilter {
     pub(crate) tx_account_keys: Vec<Vec<u8>>,
     pub(crate) account_owners: Vec<Vec<u8>>,

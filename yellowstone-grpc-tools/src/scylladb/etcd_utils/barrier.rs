@@ -12,7 +12,7 @@ pub struct Barrier {
 
 impl Barrier {
     pub async fn wait(self) {
-        self.etcd_response.await;
+        let _ = self.etcd_response.await;
     }
 }
 

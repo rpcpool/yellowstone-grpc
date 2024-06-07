@@ -93,7 +93,7 @@ create table if not exists consumer_info (
     consumer_id blob,
     consumer_group_id blob,
     producer_id blob,
-    consumer_ip: text,
+    consumer_ip inet,
     subscribed_event_types frozen<set<smallint>>,
     last_connection timestamp,
     created_at timestamp,
@@ -114,7 +114,7 @@ primary key (producer_id, consumer_id);
     
 create table if not exists producer_info (
     producer_id blob,
-    commitment smallint,
+    commitment_level smallint,
     num_shards smallint,
     created_at timestamp,
     updated_at timestamp,
@@ -126,7 +126,7 @@ create table if not exists producer_lock (
     execution_id blob,
     revision bigint,
     ifname text,
-    ipv4 text,
+    ipv4 inet,
     is_ready boolean,
     minimum_shard_offset frozen<map<smallint, tuple<bigint, bigint>>>,
     created_at timestamp,
@@ -253,7 +253,7 @@ create table if not exists log (
 )
 WITH CLUSTERING ORDER BY (offset desc)
     AND default_time_to_live = 86400
-    and compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size' : 10}; 
+    and compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size' : 30}; 
 
 create table if not exists producer_slot_seen (
     producer_id blob,
@@ -295,6 +295,8 @@ create table if not exists producer_period_commit_log (
        AND default_time_to_live = 82800; -- 23 hours
 
 -- clear all table
+
+insert into producer_info
 
 truncate log;
 truncate producer_period_commit_log;

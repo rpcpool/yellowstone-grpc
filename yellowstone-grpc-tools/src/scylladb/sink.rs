@@ -647,7 +647,7 @@ async fn load_producer_lock_state(
             .iter()
             .find(|(name, ipaddr)| *name == ifname && matches!(ipaddr, IpAddr::V4(_)))
         {
-            (ifname, ipaddr.to_string())
+            (ifname, *ipaddr)
         } else {
             anyhow::bail!("Found not interface named {}", ifname);
         }
@@ -660,7 +660,7 @@ async fn load_producer_lock_state(
             .iter()
             .find(|(_, ipaddr2)| ipaddr == *ipaddr2)
         {
-            (ifname.to_owned(), ipaddr.to_string())
+            (ifname.to_owned(), ipaddr)
         } else {
             anyhow::bail!("Found not interface matching ip {}", ipaddr);
         }

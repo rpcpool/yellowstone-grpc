@@ -57,6 +57,7 @@ impl ManagedLock {
             .op_responses()
             .pop()
             .ok_or(anyhow::anyhow!("failed to get fencing token"))?;
+
         trace!("get fencing token from etcd latency: {t:?}");
         match op_resp {
             etcd_client::TxnOpResponse::Put(put_resp) => put_resp

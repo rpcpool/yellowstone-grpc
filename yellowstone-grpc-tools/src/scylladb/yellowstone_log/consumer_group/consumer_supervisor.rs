@@ -134,6 +134,7 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
             Arc::clone(&self.session),
             self.consumer_groupd_id.clone(),
             state.producer_id,
+            state.execution_id,
             state.header.subscribed_blockchain_event_types.clone(),
             self.reusable_sink.clone(),
             shard_iterators,
@@ -155,7 +156,7 @@ impl<T: FromBlockchainEvent + Send + 'static> ConsumerSourceSupervisor<T> {
                 .wait_for(|(revision, _)| *revision > current_revision)
                 .await?
                 .to_owned();
-            tx.send((revision, new_state));
+            let _ = tx.send((revision, new_state));
             Ok(())
         });
         rx

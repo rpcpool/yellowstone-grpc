@@ -26,7 +26,7 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tracing::info,
+    tracing::{info, trace},
 };
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
@@ -88,7 +88,7 @@ const LIST_PRODUCER_LAST_HEARBEAT: &str = r###"
 const GET_PRODUCER_INFO_BY_ID: &str = r###"
     SELECT 
         producer_id,
-        commitment,
+        commitment_level,
         num_shards
     FROM producer_info
     WHERE producer_id = ?
@@ -126,8 +126,9 @@ impl ProducerQueries {
     pub async fn new(session: Arc<Session>, etcd: etcd_client::Client) -> anyhow::Result<Self> {
         let mut get_producer_by_id_ps = session.prepare(GET_PRODUCER_INFO_BY_ID).await?;
         get_producer_by_id_ps.set_consistency(Consistency::Serial);
-        let mut list_producer_locks_ps = session.prepare(LIST_PRODUCER_LOCKS).await?;
-        list_producer_locks_ps.set_consistency(Consistency::Serial);
+        
+        let list_producer_locks_ps = session.prepare(LIST_PRODUCER_LOCKS).await?;
+
         let mut get_shard_offset_in_slot_range_ps =
             session.prepare(GET_SHARD_OFFSET_AT_SLOT_APPROX).await?;
         get_shard_offset_in_slot_range_ps.set_consistency(Consistency::Serial);
@@ -153,13 +154,14 @@ impl ProducerQueries {
     ) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
         let mut producer_exec_infos: BTreeMap<[u8; 1], ProducerExecutionInfo> =
             self.list_producer_locks().await?;
+
+        trace!("list_living_producers -- registered producers: {}", producer_exec_infos.len());
         let producer_lock_prefix = get_producer_lock_prefix_v1();
         let get_resp = self
             .etcd
             .kv_client()
             .get(producer_lock_prefix, Some(GetOptions::new().with_prefix()))
             .await?;
-
         let etcd_producer_lock = get_resp
             .kvs()
             .iter()
@@ -167,16 +169,18 @@ impl ProducerQueries {
                 get_producer_id_from_lock_key_v1(kv.key()).map(|pid| (pid, kv.mod_revision()))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-
+            
+        trace!("list_living_producers -- etcd producer lock detected: {}", etcd_producer_lock.len());
         // join
-        producer_exec_infos.retain(|pid, lock_info| {
-            let maybe = etcd_producer_lock.get(pid).cloned();
-            if let Some(current_etcd_revision) = maybe {
-                lock_info.revision == current_etcd_revision
-            } else {
-                false
-            }
-        });
+        producer_exec_infos
+            .retain(|pid, execution_info| {
+                let maybe = etcd_producer_lock.get(pid).cloned();
+                if let Some(lock_revision) = maybe {
+                    lock_revision <= execution_info.revision
+                } else {
+                    false
+                }
+            });
 
         Ok(producer_exec_infos)
     }
@@ -195,6 +199,7 @@ impl ProducerQueries {
     pub async fn list_producer_locks(
         &self,
     ) -> anyhow::Result<BTreeMap<ProducerId, ProducerExecutionInfo>> {
+        trace!("list_producer_locks");
         self.session
             .execute(&self.list_producer_locks_ps, &[])
             .await?
@@ -337,7 +342,7 @@ impl ProducerQueries {
             .await?
             .rows_typed::<(ProducerId, i64)>()?
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-
+        
         elligible_producers
             .into_iter()
             .min_by_key(|(k, _)| producer_count_pairs.get(k).cloned().unwrap_or(0))
@@ -353,7 +358,7 @@ impl ProducerQueries {
             .session
             .execute(&self.get_min_producer_offset_ps, (producer_id,))
             .await?
-            .first_row_typed::<(i64, Option<Vec<(ShardId, ShardOffset, Slot)>>)>()?;
+            .first_row_typed::<(i64, Option<BTreeMap<ShardId, (ShardOffset, Slot)>>)>()?;
 
         if let Some(max_revision) = max_revision_opt {
             anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
@@ -363,7 +368,6 @@ impl ProducerQueries {
             .ok_or(anyhow::anyhow!(
                 "Producer lock exists, but its minimum shard offset is not set."
             ))
-            .map(|vec| vec.into_iter().map(|(a, b, c)| (a, (b, c))).collect())
     }
 
     pub async fn get_execution_id(
@@ -425,6 +429,7 @@ impl ProducerQueries {
             .ok_or(anyhow::anyhow!("producer does not exists"))?;
         let mut shard_offset_pairs: BTreeMap<ShardId, (ShardOffset, Slot)> = match seek_loc {
             SeekLocation::Latest => {
+                info!("computing offset to latest seek location");
                 sink::get_max_shard_offsets_for_producer(
                     Arc::clone(&self.session),
                     producer_id,
@@ -433,6 +438,7 @@ impl ProducerQueries {
                 .await?
             }
             SeekLocation::Earliest => {
+                info!("computing offset to earliest seek location");
                 self.get_min_offset_for_producer(producer_id, max_revision_opt)
                     .await?
             }
@@ -440,15 +446,18 @@ impl ProducerQueries {
                 desired_slot,
                 min_slot,
             } => {
+                info!("computing offset to approx slot seek location (0)");
                 let minium_producer_offsets = self
                     .get_min_offset_for_producer(producer_id, max_revision_opt)
                     .await?;
 
+                info!("computing offset to approx slot seek location (1)");
                 let shard_offsets_contain_slot = self
                     .get_slot_shard_offsets(desired_slot, min_slot, producer_id, max_revision_opt)
                     .await?
                     .ok_or(ImpossibleSlotOffset(desired_slot))?;
 
+                info!("computing offset to approx slot seek location (2)");
                 let are_shard_offset_reachable =
                     shard_offsets_contain_slot
                         .iter()
@@ -458,14 +467,15 @@ impl ProducerQueries {
                                 .filter(|(offset2, _)| offset1 > offset2)
                                 .is_some()
                         });
-
+                
+                info!("computing offset to approx slot seek location (3)");
                 if !are_shard_offset_reachable {
                     anyhow::bail!(ImpossibleSlotOffset(desired_slot))
                 }
                 shard_offsets_contain_slot
             }
         };
-
+        info!("compute offset has been done");
         let adjustment: i64 = match seek_loc {
             SeekLocation::Earliest
             | SeekLocation::SlotApprox {

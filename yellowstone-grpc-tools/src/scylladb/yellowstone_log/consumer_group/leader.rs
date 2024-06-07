@@ -591,7 +591,7 @@ pub async fn create_leader_state_log(
 /// changes.
 pub async fn observe_consumer_group_state(
     etcd: &etcd_client::Client,
-    consumer_group_id: &ConsumerGroupId,
+    consumer_group_id: ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<(Revision, ConsumerGroupState)>> {
     let key = leader_log_name_from_cg_id_v1(consumer_group_id);
     let mut wc = etcd.watch_client();
@@ -678,7 +678,7 @@ fn leader_name_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
 /// whenever the leader changes.
 pub async fn observe_leader_changes(
     etcd: &etcd_client::Client,
-    consumer_group_id: &ConsumerGroupId,
+    consumer_group_id: ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<Option<LeaderInfo>>> {
     let mut kv_client = etcd.kv_client();
     let mut wc = etcd.watch_client();

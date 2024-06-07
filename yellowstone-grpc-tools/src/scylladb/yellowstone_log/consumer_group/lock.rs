@@ -2,7 +2,7 @@ use {
     super::etcd_path::{get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1},
     crate::scylladb::{
         etcd_utils::{self, lock::ManagedLock},
-        types::InstanceId,
+        types::{ConsumerGroupId, InstanceId},
     },
 };
 
@@ -10,7 +10,7 @@ pub struct InstanceLock {
     lock: ManagedLock,
     pub instance_id: InstanceId,
     fencing_token_key: Vec<u8>,
-    pub consumer_group_id: Vec<u8>,
+    pub consumer_group_id: ConsumerGroupId,
     etcd_client: etcd_client::Client,
 }
 
@@ -27,15 +27,14 @@ pub struct InstanceLocker(pub etcd_client::Client);
 impl InstanceLocker {
     pub async fn try_lock_instance_id(
         &self,
-        consumer_group_id: impl Into<Vec<u8>>,
+        consumer_group_id: ConsumerGroupId,
         instance_id: &InstanceId,
     ) -> anyhow::Result<InstanceLock> {
-        let consumer_group_id = consumer_group_id.into();
         let client = self.0.clone();
         let lock_name =
-            get_instance_lock_name_path_v1(consumer_group_id.clone(), instance_id.clone());
+            get_instance_lock_name_path_v1(consumer_group_id, instance_id.clone());
         let fencing_token_key =
-            get_instance_fencing_token_key_path_v1(consumer_group_id.clone(), instance_id.clone());
+            get_instance_fencing_token_key_path_v1(consumer_group_id, instance_id.clone());
 
         let lock = etcd_utils::lock::try_lock(client, lock_name.as_str()).await?;
         Ok(InstanceLock {

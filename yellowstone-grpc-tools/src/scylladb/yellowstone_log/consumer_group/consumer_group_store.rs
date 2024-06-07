@@ -29,7 +29,7 @@ const INSERT_STATIC_GROUP_MEMBER_OFFSETS: &str = r###"
         created_at, 
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
+    VALUES (?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
     IF NOT EXISTS
 "###;
 
@@ -250,8 +250,6 @@ impl ConsumerGroupStore {
             .cloned()
             .collect::<Vec<_>>();
 
-        // TODO: handle the possible CQL injection here.
-        // the rust driver support little-to know support for IN c
         let query = r###"
             SELECT
                 consumer_id,
@@ -351,7 +349,7 @@ impl ConsumerGroupStore {
             .ok_or(anyhow::anyhow!("consumer group does not exists"))?;
 
         anyhow::ensure!(
-            cg_info.revision < current_revision,
+            cg_info.revision <= current_revision,
             "consumer group is more up to date then current operation"
         );
         anyhow::ensure!(
@@ -363,14 +361,26 @@ impl ConsumerGroupStore {
             "execution id mismatch"
         );
 
-        for consumer_id in cg_info.instance_id_shard_assignments.keys() {
+        for (consumer_id, shard_ids) in cg_info.instance_id_shard_assignments.iter() {
+            let my_shard_offset_map = shard_ids 
+                .iter()
+                .cloned()
+                .map(|shard_id| {
+                    (
+                        shard_id,
+                        shard_offset_map.get(&shard_id).expect("missing shard offset").clone()
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+
+
             let values = (
                 consumer_group_id.clone(),
                 consumer_id,
                 producer_id,
                 &cg_info.execution_id,
-                &shard_offset_map,
-                &shard_offset_map,
+                &my_shard_offset_map,
+                &my_shard_offset_map,
                 current_revision,
             );
             let lwt_result = self
@@ -380,8 +390,8 @@ impl ConsumerGroupStore {
                 .single_row_typed::<LwtResult>()?;
             if lwt_result == LwtResult(false) {
                 let values2 = (
-                    &shard_offset_map,
-                    &shard_offset_map,
+                    &my_shard_offset_map,
+                    &my_shard_offset_map,
                     current_revision,
                     consumer_group_id.clone(),
                     consumer_id,
@@ -428,7 +438,7 @@ impl ConsumerGroupStore {
             &producer_id,
             &execution_id,
             &shard_offset_map,
-            0,
+            consumer_group_info.revision,
         )
         .await
     }
@@ -458,7 +468,7 @@ impl ConsumerGroupStore {
             .producer_queries
             .get_producer_id_with_least_assigned_consumer(maybe_slot_range, commitment_level)
             .await?;
-
+        info!("create_static_consumer_group, computed producer_id={producer_id:?}, execution_id={execution_id:?}");
         self.session
             .execute(
                 &self.create_static_consumer_group_ps,
@@ -475,10 +485,10 @@ impl ConsumerGroupStore {
                 ),
             )
             .await?;
-
+        
         info!("created consumer group row -- {consumer_group_id:?}");
         let static_consumer_group_info = ConsumerGroupInfo {
-            consumer_group_id: consumer_group_id.as_bytes().to_vec(),
+            consumer_group_id: consumer_group_id.into_bytes(),
             instance_id_shard_assignments: shard_assignments,
             producer_id: Some(producer_id),
             commitment_level,
