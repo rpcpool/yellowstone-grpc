@@ -23,6 +23,7 @@
         "channel_capacity": "100_000",
         "unary_concurrency_limit": 100,
         "unary_disabled": false,
+        "x_token": null,
         "filters": {
             "accounts": {
                 "max": 1,
