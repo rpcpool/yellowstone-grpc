@@ -26,9 +26,6 @@ use {
     },
 };
 
-const ZERO_CONSUMER_GROUP_ID: Uuid =
-    Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-
 fn get_blockchain_event_types(
     event_sub_policy: EventSubscriptionPolicy,
 ) -> Vec<BlockchainEventType> {

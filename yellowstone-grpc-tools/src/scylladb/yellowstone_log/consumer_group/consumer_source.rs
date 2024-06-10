@@ -60,7 +60,7 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     IF revision < ?
 "###;
 
-pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
+pub struct ConsumerSource<T: FromBlockchainEvent> {
     ctx: ConsumerContext,
     sender: mpsc::Sender<T>,
     // The interval at which we want to commit our Offset progression to Scylla
@@ -73,7 +73,7 @@ pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
 pub type InterruptSignal = oneshot::Receiver<()>;
 
 #[derive(Clone, Debug, PartialEq, Error, Eq, Copy)]
-pub(crate) struct Interrupted;
+pub struct Interrupted;
 
 impl fmt::Display for Interrupted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -84,6 +84,7 @@ impl fmt::Display for Interrupted {
 pub trait FromBlockchainEvent: Send + 'static {
     fn from(blockchain_event: BlockchainEvent) -> Self;
 }
+
 
 impl<T: FromBlockchainEvent> ConsumerSource<T> {
     pub(crate) async fn new(
@@ -281,3 +282,6 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         }
     }
 }
+
+
+

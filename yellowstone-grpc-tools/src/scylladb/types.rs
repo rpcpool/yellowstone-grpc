@@ -101,8 +101,9 @@ impl FromCqlVal<CqlValue> for BlockchainEventType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Copy, Default)]
 pub enum CommitmentLevel {
+    #[default]
     Processed = 0,
     Confirmed = 1,
     Finalized = 2,
