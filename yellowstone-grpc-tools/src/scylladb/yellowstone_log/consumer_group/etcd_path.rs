@@ -1,14 +1,14 @@
 use {
     crate::scylladb::types::{ConsumerGroupId, ConsumerId, ProducerId, ShardId},
-    tracing::trace,
+    tracing::trace, uuid::Uuid,
 };
 
 pub fn get_instance_lock_name_path_v1(
     consumer_group_id: ConsumerGroupId,
     consumer_id: ConsumerId,
 ) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.to_vec())
-        .expect("consumer group id is not proper utf8 uuid");
+    let uuid = Uuid::from_bytes(consumer_group_id);
+    let uuid_str = uuid.to_string();
     format!("v1/lock/cg-{uuid_str}/i-{consumer_id}")
 }
 
@@ -22,8 +22,8 @@ pub fn get_instance_fencing_token_key_path_v1(
     consumer_group_id: ConsumerGroupId,
     consumer_id: ConsumerId,
 ) -> String {
-    let uuid_str = String::from_utf8(consumer_group_id.to_vec())
-        .expect("consumer group id is not proper utf8 uuid");
+    let uuid = Uuid::from_bytes(consumer_group_id);
+    let uuid_str = uuid.to_string();
     format!("v1/fencing-token/cg-{uuid_str}/i-{consumer_id}")
 }
 

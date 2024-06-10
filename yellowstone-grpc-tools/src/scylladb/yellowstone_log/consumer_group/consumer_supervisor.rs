@@ -1,7 +1,7 @@
 use {
     super::{
         consumer_group_store::ConsumerGroupStore,
-        consumer_source::{ConsumerSource, FromBlockchainEvent, InterruptSignal},
+        consumer_source::{ConsumerSource, ConsumerSourceHandle, FromBlockchainEvent},
         context::ConsumerContext,
         leader::{ConsumerGroupState, IdleState, WaitingBarrierState},
         lock::ConsumerLock,
@@ -10,7 +10,7 @@ use {
     crate::scylladb::{
         etcd_utils::{barrier::release_child, Revision},
         types::{ConsumerGroupId, ConsumerId},
-        yellowstone_log::consumer_group::error::DeadConsumerGroup,
+        yellowstone_log::consumer_group::{consumer_source::ConsumerSourceCommand, error::DeadConsumerGroup},
     },
     futures::{
         future::{try_join_all, BoxFuture},
@@ -41,7 +41,7 @@ pub struct ConsumerSourceSupervisor {
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
 }
 
-struct InnerSupervisor<F: ConsumerSourceFactory> {
+struct InnerSupervisor<F: ConsumerSourceSpawner> {
     consumer_group_id: ConsumerGroupId,
     consumer_id: ConsumerId,
     consumer_lock: ConsumerLock,
@@ -52,28 +52,27 @@ struct InnerSupervisor<F: ConsumerSourceFactory> {
     factory: F,
 }
 
+
+
 impl<F> InnerSupervisor<F>
 where
-    F: ConsumerSourceFactory,
+    F: ConsumerSourceSpawner,
 {
     fn wait_for_state_change(
-        &self,
+        &mut self,
         current_revision: Revision,
-    ) -> oneshot::Receiver<(Revision, ConsumerGroupState)> {
-        let (tx, rx) = oneshot::channel();
+    ) -> JoinHandle<anyhow::Result<(Revision, ConsumerGroupState)>> {
         let mut state_watch = self.leader_state_watch.clone();
-        let _h: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+        tokio::spawn(async move {
             let (revision, new_state) = state_watch
                 .wait_for(|(revision, _)| *revision > current_revision)
                 .await?
                 .to_owned();
-            let _ = tx.send((revision, new_state));
-            Ok(())
-        });
-        rx
+            Ok((revision, new_state))
+        })
     }
 
-    async fn handle_wait_barrier(&self, state: &WaitingBarrierState) -> anyhow::Result<()> {
+    async fn handle_wait_barrier(&mut self, state: &WaitingBarrierState) -> anyhow::Result<()> {
         let is_in_wait_for = state
             .wait_for
             .iter()
@@ -85,7 +84,7 @@ where
         }
     }
 
-    async fn wait_for_idle_state(&self) -> anyhow::Result<(Revision, IdleState)> {
+    async fn wait_for_idle_state(&mut self) -> anyhow::Result<(Revision, IdleState)> {
         let mut state_watch = self.leader_state_watch.clone();
 
         state_watch.mark_changed();
@@ -121,7 +120,7 @@ where
         }
     }
 
-    async fn run(&mut self, mut stop_signal: InterruptSignal) -> anyhow::Result<()> {
+    async fn run(&mut self, mut stop_signal: oneshot::Receiver<()>) -> anyhow::Result<()> {
         loop {
             self.leader_state_watch.mark_changed();
 
@@ -129,28 +128,24 @@ where
 
             let ctx = self.build_consumer_context(idle_state);
             let mut new_state_signal = self.wait_for_state_change(revision);
-            let (tx_interrupt, rx_interrupt) = oneshot::channel();
-
-            let mut consumer_source = self.factory.build(ctx).await?;
-
-            let mut consumer_fut =
-                tokio::spawn(async move { consumer_source.run(rx_interrupt).await });
+            
+            let mut handle = self.factory.spawn(ctx).await?;
 
             tokio::select! {
-                Ok(Err(e)) = &mut consumer_fut => {
+                Ok(Err(e)) = &mut handle => {
                     error!("ConsumerSourceSupervisor failed to run consumer source: {}", e);
                     return Err(e);
                 },
                 _ = &mut stop_signal => {
                     info!("ConsumerSourceSupervisor received terminate signal");
-                    let _ = tx_interrupt.send(());
-                    consumer_fut.await??;
+                    handle.send(ConsumerSourceCommand::Stop).await?;
+                    handle.await??;
                     return Ok(())
                 },
-                Ok((revision, new_state)) = &mut new_state_signal => {
+                Ok(Ok((revision, new_state))) = &mut new_state_signal => {
                     info!("ConsumerSourceSupervisor received new state with revision {revision}");
-                    let _ = tx_interrupt.send(());
-                    consumer_fut.await??;
+                    handle.send(ConsumerSourceCommand::Stop).await?;
+                    handle.await??;
                     match new_state {
                         ConsumerGroupState::WaitingBarrier(wait_barrier_state) => {
                             self.handle_wait_barrier(&wait_barrier_state).await?;
@@ -185,39 +180,24 @@ impl Future for ConsumerSourceSupervisorHandle {
 }
 
 #[async_trait]
-trait ConsumerSourceFactory: Send + Sync + 'static {
-    type ConsumerOutput: FromBlockchainEvent + Send + 'static;
-
-    async fn build(
-        &self,
-        ctx: ConsumerContext,
-    ) -> anyhow::Result<ConsumerSource<Self::ConsumerOutput>>;
+pub trait ConsumerSourceSpawner {
+    async fn spawn(&self, ctx: ConsumerContext) -> anyhow::Result<ConsumerSourceHandle>;
 }
 
-struct ConsumerSourceFactoryFn<F, O>
-where
-    O: FromBlockchainEvent + Send + 'static,
-    F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSource<O>>>
-        + Send
-        + 'static,
-{
+struct ConsumerSourceSpawnerFn<F> {
     inner: F,
 }
 
-impl<F, O> ConsumerSourceFactory for ConsumerSourceFactoryFn<F, O>
+impl<F> ConsumerSourceSpawner for ConsumerSourceSpawnerFn<F>
 where
-    O: FromBlockchainEvent + Send + 'static,
-    F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSource<O>>>
+    F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSourceHandle>>
         + Send
-        + Sync
         + 'static,
 {
-    type ConsumerOutput = O;
-
-    fn build<'a, 'b>(
+    fn spawn<'a, 'b>(
         &'a self,
         ctx: ConsumerContext,
-    ) -> BoxFuture<'b, anyhow::Result<ConsumerSource<Self::ConsumerOutput>>>
+    ) -> BoxFuture<'b, anyhow::Result<ConsumerSourceHandle>>
     where
         'a: 'b,
         Self: 'b,
@@ -227,7 +207,7 @@ where
 }
 
 impl ConsumerSourceSupervisor {
-    pub async fn spawn<F: ConsumerSourceFactory + Send + 'static>(
+    pub async fn spawn<F: ConsumerSourceSpawner + Send + 'static>(
         mut self,
         factory: F,
     ) -> anyhow::Result<ConsumerSourceSupervisorHandle> {
@@ -245,22 +225,20 @@ impl ConsumerSourceSupervisor {
         })
     }
 
-    pub async fn spawn_with<O, F>(
-        mut self,
+    pub async fn spawn_with<F>(
+        self,
         callable: F,
     ) -> anyhow::Result<ConsumerSourceSupervisorHandle>
     where
-        O: FromBlockchainEvent + Send + 'static,
-        F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSource<O>>>
+        F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSourceHandle>>
             + Send
-            + Sync
             + 'static,
     {
-        let factory = ConsumerSourceFactoryFn { inner: callable };
+        let factory = ConsumerSourceSpawnerFn { inner: callable };
         ConsumerSourceSupervisor::spawn(self, factory).await
     }
 
-    fn into_inner<F: ConsumerSourceFactory>(self, factory: F) -> InnerSupervisor<F> {
+    fn into_inner<F: ConsumerSourceSpawner>(self, factory: F) -> InnerSupervisor<F> {
         InnerSupervisor {
             consumer_group_id: self.consumer_group_id,
             consumer_id: self.consumer_id,

@@ -150,8 +150,16 @@ impl JoinPermit {
                         shard_offset_map_by_ev_types.insert(ev_type, shard_offset_map);
                     }
 
-                    ConsumerSource::new(ctx, shard_offset_map_by_ev_types, sink2, None, filter2)
-                        .await
+                    let cs = ConsumerSource::new(
+                        ctx,
+                        shard_offset_map_by_ev_types,
+                        sink2,
+                        None,
+                        filter2,
+                    )
+                    .await?;
+
+                    Ok(cs.spawn())
                 }
                 .boxed()
             })
@@ -206,7 +214,7 @@ impl ConsumerGroupCoordinator {
 
         let (tx, rx) = oneshot::channel();
 
-        if let Err(e) = self
+        if let Err(_) = self
             .sender
             .send(CoordinatorCommand::CreateConsumerGroup(args, tx))
             .await

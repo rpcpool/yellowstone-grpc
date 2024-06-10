@@ -25,7 +25,7 @@ use {
                 consumer_group::{
                     consumer_group_store::ConsumerGroupStore,
                     coordinator::ConsumerGroupCoordinatorBackend,
-                    producer_queries::{self, ProducerQueries},
+                    producer_queries::ProducerQueries,
                 },
                 grpc2::ScyllaYsLog,
             },

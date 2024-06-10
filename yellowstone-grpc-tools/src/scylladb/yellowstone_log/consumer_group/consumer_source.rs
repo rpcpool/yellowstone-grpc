@@ -12,7 +12,7 @@ use {
         },
     },
     core::fmt,
-    futures::future::try_join_all,
+    futures::{future::try_join_all, Future, FutureExt},
     scylla::{
         batch::{Batch, BatchType},
         prepared_statement::PreparedStatement,
@@ -21,10 +21,8 @@ use {
     std::{collections::BTreeMap, sync::Arc, time::Duration},
     thiserror::Error,
     tokio::{
-        sync::{
-            mpsc,
-            oneshot::{self, error::TryRecvError},
-        },
+        sync::mpsc::{self, error::SendError},
+        task::{JoinError, JoinHandle},
         time::Instant,
     },
     tracing::{info, warn},
@@ -70,8 +68,6 @@ pub struct ConsumerSource<T: FromBlockchainEvent> {
     update_consumer_shard_offset_v2_ps: PreparedStatement,
 }
 
-pub type InterruptSignal = oneshot::Receiver<()>;
-
 #[derive(Clone, Debug, PartialEq, Error, Eq, Copy)]
 pub struct Interrupted;
 
@@ -85,6 +81,36 @@ pub trait FromBlockchainEvent: Send + 'static {
     fn from(blockchain_event: BlockchainEvent) -> Self;
 }
 
+#[derive(Clone)]
+pub enum ConsumerSourceCommand {
+    Stop,
+}
+
+pub struct ConsumerSourceHandle {
+    // This is public to ease integration test
+    pub tx: mpsc::Sender<ConsumerSourceCommand>,
+    pub handle: JoinHandle<anyhow::Result<()>>,
+}
+
+impl ConsumerSourceHandle {
+    pub async fn send(
+        &self,
+        cmd: ConsumerSourceCommand,
+    ) -> Result<(), SendError<ConsumerSourceCommand>> {
+        self.tx.send(cmd).await
+    }
+}
+
+impl Future for ConsumerSourceHandle {
+    type Output = Result<anyhow::Result<()>, JoinError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.handle.poll_unpin(cx)
+    }
+}
 
 impl<T: FromBlockchainEvent> ConsumerSource<T> {
     pub(crate) async fn new(
@@ -218,7 +244,18 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         Ok(())
     }
 
-    pub async fn run(&mut self, mut interrupt: InterruptSignal) -> anyhow::Result<()> {
+    pub fn spawn(mut self) -> ConsumerSourceHandle {
+        let (tx, rx) = mpsc::channel(1);
+
+        let handle = tokio::spawn(async move { self.run(rx).await });
+
+        ConsumerSourceHandle { tx, handle }
+    }
+
+    pub async fn run(
+        &mut self,
+        mut rx: mpsc::Receiver<ConsumerSourceCommand>,
+    ) -> anyhow::Result<()> {
         let consumer_id = self.ctx.consumer_id.to_owned();
         let mut commit_offset_deadline = Instant::now() + self.offset_commit_interval;
         const PRINT_CONSUMER_SLOT_REACH_DELAY: Duration = Duration::from_secs(5);
@@ -231,15 +268,17 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         let mut t = Instant::now();
         loop {
             for (shard_id, shard_it) in self.shard_iterators.iter_mut() {
-                match interrupt.try_recv() {
+                match rx.try_recv() {
                     Ok(_) => {
                         warn!("consumer {consumer_id} received an interrupted signal");
                         //self.update_consumer_shard_offsets().await?;
                         self.update_consumer_shard_offsets_v2().await?;
                         return Ok(());
                     }
-                    Err(TryRecvError::Closed) => anyhow::bail!("detected orphan consumer source"),
-                    Err(TryRecvError::Empty) => (),
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        anyhow::bail!("detected orphan consumer source")
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => (),
                 }
 
                 let maybe = shard_it.try_next().await?;
@@ -282,6 +321,3 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         }
     }
 }
-
-
-
