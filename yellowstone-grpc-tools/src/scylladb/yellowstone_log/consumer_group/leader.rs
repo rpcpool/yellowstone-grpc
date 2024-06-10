@@ -12,7 +12,7 @@ use {
             Revision,
         },
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, ConsumerId,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ExecutionId,
             ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{

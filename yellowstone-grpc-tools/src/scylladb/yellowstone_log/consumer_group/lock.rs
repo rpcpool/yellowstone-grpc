@@ -1,8 +1,12 @@
 use {
-    super::etcd_path::{get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1}, crate::scylladb::{
+    super::etcd_path::{get_instance_fencing_token_key_path_v1, get_instance_lock_name_path_v1},
+    crate::scylladb::{
         etcd_utils::{self, lock::ManagedLock},
         types::{ConsumerGroupId, ConsumerId},
-    }, etcd_client::{Compare, CompareOp, Txn, TxnOp}, tokio::time::Instant, tracing::trace
+    },
+    etcd_client::{Compare, CompareOp, Txn, TxnOp},
+    tokio::time::Instant,
+    tracing::trace,
 };
 
 pub struct ConsumerLock {
@@ -13,7 +17,6 @@ pub struct ConsumerLock {
     etcd_client: etcd_client::Client,
 }
 
-
 #[derive(Clone)]
 pub struct FencingTokenGenerator {
     etcd: etcd_client::Client,
@@ -22,9 +25,7 @@ pub struct FencingTokenGenerator {
 }
 
 impl FencingTokenGenerator {
-    pub async fn generate(
-        &self,
-    ) -> anyhow::Result<i64> {
+    pub async fn generate(&self) -> anyhow::Result<i64> {
         let t = Instant::now();
 
         let mut client = self.etcd.clone();
@@ -35,7 +36,11 @@ impl FencingTokenGenerator {
                 CompareOp::Greater,
                 0,
             )])
-            .and_then(vec![TxnOp::put(self.fencing_token_key.as_slice(), [0], None)]);
+            .and_then(vec![TxnOp::put(
+                self.fencing_token_key.as_slice(),
+                [0],
+                None,
+            )]);
 
         let txn_resp = client.txn(txn).await?;
         anyhow::ensure!(txn_resp.succeeded(), "failed to get fencing token");
@@ -68,7 +73,7 @@ impl ConsumerLock {
         FencingTokenGenerator {
             etcd: self.etcd_client.clone(),
             lock_key: self.lock.lock_key.clone(),
-            fencing_token_key: self.fencing_token_key.clone()
+            fencing_token_key: self.fencing_token_key.clone(),
         }
     }
 }
@@ -82,8 +87,7 @@ impl ConsumerLocker {
         consumer_id: &ConsumerId,
     ) -> anyhow::Result<ConsumerLock> {
         let client = self.0.clone();
-        let lock_name =
-            get_instance_lock_name_path_v1(consumer_group_id, consumer_id.clone());
+        let lock_name = get_instance_lock_name_path_v1(consumer_group_id, consumer_id.clone());
         let fencing_token_key =
             get_instance_fencing_token_key_path_v1(consumer_group_id, consumer_id.clone());
 

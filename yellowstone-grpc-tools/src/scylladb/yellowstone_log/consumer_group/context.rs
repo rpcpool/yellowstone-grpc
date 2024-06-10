@@ -1,28 +1,30 @@
-use std::sync::Arc;
-
-use scylla::Session;
-
-use crate::scylladb::types::{BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId, ProducerId, ShardOffsetMap};
-
-use super::{consumer_group_store::ConsumerGroupStore, producer_queries::ProducerQueries, shard_iterator::ShardFilter};
-
-
-
+use {
+    super::{
+        consumer_group_store::ConsumerGroupStore, lock::FencingTokenGenerator,
+        producer_queries::ProducerQueries, shard_iterator::ShardFilter,
+    },
+    crate::scylladb::{
+        etcd_utils::Revision,
+        types::{
+            BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId, ProducerId,
+            ShardOffsetMap,
+        },
+    },
+    scylla::Session,
+    std::sync::Arc,
+};
 
 #[derive(Clone)]
 pub struct ConsumerContext {
     pub consumer_group_id: ConsumerGroupId,
     pub consumer_id: ConsumerId,
-    pub shard_offset_map: ShardOffsetMap,
     pub producer_id: ProducerId,
     pub execution_id: ExecutionId,
     pub subscribed_event_types: Vec<BlockchainEventType>,
-    pub acc_update_filter: Option<ShardFilter>,
-    pub new_tx_filter: Option<ShardFilter>,
-    session: Arc<Session>,
-    etcd: etcd_client::Client,
+    pub session: Arc<Session>,
+    pub etcd: etcd_client::Client,
     pub consumer_group_store: ConsumerGroupStore,
-    pub producer_queries: ProducerQueries,
+    pub fencing_token_generator: FencingTokenGenerator,
 }
 
 impl ConsumerContext {
@@ -32,5 +34,23 @@ impl ConsumerContext {
 
     pub fn etcd(&self) -> etcd_client::Client {
         self.etcd.clone()
+    }
+
+    pub async fn get_shard_offset_map(
+        &self,
+        blockchain_event_type: BlockchainEventType,
+    ) -> anyhow::Result<(Revision, ShardOffsetMap)> {
+        self.consumer_group_store
+            .get_shard_offset_map(
+                &self.consumer_group_id,
+                &self.consumer_id,
+                &self.execution_id,
+                blockchain_event_type,
+            )
+            .await
+    }
+
+    pub async fn generate_fencing_token(&self) -> anyhow::Result<Revision> {
+        self.fencing_token_generator.generate().await
     }
 }

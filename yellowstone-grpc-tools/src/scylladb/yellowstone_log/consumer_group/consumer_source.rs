@@ -1,8 +1,16 @@
 use {
-    super::{lock::{FencingTokenGenerator, ConsumerLock}, shard_iterator::ShardIterator},
-    crate::scylladb::{scylladb_utils::LwtResult, types::{
-        BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffsetMap, Slot, UNDEFINED_SLOT
-    }},
+    super::{
+        context::ConsumerContext,
+        lock::{ConsumerLock, FencingTokenGenerator},
+        shard_iterator::{ShardFilter, ShardIterator},
+    },
+    crate::scylladb::{
+        scylladb_utils::LwtResult,
+        types::{
+            BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId,
+            ProducerId, ShardId, ShardOffsetMap, Slot, UNDEFINED_SLOT,
+        },
+    },
     core::fmt,
     futures::future::try_join_all,
     scylla::{
@@ -53,22 +61,13 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
 "###;
 
 pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
-    session: Arc<Session>,
-    pub(crate) consumer_group_id: ConsumerGroupId,
-    pub(crate) consumer_id: ConsumerId,
-    pub(crate) producer_id: ProducerId,
-    pub(crate) execution_id: ExecutionId,
-    pub(crate) subscribed_event_types: Vec<BlockchainEventType>,
+    ctx: ConsumerContext,
     sender: mpsc::Sender<T>,
     // The interval at which we want to commit our Offset progression to Scylla
     offset_commit_interval: Duration,
     shard_iterators: BTreeMap<ShardId, ShardIterator>,
-    pub(crate) acc_update_shard_it_slot_map: BTreeMap<ShardId, Slot>,
-    pub(crate) new_tx_shard_it_slot_map: BTreeMap<ShardId, Slot>,
-    pub(crate) shard_iterators_slot: BTreeMap<ShardId, Slot>,
     update_consumer_shard_offset_prepared_stmt: PreparedStatement,
     update_consumer_shard_offset_v2_ps: PreparedStatement,
-    fencing_token_generator: FencingTokenGenerator,
 }
 
 pub type InterruptSignal = oneshot::Receiver<()>;
@@ -82,39 +81,51 @@ impl fmt::Display for Interrupted {
     }
 }
 
-pub(crate) trait FromBlockchainEvent: Send + 'static {
+pub trait FromBlockchainEvent: Send + 'static {
     fn from(blockchain_event: BlockchainEvent) -> Self;
 }
 
 impl<T: FromBlockchainEvent> ConsumerSource<T> {
     pub(crate) async fn new(
-        session: Arc<Session>,
-        consumer_group_id: ConsumerGroupId,
-        consumer_id: ConsumerId,
-        producer_id: ProducerId,
-        execution_id: ExecutionId,
-        subscribed_event_types: Vec<BlockchainEventType>,
+        ctx: ConsumerContext,
+        shard_offset_map_per_blockchain_event_type: BTreeMap<BlockchainEventType, ShardOffsetMap>,
         sender: mpsc::Sender<T>,
-        mut shard_iterators: Vec<ShardIterator>,
-        fencing_token_generator: FencingTokenGenerator,
         offset_commit_interval: Option<Duration>,
+        filter: Option<ShardFilter>,
     ) -> anyhow::Result<Self> {
+        let mut shard_iterators = try_join_all(
+            shard_offset_map_per_blockchain_event_type
+                .into_iter()
+                .flat_map(|(ev_type, shard_offset_map)| {
+                    shard_offset_map
+                        .into_iter()
+                        .map(move |(k, v)| (ev_type, k, v))
+                })
+                .map(|(ev_type, shard_id, (offset, slot))| {
+                    ShardIterator::new(
+                        ctx.session(),
+                        ctx.producer_id,
+                        shard_id,
+                        offset,
+                        slot,
+                        ev_type,
+                        filter.clone(),
+                    )
+                }),
+        )
+        .await?;
+
         let update_consumer_shard_offset_prepared_stmt =
-            session.prepare(UPDATE_CONSUMER_SHARD_OFFSET).await?;
-        let update_consumer_shard_offset_v2_ps = session.prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2).await?;
+            ctx.session().prepare(UPDATE_CONSUMER_SHARD_OFFSET).await?;
+        let update_consumer_shard_offset_v2_ps = ctx
+            .session()
+            .prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2)
+            .await?;
         // Prewarm every shard iterator
         try_join_all(shard_iterators.iter_mut().map(|shard_it| shard_it.warm())).await?;
-        let shard_iterators_slot: BTreeMap<ShardId, Slot> = shard_iterators
-            .iter()
-            .map(|shard_it| (shard_it.shard_id, UNDEFINED_SLOT))
-            .collect();
+
         Ok(ConsumerSource {
-            session,
-            consumer_group_id,
-            consumer_id,
-            producer_id,
-            execution_id,
-            subscribed_event_types,
+            ctx,
             sender,
             offset_commit_interval: offset_commit_interval
                 .unwrap_or(DEFAULT_OFFSET_COMMIT_INTERVAL),
@@ -122,32 +133,26 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
                 .into_iter()
                 .map(|shard_it| (shard_it.shard_id, shard_it))
                 .collect(),
-            new_tx_shard_it_slot_map: shard_iterators_slot.clone(),
-            acc_update_shard_it_slot_map: shard_iterators_slot.clone(),
-            shard_iterators_slot,
             update_consumer_shard_offset_prepared_stmt,
-            fencing_token_generator,
             update_consumer_shard_offset_v2_ps,
         })
     }
 
     async fn update_consumer_shard_offsets(&self) -> anyhow::Result<()> {
         let mut batch = Batch::new(BatchType::Unlogged);
-        let mut values = Vec::with_capacity(self.shard_iterators_slot.len());
+        let mut values = Vec::with_capacity(self.shard_iterators.len());
         for (shard_id, shard_it) in self.shard_iterators.iter() {
             values.push((
                 shard_it.last_offset(),
-                self.shard_iterators_slot
-                    .get(shard_id)
-                    .expect("missing shard slot info"),
-                self.consumer_id.to_owned(),
-                self.producer_id,
-                shard_it.shard_id,
+                shard_it.last_slot,
+                self.ctx.consumer_id.to_owned(),
+                self.ctx.producer_id,
+                shard_id,
                 shard_it.event_type,
             ));
             batch.append_statement(self.update_consumer_shard_offset_prepared_stmt.clone());
         }
-        self.session.batch(&batch, values).await?;
+        self.ctx.session().batch(&batch, values).await?;
         Ok(())
     }
 
@@ -156,45 +161,52 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             .iter()
             .filter(|(_, v)| v.event_type == ev_type)
             .map(|(k, v)| {
-                let slot = self.shard_iterators_slot.get(k).expect("missing shard slot info");
-                (*k, (v.last_offset(), *slot))
+                let slot = v.last_slot;
+                (*k, (v.last_offset(), slot))
             })
             .collect()
     }
 
     async fn update_consumer_shard_offsets_v2(&self) -> anyhow::Result<()> {
-        
-        let b1 = self.subscribed_event_types.contains(&BlockchainEventType::AccountUpdate);
-        let b2 = self.subscribed_event_types.contains(&BlockchainEventType::NewTransaction);
+        let b1 = self
+            .ctx
+            .subscribed_event_types
+            .contains(&BlockchainEventType::AccountUpdate);
+        let b2 = self
+            .ctx
+            .subscribed_event_types
+            .contains(&BlockchainEventType::NewTransaction);
 
         let (acc_shard_offsets, tx_shard_offsets) = match (b1, b2) {
             (true, false) => {
                 let map = self.get_shard_offset_map(BlockchainEventType::AccountUpdate);
-                (map.clone(), map) 
-            },
+                (map.clone(), map)
+            }
             (false, true) => {
                 let map = self.get_shard_offset_map(BlockchainEventType::NewTransaction);
                 (map.clone(), map)
-            },
+            }
             (true, true) => {
                 let map1 = self.get_shard_offset_map(BlockchainEventType::AccountUpdate);
                 let map2 = self.get_shard_offset_map(BlockchainEventType::NewTransaction);
                 (map1, map2)
             }
-            (false, false) => panic!("no blockchain event subscribed to")
+            (false, false) => panic!("no blockchain event subscribed to"),
         };
-        let revision = self.fencing_token_generator.generate().await?;
+        let revision = self.ctx.generate_fencing_token().await?;
         let values = (
             acc_shard_offsets,
             tx_shard_offsets,
             revision,
-            &self.consumer_group_id,
-            &self.consumer_id,
-            &self.execution_id,
+            &self.ctx.consumer_group_id,
+            &self.ctx.consumer_id,
+            &self.ctx.execution_id,
             revision,
         );
 
-        let lwt_result = self.session
+        let lwt_result = self
+            .ctx
+            .session()
             .execute(&self.update_consumer_shard_offset_v2_ps, values)
             .await?
             .first_row_typed::<LwtResult>()?;
@@ -202,11 +214,11 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             anyhow::bail!("Failed to update shard offset, lock is compromised");
         }
 
-        Ok(())        
+        Ok(())
     }
 
     pub async fn run(&mut self, mut interrupt: InterruptSignal) -> anyhow::Result<()> {
-        let consumer_id = self.consumer_id.to_owned();
+        let consumer_id = self.ctx.consumer_id.to_owned();
         let mut commit_offset_deadline = Instant::now() + self.offset_commit_interval;
         const PRINT_CONSUMER_SLOT_REACH_DELAY: Duration = Duration::from_secs(5);
         info!("Serving consumer: {:?}", consumer_id);
@@ -232,12 +244,6 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
                 let maybe = shard_it.try_next().await?;
 
                 if let Some(block_chain_event) = maybe {
-                    self.shard_iterators_slot
-                        .insert(*shard_id, block_chain_event.slot);
-                    match block_chain_event.event_type {
-                        BlockchainEventType::AccountUpdate => self.acc_update_shard_it_slot_map.insert(*shard_id, block_chain_event.slot),
-                        BlockchainEventType::NewTransaction => self.new_tx_shard_it_slot_map.insert(*shard_id, block_chain_event.slot),
-                    };
                     if t.elapsed() >= FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD {
                         warn!(
                             "consumer {consumer_id} micro batch took {:?} to fetch.",

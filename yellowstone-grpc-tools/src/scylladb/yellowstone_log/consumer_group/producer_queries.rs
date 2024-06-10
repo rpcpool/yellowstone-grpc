@@ -126,7 +126,7 @@ impl ProducerQueries {
     pub async fn new(session: Arc<Session>, etcd: etcd_client::Client) -> anyhow::Result<Self> {
         let mut get_producer_by_id_ps = session.prepare(GET_PRODUCER_INFO_BY_ID).await?;
         get_producer_by_id_ps.set_consistency(Consistency::Serial);
-        
+
         let list_producer_locks_ps = session.prepare(LIST_PRODUCER_LOCKS).await?;
 
         let mut get_shard_offset_in_slot_range_ps =
@@ -155,7 +155,10 @@ impl ProducerQueries {
         let mut producer_exec_infos: BTreeMap<[u8; 1], ProducerExecutionInfo> =
             self.list_producer_locks().await?;
 
-        trace!("list_living_producers -- registered producers: {}", producer_exec_infos.len());
+        trace!(
+            "list_living_producers -- registered producers: {}",
+            producer_exec_infos.len()
+        );
         let producer_lock_prefix = get_producer_lock_prefix_v1();
         let get_resp = self
             .etcd
@@ -169,18 +172,20 @@ impl ProducerQueries {
                 get_producer_id_from_lock_key_v1(kv.key()).map(|pid| (pid, kv.mod_revision()))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-            
-        trace!("list_living_producers -- etcd producer lock detected: {}", etcd_producer_lock.len());
+
+        trace!(
+            "list_living_producers -- etcd producer lock detected: {}",
+            etcd_producer_lock.len()
+        );
         // join
-        producer_exec_infos
-            .retain(|pid, execution_info| {
-                let maybe = etcd_producer_lock.get(pid).cloned();
-                if let Some(lock_revision) = maybe {
-                    lock_revision <= execution_info.revision
-                } else {
-                    false
-                }
-            });
+        producer_exec_infos.retain(|pid, execution_info| {
+            let maybe = etcd_producer_lock.get(pid).cloned();
+            if let Some(lock_revision) = maybe {
+                lock_revision <= execution_info.revision
+            } else {
+                false
+            }
+        });
 
         Ok(producer_exec_infos)
     }
@@ -342,7 +347,7 @@ impl ProducerQueries {
             .await?
             .rows_typed::<(ProducerId, i64)>()?
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        
+
         elligible_producers
             .into_iter()
             .min_by_key(|(k, _)| producer_count_pairs.get(k).cloned().unwrap_or(0))
@@ -364,10 +369,9 @@ impl ProducerQueries {
             anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
         }
 
-        offsets
-            .ok_or(anyhow::anyhow!(
-                "Producer lock exists, but its minimum shard offset is not set."
-            ))
+        offsets.ok_or(anyhow::anyhow!(
+            "Producer lock exists, but its minimum shard offset is not set."
+        ))
     }
 
     pub async fn get_execution_id(
@@ -467,7 +471,7 @@ impl ProducerQueries {
                                 .filter(|(offset2, _)| offset1 > offset2)
                                 .is_some()
                         });
-                
+
                 info!("computing offset to approx slot seek location (3)");
                 if !are_shard_offset_reachable {
                     anyhow::bail!(ImpossibleSlotOffset(desired_slot))

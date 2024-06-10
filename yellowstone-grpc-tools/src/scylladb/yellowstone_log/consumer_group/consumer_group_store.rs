@@ -3,7 +3,9 @@ use {
     crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ConsumerGroupType, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
+            ConsumerGroupType, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffset,
+            ShardOffsetMap, Slot,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
     },
@@ -167,10 +169,10 @@ impl ConsumerGroupStore {
         Ok(this)
     }
 
-    pub async fn get_shard_offset(
+    pub async fn get_shard_offset_map(
         &self,
         consumer_group_id: &ConsumerGroupId,
-        instance_id: &ConsumerId,
+        consumer_id: &ConsumerId,
         execution_id: &ExecutionId,
         blockchain_event_types: BlockchainEventType,
     ) -> anyhow::Result<(i64, ShardOffsetMap)> {
@@ -178,7 +180,7 @@ impl ConsumerGroupStore {
             BlockchainEventType::AccountUpdate => &self.get_acc_update_shard_offset_ps,
             BlockchainEventType::NewTransaction => &self.get_new_tx_shard_offset_ps,
         };
-        let bind_values = (consumer_group_id, instance_id, execution_id);
+        let bind_values = (consumer_group_id, consumer_id, execution_id);
 
         let row = self
             .session
@@ -360,17 +362,19 @@ impl ConsumerGroupStore {
         );
 
         for (consumer_id, shard_ids) in cg_info.consumer_id_shard_assignments.iter() {
-            let my_shard_offset_map = shard_ids 
+            let my_shard_offset_map = shard_ids
                 .iter()
                 .cloned()
                 .map(|shard_id| {
                     (
                         shard_id,
-                        shard_offset_map.get(&shard_id).expect("missing shard offset").clone()
+                        shard_offset_map
+                            .get(&shard_id)
+                            .expect("missing shard offset")
+                            .clone(),
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-
 
             let values = (
                 consumer_group_id.clone(),
@@ -483,7 +487,7 @@ impl ConsumerGroupStore {
                 ),
             )
             .await?;
-        
+
         info!("created consumer group row -- {consumer_group_id:?}");
         let static_consumer_group_info = ConsumerGroupInfo {
             consumer_group_id: consumer_group_id.into_bytes(),

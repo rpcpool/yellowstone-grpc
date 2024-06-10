@@ -1,6 +1,6 @@
 use {
     crate::scylladb::types::{
-        BlockchainEvent, BlockchainEventType, ProducerId, ShardId, ShardOffset, ShardPeriod,
+        BlockchainEvent, BlockchainEventType, ProducerId, ShardId, ShardOffset, ShardPeriod, Slot,
         SHARD_OFFSET_MODULO,
     },
     core::fmt,
@@ -133,7 +133,7 @@ impl ShardIteratorState {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default)]
 pub(crate) struct ShardFilter {
     pub(crate) tx_account_keys: Vec<Vec<u8>>,
     pub(crate) account_owners: Vec<Vec<u8>>,
@@ -149,18 +149,19 @@ pub(crate) struct ShardIterator {
     get_events_prepared_stmt: PreparedStatement,
     get_last_shard_period_commit_prepared_stmt: PreparedStatement,
     last_period_confirmed: ShardPeriod,
+    pub(crate) last_slot: Slot,
     filter: ShardFilter,
 }
 
 /// Represents an iterator for fetching and processing blockchain events from a specific shard.
 /// The iterator fetch "micro batch" at a time.
 impl ShardIterator {
-
     pub(crate) async fn new(
         session: Arc<Session>,
         producer_id: ProducerId,
         shard_id: ShardId,
         offset: ShardOffset,
+        slot: Slot,
         event_type: BlockchainEventType,
         filter: Option<ShardFilter>,
     ) -> anyhow::Result<Self> {
@@ -182,6 +183,7 @@ impl ShardIterator {
             get_events_prepared_stmt: get_events_ps,
             get_last_shard_period_commit_prepared_stmt: get_last_shard_period_commit,
             last_period_confirmed: (offset / SHARD_OFFSET_MODULO) - 1,
+            last_slot: slot,
             filter: filter.unwrap_or_default(),
         })
     }
@@ -389,7 +391,13 @@ impl ShardIterator {
             }
         };
         let _ = std::mem::replace(&mut self.inner, next_state);
-        Ok(maybe_to_return.and_then(|row| self.filter_row(row)))
+        let maybe_ret = maybe_to_return.and_then(|row| self.filter_row(row));
+
+        if let Some(ret) = &maybe_ret {
+            self.last_slot = ret.slot;
+        }
+
+        Ok(maybe_ret)
     }
 }
 

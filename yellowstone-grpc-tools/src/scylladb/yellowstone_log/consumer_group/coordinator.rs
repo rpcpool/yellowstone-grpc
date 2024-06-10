@@ -4,7 +4,8 @@ use {
         consumer_source::{ConsumerSource, FromBlockchainEvent},
         consumer_supervisor::{ConsumerSourceSupervisor, ConsumerSourceSupervisorHandle},
         leader::{
-            create_leader_state_log, observe_consumer_group_state, observe_leader_changes, try_become_leader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState, LeaderInfo
+            create_leader_state_log, observe_consumer_group_state, observe_leader_changes,
+            try_become_leader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState, LeaderInfo,
         },
         lock::{ConsumerLock, ConsumerLocker},
         producer_queries::ProducerQueries,
@@ -12,11 +13,16 @@ use {
     },
     crate::scylladb::{
         etcd_utils::{lease::ManagedLease, Revision},
-        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap},
+        types::{
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap,
+        },
         yellowstone_log::common::SeekLocation,
     },
     etcd_client::LeaderKey,
-    futures::{future::{self, select_all, try_join_all, BoxFuture}, Future, FutureExt},
+    futures::{
+        future::{self, select_all, try_join_all, BoxFuture},
+        Future, FutureExt,
+    },
     scylla::Session,
     std::{
         collections::{BTreeMap, HashMap},
@@ -51,23 +57,16 @@ pub struct ConsumerGroupCoordinatorBackend {
         HashMap<ConsumerGroupId, watch::Receiver<(Revision, ConsumerGroupState)>>,
 }
 
-
 pub struct JoinGroupArgs {
     consumer_group_id: ConsumerGroupId,
     consumer_id: ConsumerId,
-    acc_update_filter: Option<ShardFilter>,
-    new_tx_filter: Option<ShardFilter>,
+    filter: Option<ShardFilter>,
 }
 
 pub struct JoinPermit {
     coordinator_callback: oneshot::Sender<ConsumerSourceSupervisorHandle>,
-    etcd: etcd_client::Client,
-    session: Arc<Session>,
-    instance_lock: ConsumerLock,
-    acc_update_filter: Option<ShardFilter>,
-    new_tx_filter: Option<ShardFilter>,
-    leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
-    consumer_group_store: ConsumerGroupStore,
+    supervisor: ConsumerSourceSupervisor,
+    filter: Option<ShardFilter>,
 }
 
 struct LeaderHandle {
@@ -77,7 +76,6 @@ struct LeaderHandle {
 }
 
 impl LeaderHandle {
-
     fn kill(self) -> () {
         self.inner.abort();
     }
@@ -138,17 +136,26 @@ impl JoinPermit {
         self,
         sink: mpsc::Sender<T>,
     ) -> anyhow::Result<()> {
-        let handle = ConsumerSourceSupervisor::spawn(
-            self.etcd,
-            self.session,
-            self.consumer_group_store,
-            self.leader_state_watch,
-            self.instance_lock,
-            self.new_tx_filter,
-            self.acc_update_filter,
-            sink,
-        )
-        .await?;
+        let filter = self.filter;
+        let handle = self
+            .supervisor
+            .spawn_with(move |ctx| {
+                let sink2 = sink.clone();
+                let filter2 = filter.to_owned();
+                async move {
+                    let mut shard_offset_map_by_ev_types = BTreeMap::new();
+                    for ev_type in ctx.subscribed_event_types.iter().cloned() {
+                        let (_revision, shard_offset_map) =
+                            ctx.get_shard_offset_map(ev_type).await?;
+                        shard_offset_map_by_ev_types.insert(ev_type, shard_offset_map);
+                    }
+
+                    ConsumerSource::new(ctx, shard_offset_map_by_ev_types, sink2, None, filter2)
+                        .await
+                }
+                .boxed()
+            })
+            .await?;
         self.coordinator_callback
             .send(handle)
             .map_err(|_| anyhow::anyhow!("failed to grap supervisor handle"))?;
@@ -199,7 +206,11 @@ impl ConsumerGroupCoordinator {
 
         let (tx, rx) = oneshot::channel();
 
-        if let Err(e) = self.sender.send(CoordinatorCommand::CreateConsumerGroup(args, tx)).await {
+        if let Err(e) = self
+            .sender
+            .send(CoordinatorCommand::CreateConsumerGroup(args, tx))
+            .await
+        {
             panic!("ConsumerGroupCoordinatorBackend channel is closed")
         }
         rx.await?
@@ -209,15 +220,13 @@ impl ConsumerGroupCoordinator {
         &self,
         consumer_group_id: ConsumerGroupId,
         consumer_id: ConsumerId,
-        acc_update_filter: Option<ShardFilter>,
-        new_tx_filter: Option<ShardFilter>,
+        filter: Option<ShardFilter>,
         sink: mpsc::Sender<T>,
     ) -> anyhow::Result<()> {
         let args = JoinGroupArgs {
             consumer_group_id,
             consumer_id,
-            acc_update_filter,
-            new_tx_filter,
+            filter,
         };
         let (tx, rx) = oneshot::channel();
         self.sender
@@ -318,10 +327,10 @@ impl ConsumerGroupCoordinatorBackend {
         JoinPermit,
     )> {
         let consumer_group_id = join_args.consumer_group_id;
-        let instance_id = &join_args.consumer_id;
-        let instance_lock = self
+        let consumer_id = &join_args.consumer_id;
+        let consumer_lock = self
             .instance_locker
-            .try_lock_instance_id(consumer_group_id, instance_id)
+            .try_lock_instance_id(consumer_group_id, consumer_id)
             .await?;
 
         let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
@@ -338,16 +347,19 @@ impl ConsumerGroupCoordinatorBackend {
             self.try_become_leader_bg(consumer_group_id);
         }
 
+        let supervisor = ConsumerSourceSupervisor::new(
+            consumer_lock,
+            self.etcd.clone(),
+            Arc::clone(&self.session),
+            self.consumer_group_store.clone(),
+            leader_state_watch.clone(),
+        );
+
         let (tx, rx) = oneshot::channel();
         let permit = JoinPermit {
             coordinator_callback: tx,
-            etcd: self.etcd.clone(),
-            session: Arc::clone(&self.session),
-            instance_lock,
-            acc_update_filter: join_args.acc_update_filter,
-            new_tx_filter: join_args.new_tx_filter,
-            leader_state_watch,
-            consumer_group_store: self.consumer_group_store.clone(),
+            supervisor,
+            filter: join_args.filter,
         };
         Ok((rx, permit))
     }
@@ -447,7 +459,6 @@ impl ConsumerGroupCoordinatorBackend {
         };
     }
 
-
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             let wait_for_election_result = if !self.background_leader_attempt.is_empty() {
@@ -508,8 +519,6 @@ impl ConsumerGroupCoordinatorBackend {
         }
     }
 }
-
-
 
 // pub async fn build_consumer_source<T: FromBlockchainEvent + Send + 'static>(
 //     consumer_id: ConsumerId,

@@ -9,7 +9,7 @@ pub mod producer_queries;
 pub(crate) mod consumer_group_service {
     tonic::include_proto!("yellowstone.log.consumer_group");
 }
+pub mod context;
 pub mod coordinator;
 pub(crate) mod server;
 pub(crate) mod shard_iterator;
-pub mod context;

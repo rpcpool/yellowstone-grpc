@@ -8,11 +8,9 @@ use {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-
     let s = "p-0000";
     let producer_id = &s[2..].parse::<u8>()?;
     println!("producer_id {producer_id}");
-
 
     let mut client = Client::connect(["localhost:2379"], None).await?;
     let mut client2 = client.clone();

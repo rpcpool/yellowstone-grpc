@@ -112,7 +112,6 @@ impl YellowstoneLog for ScyllaYsLog {
             .await
             .map_err(map_lock_err_to_tonic_status)?;
 
-        
         Ok(Response::new(CreateStaticConsumerGroupResponse {
             group_id: Uuid::from_bytes(consumer_group_id).to_string(),
         }))
@@ -145,7 +144,6 @@ impl YellowstoneLog for ScyllaYsLog {
                 cg_id,
                 instance_id,
                 // TODO: add filtering
-                None,
                 None,
                 tx,
             )
