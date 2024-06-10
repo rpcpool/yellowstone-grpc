@@ -155,6 +155,7 @@ pub(crate) struct ShardIterator {
 /// Represents an iterator for fetching and processing blockchain events from a specific shard.
 /// The iterator fetch "micro batch" at a time.
 impl ShardIterator {
+
     pub(crate) async fn new(
         session: Arc<Session>,
         producer_id: ProducerId,

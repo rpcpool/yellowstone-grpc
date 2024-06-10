@@ -12,7 +12,7 @@ use {
             Revision,
         },
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, InstanceId,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ExecutionId, ConsumerId,
             ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{
@@ -205,7 +205,7 @@ pub struct ConsumerGroupHeader {
     pub consumer_group_id: ConsumerGroupId,
     pub commitment_level: CommitmentLevel,
     pub subscribed_blockchain_event_types: Vec<BlockchainEventType>,
-    pub shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
+    pub shard_assignments: BTreeMap<ConsumerId, Vec<ShardId>>,
 }
 
 pub struct ConsumerGroupLeaderNode {
@@ -548,7 +548,7 @@ pub async fn create_leader_state_log(
             .subscribed_event_types
             .clone(),
         shard_assignments: scylla_consumer_group_info
-            .instance_id_shard_assignments
+            .consumer_id_shard_assignments
             .clone(),
     };
     let state = ConsumerGroupState::Idle(IdleState {

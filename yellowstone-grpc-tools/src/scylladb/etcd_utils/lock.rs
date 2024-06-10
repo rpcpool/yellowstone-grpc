@@ -19,6 +19,7 @@ pub struct ManagedLock {
     etcd: etcd_client::Client,
 }
 
+
 impl ManagedLock {
     pub fn lease_id(&self) -> i64 {
         self.managed_lease.lease_id

@@ -3,9 +3,7 @@ use {
     crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
-            ConsumerGroupType, ExecutionId, InstanceId, ProducerId, ShardId, ShardOffset,
-            ShardOffsetMap, Slot,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ConsumerGroupType, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
     },
@@ -120,7 +118,7 @@ pub struct ConsumerGroupStore {
     get_new_tx_shard_offset_ps: PreparedStatement,
 }
 
-fn assign_shards(ids: &[InstanceId], num_shards: usize) -> BTreeMap<InstanceId, Vec<ShardId>> {
+fn assign_shards(ids: &[ConsumerId], num_shards: usize) -> BTreeMap<ConsumerId, Vec<ShardId>> {
     let mut ids = ids.to_vec();
     ids.sort();
 
@@ -172,7 +170,7 @@ impl ConsumerGroupStore {
     pub async fn get_shard_offset(
         &self,
         consumer_group_id: &ConsumerGroupId,
-        instance_id: &InstanceId,
+        instance_id: &ConsumerId,
         execution_id: &ExecutionId,
         blockchain_event_types: BlockchainEventType,
     ) -> anyhow::Result<(i64, ShardOffsetMap)> {
@@ -245,7 +243,7 @@ impl ConsumerGroupStore {
             .execution_id
             .expect("cannot compute LCS of unused consumer group");
         let instance_id_in_clause = consumer_group_info
-            .instance_id_shard_assignments
+            .consumer_id_shard_assignments
             .keys()
             .cloned()
             .collect::<Vec<_>>();
@@ -361,7 +359,7 @@ impl ConsumerGroupStore {
             "execution id mismatch"
         );
 
-        for (consumer_id, shard_ids) in cg_info.instance_id_shard_assignments.iter() {
+        for (consumer_id, shard_ids) in cg_info.consumer_id_shard_assignments.iter() {
             let my_shard_offset_map = shard_ids 
                 .iter()
                 .cloned()
@@ -445,14 +443,14 @@ impl ConsumerGroupStore {
 
     pub async fn create_static_consumer_group(
         &self,
-        instance_ids: &[InstanceId],
+        consumer_ids: &[ConsumerId],
         commitment_level: CommitmentLevel,
         subscribed_blockchain_event_types: &[BlockchainEventType],
         initial_offset: SeekLocation,
         remote_ip_addr: Option<IpAddr>,
     ) -> anyhow::Result<ConsumerGroupInfo> {
         let consumer_group_id = Uuid::new_v4();
-        let shard_assignments = assign_shards(instance_ids, NUM_SHARDS);
+        let shard_assignments = assign_shards(consumer_ids, NUM_SHARDS);
 
         let maybe_slot_range = if let SeekLocation::SlotApprox {
             desired_slot,
@@ -489,7 +487,7 @@ impl ConsumerGroupStore {
         info!("created consumer group row -- {consumer_group_id:?}");
         let static_consumer_group_info = ConsumerGroupInfo {
             consumer_group_id: consumer_group_id.into_bytes(),
-            instance_id_shard_assignments: shard_assignments,
+            consumer_id_shard_assignments: shard_assignments,
             producer_id: Some(producer_id),
             commitment_level,
             revision: 0,

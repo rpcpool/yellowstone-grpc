@@ -12,3 +12,4 @@ pub(crate) mod consumer_group_service {
 pub mod coordinator;
 pub(crate) mod server;
 pub(crate) mod shard_iterator;
+pub mod context;

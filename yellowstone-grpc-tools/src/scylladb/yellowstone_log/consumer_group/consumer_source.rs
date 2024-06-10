@@ -1,5 +1,5 @@
 use {
-    super::{lock::InstanceLock, shard_iterator::ShardIterator},
+    super::{lock::{FencingTokenGenerator, ConsumerLock}, shard_iterator::ShardIterator},
     crate::scylladb::{scylladb_utils::LwtResult, types::{
         BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffsetMap, Slot, UNDEFINED_SLOT
     }},
@@ -68,7 +68,7 @@ pub(crate) struct ConsumerSource<T: FromBlockchainEvent> {
     pub(crate) shard_iterators_slot: BTreeMap<ShardId, Slot>,
     update_consumer_shard_offset_prepared_stmt: PreparedStatement,
     update_consumer_shard_offset_v2_ps: PreparedStatement,
-    instance_lock: InstanceLock,
+    fencing_token_generator: FencingTokenGenerator,
 }
 
 pub type InterruptSignal = oneshot::Receiver<()>;
@@ -90,12 +90,13 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
     pub(crate) async fn new(
         session: Arc<Session>,
         consumer_group_id: ConsumerGroupId,
+        consumer_id: ConsumerId,
         producer_id: ProducerId,
         execution_id: ExecutionId,
         subscribed_event_types: Vec<BlockchainEventType>,
         sender: mpsc::Sender<T>,
         mut shard_iterators: Vec<ShardIterator>,
-        instance_lock: InstanceLock,
+        fencing_token_generator: FencingTokenGenerator,
         offset_commit_interval: Option<Duration>,
     ) -> anyhow::Result<Self> {
         let update_consumer_shard_offset_prepared_stmt =
@@ -110,7 +111,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         Ok(ConsumerSource {
             session,
             consumer_group_id,
-            consumer_id: instance_lock.instance_id.clone(),
+            consumer_id,
             producer_id,
             execution_id,
             subscribed_event_types,
@@ -125,13 +126,9 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             acc_update_shard_it_slot_map: shard_iterators_slot.clone(),
             shard_iterators_slot,
             update_consumer_shard_offset_prepared_stmt,
-            instance_lock,
+            fencing_token_generator,
             update_consumer_shard_offset_v2_ps,
         })
-    }
-
-    pub fn take_instance_lock(self) -> InstanceLock {
-        self.instance_lock
     }
 
     async fn update_consumer_shard_offsets(&self) -> anyhow::Result<()> {
@@ -186,7 +183,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             }
             (false, false) => panic!("no blockchain event subscribed to")
         };
-        let revision = self.instance_lock.get_fencing_token().await?;
+        let revision = self.fencing_token_generator.generate().await?;
         let values = (
             acc_shard_offsets,
             tx_shard_offsets,

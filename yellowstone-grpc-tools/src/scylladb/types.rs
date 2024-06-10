@@ -1157,7 +1157,6 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
 }
 
 pub type ConsumerGroupId = [u8; 16];
-pub type InstanceId = String;
 pub type ExecutionId = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct ConsumerGroupInfo {
@@ -1168,7 +1167,7 @@ pub struct ConsumerGroupInfo {
     pub revision: i64,
     pub commitment_level: CommitmentLevel,
     pub subscribed_event_types: Vec<BlockchainEventType>,
-    pub instance_id_shard_assignments: BTreeMap<InstanceId, Vec<ShardId>>,
+    pub consumer_id_shard_assignments: BTreeMap<ConsumerId, Vec<ShardId>>,
     pub last_access_ip_address: Option<IpAddr>,
 }
 

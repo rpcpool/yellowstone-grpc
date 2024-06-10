@@ -1,23 +1,22 @@
 use {
     super::{
         consumer_group_store::ConsumerGroupStore,
-        consumer_source::FromBlockchainEvent,
+        consumer_source::{ConsumerSource, FromBlockchainEvent},
         consumer_supervisor::{ConsumerSourceSupervisor, ConsumerSourceSupervisorHandle},
         leader::{
-            create_leader_state_log, observe_consumer_group_state, observe_leader_changes,
-            try_become_leader, ConsumerGroupLeaderNode, ConsumerGroupState, LeaderInfo,
+            create_leader_state_log, observe_consumer_group_state, observe_leader_changes, try_become_leader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState, LeaderInfo
         },
-        lock::{InstanceLock, InstanceLocker},
+        lock::{ConsumerLock, ConsumerLocker},
         producer_queries::ProducerQueries,
-        shard_iterator::ShardFilter,
+        shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
         etcd_utils::{lease::ManagedLease, Revision},
-        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, InstanceId},
+        types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap},
         yellowstone_log::common::SeekLocation,
     },
     etcd_client::LeaderKey,
-    futures::{future::{self, select_all, BoxFuture}, Future, FutureExt},
+    futures::{future::{self, select_all, try_join_all, BoxFuture}, Future, FutureExt},
     scylla::Session,
     std::{
         collections::{BTreeMap, HashMap},
@@ -38,7 +37,7 @@ pub struct ConsumerGroupCoordinatorBackend {
     rx: mpsc::Receiver<CoordinatorCommand>,
     etcd: etcd_client::Client,
     session: Arc<Session>,
-    instance_locker: InstanceLocker,
+    instance_locker: ConsumerLocker,
     consumer_group_store: ConsumerGroupStore,
     producer_queries: ProducerQueries,
     leader_ifname: String,
@@ -55,7 +54,7 @@ pub struct ConsumerGroupCoordinatorBackend {
 
 pub struct JoinGroupArgs {
     consumer_group_id: ConsumerGroupId,
-    instance_id: InstanceId,
+    consumer_id: ConsumerId,
     acc_update_filter: Option<ShardFilter>,
     new_tx_filter: Option<ShardFilter>,
 }
@@ -64,7 +63,7 @@ pub struct JoinPermit {
     coordinator_callback: oneshot::Sender<ConsumerSourceSupervisorHandle>,
     etcd: etcd_client::Client,
     session: Arc<Session>,
-    instance_lock: InstanceLock,
+    instance_lock: ConsumerLock,
     acc_update_filter: Option<ShardFilter>,
     new_tx_filter: Option<ShardFilter>,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
@@ -162,7 +161,7 @@ struct CreateConsumerGroupArgs {
     seek_loc: SeekLocation,
     subscribed_blockchain_events: Vec<BlockchainEventType>,
     commitment_level: CommitmentLevel,
-    instance_ids: Vec<InstanceId>,
+    consumer_id_list: Vec<ConsumerId>,
     requestor_ipaddr: Option<IpAddr>,
 }
 
@@ -186,7 +185,7 @@ impl ConsumerGroupCoordinator {
         &self,
         seek_loc: SeekLocation,
         subscribed_blockchain_events: Vec<BlockchainEventType>,
-        instance_ids: Vec<InstanceId>,
+        consumer_id_list: Vec<ConsumerId>,
         commitment_level: CommitmentLevel,
         requestor_ipaddr: Option<IpAddr>,
     ) -> anyhow::Result<ConsumerGroupId> {
@@ -194,7 +193,7 @@ impl ConsumerGroupCoordinator {
             seek_loc,
             subscribed_blockchain_events,
             commitment_level,
-            instance_ids,
+            consumer_id_list,
             requestor_ipaddr,
         };
 
@@ -209,14 +208,14 @@ impl ConsumerGroupCoordinator {
     pub async fn try_join_consumer_group<T: FromBlockchainEvent + Send + 'static>(
         &self,
         consumer_group_id: ConsumerGroupId,
-        instance_id: InstanceId,
+        consumer_id: ConsumerId,
         acc_update_filter: Option<ShardFilter>,
         new_tx_filter: Option<ShardFilter>,
         sink: mpsc::Sender<T>,
     ) -> anyhow::Result<()> {
         let args = JoinGroupArgs {
             consumer_group_id,
-            instance_id,
+            consumer_id,
             acc_update_filter,
             new_tx_filter,
         };
@@ -244,7 +243,7 @@ impl ConsumerGroupCoordinatorBackend {
             rx,
             etcd: etcd.clone(),
             session: Arc::clone(&session),
-            instance_locker: InstanceLocker(etcd.clone()),
+            instance_locker: ConsumerLocker(etcd.clone()),
             consumer_group_store: consumer_group_store,
             producer_queries: producer_queries,
             leader_ifname,
@@ -319,7 +318,7 @@ impl ConsumerGroupCoordinatorBackend {
         JoinPermit,
     )> {
         let consumer_group_id = join_args.consumer_group_id;
-        let instance_id = &join_args.instance_id;
+        let instance_id = &join_args.consumer_id;
         let instance_lock = self
             .instance_locker
             .try_lock_instance_id(consumer_group_id, instance_id)
@@ -360,7 +359,7 @@ impl ConsumerGroupCoordinatorBackend {
         let consumer_group_info = self
             .consumer_group_store
             .create_static_consumer_group(
-                &args.instance_ids,
+                &args.consumer_id_list,
                 args.commitment_level,
                 &args.subscribed_blockchain_events,
                 args.seek_loc,
@@ -496,7 +495,7 @@ impl ConsumerGroupCoordinatorBackend {
                     if let Err(supervisor_error) = result? {
                         error!("supervisor failed with : {supervisor_error:?}");
                     }
-                    info!("group={}, instance={} finished", String::from_utf8(resolved_handle.consumer_group_id.to_vec())?, resolved_handle.instance_id);
+                    info!("group={}, instance={} finished", String::from_utf8(resolved_handle.consumer_group_id.to_vec())?, resolved_handle.consumer_id);
                 },
                 ((cg_id, result), _, _) = wait_for_leader_to_quit => {
                     let cg_id_text = String::from_utf8(cg_id.to_vec())?;
@@ -509,3 +508,54 @@ impl ConsumerGroupCoordinatorBackend {
         }
     }
 }
+
+
+
+// pub async fn build_consumer_source<T: FromBlockchainEvent + Send + 'static>(
+//     consumer_id: ConsumerId,
+//     state: &IdleState,
+//     session: Arc<Session>,
+//     instance_lock: &ConsumerLock,
+//     shard_offsets: ShardOffsetMap,
+//     acc_update_filter: Option<ShardFilter>,
+//     sink: mpsc::Sender<T>,
+// ) -> anyhow::Result<ConsumerSource<T>> {
+
+//     let mut shard_iterators = Vec::with_capacity(64);
+//     for ev_type in state
+//         .header
+//         .subscribed_blockchain_event_types
+//         .iter()
+//         .cloned()
+//     {
+//         let shard_iterator_subset = try_join_all(shard_offsets.iter().map(
+//             |(shard_id, (offset, _slot))| {
+//                 ShardIterator::new(
+//                     Arc::clone(&session),
+//                     state.producer_id,
+//                     shard_id,
+//                     offset,
+//                     ev_type,
+//                     acc_update_filter.clone(),
+//                 )
+//             },
+//         ))
+//         .await?;
+//         shard_iterators.extend(shard_iterator_subset);
+//     }
+
+//     let consumer_source = ConsumerSource::new(
+//         Arc::clone(&session),
+//         state.header.consumer_group_id.clone(),
+//         consumer_id,
+//         state.producer_id,
+//         state.execution_id,
+//         state.header.subscribed_blockchain_event_types.clone(),
+//         sink,
+//         shard_iterators,
+//         instance_lock.get_fencing_token_gen(),
+//         None,
+//     )
+//     .await?;
+//     Ok(consumer_source)
+// }
