@@ -2,8 +2,7 @@ use {
     super::{
         consumer_group_store::ConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
         producer_queries::ProducerQueries,
-    },
-    crate::scylladb::{
+    }, crate::scylladb::{
         self,
         etcd_utils::{
             self,
@@ -22,25 +21,15 @@ use {
                 etcd_path::get_producer_lock_path_v1,
             },
         },
-    },
-    bincode::{deserialize, serialize},
-    etcd_client::{
+    }, bincode::{deserialize, serialize}, etcd_client::{
         Compare, EventType, GetOptions, LeaderKey, PutOptions, Txn, TxnOp, WatchOptions,
-    },
-    futures::Future,
-    local_ip_address::list_afinet_netifas,
-    serde::{Deserialize, Serialize},
-    std::{collections::BTreeMap, fmt, net::IpAddr, time::Duration},
-    thiserror::Error,
-    tokio::{
+    }, futures::Future, local_ip_address::list_afinet_netifas, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, time::Duration}, thiserror::Error, tokio::{
         sync::{
             oneshot::{self, error::RecvError},
             watch,
         },
         task::JoinHandle,
-    },
-    tracing::warn,
-    uuid::Uuid,
+    }, tokio_stream::StreamExt, tracing::warn, uuid::Uuid
 };
 
 const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
@@ -538,7 +527,7 @@ impl ConsumerGroupLeaderNode {
 /// # Returns
 /// A result indicating whether the state log was successfully created.
 pub async fn create_leader_state_log(
-    etcd: &etcd_client::Client,
+    etcd: etcd_client::Client,
     scylla_consumer_group_info: &scylladb::types::ConsumerGroupInfo,
 ) -> anyhow::Result<()> {
     let header = ConsumerGroupHeader {
@@ -564,7 +553,7 @@ pub async fn create_leader_state_log(
     });
 
     let state_log_key =
-        leader_log_name_from_cg_id_v1(&scylla_consumer_group_info.consumer_group_id);
+        leader_log_name_from_cg_id_v1(scylla_consumer_group_info.consumer_group_id);
 
     let txn = Txn::new()
         .when(vec![Compare::version(
@@ -590,14 +579,14 @@ pub async fn create_leader_state_log(
 /// receiver will initially receive the current state, and then receive updates whenever the state
 /// changes.
 pub async fn observe_consumer_group_state(
-    etcd: &etcd_client::Client,
+    etcd: etcd_client::Client,
     consumer_group_id: ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<(Revision, ConsumerGroupState)>> {
     let key = leader_log_name_from_cg_id_v1(consumer_group_id);
     let mut wc = etcd.watch_client();
 
     let mut kv_client = etcd.kv_client();
-    let get_resp = kv_client.get(consumer_group_id.as_slice(), None).await?;
+    let get_resp = kv_client.get(key.as_str(), None).await?;
 
     anyhow::ensure!(
         get_resp.count() == 1,
@@ -613,32 +602,42 @@ pub async fn observe_consumer_group_state(
             .watch(key.as_str(), None)
             .await
             .unwrap_or_else(|_| panic!("failed to watch {key}"));
-        while let Some(message) = stream
-            .message()
-            .await
-            .expect("leader state log watch error")
-        {
-            let events = message.events();
-            if events.iter().any(|ev| ev.event_type() == EventType::Delete) {
-                panic!("remote state log has been deleted")
-            }
-            events
-                .iter()
-                .map(|ev| {
-                    ev.kv().map(|kv| {
-                        (
-                            kv.mod_revision(),
-                            deserialize::<ConsumerGroupState>(kv.value())
-                                .expect("failed to deser consumer group state from leader log"),
-                        )
-                    })
-                })
-                .map(|opt| opt.expect("kv from state log is None"))
-                .for_each(|(revision, state)| {
-                    if tx.send((revision, state)).is_err() {
-                        warn!("receiver half of LeaderStateLogObserver has been close");
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                    if tx.is_closed() {
+                        break;
                     }
-                })
+                }
+                // tokio's StreamExt::next is cancel safe
+                Some(result) = stream.next() => {
+                    let message = result.expect("watch stream was terminated early");
+                    let events = message.events();
+                    if events.iter().any(|ev| ev.event_type() == EventType::Delete) {
+                        panic!("remote state log has been deleted")
+                    }
+                    let maybe = events
+                        .iter()
+                        .filter_map(|ev| {
+                            ev.kv().map(|kv| {
+                                (
+                                    kv.mod_revision(),
+                                    deserialize::<ConsumerGroupState>(kv.value())
+                                        .expect("failed to deser consumer group state from leader log"),
+                                )
+                            })
+                        })
+                        .max_by_key(|(revision, _)| *revision);
+                    if let Some(payload) = maybe {
+                        if tx.send(payload).is_err() {
+                            warn!("receiver half of LeaderStateLogObserver has been close");
+                            break;
+                        }
+                    }
+                }
+
+            }
         }
         let _ = watcher.cancel().await;
     });
@@ -654,16 +653,17 @@ pub struct LeaderInfo {
 
 fn leader_log_name_from_leader_key_v1(lk: &LeaderKey) -> String {
     let lk_name = lk.name_str().expect("invalid leader key name");
-    format!("{lk_name}/log",)
+    format!("v1/{lk_name}/log",)
 }
 
-fn leader_log_name_from_cg_id_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
-    format!("{}/log", leader_name_v1(consumer_group_id))
+pub fn leader_log_name_from_cg_id_v1(consumer_group_id: ConsumerGroupId) -> String {
+    let uuid = Uuid::from_bytes(consumer_group_id).to_string();
+    format!("v1/cg-leader-{uuid}/log")
 }
 
-fn leader_name_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
-    let cg = String::from_utf8_lossy(consumer_group_id.as_ref());
-    format!("cg-leader-{cg}")
+fn leader_name_v1(consumer_group_id: ConsumerGroupId) -> String {
+    let uuid = Uuid::from_bytes(consumer_group_id).to_string();
+    format!("v1/cg-leader-{uuid}")
 }
 
 /// Observes changes to the leader of the given consumer group. Returns a watch receiver that will
@@ -677,7 +677,7 @@ fn leader_name_v1(consumer_group_id: impl AsRef<[u8]>) -> String {
 /// receiver will initially receive the current leader information, and then receive updates
 /// whenever the leader changes.
 pub async fn observe_leader_changes(
-    etcd: &etcd_client::Client,
+    etcd: etcd_client::Client,
     consumer_group_id: ConsumerGroupId,
 ) -> anyhow::Result<watch::Receiver<Option<LeaderInfo>>> {
     let mut kv_client = etcd.kv_client();
@@ -703,21 +703,34 @@ pub async fn observe_leader_changes(
             .await
             .unwrap_or_else(|_| panic!("fail to watch {leader}"));
 
-        'outer: while let Some(msg) = stream.message().await.expect("") {
-            for ev in msg.events() {
-                let payload = match ev.event_type() {
-                    EventType::Put => ev.kv().map(|kv| {
-                        deserialize::<LeaderInfo>(kv.value())
-                            .expect("invalid leader state log format")
-                    }),
-                    EventType::Delete => None,
-                };
-                if tx.send(payload).is_err() {
-                    break 'outer;
-                }
-            }
-        }
+        'outer: loop {
 
+            tokio::select! {
+
+                _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                    if tx.is_closed() {
+                        break;
+                    }
+                }
+
+                Some(Ok(msg)) = stream.next() => {
+                    for ev in msg.events() {
+                        let payload = match ev.event_type() {
+                            EventType::Put => ev.kv().map(|kv| {
+                                deserialize::<LeaderInfo>(kv.value())
+                                    .expect("invalid leader state log format")
+                            }),
+                            EventType::Delete => None,
+                        };
+                        if tx.send(payload).is_err() {
+                            break 'outer;
+                        }
+                    }
+                }
+
+            }
+
+        }
         let _ = watcher.cancel().await;
     });
 

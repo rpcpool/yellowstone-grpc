@@ -1,46 +1,12 @@
-use {
-    futures::{future, FutureExt}, scylla::{Session, SessionBuilder}, std::sync::Arc, tokio::sync::{broadcast, mpsc, watch}, uuid::Uuid, yellowstone_grpc_tools::scylladb::{
-        types::BlockchainEventType,
-        yellowstone_log::consumer_group::{
-            consumer_group_store::ConsumerGroupStore, consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle}, consumer_supervisor::ConsumerSourceSupervisor, leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState}, lock::{ConsumerLock, ConsumerLocker}, producer_queries::ProducerQueries
-        },
-    }
-};
+use std::sync::Arc;
 
-struct TestContext {
-    session: Arc<Session>,
-    etcd: etcd_client::Client,
-    consumer_group_store: ConsumerGroupStore,
-    producer_queries: ProducerQueries,
-}
+use futures::{future, FutureExt};
+use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
+use yellowstone_grpc_tools::scylladb::{types::BlockchainEventType, yellowstone_log::consumer_group::{consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle}, consumer_supervisor::ConsumerSourceSupervisor, leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState}, lock::ConsumerLocker}};
 
-impl TestContext {
-    pub async fn new() -> anyhow::Result<Self> {
-        let scylladb_endpoint = std::env::var("TEST_SCYLLADB_HOSTNAME")?;
-        let scylladb_user = std::env::var("TEST_SCYLLADB_USER")?;
-        let scylladb_passwd = std::env::var("TEST_SCYLLADB_PASSWD")?;
-        let keyspace = std::env::var("TEST_SCYLLADB_KEYSPACE")?;
-        let session: Session = SessionBuilder::new()
-            .known_node(scylladb_endpoint)
-            .user(scylladb_user, scylladb_passwd)
-            .use_keyspace(keyspace, false)
-            .build()
-            .await?;
-
-        let etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
-        let session = Arc::new(session);
-        let consumer_group_store =
-            ConsumerGroupStore::new(Arc::clone(&session), etcd.clone()).await?;
-        let producer_queries = ProducerQueries::new(Arc::clone(&session), etcd.clone()).await?;
-        let ctx = TestContext {
-            session: session,
-            etcd,
-            consumer_group_store,
-            producer_queries,
-        };
-        Ok(ctx)
-    }
-}
+use crate::common::TestContext;
+mod common;
 
 
 ///
@@ -50,12 +16,14 @@ impl TestContext {
 /// - the supervisor stop a consumer when it detected the producer is gone
 /// - the supervisor restart a consumer when it receive a new producer
 /// - the underlying consumer stop if the supervisor is dropped
+/// - 
 #[tokio::test]
 async fn test_supervisor() {
     let ctx = TestContext::new().await.unwrap();
     let locker = ConsumerLocker(ctx.etcd.clone());
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let consumer_id = Uuid::new_v4().to_string();
+    print!("consumer_id: {}", consumer_id);
     let lock = locker
         .try_lock_instance_id(consumer_group_id, &consumer_id)
         .await
@@ -67,7 +35,7 @@ async fn test_supervisor() {
         shard_assignments: Default::default(),
     };
     let (tx_state, rx_state) = watch::channel((1, ConsumerGroupState::Init(cg_header.clone())));
-
+    
     let supervisor = ConsumerSourceSupervisor::new(
         lock,
         ctx.etcd.clone(),
@@ -145,5 +113,4 @@ async fn test_supervisor() {
     let msg = rx_eavesdrop.recv().await.unwrap();
     // 1 = the consumer has been dropped
     assert_eq!(msg, 1);
-
 }

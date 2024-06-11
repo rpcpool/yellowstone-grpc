@@ -5,7 +5,7 @@ use {
     std::time::Duration,
     thiserror::Error,
     tokio::time::Instant,
-    tracing::trace,
+    tracing::{info, trace},
 };
 
 const LOCK_LEASE_DURATION: Duration = Duration::from_secs(5);
@@ -89,10 +89,11 @@ impl fmt::Display for TryLockError {
 
 pub async fn try_lock(mut client: etcd_client::Client, name: &str) -> anyhow::Result<ManagedLock> {
     const TRY_LOCKING_DURATION: Duration = Duration::from_millis(500);
-
+    trace!("Trying to lock {name}...");
     let get_response = client
-        .get(name, Some(GetOptions::new().with_from_key()))
+        .get(name, Some(GetOptions::new().with_prefix()))
         .await?;
+
     anyhow::ensure!(get_response.count() <= 1, TryLockError::InvalidLockName);
     anyhow::ensure!(get_response.count() == 0, TryLockError::AlreadyTaken);
 

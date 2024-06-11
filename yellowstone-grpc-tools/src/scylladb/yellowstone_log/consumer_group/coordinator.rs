@@ -301,7 +301,7 @@ impl ConsumerGroupCoordinatorBackend {
         match self.leader_state_watch_map.entry(consumer_group_id.clone()) {
             std::collections::hash_map::Entry::Occupied(o) => Ok(o.get().clone()),
             std::collections::hash_map::Entry::Vacant(v) => {
-                let watch = observe_consumer_group_state(&self.etcd, consumer_group_id).await?;
+                let watch = observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
                 Ok(v.insert(watch).clone())
             }
         }
@@ -317,7 +317,7 @@ impl ConsumerGroupCoordinatorBackend {
         {
             std::collections::hash_map::Entry::Occupied(o) => Ok(o.get().clone()),
             std::collections::hash_map::Entry::Vacant(v) => {
-                let watch = observe_leader_changes(&self.etcd, consumer_group_id).await?;
+                let watch = observe_leader_changes(self.etcd.clone(), consumer_group_id).await?;
                 Ok(v.insert(watch).clone())
             }
         }
@@ -343,10 +343,9 @@ impl ConsumerGroupCoordinatorBackend {
 
         let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
 
-        let mut leader_state_watch = self.get_leader_state_watch(consumer_group_id).await?;
+        let leader_state_watch = observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
 
         leader_election_watch.mark_changed();
-        leader_state_watch.mark_changed();
 
         let maybe_leader_info = { leader_election_watch.borrow_and_update().to_owned() };
 
@@ -360,7 +359,7 @@ impl ConsumerGroupCoordinatorBackend {
             self.etcd.clone(),
             Arc::clone(&self.session),
             self.consumer_group_store.clone(),
-            leader_state_watch.clone(),
+            leader_state_watch,
         );
 
         let (tx, rx) = oneshot::channel();
@@ -391,7 +390,7 @@ impl ConsumerGroupCoordinatorBackend {
                 tonic::Status::internal("failed to create consumer group")
             })?;
 
-        create_leader_state_log(&self.etcd, &consumer_group_info)
+        create_leader_state_log(self.etcd.clone(), &consumer_group_info)
             .await
             .map_err(|e| {
                 error!("create_static_consumer_group: {e:?}");

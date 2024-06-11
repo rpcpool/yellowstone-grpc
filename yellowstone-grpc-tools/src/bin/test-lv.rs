@@ -13,23 +13,15 @@ async fn main() -> anyhow::Result<()> {
     println!("producer_id {producer_id}");
 
     let mut client = Client::connect(["localhost:2379"], None).await?;
-    let mut client2 = client.clone();
-    let lease1 = ManagedLease::new(
-        client.clone(),
-        Duration::from_secs(2),
-        Some(Duration::from_secs(1)),
-    )
-    .await?;
 
-    let uuid = Uuid::new_v4();
-    println!("uuid: {uuid:?}");
-
-    let (tx, mut rx) = mpsc::channel(10);
-    tokio::spawn(async move {
-        let (_watcher, mut stream) = client2
-            .watch("myleader", Some(WatchOptions::new().with_prefix()))
+    
+    let (watcher, mut stream) = client
+            .watch("test", Some(WatchOptions::new().with_prefix()))
             .await
             .expect("fail");
+    drop(watcher);
+    let (tx, mut rx) = mpsc::channel(10);
+    tokio::spawn(async move {
         while let Some(msg) = stream.message().await.expect("") {
             let ev = &msg.events()[0];
             let kv = ev.kv().unwrap();
@@ -43,43 +35,17 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+    let mut i = 1;
+    loop {
+        client.put(format!("test/{i}"), 1_i32.to_be_bytes(), None).await?;
 
-    let res = rx.try_recv();
-    println!("try recv1 : {res:?}");
-
-    let resp = client
-        .campaign("myleader", uuid.to_string(), lease1.lease_id)
-        .await?;
-    let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
-    println!("leader key: {leader_key:?}");
-
-    // let (ev_type, k, v) = rx.recv().await.unwrap();
-    // let v = String::from_utf8(v)?;
-    // println!("rx: {ev_type:?} {v:?}");
-
-    let lk = LeaderKey::new().with_key(leader_key).with_name("myleader");
-    //client.lease_revoke(lease1).await?;
-
-    client
-        .resign(Some(ResignOptions::new().with_leader(lk.clone())))
-        .await?;
-    // client
-    //     .resign(Some(ResignOptions::new().with_leader(lk)))
-    //     .await?;
-
-    let (ev_type, _k, v) = rx.recv().await.unwrap();
-    println!("after resign recv1 : {ev_type:?} {v:?}");
-
-    let lease2 = client.lease_grant(1, None).await?.id();
-    let uuid = Uuid::new_v4();
-    let resp = client.campaign("myleader", uuid.to_string(), lease2).await;
-    println!("campaign result: {resp:?}");
-    //let leader_key = String::from_utf8(resp.leader().unwrap().key().to_vec())?;
-    //println!("leader key: {leader_key:?}");
-
-    let (ev_type, _k, v) = rx.recv().await.unwrap();
-    let v = String::from_utf8(v)?;
-    println!("rx: {ev_type:?} {v:?}");
+        let val = rx.recv().await;
+        println!("rx1 {val:?}");
+        i += 1;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    
+    
 
     Ok(())
 }
