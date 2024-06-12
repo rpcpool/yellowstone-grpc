@@ -1,7 +1,7 @@
 use {
     super::{
         consumer_group_store::ScyllaConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
-        producer_queries::ProducerQueries,
+        producer_queries::ProducerQueries, timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState},
     }, crate::scylladb::{
         self,
         etcd_utils::{
@@ -23,7 +23,7 @@ use {
         },
     }, bincode::{deserialize, serialize}, etcd_client::{
         Compare, EventType, GetOptions, LeaderKey, PutOptions, Txn, TxnOp, WatchOptions,
-    }, futures::Future, local_ip_address::list_afinet_netifas, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, time::Duration}, thiserror::Error, tokio::{
+    }, futures::Future, local_ip_address::list_afinet_netifas, scylla::transport::errors::TranslationError, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, sync::Arc, time::Duration}, thiserror::Error, tokio::{
         sync::{
             oneshot::{self, error::RecvError},
             watch,
@@ -129,9 +129,7 @@ pub enum ConsumerGroupState {
     Init(ConsumerGroupHeader),
     LostProducer(LostProducerState),
     WaitingBarrier(WaitingBarrierState),
-    ComputingProducerSelection(ConsumerGroupHeader),
-    ProducerProposition(ProducerPropositionState),
-    ProducerUpdatedAtGroupLevel(ProducerUpdatedAtGroupLevelState),
+    InTimelineTranslation(InTimelineTranslationState),
     Idle(IdleState),
     Dead(ConsumerGroupHeader),
 }
@@ -142,9 +140,7 @@ impl ConsumerGroupState {
             ConsumerGroupState::Init(header) => header,
             ConsumerGroupState::LostProducer(x) => &x.header,
             ConsumerGroupState::WaitingBarrier(x) => &x.header,
-            ConsumerGroupState::ComputingProducerSelection(header) => header,
-            ConsumerGroupState::ProducerProposition(x) => &x.header,
-            ConsumerGroupState::ProducerUpdatedAtGroupLevel(x) => &x.header,
+            ConsumerGroupState::InTimelineTranslation(x) => &x.header,
             ConsumerGroupState::Idle(x) => &x.header,
             ConsumerGroupState::Dead(header) => header,
         }
@@ -166,20 +162,11 @@ pub struct WaitingBarrierState {
     pub wait_for: Vec<Vec<u8>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct ProducerPropositionState {
-    pub header: ConsumerGroupHeader,
-    pub producer_id: ProducerId,
-    pub execution_id: Vec<u8>,
-    pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct ProducerUpdatedAtGroupLevelState {
+pub struct InTimelineTranslationState {
     pub header: ConsumerGroupHeader,
-    pub producer_id: ProducerId,
-    pub execution_id: Vec<u8>,
-    pub new_shard_offsets: BTreeMap<ShardId, (ShardOffset, Slot)>,
+    pub substate: TranslationState,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -207,8 +194,7 @@ pub struct ConsumerGroupLeaderNode {
     last_revision: Revision,
     producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
-    consumer_group_store: ScyllaConsumerGroupStore,
-    producer_queries: ProducerQueries,
+    timeline_translator: Arc<dyn TimelineTranslator + Send + Sync>,
 }
 
 ///
@@ -234,8 +220,7 @@ impl ConsumerGroupLeaderNode {
         mut etcd: etcd_client::Client,
         leader_key: LeaderKey,
         leader_lease: ManagedLease,
-        consumer_group_store: ScyllaConsumerGroupStore,
-        producer_queries: ProducerQueries,
+        timeline_translator: Arc<dyn TimelineTranslator + Send + Sync>,
     ) -> anyhow::Result<Self> {
         let state_log_key = leader_log_name_from_leader_key_v1(&leader_key);
         let get_resp = etcd.get(state_log_key.as_bytes(), None).await?;
@@ -260,39 +245,10 @@ impl ConsumerGroupLeaderNode {
             state,
             last_revision,
             barrier: None,
-            consumer_group_store,
             state_log_key,
-            producer_queries,
+            timeline_translator,
         };
         Ok(ret)
-    }
-
-    async fn compute_next_producer(
-        &self,
-    ) -> anyhow::Result<(ProducerId, ExecutionId, ShardOffsetMap)> {
-        let (lcs, _max_revision) = self
-            .consumer_group_store
-            .get_lowest_common_slot_number(&self.consumer_group_id, Some(self.last_revision))
-            .await?;
-        let slot_ranges = Some(lcs - 10..=lcs);
-        let (producer_id, execution_id) = self
-            .producer_queries
-            .get_producer_id_with_least_assigned_consumer(
-                slot_ranges,
-                self.state.header().commitment_level,
-            )
-            .await?;
-
-        let seek_loc = SeekLocation::SlotApprox {
-            desired_slot: lcs,
-            min_slot: lcs - 10,
-        };
-        let shard_offset_map = self
-            .producer_queries
-            .compute_offset(producer_id, seek_loc, None)
-            .await?;
-
-        Ok((producer_id, execution_id, shard_offset_map))
     }
 
     async fn update_state_machine(&mut self, _next_step: ConsumerGroupState) -> anyhow::Result<()> {
@@ -330,6 +286,101 @@ impl ConsumerGroupLeaderNode {
         Ok(())
     }
 
+
+    async fn handle_in_timeline_translation(&self, state: &InTimelineTranslationState) -> anyhow::Result<ConsumerGroupState> {
+        let result = self.timeline_translator.next(state.substate.to_owned()).await;
+        match result {
+            Ok(substate2) => {
+                Ok(match substate2 {
+                    TranslationState::Done(inner) => ConsumerGroupState::Idle(
+                        IdleState { 
+                            header: state.header.to_owned(), 
+                            producer_id: inner.producer_id,
+                            execution_id: inner.execution_id
+                        }
+                    ),
+                    anystate => ConsumerGroupState::InTimelineTranslation(
+                        InTimelineTranslationState {
+                            header: state.header.to_owned(),
+                            substate: anystate
+                        }
+                    )
+                })
+            },
+            Err(e) => {
+                if let Some(t_err) = e.downcast_ref::<timeline::TranslationStepError>() {
+                    match t_err {
+                        timeline::TranslationStepError::ConsumerGroupNotFound => {
+                            Ok(ConsumerGroupState::Dead(state.header.clone()))
+                        },
+                        timeline::TranslationStepError::StaleProducerProposition(_) => {
+                            Ok(ConsumerGroupState::InTimelineTranslation(
+                                InTimelineTranslationState {
+                                    header: state.header.clone(),
+                                    substate: TranslationState::ComputingNextProducer(
+                                        ComputingNextProducerState {
+                                            consumer_group_id: state.header.consumer_group_id,
+                                            revision: self.last_revision
+                                        }
+                                    ),
+                                }
+                            ))
+                        }
+                    }
+                } else {
+                    anyhow::bail!(e)
+                }
+            },
+        }
+    }
+
+    async fn handle_lost_producer(&self, state: &LostProducerState) -> anyhow::Result<ConsumerGroupState> {
+        let barrier_key = Uuid::new_v4();
+        let lease_id = self.etcd.lease_client().grant(10, None).await?.id();
+        let lock_prefix = get_instance_lock_prefix_v1(self.consumer_group_id.clone());
+        // TODO add healthcheck here
+        let wait_for = self
+            .etcd
+            .kv_client()
+            .get(lock_prefix, Some(GetOptions::new().with_prefix()))
+            .await?
+            .kvs()
+            .iter()
+            .map(|kv| kv.key().to_vec())
+            .collect::<Vec<_>>();
+
+        let _barrier = etcd_utils::barrier::new_barrier(
+            self.etcd.clone(),
+            barrier_key.as_bytes(),
+            &wait_for,
+            lease_id,
+        )
+        .await?;
+
+        let next_state = ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
+            header: state.header.clone(),
+            lease_id,
+            barrier_key: barrier_key.as_bytes().to_vec(),
+            wait_for,
+        });
+        Ok(next_state)
+    }
+
+    async fn handle_wait_barrier(&self, state: &WaitingBarrierState) -> anyhow::Result<ConsumerGroupState> {
+        let barrier = get_barrier(self.etcd.clone(), &state.barrier_key).await?;
+
+        barrier.wait().await;
+        Ok(ConsumerGroupState::InTimelineTranslation(
+            InTimelineTranslationState {
+                header: state.header.to_owned(),
+                substate: self.timeline_translator.begin_translation(
+                    state.header.consumer_group_id, 
+                    self.last_revision
+                )
+            }
+        ))
+    }
+
     /// Runs the leader loop for the consumer group.
     ///
     /// This function is responsible for managing the state machine of the consumer group leader. It
@@ -350,128 +401,25 @@ impl ConsumerGroupLeaderNode {
         loop {
             let next_state = match &self.state {
                 ConsumerGroupState::Init(header) => {
-                    ConsumerGroupState::ComputingProducerSelection(header.clone())
-                }
-                ConsumerGroupState::LostProducer(LostProducerState {
-                    header,
-                    lost_producer_id: _,
-                    execution_id: _,
-                }) => {
-                    let barrier_key = Uuid::new_v4();
-                    let lease_id = self.etcd.lease_grant(10, None).await?.id();
-                    let lock_prefix = get_instance_lock_prefix_v1(self.consumer_group_id.clone());
-                    // TODO add healthcheck here
-                    let wait_for = self
-                        .etcd
-                        .get(lock_prefix, Some(GetOptions::new().with_prefix()))
-                        .await?
-                        .kvs()
-                        .iter()
-                        .map(|kv| kv.key().to_vec())
-                        .collect::<Vec<_>>();
-
-                    let barrier = etcd_utils::barrier::new_barrier(
-                        self.etcd.clone(),
-                        barrier_key.as_bytes(),
-                        &wait_for,
-                        lease_id,
-                    )
-                    .await?;
-                    self.barrier = Some(barrier);
-
-                    let next_state = ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
-                        header: header.clone(),
-                        lease_id,
-                        barrier_key: barrier_key.as_bytes().to_vec(),
-                        wait_for,
-                    });
-                    next_state
-                }
-                ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
-                    header,
-                    barrier_key,
-                    wait_for: _,
-                    lease_id: _,
-                }) => {
-                    let barrier = if let Some(barrier) = self.barrier.take() {
-                        barrier
-                    } else {
-                        get_barrier(self.etcd.clone(), barrier_key).await?
-                    };
-
-                    tokio::select! {
-                        _ = &mut interrupt_signal => return Ok(()),
-                        _ = barrier.wait() => ()
-                    }
-                    ConsumerGroupState::ComputingProducerSelection(header.clone())
-                }
-                ConsumerGroupState::ComputingProducerSelection(header) => {
-                    let (producer_id, execution_id, new_shard_offsets) =
-                        self.compute_next_producer().await?;
-                    ConsumerGroupState::ProducerProposition(ProducerPropositionState {
-                        header: header.clone(),
-                        producer_id,
-                        execution_id,
-                        new_shard_offsets,
-                    })
-                }
-                ConsumerGroupState::ProducerProposition(ProducerPropositionState {
-                    header,
-                    producer_id,
-                    execution_id,
-                    new_shard_offsets: new_shard_offset,
-                }) => {
-                    let remote_state = self.producer_queries.get_execution_id(*producer_id).await?;
-                    match remote_state {
-                        Some((_remote_revision, remote_execution_id)) => {
-                            if *execution_id != remote_execution_id {
-                                ConsumerGroupState::ComputingProducerSelection(header.clone())
-                            } else {
-                                self.consumer_group_store
-                                    .update_consumer_group_producer(
-                                        &self.consumer_group_id,
-                                        producer_id,
-                                        execution_id,
-                                        self.last_revision,
-                                    )
-                                    .await?;
-
-                                ConsumerGroupState::ProducerUpdatedAtGroupLevel(
-                                    ProducerUpdatedAtGroupLevelState {
-                                        header: header.clone(),
-                                        producer_id: *producer_id,
-                                        execution_id: execution_id.clone(),
-                                        new_shard_offsets: new_shard_offset.clone(),
-                                    },
-                                )
-                            }
+                    ConsumerGroupState::InTimelineTranslation(
+                        InTimelineTranslationState {
+                            header: header.to_owned(),
+                            substate: self.timeline_translator.begin_translation(
+                                header.consumer_group_id, 
+                                self.last_revision
+                            )
                         }
-                        None => ConsumerGroupState::ComputingProducerSelection(header.clone()),
-                    }
+                    )
                 }
-                ConsumerGroupState::ProducerUpdatedAtGroupLevel(
-                    ProducerUpdatedAtGroupLevelState {
-                        header,
-                        producer_id,
-                        execution_id,
-                        new_shard_offsets: new_shard_offset,
-                    },
-                ) => {
-                    self.consumer_group_store
-                        .set_static_group_members_shard_offset(
-                            &self.consumer_group_id,
-                            producer_id,
-                            execution_id,
-                            new_shard_offset,
-                            self.last_revision,
-                        )
-                        .await?;
-                    ConsumerGroupState::Idle(IdleState {
-                        header: header.clone(),
-                        producer_id: *producer_id,
-                        execution_id: execution_id.clone(),
-                    })
+                ConsumerGroupState::LostProducer(inner) => {
+                    self.handle_lost_producer(inner).await?
                 }
+                ConsumerGroupState::WaitingBarrier(inner) => {
+                    self.handle_wait_barrier(inner).await?
+                },
+                ConsumerGroupState::InTimelineTranslation(inner) => {
+                    self.handle_in_timeline_translation(inner).await?
+                },
                 ConsumerGroupState::Idle(IdleState {
                     header,
                     producer_id,

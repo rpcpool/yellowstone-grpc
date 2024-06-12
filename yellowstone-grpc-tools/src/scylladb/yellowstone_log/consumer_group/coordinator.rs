@@ -9,7 +9,7 @@ use {
         },
         lock::{ConsumerLock, ConsumerLocker},
         producer_queries::ProducerQueries,
-        shard_iterator::{ShardFilter, ShardIterator},
+        shard_iterator::{ShardFilter, ShardIterator}, timeline::ScyllaTimelineTranslator,
     },
     crate::scylladb::{
         etcd_utils::{lease::ManagedLease, Revision},
@@ -439,15 +439,17 @@ impl ConsumerGroupCoordinatorBackend {
         let etcd = self.etcd.clone();
         let consumer_group_store = self.consumer_group_store.clone();
         let producer_queries = self.producer_queries.clone();
-
+        let timeline_translator = ScyllaTimelineTranslator {
+            consumer_group_store,
+            producer_queries,
+        };
         let (tx, rx) = oneshot::channel();
         let h = tokio::spawn(async move {
             let mut leader = ConsumerGroupLeaderNode::new(
                 etcd,
                 leader_key,
                 leader_lease,
-                consumer_group_store,
-                producer_queries,
+                Arc::new(timeline_translator),
             )
             .await?;
 

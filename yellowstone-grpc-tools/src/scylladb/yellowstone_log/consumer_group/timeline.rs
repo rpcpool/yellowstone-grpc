@@ -10,13 +10,14 @@ use crate::scylladb::{types::{ConsumerGroupId, ExecutionId, ProducerId, ShardOff
 use super::{consumer_group_store::ScyllaConsumerGroupStore, producer_queries::ProducerQueries};
 
 
+/// Represents the state of computing the next producer in the timeline translation process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ComputingNextProducerState {
     pub consumer_group_id: ConsumerGroupId,
     pub revision: i64,
 }
 
-
+/// Represents the state of a producer proposal in the timeline translation process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProducerProposalState {
     pub consumer_group_id: ConsumerGroupId,
@@ -26,16 +27,46 @@ pub struct ProducerProposalState {
     pub new_shard_offsets: ShardOffsetMap,
 }
 
+/// Represents the state of a completed translation in the timeline translation process.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TranslationDoneState {
+    pub producer_id: ProducerId,
+    pub execution_id: ExecutionId,
+    pub new_shard_offsets: ShardOffsetMap
+}
+
+/// Represents the possible states in the timeline translation process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TranslationState {
     ComputingNextProducer(ComputingNextProducerState),
     ProducerProposal(ProducerProposalState),
-    Done
+    Done(TranslationDoneState)
 }
-
-
+/// Trait for timeline translators.
+///
+/// This trait represents an API to handle a timeline translation state machine. The translator
+/// follows the visitor pattern, where each state is visited and processed accordingly.
+/// 
+/// This trait defines two methods: `begin_translation` and `next`. The `begin_translation` method
+/// starts the translation process with the given consumer group ID and revision, and returns the
+/// initial state of the translation. The `next` method advances the translation process to the
+/// next state based on the current state, and returns the updated state.
 #[async_trait]
 pub trait TimelineTranslator {
+    /// Begins the translation process with the given consumer group ID and revision.
+    ///
+    /// This method initializes the translation process by creating the initial state of the
+    /// translation. It takes in the `consumer_group_id` and `revision` as parameters, and returns
+    /// the initial state of the translation.
+    ///
+    /// # Arguments
+    ///
+    /// * `consumer_group_id` - The ID of the consumer group.
+    /// * `revision` - The revision number.
+    ///
+    /// # Returns
+    ///
+    /// The initial state of the translation.
     fn begin_translation(
         &self, 
         consumer_group_id: ConsumerGroupId,
@@ -49,37 +80,54 @@ pub trait TimelineTranslator {
         )
     }
 
-
+    /// Advances the translation process to the next state.
+    ///
+    /// This method takes in the current state of the translation as a parameter, and advances the
+    /// translation process to the next state based on the current state. It returns the updated
+    /// state of the translation.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current state of the translation.
+    ///
+    /// # Returns
+    ///
+    /// The updated state of the translation.
     async fn next(&self, state: TranslationState) -> anyhow::Result<TranslationState> {
         match state {
             TranslationState::ComputingNextProducer(inner) => self.compute_next_producer(inner).await,
             TranslationState::ProducerProposal(inner) => self.accept_proposal(inner).await,
-            TranslationState::Done => Ok(TranslationState::Done),
+            TranslationState::Done(inner) => Ok(TranslationState::Done(inner)),
         }
     }
 
+    /// Computes the next producer in the timeline translation process.
+    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> anyhow::Result<TranslationState>;
+
+    /// Accepts a producer proposal in the timeline translation process.
     async fn accept_proposal(&self, state: ProducerProposalState) -> anyhow::Result<TranslationState>;
 
-    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> anyhow::Result<TranslationState>;
 }
 
 
-
-
-struct ScyllaTimelineTranslator {
-    consumer_group_store: ScyllaConsumerGroupStore,
-    producer_queries: ProducerQueries,
+pub struct ScyllaTimelineTranslator {
+    pub consumer_group_store: ScyllaConsumerGroupStore,
+    pub producer_queries: ProducerQueries,
 }
 
 
 #[derive(Debug, Clone, Error, Eq, PartialEq)]
 pub enum TranslationStepError {
-    ConsumerGroupNotFound
+    ConsumerGroupNotFound,
+    StaleProducerProposition(String)
 }
 
 impl fmt::Display for TranslationStepError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        match self {
+            TranslationStepError::ConsumerGroupNotFound => write!(f, "consumer group no longuer exists"),
+            TranslationStepError::StaleProducerProposition(e) => write!(f, "producer proposal is stale: {}", e),
+        }
     }
 }
 
@@ -131,6 +179,27 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
     }
 
     async fn accept_proposal(&self, state: ProducerProposalState) -> anyhow::Result<TranslationState> {
+
+        let maybe = self.producer_queries.get_execution_id(state.producer_id).await?;
+
+        match maybe {
+            Some((_, actual_execution_id)) => {
+                anyhow::ensure!(
+                    actual_execution_id == state.execution_id,
+                    TranslationStepError::StaleProducerProposition(
+                        format!("producer's execution id changed before translation could finish")
+                    )
+                )
+            },
+            None => {
+                anyhow::bail!(
+                    TranslationStepError::StaleProducerProposition(
+                        format!("producer with id {:?} no longuer exists", state.producer_id)
+                    )
+                )
+            },
+        }
+
         self.consumer_group_store
             .set_static_group_members_shard_offset(
                 &state.consumer_group_id,
@@ -149,8 +218,12 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
                 state.revision,
             )
             .await?;
-
-        Ok(TranslationState::Done)
+        let done_state = TranslationDoneState {
+            producer_id: state.producer_id, 
+            execution_id: state.execution_id, 
+            new_shard_offsets: state.new_shard_offsets, 
+        };
+        Ok(TranslationState::Done(done_state))
     }
 
 }
