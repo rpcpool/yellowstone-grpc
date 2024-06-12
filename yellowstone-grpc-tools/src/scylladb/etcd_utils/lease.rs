@@ -11,8 +11,8 @@ use {
 pub struct ManagedLease {
     pub lease_id: i64,
     keep_alive_response_watch: watch::Receiver<Instant>,
-    _sender: oneshot::Sender<()>,
-    _lifecycle_handle: JoinHandle<()>,
+    tx_terminate: oneshot::Sender<()>,
+    lifecycle_handle: JoinHandle<()>,
 }
 
 impl ManagedLease {
@@ -66,12 +66,18 @@ impl ManagedLease {
         Ok(ManagedLease {
             lease_id,
             keep_alive_response_watch: wreceiver,
-            _sender: sender,
-            _lifecycle_handle: lifecycle_handle,
+            tx_terminate: sender,
+            lifecycle_handle: lifecycle_handle,
         })
     }
 
     pub fn last_keep_alive(&self) -> Instant {
         self.keep_alive_response_watch.borrow().to_owned()
+    }
+
+
+    pub async fn revoke(self) -> anyhow::Result<()> {
+        drop(self.tx_terminate);
+        self.lifecycle_handle.await.map_err(anyhow::Error::new)
     }
 }

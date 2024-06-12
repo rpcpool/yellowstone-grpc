@@ -1,9 +1,9 @@
 use {
-    futures::{future, FutureExt}, local_ip_address::{linux::local_ip, list_afinet_netifas}, scylla::{Session, SessionBuilder}, std::sync::Arc, tokio::sync::{broadcast, mpsc, watch}, uuid::Uuid, yellowstone_grpc_tools::scylladb::{
+    futures::{future, FutureExt}, local_ip_address::{linux::local_ip, list_afinet_netifas}, scylla::{Session, SessionBuilder}, std::sync::Arc, tokio::sync::{broadcast, mpsc, watch}, uuid::Uuid, yellowstone_grpc_tools::{scylladb::{
         etcd_utils::Revision, types::BlockchainEventType, yellowstone_log::consumer_group::{
             consumer_group_store::ScyllaConsumerGroupStore, consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle}, consumer_supervisor::ConsumerSourceSupervisor, leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState, WaitingBarrierState}, lock::{ConsumerLock, ConsumerLocker}, producer_queries::ProducerQueries
         }
-    }
+    }, setup_tracing}
 };
 
 pub struct TestContext {

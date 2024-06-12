@@ -68,6 +68,10 @@ impl ManagedLock {
             _ => panic!("unexpected operation in etcd txn response"),
         }
     }
+
+    pub async fn revoke(self) -> anyhow::Result<()> {
+        self.managed_lease.revoke().await
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Error)]

@@ -23,13 +23,13 @@ use {
         },
     }, bincode::{deserialize, serialize}, etcd_client::{
         Compare, EventType, GetOptions, LeaderKey, PutOptions, Txn, TxnOp, WatchOptions,
-    }, futures::Future, local_ip_address::list_afinet_netifas, scylla::transport::errors::TranslationError, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, sync::Arc, time::Duration}, thiserror::Error, tokio::{
+    }, futures::Future, local_ip_address::list_afinet_netifas, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, sync::Arc, time::Duration}, thiserror::Error, tokio::{
         sync::{
             oneshot::{self, error::RecvError},
             watch,
         },
         task::JoinHandle,
-    }, tokio_stream::StreamExt, tracing::{info, warn}, uuid::Uuid
+    }, tokio_stream::StreamExt, tracing::{error, info, warn}, uuid::Uuid
 };
 
 const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
@@ -43,8 +43,16 @@ enum LeaderCommand {
 /// Cancel safe producer dead signal
 struct ProducerDeadSignal {
     // When this object is drop, the sender will drop too and cancel the watch automatically
-    _cancel_watcher_tx: oneshot::Sender<()>,
+    #[allow(dead_code)]
+    cancel_watcher_tx: oneshot::Sender<()>,
     inner: oneshot::Receiver<()>,
+}
+
+impl ProducerDeadSignal {
+
+    pub fn try_recv(&mut self) -> Result<(), oneshot::error::TryRecvError> {
+        self.inner.try_recv()
+    }
 }
 
 impl Future for ProducerDeadSignal {
@@ -73,56 +81,62 @@ async fn get_producer_dead_signal(
         .await?;
 
     let (tx, rx) = oneshot::channel();
-    let get_resp = etcd.get(producer_lock_path.as_bytes(), None).await?;
+    let get_resp = etcd.get(
+        producer_lock_path.as_str(), 
+        Some(GetOptions::new().with_prefix())
+    ).await?;
 
-    let (cancel_watch_tx, cancel_watch_rx) = oneshot::channel::<()>();
-
-    tokio::spawn(async move {
-        let _ = cancel_watch_rx.await;
-        let _ = watch_handle.cancel().await;
-    });
+    let (cancel_watch_tx, mut cancel_watch_rx) = oneshot::channel::<()>();
 
     // If the producer is already dead, we can quit early
     if get_resp.count() == 0 {
+        warn!("producer lock was not found, producer is dead already");
         tx.send(())
             .map_err(|_| anyhow::anyhow!("failed to early notify dead producer"))?;
         return Ok(ProducerDeadSignal {
-            _cancel_watcher_tx: cancel_watch_tx,
+            cancel_watcher_tx: cancel_watch_tx,
             inner: rx,
         });
     }
+    let anchor_revision = get_resp.kvs()[0].mod_revision();
 
     tokio::spawn(async move {
-        while let Some(message) = stream
-            .message()
-            .await
-            .expect("watch stream was terminated early")
-        {
-            let ev_type = message
-                .events()
-                .first()
-                .map(|ev| ev.event_type())
-                .expect("watch received a none event");
-            match ev_type {
-                etcd_client::EventType::Put => {
-                    panic!("corrupted system state, producer was created after dead signal")
+        'outer: loop {
+            tokio::select! {
+                _ = &mut cancel_watch_rx => {
+                    info!("producer dead signal watcher was canceled");
+                    break 'outer;
                 }
-                etcd_client::EventType::Delete => {
-                    if tx.send(()).is_err() {
-                        warn!("producer dead signal receiver half was terminated before signal was send");
+                Some(Ok(msg)) = stream.next() => {
+                    for ev in msg.events() {
+                        match ev.event_type() {
+                            etcd_client::EventType::Put => {
+                                warn!("producer lock was updated");
+                                let kv = ev.kv().expect("empty put response");
+                                if kv.mod_revision() > anchor_revision {
+                                    break 'outer;
+                                }
+                            }
+                            etcd_client::EventType::Delete => {
+                                warn!("producer lock was deleted");
+                                break 'outer;
+                            }
+                        }
                     }
-                    break;
                 }
             }
         }
+        if tx.send(()).is_err() {
+            warn!("producer dead signal receiver half was terminated before signal was send");
+        }
+        let _ = watch_handle.cancel().await;
     });
     Ok(ProducerDeadSignal {
-        _cancel_watcher_tx: cancel_watch_tx,
+        cancel_watcher_tx: cancel_watch_tx,
         inner: rx,
     })
 }
 
-type EtcdKey = Vec<u8>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ConsumerGroupState {
@@ -200,15 +214,15 @@ pub struct ConsumerGroupLeaderNode {
 ///
 /// This error is raised when there is no active producer for the desired commitment level.
 ///
-#[derive(Copy, Error, PartialEq, Eq, Debug, Clone)]
-pub enum LeaderInitError {
-    FailedToUpdateStateLog,
+#[derive(Error, PartialEq, Eq, Debug, Clone)]
+pub enum LeaderNodeError {
+    FailedToUpdateStateLog(String),
 }
 
-impl fmt::Display for LeaderInitError {
+impl fmt::Display for LeaderNodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LeaderInitError::FailedToUpdateStateLog => f.write_str("FailedToUpdateStateLog"),
+            LeaderNodeError::FailedToUpdateStateLog(e) => write!(f, "failed to update log, {}", e),
         }
     }
 }
@@ -251,25 +265,31 @@ impl ConsumerGroupLeaderNode {
         Ok(ret)
     }
 
-    async fn update_state_machine(&mut self, _next_step: ConsumerGroupState) -> anyhow::Result<()> {
+    pub fn state(&self) -> &ConsumerGroupState {
+        &self.state
+    }
+
+    async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
         let leader_log_key = &self.state_log_key;
-        let state2 = self.state.clone();
         let txn = etcd_client::Txn::new()
             .when(vec![
                 Compare::version(self.leader_key.key(), etcd_client::CompareOp::Greater, 0),
                 Compare::mod_revision(
                     leader_log_key.as_str(),
-                    etcd_client::CompareOp::Less,
+                    etcd_client::CompareOp::Equal,
                     self.last_revision,
                 ),
             ])
             .and_then(vec![TxnOp::put(
                 leader_log_key.as_str(),
-                serialize(&state2)?,
+                serialize(&next_step)?,
                 None,
             )]);
 
         let txn_resp = self.etcd.txn(txn).await?;
+        
+        anyhow::ensure!(txn_resp.succeeded(), LeaderNodeError::FailedToUpdateStateLog(format!("{txn_resp:?}")));
+
         let revision = txn_resp
             .op_responses()
             .pop()
@@ -277,12 +297,12 @@ impl ConsumerGroupLeaderNode {
                 etcd_client::TxnOpResponse::Put(put_resp) => {
                     put_resp.header().map(|header| header.revision())
                 }
-                _ => panic!("unexpected op"),
+                _ => panic!("unexpected txn op response"),
             })
-            .ok_or(LeaderInitError::FailedToUpdateStateLog)?;
+            .expect("unexpected txn response");
 
         self.last_revision = revision;
-        self.state = state2;
+        self.state = next_step;
         Ok(())
     }
 
@@ -379,6 +399,60 @@ impl ConsumerGroupLeaderNode {
                 )
             }
         ))
+    }
+
+    pub async fn step(&mut self) -> anyhow::Result<()> {
+        let next_state = match &self.state {
+            ConsumerGroupState::Init(header) => {
+                Some(ConsumerGroupState::InTimelineTranslation(
+                    InTimelineTranslationState {
+                        header: header.to_owned(),
+                        substate: self.timeline_translator.begin_translation(
+                            header.consumer_group_id, 
+                            self.last_revision
+                        )
+                    }
+                ))
+            }
+            ConsumerGroupState::LostProducer(inner) => {
+                Some(self.handle_lost_producer(inner).await?)
+            }
+            ConsumerGroupState::WaitingBarrier(inner) => {
+                Some(self.handle_wait_barrier(inner).await?)
+            },
+            ConsumerGroupState::InTimelineTranslation(inner) => {
+                Some(self.handle_in_timeline_translation(inner).await?)
+            },
+            ConsumerGroupState::Idle(IdleState {
+                header,
+                producer_id,
+                execution_id,
+            }) => {
+                let signal = self.producer_dead_signal.get_or_insert(
+                    get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
+                );
+                if let Ok(()) = signal.try_recv() {
+                    warn!("received dead signal from producer {producer_id:?}");
+                    Some(ConsumerGroupState::LostProducer (LostProducerState {
+                        header: header.clone(),
+                        lost_producer_id: *producer_id,
+                        execution_id: execution_id.clone()
+                    }))
+                } else {
+                    None
+                }
+            }
+            ConsumerGroupState::Dead(_) => {
+                anyhow::bail!(DeadConsumerGroup(self.consumer_group_id.clone()))
+            }
+        };
+        if let Some(next_state) = next_state {
+            info!("updating state machine");
+            self.update_state_machine(next_state).await
+        } else {
+            info!("skipping state transation no state change detected");
+            Ok(())
+        }
     }
 
     /// Runs the leader loop for the consumer group.
@@ -603,7 +677,7 @@ pub struct LeaderInfo {
 
 fn leader_log_name_from_leader_key_v1(lk: &LeaderKey) -> String {
     let lk_name = lk.name_str().expect("invalid leader key name");
-    format!("v1#{lk_name}#log")
+    format!("{lk_name}#log")
 }
 
 pub fn leader_log_name_from_cg_id_v1(consumer_group_id: ConsumerGroupId) -> String {
