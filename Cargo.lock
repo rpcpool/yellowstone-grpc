@@ -5498,7 +5498,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.15.0+solana.1.18.15"
+version = "1.15.0+solana.1.18"
 dependencies = [
  "bytes",
  "futures",
@@ -5511,7 +5511,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.13.0+solana.1.18.14"
+version = "1.13.0+solana.1.18"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5534,7 +5534,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.15.0+solana.1.18.15"
+version = "1.15.0+solana.1.18"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -5567,7 +5567,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.14.0+solana.1.18.15"
+version = "1.14.0+solana.1.18"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5582,7 +5582,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.11+solana.1.18.15"
+version = "1.0.0-rc.11+solana.1.18"
 dependencies = [
  "anyhow",
  "async-trait",
