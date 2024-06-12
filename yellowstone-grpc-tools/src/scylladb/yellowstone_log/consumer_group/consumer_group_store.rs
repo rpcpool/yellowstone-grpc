@@ -1,6 +1,5 @@
 use {
-    super::producer_queries::ProducerQueries,
-    crate::scylladb::{
+    super::producer_queries::ProducerQueries, crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
@@ -8,11 +7,7 @@ use {
             ShardOffsetMap, Slot,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
-    },
-    scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
-    std::{collections::BTreeMap, net::IpAddr, sync::Arc},
-    tracing::info,
-    uuid::Uuid,
+    }, scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session}, std::{collections::BTreeMap, net::IpAddr, sync::Arc}, tonic::async_trait, tracing::info, uuid::Uuid
 };
 
 const NUM_SHARDS: usize = 64;
@@ -107,7 +102,7 @@ const GET_NEW_TX_SHARD_OFFSET: &str = r###"
 "###;
 
 #[derive(Clone)]
-pub struct ConsumerGroupStore {
+pub struct ScyllaConsumerGroupStore {
     session: Arc<Session>,
     etcd: etcd_client::Client,
     producer_queries: ProducerQueries,
@@ -133,7 +128,42 @@ fn assign_shards(ids: &[ConsumerId], num_shards: usize) -> BTreeMap<ConsumerId, 
     ids.into_iter().zip(chunk_it).collect()
 }
 
-impl ConsumerGroupStore {
+
+// #[async_trait]
+// pub trait ConsumerGroupStore {
+//     async fn update_consumer_group_producer(
+//         &self,
+//         consumer_group_id: &ConsumerGroupId,
+//         producer_id: &ProducerId,
+//         execution_id: &ExecutionId,
+//         revision: i64,
+//     ) -> anyhow::Result<()>;
+
+//     async fn get_shard_offset_map(
+//         &self,
+//         consumer_group_id: &ConsumerGroupId,
+//         consumer_id: &ConsumerId,
+//         execution_id: &ExecutionId,
+//         blockchain_event_types: BlockchainEventType,
+//     ) -> anyhow::Result<(i64, ShardOffsetMap)>;
+
+//     async fn get_consumer_group_info(
+//         &self,
+//         consumer_group_id: &ConsumerGroupId,
+//     ) -> anyhow::Result<Option<ConsumerGroupInfo>>;
+    
+//     async fn get_lowest_common_slot_number(
+//         &self,
+//         consumer_group_id: &ConsumerGroupId,
+//         max_revision_opt: Option<i64>,
+//     ) -> anyhow::Result<(Slot, i64)>;
+
+    
+// }
+
+
+
+impl ScyllaConsumerGroupStore {
     pub async fn new(session: Arc<Session>, etcd: etcd_client::Client) -> anyhow::Result<Self> {
         let create_static_consumer_group_ps = session.prepare(CREATE_STATIC_CONSUMER_GROUP).await?;
 
@@ -154,7 +184,7 @@ impl ConsumerGroupStore {
         get_acc_update_shard_offset_ps.set_consistency(Consistency::Serial);
         get_new_tx_shard_offset_ps.set_consistency(Consistency::Serial);
 
-        let this = ConsumerGroupStore {
+        let this = ScyllaConsumerGroupStore {
             session: Arc::clone(&session),
             create_static_consumer_group_ps,
             get_static_consumer_group_ps,
@@ -352,14 +382,14 @@ impl ConsumerGroupStore {
             cg_info.revision <= current_revision,
             "consumer group is more up to date then current operation"
         );
-        anyhow::ensure!(
-            cg_info.producer_id == Some(*producer_id),
-            "producer id mismatch"
-        );
-        anyhow::ensure!(
-            cg_info.execution_id == Some(execution_id.clone()),
-            "execution id mismatch"
-        );
+        // anyhow::ensure!(
+        //     cg_info.producer_id == Some(*producer_id),
+        //     "producer id mismatch"
+        // );
+        // anyhow::ensure!(
+        //     cg_info.execution_id == Some(execution_id.clone()),
+        //     "execution id mismatch"
+        // );
 
         for (consumer_id, shard_ids) in cg_info.consumer_id_shard_assignments.iter() {
             let my_shard_offset_map = shard_ids
@@ -380,7 +410,7 @@ impl ConsumerGroupStore {
                 consumer_group_id.clone(),
                 consumer_id,
                 producer_id,
-                &cg_info.execution_id,
+                &execution_id,
                 &my_shard_offset_map,
                 &my_shard_offset_map,
                 current_revision,
@@ -397,7 +427,7 @@ impl ConsumerGroupStore {
                     current_revision,
                     consumer_group_id.clone(),
                     consumer_id,
-                    &cg_info.execution_id,
+                    &execution_id,
                     current_revision,
                 );
                 let lwt_result2 = self

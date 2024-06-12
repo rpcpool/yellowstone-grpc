@@ -1,5 +1,6 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 CREATE KEYSPACE solana2 WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
+CREATE KEYSPACE intg_test WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 
 
 drop materialized view if exists producer_consumer_mapping_mv;
@@ -78,16 +79,7 @@ create table if not exists consumer_groups (
     primary key (consumer_group_id)
 );
 
-create materialized view if not exists consumer_group_member_mv
-as
-    select
-        consumer_group_id,
-        consumer_id
-    from consumer_info
-    where
-        consumer_id is not null
-        and consumer_group_id is not null
-primary key (consumer_group_id, consumer_id);
+
 
 create table if not exists consumer_info (
     consumer_id blob,
@@ -100,6 +92,17 @@ create table if not exists consumer_info (
     updated_at timestamp,
     PRIMARY KEY (consumer_id)
 );
+
+create materialized view if not exists consumer_group_member_mv
+as
+    select
+        consumer_group_id,
+        consumer_id
+    from consumer_info
+    where
+        consumer_id is not null
+        and consumer_group_id is not null
+primary key (consumer_group_id, consumer_id);
 
 create materialized view if not exists producer_consumer_mapping_mv
 as

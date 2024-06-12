@@ -23,7 +23,7 @@ use {
             types::Transaction,
             yellowstone_log::{
                 consumer_group::{
-                    consumer_group_store::ConsumerGroupStore,
+                    consumer_group_store::ScyllaConsumerGroupStore,
                     coordinator::ConsumerGroupCoordinatorBackend,
                     producer_queries::ProducerQueries,
                 },
@@ -110,7 +110,7 @@ impl ArgsAction {
         let etcd_client = etcd_client::Client::connect(etcd_endpoints, None).await?;
         let session = Arc::new(session);
         let consumer_group_store =
-            ConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
+            ScyllaConsumerGroupStore::new(Arc::clone(&session), etcd_client.clone()).await?;
         let producer_queries =
             ProducerQueries::new(Arc::clone(&session), etcd_client.clone()).await?;
         let (coordinator, coordinator_backend_handle) = ConsumerGroupCoordinatorBackend::spawn(

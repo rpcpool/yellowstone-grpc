@@ -1,6 +1,6 @@
 use {
     super::{
-        consumer_group_store::ConsumerGroupStore,
+        consumer_group_store::ScyllaConsumerGroupStore,
         consumer_source::{ConsumerSource, FromBlockchainEvent},
         consumer_supervisor::{ConsumerSourceSupervisor, ConsumerSourceSupervisorHandle},
         leader::{
@@ -44,7 +44,7 @@ pub struct ConsumerGroupCoordinatorBackend {
     etcd: etcd_client::Client,
     session: Arc<Session>,
     instance_locker: ConsumerLocker,
-    consumer_group_store: ConsumerGroupStore,
+    consumer_group_store: ScyllaConsumerGroupStore,
     producer_queries: ProducerQueries,
     leader_ifname: String,
 
@@ -251,7 +251,7 @@ impl ConsumerGroupCoordinatorBackend {
     pub fn spawn(
         etcd: etcd_client::Client,
         session: Arc<Session>,
-        consumer_group_store: ConsumerGroupStore,
+        consumer_group_store: ScyllaConsumerGroupStore,
         producer_queries: ProducerQueries,
         leader_ifname: String,
     ) -> (ConsumerGroupCoordinator, JoinHandle<anyhow::Result<()>>) {

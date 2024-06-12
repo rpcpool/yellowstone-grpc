@@ -1,6 +1,6 @@
 use {
     super::{
-        consumer_group_store::ConsumerGroupStore,
+        consumer_group_store::ScyllaConsumerGroupStore,
         consumer_source::{ConsumerSource, ConsumerSourceHandle, FromBlockchainEvent},
         context::ConsumerContext,
         leader::{ConsumerGroupState, IdleState, WaitingBarrierState},
@@ -37,7 +37,7 @@ pub struct ConsumerSourceSupervisor {
     consumer_lock: ConsumerLock,
     etcd: etcd_client::Client,
     session: Arc<Session>,
-    consumer_group_store: ConsumerGroupStore,
+    consumer_group_store: ScyllaConsumerGroupStore,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
 }
 
@@ -47,7 +47,7 @@ struct InnerSupervisor<F: ConsumerSourceSpawner> {
     consumer_lock: ConsumerLock,
     etcd: etcd_client::Client,
     session: Arc<Session>,
-    consumer_group_store: ConsumerGroupStore,
+    consumer_group_store: ScyllaConsumerGroupStore,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
     factory: F,
 }
@@ -255,7 +255,7 @@ impl ConsumerSourceSupervisor {
         consumer_lock: ConsumerLock,
         etcd: etcd_client::Client,
         session: Arc<Session>,
-        consumer_group_store: ConsumerGroupStore,
+        consumer_group_store: ScyllaConsumerGroupStore,
         leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
     ) -> Self {
         let consumer_id = consumer_lock.consumer_id.clone();

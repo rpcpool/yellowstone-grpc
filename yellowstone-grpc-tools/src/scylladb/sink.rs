@@ -72,8 +72,8 @@ const UPDATE_PRODUCER_LOCK_EXECUTION_ID: &str = r###"
 const GET_PRODUCER_INFO_BY_ID: &str = r###"
     SELECT
         producer_id,
-        num_shards,
-        commitment_level
+        commitment_level,
+        num_shards
     FROM producer_info
     WHERE producer_id = ?
 "###;

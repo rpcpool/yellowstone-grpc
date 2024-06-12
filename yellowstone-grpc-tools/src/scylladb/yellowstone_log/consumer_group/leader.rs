@@ -1,6 +1,6 @@
 use {
     super::{
-        consumer_group_store::ConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
+        consumer_group_store::ScyllaConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
         producer_queries::ProducerQueries,
     }, crate::scylladb::{
         self,
@@ -29,7 +29,7 @@ use {
             watch,
         },
         task::JoinHandle,
-    }, tokio_stream::StreamExt, tracing::warn, uuid::Uuid
+    }, tokio_stream::StreamExt, tracing::{info, warn}, uuid::Uuid
 };
 
 const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
@@ -207,7 +207,7 @@ pub struct ConsumerGroupLeaderNode {
     last_revision: Revision,
     producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
-    consumer_group_store: ConsumerGroupStore,
+    consumer_group_store: ScyllaConsumerGroupStore,
     producer_queries: ProducerQueries,
 }
 
@@ -227,12 +227,14 @@ impl fmt::Display for LeaderInitError {
     }
 }
 
+
+
 impl ConsumerGroupLeaderNode {
     pub async fn new(
         mut etcd: etcd_client::Client,
         leader_key: LeaderKey,
         leader_lease: ManagedLease,
-        consumer_group_store: ConsumerGroupStore,
+        consumer_group_store: ScyllaConsumerGroupStore,
         producer_queries: ProducerQueries,
     ) -> anyhow::Result<Self> {
         let state_log_key = leader_log_name_from_leader_key_v1(&leader_key);
@@ -645,25 +647,25 @@ pub async fn observe_consumer_group_state(
     Ok(rx)
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LeaderInfo {
-    ipaddr: IpAddr,
-    id: Vec<u8>,
+    pub ipaddr: IpAddr,
+    pub id: Vec<u8>,
 }
 
 fn leader_log_name_from_leader_key_v1(lk: &LeaderKey) -> String {
     let lk_name = lk.name_str().expect("invalid leader key name");
-    format!("v1/{lk_name}/log",)
+    format!("v1#{lk_name}#log")
 }
 
 pub fn leader_log_name_from_cg_id_v1(consumer_group_id: ConsumerGroupId) -> String {
     let uuid = Uuid::from_bytes(consumer_group_id).to_string();
-    format!("v1/cg-leader-{uuid}/log")
+    format!("v1#cg-leader-{uuid}#log")
 }
 
 fn leader_name_v1(consumer_group_id: ConsumerGroupId) -> String {
     let uuid = Uuid::from_bytes(consumer_group_id).to_string();
-    format!("v1/cg-leader-{uuid}")
+    format!("v1#cg-leader-{uuid}")
 }
 
 /// Observes changes to the leader of the given consumer group. Returns a watch receiver that will
@@ -692,7 +694,7 @@ pub async fn observe_leader_changes(
         .take_kvs()
         .into_iter()
         .max_by_key(|kv| kv.mod_revision())
-        .map(|kv| deserialize::<LeaderInfo>(kv.value()))
+        .map(|kv| serde_json::from_slice::<LeaderInfo>(kv.value()))
         .transpose()?;
 
     let (tx, rx) = watch::channel(initital_value);
@@ -717,7 +719,9 @@ pub async fn observe_leader_changes(
                     for ev in msg.events() {
                         let payload = match ev.event_type() {
                             EventType::Put => ev.kv().map(|kv| {
-                                deserialize::<LeaderInfo>(kv.value())
+                                // deserialize::<LeaderInfo>(kv.value())
+                                //     .expect("invalid leader state log format")
+                                serde_json::from_slice::<LeaderInfo>(kv.value())
                                     .expect("invalid leader state log format")
                             }),
                             EventType::Delete => None,
@@ -740,7 +744,7 @@ pub async fn observe_leader_changes(
 pub async fn try_become_leader(
     etcd: etcd_client::Client,
     consumer_group_id: ConsumerGroupId,
-    wait_for: Duration,
+    timeout: Duration,
     leader_ifname: String,
 ) -> anyhow::Result<Option<(LeaderKey, ManagedLease)>> {
     let network_interfaces = list_afinet_netifas()?;
@@ -768,14 +772,15 @@ pub async fn try_become_leader(
         ipaddr,
         id: id.as_bytes().to_vec(),
     };
-    const LEASE_TTL: Duration = Duration::from_secs(60);
-    let etcd2 = etcd.clone();
-    let lease = ManagedLease::new(etcd2, LEADER_LEASE_TTL, None).await?;
+    let lease = ManagedLease::new(etcd.clone(), LEADER_LEASE_TTL, None).await?;
+    
     tokio::select! {
-        _ = tokio::time::sleep(wait_for) => {
+        _ = tokio::time::sleep(timeout) => {
+            warn!("failed to become leader in time");
             return Ok(None)
         },
-        Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serialize(&leader_info)?, lease.lease_id) => {
+        Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serde_json::to_string(&leader_info)?, lease.lease_id) => {
+            info!("became leader for {leader_name}");
             let payload = campaign_resp
                 .take_leader()
                 .map(|lk| (lk, lease));

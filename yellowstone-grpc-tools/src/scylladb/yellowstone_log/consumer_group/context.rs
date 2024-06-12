@@ -1,6 +1,6 @@
 use {
     super::{
-        consumer_group_store::ConsumerGroupStore, lock::FencingTokenGenerator,
+        consumer_group_store::ScyllaConsumerGroupStore, lock::FencingTokenGenerator,
         producer_queries::ProducerQueries, shard_iterator::ShardFilter,
     },
     crate::scylladb::{
@@ -23,7 +23,7 @@ pub struct ConsumerContext {
     pub subscribed_event_types: Vec<BlockchainEventType>,
     pub session: Arc<Session>,
     pub etcd: etcd_client::Client,
-    pub consumer_group_store: ConsumerGroupStore,
+    pub consumer_group_store: ScyllaConsumerGroupStore,
     pub fencing_token_generator: FencingTokenGenerator,
 }
 
