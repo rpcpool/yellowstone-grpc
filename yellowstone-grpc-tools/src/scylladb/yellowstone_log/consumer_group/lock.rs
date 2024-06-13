@@ -6,7 +6,7 @@ use {
     },
     etcd_client::{Compare, CompareOp, Txn, TxnOp},
     tokio::time::Instant,
-    tracing::trace,
+    tracing::{info, trace},
 };
 
 pub struct ConsumerLock {
@@ -50,15 +50,17 @@ impl FencingTokenGenerator {
             .pop()
             .ok_or(anyhow::anyhow!("failed to get fencing token"))?;
 
-        trace!("get fencing token from etcd latency: {t:?}");
-        match op_resp {
+        let res = match op_resp {
             etcd_client::TxnOpResponse::Put(put_resp) => put_resp
                 .header()
                 .take()
                 .ok_or(anyhow::anyhow!("put response empty"))
                 .map(|header| header.revision()),
             _ => panic!("unexpected operation in etcd txn response"),
-        }
+        };
+
+        trace!("get fencing token {res:?} from etcd latency: {:?}", t.elapsed());
+        res
     }
 }
 

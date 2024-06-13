@@ -179,7 +179,8 @@ impl ScyllaConsumerGroupStore {
 
         let mut get_acc_update_shard_offset_ps =
             session.prepare(GET_ACC_UPDATE_SHARD_OFFSET).await?;
-        let mut get_new_tx_shard_offset_ps = session.prepare(GET_NEW_TX_SHARD_OFFSET).await?;
+        let mut get_new_tx_shard_offset_ps = session
+            .prepare(GET_NEW_TX_SHARD_OFFSET).await?;
 
         get_acc_update_shard_offset_ps.set_consistency(Consistency::Serial);
         get_new_tx_shard_offset_ps.set_consistency(Consistency::Serial);
@@ -204,9 +205,9 @@ impl ScyllaConsumerGroupStore {
         consumer_group_id: &ConsumerGroupId,
         consumer_id: &ConsumerId,
         execution_id: &ExecutionId,
-        blockchain_event_types: BlockchainEventType,
+        blockchain_event_type: BlockchainEventType,
     ) -> anyhow::Result<(i64, ShardOffsetMap)> {
-        let ps = match blockchain_event_types {
+        let ps = match blockchain_event_type {
             BlockchainEventType::AccountUpdate => &self.get_acc_update_shard_offset_ps,
             BlockchainEventType::NewTransaction => &self.get_new_tx_shard_offset_ps,
         };
@@ -382,15 +383,6 @@ impl ScyllaConsumerGroupStore {
             cg_info.revision <= current_revision,
             "consumer group is more up to date then current operation"
         );
-        // anyhow::ensure!(
-        //     cg_info.producer_id == Some(*producer_id),
-        //     "producer id mismatch"
-        // );
-        // anyhow::ensure!(
-        //     cg_info.execution_id == Some(execution_id.clone()),
-        //     "execution id mismatch"
-        // );
-
         for (consumer_id, shard_ids) in cg_info.consumer_id_shard_assignments.iter() {
             let my_shard_offset_map = shard_ids
                 .iter()

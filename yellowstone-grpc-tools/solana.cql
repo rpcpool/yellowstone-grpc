@@ -1,6 +1,6 @@
 CREATE KEYSPACE solana WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
 CREATE KEYSPACE solana2 WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
-CREATE KEYSPACE intg_test WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}  AND durable_writes = true;
+CREATE KEYSPACE intg_test WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '1'}  AND durable_writes = true AND TABLETS = { 'enabled': 'false' };
 
 
 drop materialized view if exists producer_consumer_mapping_mv;
@@ -33,8 +33,8 @@ create table if not exists consumer_shard_offset (
     created_at timestamp,
     updated_at timestamp,
     PRIMARY KEY ((consumer_id, producer_id), shard_id, event_type)
-)
-with default_time_to_live = 3600;
+);
+--with default_time_to_live = 3600;
 
 create table if not exists consumer_shard_offset_v2 (
     consumer_group_id blob,
@@ -254,9 +254,9 @@ create table if not exists log (
 
     primary key ((shard_id, period, producer_id), offset)
 )
-WITH CLUSTERING ORDER BY (offset desc)
-    AND default_time_to_live = 86400
-    and compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size' : 30}; 
+WITH CLUSTERING ORDER BY (offset desc);
+    --AND default_time_to_live = 86400
+    --and compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size' : 30}; 
 
 create table if not exists producer_slot_seen (
     producer_id blob,
@@ -266,8 +266,8 @@ create table if not exists producer_slot_seen (
     created_at timestamp,
     primary key (producer_id, slot)
 )
-with clustering order by (slot DESC)
-     AND default_time_to_live = 82800; -- 23 hours
+with clustering order by (slot DESC);
+--AND default_time_to_live = 82800; -- 23 hours
 
 CREATE materialized VIEW if not exists slot_producer_seen_mv
 AS
@@ -294,8 +294,8 @@ create table if not exists producer_period_commit_log (
     period bigint,
     created_at timestamp,
     PRIMARY KEY((producer_id, shard_id), period)
-) with clustering order by (period desc)
-       AND default_time_to_live = 82800; -- 23 hours
+) with clustering order by (period desc);
+--AND default_time_to_live = 82800; -- 23 hours
 
 -- clear all table
 
@@ -307,6 +307,5 @@ truncate producer_slot_seen;
 truncate producer_lock;
 
 truncate consumer_info;
-truncate consumer_shard_offset;
 truncate consumer_shard_offset_v2;
 truncate shard_tip;

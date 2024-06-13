@@ -34,17 +34,6 @@ const DEFAULT_OFFSET_COMMIT_INTERVAL: Duration = Duration::from_millis(500);
 
 const FETCH_MICRO_BATCH_LATENCY_WARN_THRESHOLD: Duration = Duration::from_millis(500);
 
-const UPDATE_CONSUMER_SHARD_OFFSET: &str = r###"
-    UPDATE consumer_shard_offset
-    SET offset = ?, slot = ?, revision = ?, updated_at = currentTimestamp() 
-    WHERE 
-        consumer_id = ?
-        AND producer_id = ?
-        AND shard_id = ?
-        AND event_type = ?
-    IF revision < ?
-"###;
-
 const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     UPDATE consumer_shard_offset_v2
     SET 
@@ -64,7 +53,6 @@ pub struct ConsumerSource<T: FromBlockchainEvent> {
     // The interval at which we want to commit our Offset progression to Scylla
     offset_commit_interval: Duration,
     shard_iterators: BTreeMap<ShardId, ShardIterator>,
-    update_consumer_shard_offset_prepared_stmt: PreparedStatement,
     update_consumer_shard_offset_v2_ps: PreparedStatement,
 }
 
@@ -113,7 +101,7 @@ impl Future for ConsumerSourceHandle {
 }
 
 impl<T: FromBlockchainEvent> ConsumerSource<T> {
-    pub(crate) async fn new(
+    pub async fn new(
         ctx: ConsumerContext,
         shard_offset_map_per_blockchain_event_type: BTreeMap<BlockchainEventType, ShardOffsetMap>,
         sender: mpsc::Sender<T>,
@@ -142,8 +130,6 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         )
         .await?;
 
-        let update_consumer_shard_offset_prepared_stmt =
-            ctx.session().prepare(UPDATE_CONSUMER_SHARD_OFFSET).await?;
         let update_consumer_shard_offset_v2_ps = ctx
             .session()
             .prepare(UPDATE_CONSUMER_SHARD_OFFSET_V2)
@@ -160,27 +146,8 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
                 .into_iter()
                 .map(|shard_it| (shard_it.shard_id, shard_it))
                 .collect(),
-            update_consumer_shard_offset_prepared_stmt,
             update_consumer_shard_offset_v2_ps,
         })
-    }
-
-    async fn update_consumer_shard_offsets(&self) -> anyhow::Result<()> {
-        let mut batch = Batch::new(BatchType::Unlogged);
-        let mut values = Vec::with_capacity(self.shard_iterators.len());
-        for (shard_id, shard_it) in self.shard_iterators.iter() {
-            values.push((
-                shard_it.last_offset(),
-                shard_it.last_slot,
-                self.ctx.consumer_id.to_owned(),
-                self.ctx.producer_id,
-                shard_id,
-                shard_it.event_type,
-            ));
-            batch.append_statement(self.update_consumer_shard_offset_prepared_stmt.clone());
-        }
-        self.ctx.session().batch(&batch, values).await?;
-        Ok(())
     }
 
     fn get_shard_offset_map(&self, ev_type: BlockchainEventType) -> ShardOffsetMap {
@@ -237,6 +204,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             .execute(&self.update_consumer_shard_offset_v2_ps, values)
             .await?
             .first_row_typed::<LwtResult>()?;
+
         if let LwtResult(false) = lwt_result {
             anyhow::bail!("Failed to update shard offset, lock is compromised");
         }

@@ -134,13 +134,13 @@ impl ShardIteratorState {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct ShardFilter {
-    pub(crate) tx_account_keys: Vec<Vec<u8>>,
-    pub(crate) account_owners: Vec<Vec<u8>>,
-    pub(crate) account_pubkyes: Vec<Vec<u8>>,
+pub struct ShardFilter {
+    pub tx_account_keys: Vec<Vec<u8>>,
+    pub account_owners: Vec<Vec<u8>>,
+    pub account_pubkyes: Vec<Vec<u8>>,
 }
 
-pub(crate) struct ShardIterator {
+pub struct ShardIterator {
     session: Arc<Session>,
     pub(crate) producer_id: ProducerId,
     pub(crate) shard_id: ShardId,

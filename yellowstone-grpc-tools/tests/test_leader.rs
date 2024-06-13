@@ -186,7 +186,6 @@ impl TimelineTranslator for MockTimelineTranslator {
 #[tokio::test]
 async fn test_leader_state_transation_during_timeline_translation() {
 
-    let _ = setup_tracing();
     let ctx = TestContext::new().await.unwrap();
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
@@ -195,7 +194,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         Duration::from_secs(10), 
         ctx.default_ifname()
     ).await.unwrap().unwrap();
-    let producer_id = [0x00];
+    let producer_id = [0x01];
 
     let producer_lock_keyname = get_producer_lock_path_v1(producer_id);
     let producer_lock = try_lock(ctx.etcd.clone(), &producer_lock_keyname).await.unwrap();

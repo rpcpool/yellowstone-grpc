@@ -104,8 +104,8 @@ const GET_MIN_PRODUCER_OFFSET: &str = r###"
 
 const GET_PRODUCER_EXECUTION_ID: &str = r###"
     SELECT
-        execution_id,
-        revision
+        revision,
+        execution_id
     FROM producer_lock
     WHERE producer_id = ?
     PER PARTITION LIMIT 1
