@@ -7,7 +7,7 @@ use {
 ///
 /// This error is raised when no lock is held by any producer.
 ///
-#[derive(Error, PartialEq, Eq, Debug)]
+#[derive(Clone, Error, PartialEq, Eq, Debug)]
 pub struct NoActiveProducer;
 
 impl fmt::Display for NoActiveProducer {
@@ -19,7 +19,7 @@ impl fmt::Display for NoActiveProducer {
 ///
 /// This error is raised when there is no active producer for the desired commitment level.
 ///
-#[derive(Copy, Error, PartialEq, Eq, Debug, Clone)]
+#[derive(Error, PartialEq, Eq, Debug, Clone)]
 pub struct ImpossibleCommitmentLevel(pub CommitmentLevel);
 
 impl fmt::Display for ImpossibleCommitmentLevel {
@@ -32,7 +32,7 @@ impl fmt::Display for ImpossibleCommitmentLevel {
 ///
 /// This error is raised when the combination of consumer critera result in an empty set of elligible producer timeline.
 ///
-#[derive(Error, PartialEq, Eq, Debug)]
+#[derive(Clone, Error, PartialEq, Eq, Debug)]
 pub struct ImpossibleTimelineSelection;
 
 impl fmt::Display for ImpossibleTimelineSelection {
@@ -43,7 +43,7 @@ impl fmt::Display for ImpossibleTimelineSelection {
 ///
 /// This error is raised when no producer as seen the desired `slot`.
 ///
-#[derive(Clone, Debug, Error, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub struct ImpossibleSlotOffset(pub Slot);
 
 impl fmt::Display for ImpossibleSlotOffset {
@@ -57,7 +57,7 @@ impl fmt::Display for ImpossibleSlotOffset {
 /// This error is raised when a query to a remote store return data that is more up to date
 /// then what the current process timeline is expecting.
 ///
-#[derive(Clone, Debug, Error, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub struct StaleRevision(pub i64);
 
 impl fmt::Display for StaleRevision {

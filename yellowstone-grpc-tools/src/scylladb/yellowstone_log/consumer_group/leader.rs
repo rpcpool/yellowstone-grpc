@@ -17,8 +17,7 @@ use {
         yellowstone_log::{
             common::SeekLocation,
             consumer_group::{
-                error::{DeadConsumerGroup, LeaderStateLogNotFound},
-                etcd_path::get_producer_lock_path_v1,
+                self, error::{DeadConsumerGroup, LeaderStateLogNotFound}, etcd_path::get_producer_lock_path_v1
             },
         },
     }, bincode::{deserialize, serialize}, etcd_client::{
@@ -269,7 +268,7 @@ impl ConsumerGroupLeaderNode {
         &self.state
     }
 
-    async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
+    pub async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
         let leader_log_key = &self.state_log_key;
         let txn = etcd_client::Txn::new()
             .when(vec![
@@ -328,27 +327,25 @@ impl ConsumerGroupLeaderNode {
                 })
             },
             Err(e) => {
-                if let Some(t_err) = e.downcast_ref::<timeline::TranslationStepError>() {
-                    match t_err {
-                        timeline::TranslationStepError::ConsumerGroupNotFound => {
-                            Ok(ConsumerGroupState::Dead(state.header.clone()))
-                        },
-                        timeline::TranslationStepError::StaleProducerProposition(_) => {
-                            Ok(ConsumerGroupState::InTimelineTranslation(
-                                InTimelineTranslationState {
-                                    header: state.header.clone(),
-                                    substate: TranslationState::ComputingNextProducer(
-                                        ComputingNextProducerState {
-                                            consumer_group_id: state.header.consumer_group_id,
-                                            revision: self.last_revision
-                                        }
-                                    ),
-                                }
-                            ))
-                        }
+                match e {
+                    timeline::TranslationStepError::ConsumerGroupNotFound => {
+                        Ok(ConsumerGroupState::Dead(state.header.clone()))
+                    },
+                    timeline::TranslationStepError::StaleProducerProposition(_) => {
+                        Ok(ConsumerGroupState::InTimelineTranslation(
+                            InTimelineTranslationState {
+                                header: state.header.clone(),
+                                substate: TranslationState::ComputingNextProducer(
+                                    ComputingNextProducerState {
+                                        consumer_group_id: state.header.consumer_group_id,
+                                        revision: self.last_revision
+                                    }
+                                ),
+                            }
+                        ))
                     }
-                } else {
-                    anyhow::bail!(e)
+                    timeline::TranslationStepError::NoActiveProducer => anyhow::bail!(consumer_group::error::NoActiveProducer),
+                    timeline::TranslationStepError::InternalError(e) => anyhow::bail!(e),
                 }
             },
         }
@@ -401,7 +398,9 @@ impl ConsumerGroupLeaderNode {
         ))
     }
 
-    pub async fn step(&mut self) -> anyhow::Result<()> {
+    ///
+    /// This function is cancel safe
+    pub async fn next_state(&self) -> anyhow::Result<Option<ConsumerGroupState>> {
         let next_state = match &self.state {
             ConsumerGroupState::Init(header) => {
                 Some(ConsumerGroupState::InTimelineTranslation(
@@ -428,10 +427,10 @@ impl ConsumerGroupLeaderNode {
                 producer_id,
                 execution_id,
             }) => {
-                let signal = self.producer_dead_signal.get_or_insert(
-                    get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
-                );
-                if let Ok(()) = signal.try_recv() {
+
+                let producer_lock_path = get_producer_lock_path_v1(*producer_id);
+                let get_resp = self.etcd.kv_client().get(producer_lock_path, Some(GetOptions::new().with_prefix())).await?;
+                if get_resp.kvs().is_empty() {
                     warn!("received dead signal from producer {producer_id:?}");
                     Some(ConsumerGroupState::LostProducer (LostProducerState {
                         header: header.clone(),
@@ -442,17 +441,13 @@ impl ConsumerGroupLeaderNode {
                     None
                 }
             }
-            ConsumerGroupState::Dead(_) => {
-                anyhow::bail!(DeadConsumerGroup(self.consumer_group_id.clone()))
+            ConsumerGroupState::Dead(inner) => {
+                Some(ConsumerGroupState::Dead(inner.clone()))
             }
         };
-        if let Some(next_state) = next_state {
-            info!("updating state machine");
-            self.update_state_machine(next_state).await
-        } else {
-            info!("skipping state transation no state change detected");
-            Ok(())
-        }
+
+        return Ok(next_state);
+        
     }
 
     /// Runs the leader loop for the consumer group.
@@ -472,63 +467,51 @@ impl ConsumerGroupLeaderNode {
         &mut self,
         mut interrupt_signal: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-        loop {
-            let next_state = match &self.state {
-                ConsumerGroupState::Init(header) => {
-                    ConsumerGroupState::InTimelineTranslation(
-                        InTimelineTranslationState {
-                            header: header.to_owned(),
-                            substate: self.timeline_translator.begin_translation(
-                                header.consumer_group_id, 
-                                self.last_revision
-                            )
-                        }
-                    )
-                }
-                ConsumerGroupState::LostProducer(inner) => {
-                    self.handle_lost_producer(inner).await?
-                }
-                ConsumerGroupState::WaitingBarrier(inner) => {
-                    self.handle_wait_barrier(inner).await?
-                },
-                ConsumerGroupState::InTimelineTranslation(inner) => {
-                    self.handle_in_timeline_translation(inner).await?
-                },
-                ConsumerGroupState::Idle(IdleState {
-                    header,
-                    producer_id,
-                    execution_id,
-                }) => {
-                    let signal = self.producer_dead_signal.get_or_insert(
-                        get_producer_dead_signal(self.etcd.clone(), *producer_id).await?,
-                    );
-                    tokio::select! {
-                        _ = &mut interrupt_signal => return Ok(()),
-                        _ = signal => {
-                            warn!("received dead signal from producer {producer_id:?}");
-                            let barrier_key = Uuid::new_v4();
-                            let lease_id = self.etcd.lease_grant(10, None).await?.id();
-                            self.etcd.put(barrier_key.as_bytes(), [], Some(PutOptions::new().with_lease(lease_id))).await?;
 
-                            ConsumerGroupState::LostProducer (LostProducerState {
-                                header: header.clone(),
-                                lost_producer_id: *producer_id,
-                                execution_id: execution_id.clone()
-                            })
-                        }
+        loop {
+            
+            tokio::select! {
+                res = self.next_state() => {
+                    let maybe_next_state = res?;
+                    if let Some(next_state) = maybe_next_state {
+                        anyhow::ensure!(!matches!(&next_state, ConsumerGroupState::Dead(_)), DeadConsumerGroup(self.consumer_group_id.clone()));
+                        info!("updating state machine");
+                        self.update_state_machine(next_state).await?;
+                    } else {
+                        info!("skipping state transation no state change detected");
                     }
                 }
-                ConsumerGroupState::Dead(_) => {
-                    anyhow::bail!(DeadConsumerGroup(self.consumer_group_id.clone()))
+                _ = &mut interrupt_signal => {
+                    return Ok(())
                 }
-            };
+            }
 
-            self.update_state_machine(next_state).await?;
+            if matches!(self.state, ConsumerGroupState::Idle(_)) {
 
-            match interrupt_signal.try_recv() {
-                Ok(_) => return Ok(()),
-                Err(oneshot::error::TryRecvError::Empty) => continue,
-                Err(oneshot::error::TryRecvError::Closed) => return Ok(()),
+                let idle_state = match &self.state {
+                    ConsumerGroupState::Idle(idle_state) => idle_state,
+                    _ => unreachable!(),
+                };
+                
+                let signal = get_producer_dead_signal(
+                    self.etcd.clone(), 
+                    idle_state.producer_id
+                ).await?;
+
+                tokio::select! {
+                    _ = signal => {
+                        warn!("received dead signal from producer {:?}", idle_state.producer_id);
+                        let next_state = ConsumerGroupState::LostProducer(LostProducerState {
+                            header: idle_state.header.clone(),
+                            lost_producer_id: idle_state.producer_id,
+                            execution_id: idle_state.execution_id.clone()
+                        });
+                        self.update_state_machine(next_state).await?;
+                    }
+                    _ = &mut interrupt_signal => {
+                        return Ok(())
+                    }
+                }
             }
         }
     }

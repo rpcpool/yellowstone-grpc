@@ -52,8 +52,6 @@ struct InnerSupervisor<F: ConsumerSourceSpawner> {
     factory: F,
 }
 
-
-
 impl<F> InnerSupervisor<F>
 where
     F: ConsumerSourceSpawner,

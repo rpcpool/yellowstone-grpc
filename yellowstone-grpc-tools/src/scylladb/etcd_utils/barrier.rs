@@ -129,7 +129,7 @@ where
         }
         let _ = tx2.send(());
     });
-
+    
     Ok(Barrier {
         key: barrier_key.to_vec(),
         watch_handle,

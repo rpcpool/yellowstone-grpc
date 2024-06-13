@@ -1,4 +1,7 @@
+use std::borrow::BorrowMut;
 use std::cell::{Ref, RefCell};
+use std::f32::consts::E;
+use std::os::linux::raw::stat;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,10 +16,12 @@ use tracing::info;
 use uuid::Uuid;
 use yellowstone_grpc_tools::scylladb::etcd_utils::lock::try_lock;
 use yellowstone_grpc_tools::scylladb::types::{BlockchainEventType, CommitmentLevel, ConsumerGroupInfo};
+use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group;
+use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::error::NoActiveProducer;
 use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::etcd_path::get_producer_lock_path_v1;
 use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::lock::ConsumerLocker;
 use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::leader::{create_leader_state_log, leader_log_name_from_cg_id_v1, observe_consumer_group_state, observe_leader_changes, try_become_leader, ConsumerGroupHeader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState, LeaderInfo, LostProducerState};
-use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::timeline::{ComputingNextProducerState, ProducerProposalState, TimelineTranslator, TranslationState};
+use yellowstone_grpc_tools::scylladb::yellowstone_log::consumer_group::timeline::{ComputingNextProducerState, ProducerProposalState, TimelineTranslator, TranslationState, TranslationStepError, TranslationStepResult};
 use yellowstone_grpc_tools::setup_tracing;
 mod common;
 
@@ -159,21 +164,21 @@ async fn test_leader_mutual_exclusion() {
 
 
 struct MockTimelineTranslator {
-    next_state: Arc<RwLock<TranslationState>>,
+    next_state: Arc<RwLock<TranslationStepResult>>,
 }
 
 #[async_trait]
 impl TimelineTranslator for MockTimelineTranslator {
-    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> anyhow::Result<TranslationState> {
-        Ok(self.next_state.read().await.to_owned())
+    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> TranslationStepResult {
+        self.next_state.read().await.to_owned()
     }
 
-    async fn accept_proposal(&self, state: ProducerProposalState) -> anyhow::Result<TranslationState> {
-        Ok(self.next_state.read().await.to_owned())
+    async fn accept_proposal(&self, state: ProducerProposalState) -> TranslationStepResult {
+        self.next_state.read().await.to_owned()
     }
 
-    async fn next(&self, state: TranslationState) -> anyhow::Result<TranslationState> {
-        Ok(self.next_state.read().await.to_owned())
+    async fn next(&self, state: TranslationState) -> TranslationStepResult {
+        self.next_state.read().await.to_owned()
     }
 
 }
@@ -212,12 +217,12 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let mut leader_state_log = observe_consumer_group_state(ctx.etcd.clone(), consumer_group_id).await.unwrap();
 
     let lock = RwLock::new(
-        TranslationState::ComputingNextProducer(
+        Ok::<_, TranslationStepError>(TranslationState::ComputingNextProducer(
             ComputingNextProducerState {
                 consumer_group_id,
                 revision: 1,
             }
-        )
+        ))
     );
     let lock = Arc::new(lock);
 
@@ -235,7 +240,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         .unwrap();
 
 
-    leader_node.step().await.unwrap();
+    leader_node.next_state().await.unwrap();
 
     let (revision, state) = leader_state_log.borrow_and_update().to_owned();
 
@@ -243,24 +248,70 @@ async fn test_leader_state_transation_during_timeline_translation() {
 
     producer_lock.revoke().await.unwrap();
     
-    let fut = leader_state_log
-        .wait_for(|(_, state)| matches!(state, ConsumerGroupState::LostProducer(_)));
+    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    leader_node.update_state_machine(next_state).await.unwrap();
+    let state = leader_node.state();
+    assert!(matches!(state, ConsumerGroupState::LostProducer(_)));
 
-    leader_node.step().await.unwrap();
-    info!("current leader node state: {:?}", leader_node.state());
+    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    leader_node.update_state_machine(next_state).await.unwrap();
+    let state = leader_node.state();
+    assert!(matches!(state, ConsumerGroupState::WaitingBarrier(_)));
+
+    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    leader_node.update_state_machine(next_state).await.unwrap();
+    let state = leader_node.state();
+    assert!(matches!(state, ConsumerGroupState::InTimelineTranslation(_)));
+
+    let inner_state = match state {
+        ConsumerGroupState::InTimelineTranslation(inner) => inner,
+        _ => panic!("unexpected state"),
+    };
+    assert!(matches!(inner_state.substate, TranslationState::ComputingNextProducer(_)));
 
 
+    // If producer selection is stale it should go back to computing next producer
+    {
+        let mut w = lock.write().await;
+        *w = Err(TranslationStepError::StaleProducerProposition("test".to_string()));
+    }
+    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    leader_node.update_state_machine(next_state).await.unwrap();
 
-    let (_revision, state) = fut.await.unwrap().to_owned();
-    
+    let state = leader_node.state();
+    let inner_state = match state {
+        ConsumerGroupState::InTimelineTranslation(inner) => inner,
+        _ => panic!("unexpected state"),
+    };
+    assert!(matches!(inner_state.substate, TranslationState::ComputingNextProducer(_)));
 
-    assert!(matches!(state, ConsumerGroupState::LostProducer(
-        LostProducerState { 
-            header: _,
-            lost_producer_id: producer_id,
-            execution_id: _,
-        }
-    )));
+    // leader node should fail fast if no producer is available
+    {
+        let mut w = lock.write().await;
+        *w = Err(TranslationStepError::NoActiveProducer);
+        
+    }
+    let result = leader_node.next_state().await;
+    let err = result.err().unwrap();
+    assert!(err.downcast_ref::<consumer_group::error::NoActiveProducer>().is_some());
 
-    println!("state {state:?}");
+
+    // leader node should fail fast if there is an internal error
+    {
+        let mut w = lock.write().await;
+        *w = Err(TranslationStepError::InternalError("test".to_string()));
+    }
+    let result = leader_node.next_state().await;
+    assert!(result.is_err());
+
+
+    // Leader should become dead if consumer group no longer exists
+    {   
+        let mut w = lock.write().await;
+        *w = Err(TranslationStepError::ConsumerGroupNotFound);
+    }
+    let next_state= leader_node.next_state().await.unwrap().unwrap();
+    assert!(matches!(next_state, ConsumerGroupState::Dead(_)));
 }
+
+
