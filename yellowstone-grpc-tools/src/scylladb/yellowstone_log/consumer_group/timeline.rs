@@ -7,7 +7,7 @@ use tonic::async_trait;
 
 use crate::scylladb::{types::{ConsumerGroupId, ExecutionId, ProducerId, ShardOffsetMap}, yellowstone_log::common::SeekLocation};
 
-use super::{consumer_group_store::ScyllaConsumerGroupStore, producer_queries::ProducerQueries};
+use super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore};
 
 
 /// Represents the state of computing the next producer in the timeline translation process.
@@ -134,7 +134,7 @@ pub trait TimelineTranslator {
 
 pub struct ScyllaTimelineTranslator {
     pub consumer_group_store: ScyllaConsumerGroupStore,
-    pub producer_queries: ProducerQueries,
+    pub producer_queries: ScyllaProducerStore,
 }
 
 #[async_trait]

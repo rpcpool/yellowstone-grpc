@@ -8,7 +8,7 @@ use {
             try_become_leader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState, LeaderInfo,
         },
         lock::{ConsumerLock, ConsumerLocker},
-        producer_queries::ProducerQueries,
+        producer::{ProducerMonitor, ScyllaProducerStore},
         shard_iterator::{ShardFilter, ShardIterator}, timeline::ScyllaTimelineTranslator,
     },
     crate::scylladb::{
@@ -45,7 +45,8 @@ pub struct ConsumerGroupCoordinatorBackend {
     session: Arc<Session>,
     instance_locker: ConsumerLocker,
     consumer_group_store: ScyllaConsumerGroupStore,
-    producer_queries: ProducerQueries,
+    producer_queries: ScyllaProducerStore,
+    producer_monitor: Arc<dyn ProducerMonitor>,
     leader_ifname: String,
 
     background_leader_attempt: BTreeMap<ConsumerGroupId, ElectionHandle>,
@@ -252,7 +253,8 @@ impl ConsumerGroupCoordinatorBackend {
         etcd: etcd_client::Client,
         session: Arc<Session>,
         consumer_group_store: ScyllaConsumerGroupStore,
-        producer_queries: ProducerQueries,
+        producer_queries: ScyllaProducerStore,
+        producer_monitor: Arc<dyn ProducerMonitor>,
         leader_ifname: String,
     ) -> (ConsumerGroupCoordinator, JoinHandle<anyhow::Result<()>>) {
         let (tx, rx) = mpsc::channel(10);
@@ -269,6 +271,7 @@ impl ConsumerGroupCoordinatorBackend {
             consumer_handles: Default::default(),
             leader_election_watch_map: Default::default(),
             leader_state_watch_map: Default::default(),
+            producer_monitor,
         };
 
         let h = tokio::spawn(async move { backend.run().await });
@@ -444,9 +447,11 @@ impl ConsumerGroupCoordinatorBackend {
             producer_queries,
         };
         let (tx, rx) = oneshot::channel();
+        let producer_monitor = Arc::clone(&self.producer_monitor);
         let h = tokio::spawn(async move {
             let mut leader = ConsumerGroupLeaderNode::new(
                 etcd,
+                producer_monitor,
                 leader_key,
                 leader_lease,
                 Arc::new(timeline_translator),

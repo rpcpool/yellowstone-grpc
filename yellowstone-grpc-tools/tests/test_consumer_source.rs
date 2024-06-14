@@ -27,8 +27,8 @@ async fn test_consumer_source_run() {
     let ctx = TestContext::new().await.unwrap();
     let etcd = ctx.etcd.clone();
     let producer_id = [0x00];
-    let producer_info = ctx.producer_queries.get_producer_info(producer_id).await.unwrap().unwrap();
-    let (revision,execution_id) = ctx.producer_queries.get_execution_id(producer_id).await.unwrap().unwrap();
+    let producer_info = ctx.producer_store.get_producer_info(producer_id).await.unwrap().unwrap();
+    let (revision,execution_id) = ctx.producer_store.get_execution_id(producer_id).await.unwrap().unwrap();
 
 
     let lock_key = get_producer_lock_path_v1(producer_id);

@@ -1,7 +1,7 @@
 use {
     super::{
         consumer_group_store::ScyllaConsumerGroupStore, lock::FencingTokenGenerator,
-        producer_queries::ProducerQueries, shard_iterator::ShardFilter,
+        producer::ScyllaProducerStore, shard_iterator::ShardFilter,
     },
     crate::scylladb::{
         etcd_utils::Revision,

@@ -1,7 +1,6 @@
 use {
     super::{
-        consumer_group_store::ScyllaConsumerGroupStore, etcd_path::get_instance_lock_prefix_v1,
-        producer_queries::ProducerQueries, timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState},
+        etcd_path::get_instance_lock_prefix_v1, producer::ProducerMonitor, timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState}
     }, crate::scylladb::{
         self,
         etcd_utils::{
@@ -38,103 +37,103 @@ enum LeaderCommand {
     Join { lock_key: Vec<u8> },
 }
 
-///
-/// Cancel safe producer dead signal
-struct ProducerDeadSignal {
-    // When this object is drop, the sender will drop too and cancel the watch automatically
-    #[allow(dead_code)]
-    cancel_watcher_tx: oneshot::Sender<()>,
-    inner: oneshot::Receiver<()>,
-}
+// ///
+// /// Cancel safe producer dead signal
+// struct ProducerDeadSignal {
+//     // When this object is drop, the sender will drop too and cancel the watch automatically
+//     #[allow(dead_code)]
+//     cancel_watcher_tx: oneshot::Sender<()>,
+//     inner: oneshot::Receiver<()>,
+// }
 
-impl ProducerDeadSignal {
+// impl ProducerDeadSignal {
 
-    pub fn try_recv(&mut self) -> Result<(), oneshot::error::TryRecvError> {
-        self.inner.try_recv()
-    }
-}
+//     pub fn try_recv(&mut self) -> Result<(), oneshot::error::TryRecvError> {
+//         self.inner.try_recv()
+//     }
+// }
 
-impl Future for ProducerDeadSignal {
-    type Output = Result<(), RecvError>;
+// impl Future for ProducerDeadSignal {
+//     type Output = Result<(), RecvError>;
 
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let inner = &mut self.inner;
-        tokio::pin!(inner);
-        inner.poll(cx)
-    }
-}
+//     fn poll(
+//         mut self: std::pin::Pin<&mut Self>,
+//         cx: &mut std::task::Context<'_>,
+//     ) -> std::task::Poll<Self::Output> {
+//         let inner = &mut self.inner;
+//         tokio::pin!(inner);
+//         inner.poll(cx)
+//     }
+// }
 
-async fn get_producer_dead_signal(
-    mut etcd: etcd_client::Client,
-    producer_id: ProducerId,
-) -> anyhow::Result<ProducerDeadSignal> {
-    let producer_lock_path = get_producer_lock_path_v1(producer_id);
-    let (mut watch_handle, mut stream) = etcd
-        .watch(
-            producer_lock_path.as_bytes(),
-            Some(WatchOptions::new().with_prefix()),
-        )
-        .await?;
+// async fn get_producer_dead_signal(
+//     mut etcd: etcd_client::Client,
+//     producer_id: ProducerId,
+// ) -> anyhow::Result<ProducerDeadSignal> {
+//     let producer_lock_path = get_producer_lock_path_v1(producer_id);
+//     let (mut watch_handle, mut stream) = etcd
+//         .watch(
+//             producer_lock_path.as_bytes(),
+//             Some(WatchOptions::new().with_prefix()),
+//         )
+//         .await?;
 
-    let (tx, rx) = oneshot::channel();
-    let get_resp = etcd.get(
-        producer_lock_path.as_str(), 
-        Some(GetOptions::new().with_prefix())
-    ).await?;
+//     let (tx, rx) = oneshot::channel();
+//     let get_resp = etcd.get(
+//         producer_lock_path.as_str(), 
+//         Some(GetOptions::new().with_prefix())
+//     ).await?;
 
-    let (cancel_watch_tx, mut cancel_watch_rx) = oneshot::channel::<()>();
+//     let (cancel_watch_tx, mut cancel_watch_rx) = oneshot::channel::<()>();
 
-    // If the producer is already dead, we can quit early
-    if get_resp.count() == 0 {
-        warn!("producer lock was not found, producer is dead already");
-        tx.send(())
-            .map_err(|_| anyhow::anyhow!("failed to early notify dead producer"))?;
-        return Ok(ProducerDeadSignal {
-            cancel_watcher_tx: cancel_watch_tx,
-            inner: rx,
-        });
-    }
-    let anchor_revision = get_resp.kvs()[0].mod_revision();
+//     // If the producer is already dead, we can quit early
+//     if get_resp.count() == 0 {
+//         warn!("producer lock was not found, producer is dead already");
+//         tx.send(())
+//             .map_err(|_| anyhow::anyhow!("failed to early notify dead producer"))?;
+//         return Ok(ProducerDeadSignal {
+//             cancel_watcher_tx: cancel_watch_tx,
+//             inner: rx,
+//         });
+//     }
+//     let anchor_revision = get_resp.kvs()[0].mod_revision();
 
-    tokio::spawn(async move {
-        'outer: loop {
-            tokio::select! {
-                _ = &mut cancel_watch_rx => {
-                    info!("producer dead signal watcher was canceled");
-                    break 'outer;
-                }
-                Some(Ok(msg)) = stream.next() => {
-                    for ev in msg.events() {
-                        match ev.event_type() {
-                            etcd_client::EventType::Put => {
-                                warn!("producer lock was updated");
-                                let kv = ev.kv().expect("empty put response");
-                                if kv.mod_revision() > anchor_revision {
-                                    break 'outer;
-                                }
-                            }
-                            etcd_client::EventType::Delete => {
-                                warn!("producer lock was deleted");
-                                break 'outer;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if tx.send(()).is_err() {
-            warn!("producer dead signal receiver half was terminated before signal was send");
-        }
-        let _ = watch_handle.cancel().await;
-    });
-    Ok(ProducerDeadSignal {
-        cancel_watcher_tx: cancel_watch_tx,
-        inner: rx,
-    })
-}
+//     tokio::spawn(async move {
+//         'outer: loop {
+//             tokio::select! {
+//                 _ = &mut cancel_watch_rx => {
+//                     info!("producer dead signal watcher was canceled");
+//                     break 'outer;
+//                 }
+//                 Some(Ok(msg)) = stream.next() => {
+//                     for ev in msg.events() {
+//                         match ev.event_type() {
+//                             etcd_client::EventType::Put => {
+//                                 warn!("producer lock was updated");
+//                                 let kv = ev.kv().expect("empty put response");
+//                                 if kv.mod_revision() > anchor_revision {
+//                                     break 'outer;
+//                                 }
+//                             }
+//                             etcd_client::EventType::Delete => {
+//                                 warn!("producer lock was deleted");
+//                                 break 'outer;
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         if tx.send(()).is_err() {
+//             warn!("producer dead signal receiver half was terminated before signal was send");
+//         }
+//         let _ = watch_handle.cancel().await;
+//     });
+//     Ok(ProducerDeadSignal {
+//         cancel_watcher_tx: cancel_watch_tx,
+//         inner: rx,
+//     })
+// }
 
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -205,8 +204,8 @@ pub struct ConsumerGroupLeaderNode {
     state_log_key: String,
     state: ConsumerGroupState,
     last_revision: Revision,
-    producer_dead_signal: Option<ProducerDeadSignal>,
     barrier: Option<Barrier>,
+    producer_monitor: Arc<dyn ProducerMonitor>,
     timeline_translator: Arc<dyn TimelineTranslator + Send + Sync>,
 }
 
@@ -231,6 +230,7 @@ impl fmt::Display for LeaderNodeError {
 impl ConsumerGroupLeaderNode {
     pub async fn new(
         mut etcd: etcd_client::Client,
+        producer_monitor: Arc<dyn ProducerMonitor>,
         leader_key: LeaderKey,
         leader_lease: ManagedLease,
         timeline_translator: Arc<dyn TimelineTranslator + Send + Sync>,
@@ -254,11 +254,11 @@ impl ConsumerGroupLeaderNode {
             etcd,
             leader_key,
             leader_lease,
-            producer_dead_signal: None,
             state,
             last_revision,
             barrier: None,
             state_log_key,
+            producer_monitor,
             timeline_translator,
         };
         Ok(ret)
@@ -493,13 +493,10 @@ impl ConsumerGroupLeaderNode {
                     _ => unreachable!(),
                 };
                 
-                let signal = get_producer_dead_signal(
-                    self.etcd.clone(), 
-                    idle_state.producer_id
-                ).await?;
+                let mut signal = self.producer_monitor.get_producer_dead_signal(idle_state.producer_id).await;
 
                 tokio::select! {
-                    _ = signal => {
+                    _ = &mut signal => {
                         warn!("received dead signal from producer {:?}", idle_state.producer_id);
                         let next_state = ConsumerGroupState::LostProducer(LostProducerState {
                             header: idle_state.header.clone(),

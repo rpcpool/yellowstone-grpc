@@ -231,6 +231,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let translator: Arc<dyn TimelineTranslator + Send + Sync> = Arc::new(translator);
     let mut leader_node = ConsumerGroupLeaderNode::new(
         ctx.etcd.clone(), 
+        Arc::clone(&ctx.etcd_producer_monitor),
         leader_key, 
         lease, 
         translator

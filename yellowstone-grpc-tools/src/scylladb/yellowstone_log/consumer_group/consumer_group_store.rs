@@ -1,5 +1,5 @@
 use {
-    super::producer_queries::ProducerQueries, crate::scylladb::{
+    super::producer::ScyllaProducerStore, crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
@@ -104,8 +104,7 @@ const GET_NEW_TX_SHARD_OFFSET: &str = r###"
 #[derive(Clone)]
 pub struct ScyllaConsumerGroupStore {
     session: Arc<Session>,
-    etcd: etcd_client::Client,
-    producer_queries: ProducerQueries,
+    producer_store: ScyllaProducerStore,
     create_static_consumer_group_ps: PreparedStatement,
     get_static_consumer_group_ps: PreparedStatement,
     update_static_consumer_group_ps: PreparedStatement,
@@ -129,42 +128,11 @@ fn assign_shards(ids: &[ConsumerId], num_shards: usize) -> BTreeMap<ConsumerId, 
 }
 
 
-// #[async_trait]
-// pub trait ConsumerGroupStore {
-//     async fn update_consumer_group_producer(
-//         &self,
-//         consumer_group_id: &ConsumerGroupId,
-//         producer_id: &ProducerId,
-//         execution_id: &ExecutionId,
-//         revision: i64,
-//     ) -> anyhow::Result<()>;
-
-//     async fn get_shard_offset_map(
-//         &self,
-//         consumer_group_id: &ConsumerGroupId,
-//         consumer_id: &ConsumerId,
-//         execution_id: &ExecutionId,
-//         blockchain_event_types: BlockchainEventType,
-//     ) -> anyhow::Result<(i64, ShardOffsetMap)>;
-
-//     async fn get_consumer_group_info(
-//         &self,
-//         consumer_group_id: &ConsumerGroupId,
-//     ) -> anyhow::Result<Option<ConsumerGroupInfo>>;
-    
-//     async fn get_lowest_common_slot_number(
-//         &self,
-//         consumer_group_id: &ConsumerGroupId,
-//         max_revision_opt: Option<i64>,
-//     ) -> anyhow::Result<(Slot, i64)>;
-
-    
-// }
-
-
-
 impl ScyllaConsumerGroupStore {
-    pub async fn new(session: Arc<Session>, etcd: etcd_client::Client) -> anyhow::Result<Self> {
+    pub async fn new(
+        session: Arc<Session>, 
+        producer_store: ScyllaProducerStore,
+    ) -> anyhow::Result<Self> {
         let create_static_consumer_group_ps = session.prepare(CREATE_STATIC_CONSUMER_GROUP).await?;
 
         let mut get_static_consumer_group_ps = session.prepare(GET_STATIC_CONSUMER_GROUP).await?;
@@ -189,9 +157,8 @@ impl ScyllaConsumerGroupStore {
             session: Arc::clone(&session),
             create_static_consumer_group_ps,
             get_static_consumer_group_ps,
-            producer_queries: ProducerQueries::new(session, etcd.clone()).await?,
+            producer_store,
             update_static_consumer_group_ps,
-            etcd,
             insert_consumer_shard_offset_ps_if_not_exists,
             update_consumer_shard_offset_ps,
             get_acc_update_shard_offset_ps,
@@ -286,7 +253,7 @@ impl ScyllaConsumerGroupStore {
                 consumer_id,
                 revision,
                 acc_shard_offset_map,
-                tx_shard_offset_map,
+                tx_shard_offset_map
             FROM consumer_shard_offset_v2
             WHERE 
                 consumer_group_id = ?
@@ -303,8 +270,9 @@ impl ScyllaConsumerGroupStore {
                 (consumer_group_id, instance_id_in_clause, execution_id),
             )
             .await?
-            .rows_typed::<(ConsumerGroupId, i64, ShardOffsetMap, ShardOffsetMap)>()?
+            .rows_typed::<(ConsumerId, i64, ShardOffsetMap, ShardOffsetMap)>()?
             .collect::<Result<Vec<_>, _>>()?;
+
         let shard_max_revision = rows
             .iter()
             .map(|(_, revision, _, _)| revision)
@@ -452,7 +420,7 @@ impl ScyllaConsumerGroupStore {
             .expect("consumer group does not have any execution id assigned yet");
 
         let shard_offset_map = self
-            .producer_queries
+            .producer_store
             .compute_offset(producer_id, seek_loc, None)
             .await?;
 
@@ -489,7 +457,7 @@ impl ScyllaConsumerGroupStore {
         };
 
         let (producer_id, execution_id) = self
-            .producer_queries
+            .producer_store
             .get_producer_id_with_least_assigned_consumer(maybe_slot_range, commitment_level)
             .await?;
         info!("create_static_consumer_group, computed producer_id={producer_id:?}, execution_id={execution_id:?}");
@@ -534,5 +502,5 @@ impl ScyllaConsumerGroupStore {
 pub struct ConsumerGroupManagerV2 {
     etcd: etcd_client::Client,
     session: Arc<Session>,
-    producer_queries: ProducerQueries,
+    producer_queries: ScyllaProducerStore,
 }
