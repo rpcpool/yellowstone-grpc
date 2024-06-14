@@ -1,6 +1,7 @@
 use {
     crate::scylladb::types::{ConsumerGroupId, ConsumerId, ProducerId, ShardId},
-    tracing::{info, trace}, uuid::Uuid,
+    tracing::{info, trace},
+    uuid::Uuid,
 };
 
 pub fn get_instance_lock_name_path_v1(
@@ -40,7 +41,7 @@ pub fn get_producer_id_from_lock_key_v1(lock_key: &[u8]) -> anyhow::Result<Produ
         .next()
         .ok_or(anyhow::anyhow!("invalid lock key format"))?;
     trace!("get_producer_id_from_lock_key_v1 -- number_part : {number_part}");
-    let producer_id = &number_part[2..(2+4)].parse::<u8>()?;
+    let producer_id = &number_part[2..(2 + 4)].parse::<u8>()?;
     Ok([*producer_id])
 }
 

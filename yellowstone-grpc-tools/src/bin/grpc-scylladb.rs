@@ -109,12 +109,13 @@ impl ArgsAction {
         let etcd_endpoints = config.etcd_endpoints;
         let etcd_client = etcd_client::Client::connect(etcd_endpoints, None).await?;
         let session = Arc::new(session);
-        let producer_monitor: Arc<dyn ProducerMonitor> = Arc::new(EtcdProducerMonitor::new(etcd_client.clone()));
+        let producer_monitor: Arc<dyn ProducerMonitor> =
+            Arc::new(EtcdProducerMonitor::new(etcd_client.clone()));
         let producer_queries =
             ScyllaProducerStore::new(Arc::clone(&session), Arc::clone(&producer_monitor)).await?;
         let consumer_group_store =
             ScyllaConsumerGroupStore::new(Arc::clone(&session), producer_queries.clone()).await?;
-       
+
         let (coordinator, coordinator_backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
             etcd_client.clone(),
             Arc::clone(&session),

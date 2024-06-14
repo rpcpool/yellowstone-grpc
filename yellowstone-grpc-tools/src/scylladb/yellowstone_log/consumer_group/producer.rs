@@ -1,8 +1,12 @@
 use {
     super::{
         error::ImpossibleSlotOffset,
-        etcd_path::{get_producer_id_from_lock_key_v1, get_producer_lock_path_v1, get_producer_lock_prefix_v1},
-    }, crate::scylladb::{
+        etcd_path::{
+            get_producer_id_from_lock_key_v1, get_producer_lock_path_v1,
+            get_producer_lock_prefix_v1,
+        },
+    },
+    crate::scylladb::{
         sink,
         types::{
             CommitmentLevel, ExecutionId, ProducerExecutionInfo, ProducerId, ProducerInfo, ShardId,
@@ -15,12 +19,22 @@ use {
                 StaleRevision,
             },
         },
-    }, chrono::{DateTime, TimeDelta, Utc}, etcd_client::{GetOptions, WatchOptions}, futures::{future::BoxFuture, Future, FutureExt}, rdkafka::producer::Producer, scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session}, std::{
+    },
+    chrono::{DateTime, TimeDelta, Utc},
+    etcd_client::{GetOptions, WatchOptions},
+    futures::{future::BoxFuture, Future, FutureExt},
+    rdkafka::producer::Producer,
+    scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
+    std::{
         collections::{BTreeMap, BTreeSet},
         ops::RangeInclusive,
         sync::Arc,
         time::Duration,
-    }, tokio::sync::oneshot, tokio_stream::StreamExt, tonic::async_trait, tracing::{info, trace, warn}
+    },
+    tokio::sync::oneshot,
+    tokio_stream::StreamExt,
+    tonic::async_trait,
+    tracing::{info, trace, warn},
 };
 
 const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
@@ -117,7 +131,10 @@ pub struct ScyllaProducerStore {
 }
 
 impl ScyllaProducerStore {
-    pub async fn new(session: Arc<Session>, producer_monitor: Arc<dyn ProducerMonitor>) -> anyhow::Result<Self> {
+    pub async fn new(
+        session: Arc<Session>,
+        producer_monitor: Arc<dyn ProducerMonitor>,
+    ) -> anyhow::Result<Self> {
         let mut get_producer_by_id_ps = session.prepare(GET_PRODUCER_INFO_BY_ID).await?;
         get_producer_by_id_ps.set_consistency(Consistency::Serial);
 
@@ -142,7 +159,7 @@ impl ScyllaProducerStore {
             get_producer_execution_id_ps,
         })
     }
-    
+
     pub async fn get_producer_info(
         &self,
         producer_id: ProducerId,
@@ -265,15 +282,13 @@ impl ScyllaProducerStore {
         let mut elligible_producers = producers_with_commitment_level
             .into_iter()
             .filter_map(|producer_id| {
-                living_producers
-                    .remove(&producer_id)
-                    .and_then(|_revision| {
-                        producer_exec_info_map
-                            .get(&producer_id)
-                            .map(|producer_exec_info| {
-                                (producer_id, producer_exec_info.execution_id.clone())
-                            })
-                    })
+                living_producers.remove(&producer_id).and_then(|_revision| {
+                    producer_exec_info_map
+                        .get(&producer_id)
+                        .map(|producer_exec_info| {
+                            (producer_id, producer_exec_info.execution_id.clone())
+                        })
+                })
             })
             .collect::<BTreeMap<_, _>>();
 
@@ -460,17 +475,21 @@ impl ScyllaProducerStore {
     }
 }
 
-
 /// The `ProducerMonitor` trait defines methods for monitoring producers.
 #[async_trait]
 pub trait ProducerMonitor: Send + Sync + 'static {
-
     /// Lists all living producers.
     ///
     /// # Returns
     ///
     /// A vector of `ProducerId` representing the living producers.
     async fn list_living_producers(&self) -> BTreeMap<ProducerId, i64>;
+
+    async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
+        self.list_living_producers()
+            .await
+            .contains_key(&producer_id)
+    }
 
     /// Gets the dead signal for a specific producer.
     ///
@@ -483,7 +502,6 @@ pub trait ProducerMonitor: Send + Sync + 'static {
     /// A `BoxFuture` that resolves to `()` when the producer is dead.
     async fn get_producer_dead_signal(&self, producer_id: ProducerId) -> ProducerDeadSignal;
 }
-
 
 pub struct EtcdProducerMonitor {
     etcd: etcd_client::Client,
@@ -500,19 +518,22 @@ pub struct ProducerDeadSignal {
 
     // When dropped, this will signal any underlying thread implementation to terminate aswell.
     #[allow(dead_code)]
-    tx_terminate: oneshot::Sender<()>
+    tx_terminate: oneshot::Sender<()>,
 }
 
 impl Future for ProducerDeadSignal {
     type Output = Result<(), oneshot::error::RecvError>;
 
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         self.rx.poll_unpin(cx)
     }
 }
 
 impl ProducerDeadSignal {
-    pub fn new() -> (Self, oneshot::Sender<()>, oneshot::Receiver<()> )  {
+    pub fn new() -> (Self, oneshot::Sender<()>, oneshot::Receiver<()>) {
         let (tx, rx) = oneshot::channel();
         let (tx_terminate, rx_terminate) = oneshot::channel();
         (Self { rx, tx_terminate }, tx, rx_terminate)
@@ -521,15 +542,12 @@ impl ProducerDeadSignal {
 
 #[async_trait]
 impl ProducerMonitor for EtcdProducerMonitor {
-
-
     /// Lists all living producers.
     ///
     /// # Returns
     ///
     /// A vector of `ProducerId` representing the living producers.
     async fn list_living_producers(&self) -> BTreeMap<ProducerId, i64> {
-
         let producer_lock_prefix = get_producer_lock_prefix_v1();
         let get_resp = self
             .etcd
@@ -547,6 +565,17 @@ impl ProducerMonitor for EtcdProducerMonitor {
             .expect("failed to parse producer lock keys")
     }
 
+    async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
+        let producer_lock_path = get_producer_lock_path_v1(producer_id);
+        let get_resp = self
+            .etcd
+            .kv_client()
+            .get(producer_lock_path, Some(GetOptions::new().with_prefix()))
+            .await
+            .expect("failed to get producer lock key info");
+        get_resp.count() > 0
+    }
+
     /// Gets the dead signal for a specific producer.
     ///
     /// # Parameters
@@ -558,7 +587,9 @@ impl ProducerMonitor for EtcdProducerMonitor {
     /// A `BoxFuture` that resolves to `()` when the producer is dead.
     async fn get_producer_dead_signal(&self, producer_id: ProducerId) -> ProducerDeadSignal {
         let producer_lock_path = get_producer_lock_path_v1(producer_id);
-        let (mut watcher, mut stream) = self.etcd.watch_client()
+        let (mut watcher, mut stream) = self
+            .etcd
+            .watch_client()
             .watch(
                 producer_lock_path.as_bytes(),
                 Some(WatchOptions::new().with_prefix()),
@@ -566,11 +597,12 @@ impl ProducerMonitor for EtcdProducerMonitor {
             .await
             .expect("failed to acquire watch stream over producer lock");
 
-        let get_resp = self.etcd
+        let get_resp = self
+            .etcd
             .kv_client()
             .get(
-                producer_lock_path.as_str(), 
-                Some(GetOptions::new().with_prefix())
+                producer_lock_path.as_str(),
+                Some(GetOptions::new().with_prefix()),
             )
             .await
             .expect("failed to get producer lock key info");
@@ -579,10 +611,11 @@ impl ProducerMonitor for EtcdProducerMonitor {
         // If the producer is already dead, we can quit early
         if get_resp.count() == 0 {
             warn!("producer lock was not found, producer is dead already");
-            tx.send(()).expect("failed to early send producer dead signal");
-            return signal
+            tx.send(())
+                .expect("failed to early send producer dead signal");
+            return signal;
         }
-        
+
         let anchor_revision = get_resp.kvs()[0].mod_revision();
 
         tokio::spawn(async move {

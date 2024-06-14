@@ -1,5 +1,6 @@
 use {
-    super::producer::ScyllaProducerStore, crate::scylladb::{
+    super::producer::ScyllaProducerStore,
+    crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
@@ -7,7 +8,12 @@ use {
             ShardOffsetMap, Slot,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
-    }, scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session}, std::{collections::BTreeMap, net::IpAddr, sync::Arc}, tonic::async_trait, tracing::info, uuid::Uuid
+    },
+    scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
+    std::{collections::BTreeMap, net::IpAddr, sync::Arc},
+    tonic::async_trait,
+    tracing::info,
+    uuid::Uuid,
 };
 
 const NUM_SHARDS: usize = 64;
@@ -101,6 +107,19 @@ const GET_NEW_TX_SHARD_OFFSET: &str = r###"
         AND execution_id = ?
 "###;
 
+const GET_SHARD_OFFSET_FOR_SPECIFIC_GROUP_MEMBER: &str = r###"
+    SELECT
+        consumer_id,
+        revision,
+        acc_shard_offset_map,
+        tx_shard_offset_map
+    FROM consumer_shard_offset_v2
+    WHERE 
+        consumer_group_id = ?
+        AND consumer_id IN ?
+        AND execution_id = ?
+"###;
+
 #[derive(Clone)]
 pub struct ScyllaConsumerGroupStore {
     session: Arc<Session>,
@@ -112,6 +131,7 @@ pub struct ScyllaConsumerGroupStore {
     update_consumer_shard_offset_ps: PreparedStatement,
     get_acc_update_shard_offset_ps: PreparedStatement,
     get_new_tx_shard_offset_ps: PreparedStatement,
+    get_shard_offset_for_specific_group_member_ps: PreparedStatement,
 }
 
 fn assign_shards(ids: &[ConsumerId], num_shards: usize) -> BTreeMap<ConsumerId, Vec<ShardId>> {
@@ -127,10 +147,9 @@ fn assign_shards(ids: &[ConsumerId], num_shards: usize) -> BTreeMap<ConsumerId, 
     ids.into_iter().zip(chunk_it).collect()
 }
 
-
 impl ScyllaConsumerGroupStore {
     pub async fn new(
-        session: Arc<Session>, 
+        session: Arc<Session>,
         producer_store: ScyllaProducerStore,
     ) -> anyhow::Result<Self> {
         let create_static_consumer_group_ps = session.prepare(CREATE_STATIC_CONSUMER_GROUP).await?;
@@ -147,8 +166,11 @@ impl ScyllaConsumerGroupStore {
 
         let mut get_acc_update_shard_offset_ps =
             session.prepare(GET_ACC_UPDATE_SHARD_OFFSET).await?;
-        let mut get_new_tx_shard_offset_ps = session
-            .prepare(GET_NEW_TX_SHARD_OFFSET).await?;
+        let mut get_new_tx_shard_offset_ps = session.prepare(GET_NEW_TX_SHARD_OFFSET).await?;
+
+        let get_shard_offset_for_specific_group_member_ps = session
+            .prepare(GET_SHARD_OFFSET_FOR_SPECIFIC_GROUP_MEMBER)
+            .await?;
 
         get_acc_update_shard_offset_ps.set_consistency(Consistency::Serial);
         get_new_tx_shard_offset_ps.set_consistency(Consistency::Serial);
@@ -163,6 +185,7 @@ impl ScyllaConsumerGroupStore {
             update_consumer_shard_offset_ps,
             get_acc_update_shard_offset_ps,
             get_new_tx_shard_offset_ps,
+            get_shard_offset_for_specific_group_member_ps,
         };
         Ok(this)
     }
@@ -247,32 +270,16 @@ impl ScyllaConsumerGroupStore {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-
-        let query = r###"
-            SELECT
-                consumer_id,
-                revision,
-                acc_shard_offset_map,
-                tx_shard_offset_map
-            FROM consumer_shard_offset_v2
-            WHERE 
-                consumer_group_id = ?
-                AND consumer_id IN ?
-                AND execution_id = ?
-            "###
-        .to_string();
-
         let subscribed_events = consumer_group_info.subscribed_event_types;
         let rows = self
             .session
-            .query(
-                query,
+            .execute(
+                &self.get_shard_offset_for_specific_group_member_ps,
                 (consumer_group_id, instance_id_in_clause, execution_id),
             )
             .await?
             .rows_typed::<(ConsumerId, i64, ShardOffsetMap, ShardOffsetMap)>()?
             .collect::<Result<Vec<_>, _>>()?;
-
         let shard_max_revision = rows
             .iter()
             .map(|(_, revision, _, _)| revision)

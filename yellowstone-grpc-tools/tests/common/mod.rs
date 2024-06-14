@@ -1,9 +1,31 @@
 use {
-    futures::{future, FutureExt}, local_ip_address::{linux::local_ip, list_afinet_netifas}, scylla::{Session, SessionBuilder}, std::{collections::BTreeMap, sync::Arc}, tokio::sync::{broadcast, mpsc, watch, RwLock}, tonic::async_trait, uuid::Uuid, yellowstone_grpc_tools::{scylladb::{
-        etcd_utils::Revision, types::{BlockchainEventType, ProducerId}, yellowstone_log::consumer_group::{
-            consumer_group_store::ScyllaConsumerGroupStore, consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle}, consumer_supervisor::ConsumerSourceSupervisor, leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState, WaitingBarrierState}, lock::{ConsumerLock, ConsumerLocker}, producer::{EtcdProducerMonitor, ProducerDeadSignal, ProducerMonitor, ScyllaProducerStore}
-        }
-    }, setup_tracing}
+    futures::{future, FutureExt},
+    local_ip_address::{linux::local_ip, list_afinet_netifas},
+    scylla::{Session, SessionBuilder},
+    std::{collections::BTreeMap, sync::Arc},
+    tokio::sync::{broadcast, mpsc, watch, RwLock},
+    tonic::async_trait,
+    uuid::Uuid,
+    yellowstone_grpc_tools::{
+        scylladb::{
+            etcd_utils::Revision,
+            types::{BlockchainEventType, ProducerId},
+            yellowstone_log::consumer_group::{
+                consumer_group_store::ScyllaConsumerGroupStore,
+                consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle},
+                consumer_supervisor::ConsumerSourceSupervisor,
+                leader::{
+                    ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState,
+                    WaitingBarrierState,
+                },
+                lock::{ConsumerLock, ConsumerLocker},
+                producer::{
+                    EtcdProducerMonitor, ProducerDeadSignal, ProducerMonitor, ScyllaProducerStore,
+                },
+            },
+        },
+        setup_tracing,
+    },
 };
 
 pub struct TestContext {
@@ -27,12 +49,12 @@ impl TestContext {
             .build()
             .await?;
         let etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
-        let etcd_producer_monitor: Arc<dyn ProducerMonitor> = Arc::new(EtcdProducerMonitor::new(etcd.clone()));
+        let etcd_producer_monitor: Arc<dyn ProducerMonitor> =
+            Arc::new(EtcdProducerMonitor::new(etcd.clone()));
         let session = Arc::new(session);
-        let producer_store = ScyllaProducerStore::new(
-            Arc::clone(&session), 
-            Arc::clone(&etcd_producer_monitor)
-        ).await?;
+        let producer_store =
+            ScyllaProducerStore::new(Arc::clone(&session), Arc::clone(&etcd_producer_monitor))
+                .await?;
         let consumer_group_store =
             ScyllaConsumerGroupStore::new(Arc::clone(&session), producer_store.clone()).await?;
         let ctx = TestContext {
@@ -44,7 +66,6 @@ impl TestContext {
         };
         Ok(ctx)
     }
-
 
     pub async fn last_etcd_revision(&self) -> Revision {
         let mut kv = self.etcd.kv_client();
@@ -67,8 +88,6 @@ impl TestContext {
     }
 }
 
-
-
 pub struct MockProducerMonitor {
     pub inner: Arc<RwLock<BTreeMap<ProducerId, i64>>>,
 }
@@ -79,7 +98,17 @@ impl ProducerMonitor for MockProducerMonitor {
         self.inner.read().await.clone()
     }
 
+    async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
+        self.inner.read().await.contains_key(&producer_id)
+    }
+
     async fn get_producer_dead_signal(&self, producer_id: ProducerId) -> ProducerDeadSignal {
-        unimplemented!()
+        let (signal, tx, mut rx_terminate) = ProducerDeadSignal::new();
+
+        tokio::spawn(async move {
+            let _ = rx_terminate.await;
+            let _ = tx.send(());
+        });
+        signal
     }
 }

@@ -69,6 +69,12 @@ pub trait FromBlockchainEvent: Send + 'static {
     fn from(blockchain_event: BlockchainEvent) -> Self;
 }
 
+impl FromBlockchainEvent for BlockchainEvent {
+    fn from(blockchain_event: BlockchainEvent) -> Self {
+        blockchain_event
+    }
+}
+
 #[derive(Clone)]
 pub enum ConsumerSourceCommand {
     Stop,
@@ -213,6 +219,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
     }
 
     pub fn spawn(mut self) -> ConsumerSourceHandle {
+        info!("spawn consumer source");
         let (tx, rx) = mpsc::channel(1);
 
         let handle = tokio::spawn(async move { self.run(rx).await });
@@ -227,7 +234,6 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         let consumer_id = self.ctx.consumer_id.to_owned();
         let mut commit_offset_deadline = Instant::now() + self.offset_commit_interval;
         const PRINT_CONSUMER_SLOT_REACH_DELAY: Duration = Duration::from_secs(5);
-        info!("Serving consumer: {:?}", consumer_id);
 
         let mut max_seen_slot = UNDEFINED_SLOT;
         let mut num_event_between_two_slots = 0;

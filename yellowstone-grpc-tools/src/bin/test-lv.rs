@@ -14,11 +14,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = Client::connect(["localhost:2379"], None).await?;
 
-    
     let (watcher, mut stream) = client
-            .watch("test", Some(WatchOptions::new().with_prefix()))
-            .await
-            .expect("fail");
+        .watch("test", Some(WatchOptions::new().with_prefix()))
+        .await
+        .expect("fail");
     drop(watcher);
     let (tx, mut rx) = mpsc::channel(10);
     tokio::spawn(async move {
@@ -37,15 +36,15 @@ async fn main() -> anyhow::Result<()> {
     });
     let mut i = 1;
     loop {
-        client.put(format!("test/{i}"), 1_i32.to_be_bytes(), None).await?;
+        client
+            .put(format!("test/{i}"), 1_i32.to_be_bytes(), None)
+            .await?;
 
         let val = rx.recv().await;
         println!("rx1 {val:?}");
         i += 1;
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    
-    
 
     Ok(())
 }

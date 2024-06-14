@@ -1,7 +1,10 @@
 use {
     super::{
-        etcd_path::get_instance_lock_prefix_v1, producer::ProducerMonitor, timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState}
-    }, crate::scylladb::{
+        etcd_path::get_instance_lock_prefix_v1,
+        producer::ProducerMonitor,
+        timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState},
+    },
+    crate::scylladb::{
         self,
         etcd_utils::{
             self,
@@ -16,18 +19,31 @@ use {
         yellowstone_log::{
             common::SeekLocation,
             consumer_group::{
-                self, error::{DeadConsumerGroup, LeaderStateLogNotFound}, etcd_path::get_producer_lock_path_v1
+                self,
+                error::{DeadConsumerGroup, LeaderStateLogNotFound},
+                etcd_path::get_producer_lock_path_v1,
             },
         },
-    }, bincode::{deserialize, serialize}, etcd_client::{
+    },
+    bincode::{deserialize, serialize},
+    etcd_client::{
         Compare, EventType, GetOptions, LeaderKey, PutOptions, Txn, TxnOp, WatchOptions,
-    }, futures::Future, local_ip_address::list_afinet_netifas, serde::{Deserialize, Serialize}, std::{collections::BTreeMap, fmt, net::IpAddr, sync::Arc, time::Duration}, thiserror::Error, tokio::{
+    },
+    futures::Future,
+    local_ip_address::list_afinet_netifas,
+    serde::{Deserialize, Serialize},
+    std::{collections::BTreeMap, fmt, net::IpAddr, sync::Arc, time::Duration},
+    thiserror::Error,
+    tokio::{
         sync::{
             oneshot::{self, error::RecvError},
             watch,
         },
         task::JoinHandle,
-    }, tokio_stream::StreamExt, tracing::{error, info, warn}, uuid::Uuid
+    },
+    tokio_stream::StreamExt,
+    tracing::{error, info, warn},
+    uuid::Uuid,
 };
 
 const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
@@ -80,7 +96,7 @@ enum LeaderCommand {
 
 //     let (tx, rx) = oneshot::channel();
 //     let get_resp = etcd.get(
-//         producer_lock_path.as_str(), 
+//         producer_lock_path.as_str(),
 //         Some(GetOptions::new().with_prefix())
 //     ).await?;
 
@@ -135,7 +151,6 @@ enum LeaderCommand {
 //     })
 // }
 
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ConsumerGroupState {
     Init(ConsumerGroupHeader),
@@ -173,7 +188,6 @@ pub struct WaitingBarrierState {
     pub barrier_key: Vec<u8>,
     pub wait_for: Vec<Vec<u8>>,
 }
-
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct InTimelineTranslationState {
@@ -225,8 +239,6 @@ impl fmt::Display for LeaderNodeError {
     }
 }
 
-
-
 impl ConsumerGroupLeaderNode {
     pub async fn new(
         mut etcd: etcd_client::Client,
@@ -268,7 +280,10 @@ impl ConsumerGroupLeaderNode {
         &self.state
     }
 
-    pub async fn update_state_machine(&mut self, next_step: ConsumerGroupState) -> anyhow::Result<()> {
+    pub async fn update_state_machine(
+        &mut self,
+        next_step: ConsumerGroupState,
+    ) -> anyhow::Result<()> {
         let leader_log_key = &self.state_log_key;
         let txn = etcd_client::Txn::new()
             .when(vec![
@@ -286,8 +301,11 @@ impl ConsumerGroupLeaderNode {
             )]);
 
         let txn_resp = self.etcd.txn(txn).await?;
-        
-        anyhow::ensure!(txn_resp.succeeded(), LeaderNodeError::FailedToUpdateStateLog(format!("{txn_resp:?}")));
+
+        anyhow::ensure!(
+            txn_resp.succeeded(),
+            LeaderNodeError::FailedToUpdateStateLog(format!("{txn_resp:?}"))
+        );
 
         let revision = txn_resp
             .op_responses()
@@ -305,53 +323,53 @@ impl ConsumerGroupLeaderNode {
         Ok(())
     }
 
-
-    async fn handle_in_timeline_translation(&self, state: &InTimelineTranslationState) -> anyhow::Result<ConsumerGroupState> {
-        let result = self.timeline_translator.next(state.substate.to_owned()).await;
+    async fn handle_in_timeline_translation(
+        &self,
+        state: &InTimelineTranslationState,
+    ) -> anyhow::Result<ConsumerGroupState> {
+        let result = self
+            .timeline_translator
+            .next(state.substate.to_owned())
+            .await;
         match result {
-            Ok(substate2) => {
-                Ok(match substate2 {
-                    TranslationState::Done(inner) => ConsumerGroupState::Idle(
-                        IdleState { 
-                            header: state.header.to_owned(), 
-                            producer_id: inner.producer_id,
-                            execution_id: inner.execution_id
-                        }
-                    ),
-                    anystate => ConsumerGroupState::InTimelineTranslation(
-                        InTimelineTranslationState {
-                            header: state.header.to_owned(),
-                            substate: anystate
-                        }
-                    )
-                })
-            },
-            Err(e) => {
-                match e {
-                    timeline::TranslationStepError::ConsumerGroupNotFound => {
-                        Ok(ConsumerGroupState::Dead(state.header.clone()))
-                    },
-                    timeline::TranslationStepError::StaleProducerProposition(_) => {
-                        Ok(ConsumerGroupState::InTimelineTranslation(
-                            InTimelineTranslationState {
-                                header: state.header.clone(),
-                                substate: TranslationState::ComputingNextProducer(
-                                    ComputingNextProducerState {
-                                        consumer_group_id: state.header.consumer_group_id,
-                                        revision: self.last_revision
-                                    }
-                                ),
-                            }
-                        ))
-                    }
-                    timeline::TranslationStepError::NoActiveProducer => anyhow::bail!(consumer_group::error::NoActiveProducer),
-                    timeline::TranslationStepError::InternalError(e) => anyhow::bail!(e),
+            Ok(substate2) => Ok(match substate2 {
+                TranslationState::Done(inner) => ConsumerGroupState::Idle(IdleState {
+                    header: state.header.to_owned(),
+                    producer_id: inner.producer_id,
+                    execution_id: inner.execution_id,
+                }),
+                anystate => ConsumerGroupState::InTimelineTranslation(InTimelineTranslationState {
+                    header: state.header.to_owned(),
+                    substate: anystate,
+                }),
+            }),
+            Err(e) => match e {
+                timeline::TranslationStepError::ConsumerGroupNotFound => {
+                    Ok(ConsumerGroupState::Dead(state.header.clone()))
                 }
+                timeline::TranslationStepError::StaleProducerProposition(_) => Ok(
+                    ConsumerGroupState::InTimelineTranslation(InTimelineTranslationState {
+                        header: state.header.clone(),
+                        substate: TranslationState::ComputingNextProducer(
+                            ComputingNextProducerState {
+                                consumer_group_id: state.header.consumer_group_id,
+                                revision: self.last_revision,
+                            },
+                        ),
+                    }),
+                ),
+                timeline::TranslationStepError::NoActiveProducer => {
+                    anyhow::bail!(consumer_group::error::NoActiveProducer)
+                }
+                timeline::TranslationStepError::InternalError(e) => anyhow::bail!(e),
             },
         }
     }
 
-    async fn handle_lost_producer(&self, state: &LostProducerState) -> anyhow::Result<ConsumerGroupState> {
+    async fn handle_lost_producer(
+        &self,
+        state: &LostProducerState,
+    ) -> anyhow::Result<ConsumerGroupState> {
         let barrier_key = Uuid::new_v4();
         let lease_id = self.etcd.lease_client().grant(10, None).await?.id();
         let lock_prefix = get_instance_lock_prefix_v1(self.consumer_group_id.clone());
@@ -383,18 +401,20 @@ impl ConsumerGroupLeaderNode {
         Ok(next_state)
     }
 
-    async fn handle_wait_barrier(&self, state: &WaitingBarrierState) -> anyhow::Result<ConsumerGroupState> {
+    async fn handle_wait_barrier(
+        &self,
+        state: &WaitingBarrierState,
+    ) -> anyhow::Result<ConsumerGroupState> {
         let barrier = get_barrier(self.etcd.clone(), &state.barrier_key).await?;
 
         barrier.wait().await;
         Ok(ConsumerGroupState::InTimelineTranslation(
             InTimelineTranslationState {
                 header: state.header.to_owned(),
-                substate: self.timeline_translator.begin_translation(
-                    state.header.consumer_group_id, 
-                    self.last_revision
-                )
-            }
+                substate: self
+                    .timeline_translator
+                    .begin_translation(state.header.consumer_group_id, self.last_revision),
+            },
         ))
     }
 
@@ -402,52 +422,44 @@ impl ConsumerGroupLeaderNode {
     /// This function is cancel safe
     pub async fn next_state(&self) -> anyhow::Result<Option<ConsumerGroupState>> {
         let next_state = match &self.state {
-            ConsumerGroupState::Init(header) => {
-                Some(ConsumerGroupState::InTimelineTranslation(
-                    InTimelineTranslationState {
-                        header: header.to_owned(),
-                        substate: self.timeline_translator.begin_translation(
-                            header.consumer_group_id, 
-                            self.last_revision
-                        )
-                    }
-                ))
-            }
+            ConsumerGroupState::Init(header) => Some(ConsumerGroupState::InTimelineTranslation(
+                InTimelineTranslationState {
+                    header: header.to_owned(),
+                    substate: self
+                        .timeline_translator
+                        .begin_translation(header.consumer_group_id, self.last_revision),
+                },
+            )),
             ConsumerGroupState::LostProducer(inner) => {
                 Some(self.handle_lost_producer(inner).await?)
             }
             ConsumerGroupState::WaitingBarrier(inner) => {
                 Some(self.handle_wait_barrier(inner).await?)
-            },
+            }
             ConsumerGroupState::InTimelineTranslation(inner) => {
                 Some(self.handle_in_timeline_translation(inner).await?)
-            },
+            }
             ConsumerGroupState::Idle(IdleState {
                 header,
                 producer_id,
                 execution_id,
             }) => {
-
-                let producer_lock_path = get_producer_lock_path_v1(*producer_id);
-                let get_resp = self.etcd.kv_client().get(producer_lock_path, Some(GetOptions::new().with_prefix())).await?;
-                if get_resp.kvs().is_empty() {
+                let is_alive = self.producer_monitor.is_producer_alive(*producer_id).await;
+                if !is_alive {
                     warn!("received dead signal from producer {producer_id:?}");
-                    Some(ConsumerGroupState::LostProducer (LostProducerState {
+                    Some(ConsumerGroupState::LostProducer(LostProducerState {
                         header: header.clone(),
                         lost_producer_id: *producer_id,
-                        execution_id: execution_id.clone()
+                        execution_id: execution_id.clone(),
                     }))
                 } else {
                     None
                 }
             }
-            ConsumerGroupState::Dead(inner) => {
-                Some(ConsumerGroupState::Dead(inner.clone()))
-            }
+            ConsumerGroupState::Dead(inner) => Some(ConsumerGroupState::Dead(inner.clone())),
         };
 
         return Ok(next_state);
-        
     }
 
     /// Runs the leader loop for the consumer group.
@@ -467,9 +479,7 @@ impl ConsumerGroupLeaderNode {
         &mut self,
         mut interrupt_signal: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-
         loop {
-            
             tokio::select! {
                 res = self.next_state() => {
                     let maybe_next_state = res?;
@@ -487,13 +497,15 @@ impl ConsumerGroupLeaderNode {
             }
 
             if matches!(self.state, ConsumerGroupState::Idle(_)) {
-
                 let idle_state = match &self.state {
                     ConsumerGroupState::Idle(idle_state) => idle_state,
                     _ => unreachable!(),
                 };
-                
-                let mut signal = self.producer_monitor.get_producer_dead_signal(idle_state.producer_id).await;
+
+                let mut signal = self
+                    .producer_monitor
+                    .get_producer_dead_signal(idle_state.producer_id)
+                    .await;
 
                 tokio::select! {
                     _ = &mut signal => {
@@ -556,8 +568,7 @@ pub async fn create_leader_state_log(
             .expect("missing execution id"),
     });
 
-    let state_log_key =
-        leader_log_name_from_cg_id_v1(scylla_consumer_group_info.consumer_group_id);
+    let state_log_key = leader_log_name_from_cg_id_v1(scylla_consumer_group_info.consumer_group_id);
 
     let txn = Txn::new()
         .when(vec![Compare::version(
@@ -590,6 +601,7 @@ pub async fn observe_consumer_group_state(
     let mut wc = etcd.watch_client();
 
     let mut kv_client = etcd.kv_client();
+
     let get_resp = kv_client.get(key.as_str(), None).await?;
 
     anyhow::ensure!(
@@ -657,17 +669,25 @@ pub struct LeaderInfo {
 
 fn leader_log_name_from_leader_key_v1(lk: &LeaderKey) -> String {
     let lk_name = lk.name_str().expect("invalid leader key name");
-    format!("{lk_name}#log")
+    let last_part = lk_name
+        .split("#")
+        .last()
+        .expect("unexpected leader key name format");
+    let cg_leader_uuid = last_part
+        .split("/")
+        .next()
+        .expect("unexpected leader key name format");
+    format!("v1#leader-state-log#{cg_leader_uuid}")
 }
 
 pub fn leader_log_name_from_cg_id_v1(consumer_group_id: ConsumerGroupId) -> String {
     let uuid = Uuid::from_bytes(consumer_group_id).to_string();
-    format!("v1#cg-leader-{uuid}#log")
+    format!("v1#leader-state-log#cg-leader-{uuid}")
 }
 
 fn leader_name_v1(consumer_group_id: ConsumerGroupId) -> String {
     let uuid = Uuid::from_bytes(consumer_group_id).to_string();
-    format!("v1#cg-leader-{uuid}")
+    format!("v1#leader#cg-leader-{uuid}")
 }
 
 /// Observes changes to the leader of the given consumer group. Returns a watch receiver that will
@@ -698,7 +718,7 @@ pub async fn observe_leader_changes(
         .max_by_key(|kv| kv.mod_revision())
         .map(|kv| serde_json::from_slice::<LeaderInfo>(kv.value()))
         .transpose()?;
-
+    info!("initital value {initital_value:?}");
     let (tx, rx) = watch::channel(initital_value);
     tokio::spawn(async move {
         let watch_opts = WatchOptions::new().with_prefix();
@@ -708,7 +728,6 @@ pub async fn observe_leader_changes(
             .unwrap_or_else(|_| panic!("fail to watch {leader}"));
 
         'outer: loop {
-
             tokio::select! {
 
                 _ = tokio::time::sleep(Duration::from_secs(15)) => {
@@ -735,7 +754,6 @@ pub async fn observe_leader_changes(
                 }
 
             }
-
         }
         let _ = watcher.cancel().await;
     });
@@ -775,7 +793,7 @@ pub async fn try_become_leader(
         id: id.as_bytes().to_vec(),
     };
     let lease = ManagedLease::new(etcd.clone(), LEADER_LEASE_TTL, None).await?;
-    
+
     tokio::select! {
         _ = tokio::time::sleep(timeout) => {
             warn!("failed to become leader in time");

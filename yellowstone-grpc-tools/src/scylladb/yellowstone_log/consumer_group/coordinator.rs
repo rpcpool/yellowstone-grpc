@@ -9,7 +9,8 @@ use {
         },
         lock::{ConsumerLock, ConsumerLocker},
         producer::{ProducerMonitor, ScyllaProducerStore},
-        shard_iterator::{ShardFilter, ShardIterator}, timeline::ScyllaTimelineTranslator,
+        shard_iterator::{ShardFilter, ShardIterator},
+        timeline::ScyllaTimelineTranslator,
     },
     crate::scylladb::{
         etcd_utils::{lease::ManagedLease, Revision},
@@ -37,6 +38,7 @@ use {
         task::JoinHandle,
     },
     tracing::{error, info, warn},
+    uuid::Uuid,
 };
 
 pub struct ConsumerGroupCoordinatorBackend {
@@ -304,7 +306,8 @@ impl ConsumerGroupCoordinatorBackend {
         match self.leader_state_watch_map.entry(consumer_group_id.clone()) {
             std::collections::hash_map::Entry::Occupied(o) => Ok(o.get().clone()),
             std::collections::hash_map::Entry::Vacant(v) => {
-                let watch = observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
+                let watch =
+                    observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
                 Ok(v.insert(watch).clone())
             }
         }
@@ -343,18 +346,23 @@ impl ConsumerGroupCoordinatorBackend {
             .instance_locker
             .try_lock_instance_id(consumer_group_id, consumer_id)
             .await?;
-
+        info!("lock acquired for consumer group {consumer_group_id:?} instance {consumer_id}");
         let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
 
-        let leader_state_watch = observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
+        let leader_state_watch =
+            observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
 
         leader_election_watch.mark_changed();
 
         let maybe_leader_info = { leader_election_watch.borrow_and_update().to_owned() };
 
         if maybe_leader_info.is_none() {
-            info!("will attempt to be come leader for consumer group {consumer_group_id:?}");
+            info!(
+                "consumer group {consumer_group_id:?} has no leader, attempting to become leader"
+            );
             self.try_become_leader_bg(consumer_group_id);
+        } else {
+            info!("consumer group {consumer_group_id:?} already has a leader with info {maybe_leader_info:?}");
         }
 
         let supervisor = ConsumerSourceSupervisor::new(
@@ -505,7 +513,7 @@ impl ConsumerGroupCoordinatorBackend {
                 },
                 ((cg_id, result), _, _) = wait_for_election_result => {
                     self.background_leader_attempt.remove(&cg_id);
-                    let cg_id_text = String::from_utf8(cg_id.to_vec())?;
+                    let cg_id_text = Uuid::from_slice(&cg_id)?.to_string();
                     match result {
                         Ok(Some((leader_key, leader_lease))) => {
                             info!("won leader election for cg-{cg_id_text}");
@@ -516,17 +524,19 @@ impl ConsumerGroupCoordinatorBackend {
                     }
                 }
                 (result, i, _remaining_futs) = wait_for_consumer_to_quit => {
+                    info!("consumer finished");
                     let resolved_handle = self.consumer_handles.remove(i);
                     if let Err(supervisor_error) = result? {
                         error!("supervisor failed with : {supervisor_error:?}");
                     }
-                    info!("group={}, instance={} finished", String::from_utf8(resolved_handle.consumer_group_id.to_vec())?, resolved_handle.consumer_id);
+                    let cg_id_text = Uuid::from_slice(&resolved_handle.consumer_group_id)?.to_string();
+                    info!("group={}, instance={} finished", cg_id_text, resolved_handle.consumer_id);
                 },
                 ((cg_id, result), _, _) = wait_for_leader_to_quit => {
-                    let cg_id_text = String::from_utf8(cg_id.to_vec())?;
+                    let cg_id_text = Uuid::from_slice(&cg_id)?.to_string();
                     match result {
                         Ok(_) => info!("leader {cg_id_text} closed gracefully"),
-                        Err(e) => error!("leader {cg_id_text}a "),
+                        Err(e) => error!("leader {cg_id_text} closed abnormally with: {e:?}"),
                     }
                 }
             }

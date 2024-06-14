@@ -59,7 +59,10 @@ impl FencingTokenGenerator {
             _ => panic!("unexpected operation in etcd txn response"),
         };
 
-        trace!("get fencing token {res:?} from etcd latency: {:?}", t.elapsed());
+        trace!(
+            "get fencing token {res:?} from etcd latency: {:?}",
+            t.elapsed()
+        );
         res
     }
 }

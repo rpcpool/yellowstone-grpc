@@ -75,7 +75,6 @@ impl ManagedLease {
         self.keep_alive_response_watch.borrow().to_owned()
     }
 
-
     pub async fn revoke(self) -> anyhow::Result<()> {
         drop(self.tx_terminate);
         self.lifecycle_handle.await.map_err(anyhow::Error::new)

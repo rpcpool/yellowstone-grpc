@@ -1,14 +1,15 @@
-use core::fmt;
-
-use futures::future;
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use tonic::async_trait;
-
-use crate::scylladb::{types::{ConsumerGroupId, ExecutionId, ProducerId, ShardOffsetMap}, yellowstone_log::common::SeekLocation};
-
-use super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore};
-
+use {
+    super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore},
+    crate::scylladb::{
+        types::{ConsumerGroupId, ExecutionId, ProducerId, ShardOffsetMap},
+        yellowstone_log::common::SeekLocation,
+    },
+    core::fmt,
+    futures::future,
+    serde::{Deserialize, Serialize},
+    thiserror::Error,
+    tonic::async_trait,
+};
 
 /// Represents the state of computing the next producer in the timeline translation process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub struct ProducerProposalState {
 pub struct TranslationDoneState {
     pub producer_id: ProducerId,
     pub execution_id: ExecutionId,
-    pub new_shard_offsets: ShardOffsetMap
+    pub new_shard_offsets: ShardOffsetMap,
 }
 
 /// Represents the possible states in the timeline translation process.
@@ -40,7 +41,7 @@ pub struct TranslationDoneState {
 pub enum TranslationState {
     ComputingNextProducer(ComputingNextProducerState),
     ProducerProposal(ProducerProposalState),
-    Done(TranslationDoneState)
+    Done(TranslationDoneState),
 }
 
 #[derive(Debug, Clone, Error, Eq, PartialEq)]
@@ -48,27 +49,30 @@ pub enum TranslationStepError {
     ConsumerGroupNotFound,
     NoActiveProducer,
     InternalError(String),
-    StaleProducerProposition(String)
+    StaleProducerProposition(String),
 }
 
 impl fmt::Display for TranslationStepError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TranslationStepError::ConsumerGroupNotFound => write!(f, "consumer group no longuer exists"),
-            TranslationStepError::StaleProducerProposition(e) => write!(f, "producer proposal is stale: {}", e),
+            TranslationStepError::ConsumerGroupNotFound => {
+                write!(f, "consumer group no longuer exists")
+            }
+            TranslationStepError::StaleProducerProposition(e) => {
+                write!(f, "producer proposal is stale: {}", e)
+            }
             TranslationStepError::NoActiveProducer => write!(f, "no active producer found"),
             TranslationStepError::InternalError(e) => write!(f, "got an internal error: {}", e),
         }
     }
 }
 
-
 pub type TranslationStepResult = std::result::Result<TranslationState, TranslationStepError>;
 /// Trait for timeline translators.
 ///
 /// This trait represents an API to handle a timeline translation state machine. The translator
 /// follows the visitor pattern, where each state is visited and processed accordingly.
-/// 
+///
 /// This trait defines two methods: `begin_translation` and `next`. The `begin_translation` method
 /// starts the translation process with the given consumer group ID and revision, and returns the
 /// initial state of the translation. The `next` method advances the translation process to the
@@ -90,16 +94,14 @@ pub trait TimelineTranslator {
     ///
     /// The initial state of the translation.
     fn begin_translation(
-        &self, 
+        &self,
         consumer_group_id: ConsumerGroupId,
         revision: i64,
     ) -> TranslationState {
-        TranslationState::ComputingNextProducer(
-            ComputingNextProducerState {
-                consumer_group_id,
-                revision,
-            }
-        )
+        TranslationState::ComputingNextProducer(ComputingNextProducerState {
+            consumer_group_id,
+            revision,
+        })
     }
 
     /// Advances the translation process to the next state.
@@ -117,20 +119,23 @@ pub trait TimelineTranslator {
     /// The updated state of the translation.
     async fn next(&self, state: TranslationState) -> TranslationStepResult {
         match state {
-            TranslationState::ComputingNextProducer(inner) => self.compute_next_producer(inner).await,
+            TranslationState::ComputingNextProducer(inner) => {
+                self.compute_next_producer(inner).await
+            }
             TranslationState::ProducerProposal(inner) => self.accept_proposal(inner).await,
             TranslationState::Done(inner) => Ok(TranslationState::Done(inner)),
         }
     }
 
     /// Computes the next producer in the timeline translation process.
-    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> TranslationStepResult;
+    async fn compute_next_producer(
+        &self,
+        state: ComputingNextProducerState,
+    ) -> TranslationStepResult;
 
     /// Accepts a producer proposal in the timeline translation process.
     async fn accept_proposal(&self, state: ProducerProposalState) -> TranslationStepResult;
-
 }
-
 
 pub struct ScyllaTimelineTranslator {
     pub consumer_group_store: ScyllaConsumerGroupStore,
@@ -139,16 +144,16 @@ pub struct ScyllaTimelineTranslator {
 
 #[async_trait]
 impl TimelineTranslator for ScyllaTimelineTranslator {
-
-    async fn compute_next_producer(&self, state: ComputingNextProducerState) -> TranslationStepResult {
-
+    async fn compute_next_producer(
+        &self,
+        state: ComputingNextProducerState,
+    ) -> TranslationStepResult {
         let cg_info = self
             .consumer_group_store
             .get_consumer_group_info(&state.consumer_group_id)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?
             .ok_or(TranslationStepError::ConsumerGroupNotFound)?;
-
 
         let (lcs, _max_revision) = self
             .consumer_group_store
@@ -159,10 +164,7 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
         let slot_ranges = Some(lcs - 10..=lcs);
         let (producer_id, execution_id) = self
             .producer_queries
-            .get_producer_id_with_least_assigned_consumer(
-                slot_ranges,
-                cg_info.commitment_level
-            )
+            .get_producer_id_with_least_assigned_consumer(slot_ranges, cg_info.commitment_level)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
 
@@ -176,20 +178,20 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
 
-        let new_state = TranslationState::ProducerProposal(ProducerProposalState { 
-            consumer_group_id: state.consumer_group_id, 
-            revision: state.revision, 
-            producer_id, 
+        let new_state = TranslationState::ProducerProposal(ProducerProposalState {
+            consumer_group_id: state.consumer_group_id,
+            revision: state.revision,
+            producer_id,
             execution_id,
-            new_shard_offsets
+            new_shard_offsets,
         });
 
         Ok(new_state)
     }
 
-    async fn accept_proposal(&self, state: ProducerProposalState) ->  TranslationStepResult {
-
-        let maybe = self.producer_queries
+    async fn accept_proposal(&self, state: ProducerProposalState) -> TranslationStepResult {
+        let maybe = self
+            .producer_queries
             .get_execution_id(state.producer_id)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
@@ -197,18 +199,17 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
         match maybe {
             Some((_, actual_execution_id)) => {
                 if actual_execution_id != state.execution_id {
-                    return Err(TranslationStepError::StaleProducerProposition(
-                        format!("producer's execution id changed before translation could finish")
-                    ))
+                    return Err(TranslationStepError::StaleProducerProposition(format!(
+                        "producer's execution id changed before translation could finish"
+                    )));
                 }
-            },
+            }
             None => {
-                return Err(
-                    TranslationStepError::StaleProducerProposition(
-                        format!("producer with id {:?} no longuer exists", state.producer_id)
-                    )
-                )
-            },
+                return Err(TranslationStepError::StaleProducerProposition(format!(
+                    "producer with id {:?} no longuer exists",
+                    state.producer_id
+                )))
+            }
         }
 
         self.consumer_group_store
@@ -233,11 +234,10 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
 
         let done_state = TranslationDoneState {
-            producer_id: state.producer_id, 
-            execution_id: state.execution_id, 
-            new_shard_offsets: state.new_shard_offsets, 
+            producer_id: state.producer_id,
+            execution_id: state.execution_id,
+            new_shard_offsets: state.new_shard_offsets,
         };
         Ok(TranslationState::Done(done_state))
     }
-
 }

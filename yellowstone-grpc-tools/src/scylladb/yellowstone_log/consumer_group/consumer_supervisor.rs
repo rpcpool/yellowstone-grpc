@@ -10,7 +10,9 @@ use {
     crate::scylladb::{
         etcd_utils::{barrier::release_child, Revision},
         types::{ConsumerGroupId, ConsumerId},
-        yellowstone_log::consumer_group::{consumer_source::ConsumerSourceCommand, error::DeadConsumerGroup},
+        yellowstone_log::consumer_group::{
+            consumer_source::ConsumerSourceCommand, error::DeadConsumerGroup,
+        },
     },
     futures::{
         future::{try_join_all, BoxFuture},
@@ -22,13 +24,16 @@ use {
         collections::{BTreeMap, BTreeSet},
         process::Output,
         sync::Arc,
+        time::Duration,
     },
     tokio::{
         sync::{mpsc, oneshot, watch},
         task::{JoinError, JoinHandle},
+        time::Instant,
     },
     tonic::async_trait,
     tracing::{error, info},
+    uuid::Uuid,
 };
 
 pub struct ConsumerSourceSupervisor {
@@ -88,7 +93,6 @@ where
         state_watch.mark_changed();
         loop {
             state_watch.changed().await?;
-
             let (revision, state) = state_watch.borrow_and_update().to_owned();
 
             match state {
@@ -120,15 +124,36 @@ where
 
     async fn run(&mut self, mut stop_signal: oneshot::Receiver<()>) -> anyhow::Result<()> {
         loop {
+            info!("in supervisor");
             self.leader_state_watch.mark_changed();
+            let result =
+                tokio::time::timeout(Duration::from_secs(60), self.wait_for_idle_state()).await?;
+            if let Err(result) = result {
+                error!(
+                    "ConsumerSourceSupervisor timeout while waiting for idle state: {}",
+                    result
+                );
+                return Err(result);
+            }
 
-            let (revision, idle_state) = self.wait_for_idle_state().await?;
+            let (revision, idle_state) = result?;
+            info!("ConsumerSourceSupervisor received idle state, revision: {revision}");
 
             let ctx = self.build_consumer_context(idle_state);
             let mut new_state_signal = self.wait_for_state_change(revision);
-            
+
+            let spawned_time = Instant::now();
+            info!("ConsumerSourceSupervisor spawning consumer source...");
+            // TODO : add timeout for source spawn
             let mut handle = self.factory.spawn(ctx).await?;
 
+            let cg_id_text = Uuid::from_bytes(self.consumer_group_id).to_string();
+            info!(
+                "ConsumerSourceSupervisor spawned a consumer source in {:?}, group_id={} consumer_id={}", 
+                spawned_time.elapsed(), 
+                cg_id_text, 
+                self.consumer_id
+            );
             tokio::select! {
                 Ok(Err(e)) = &mut handle => {
                     error!("ConsumerSourceSupervisor failed to run consumer source: {}", e);
@@ -162,6 +187,12 @@ pub struct ConsumerSourceSupervisorHandle {
     pub consumer_id: ConsumerId,
     tx_terminate: oneshot::Sender<()>,
     handle: JoinHandle<anyhow::Result<()>>,
+}
+
+impl Drop for ConsumerSourceSupervisorHandle {
+    fn drop(&mut self) {
+        info!("dropped handle");
+    }
 }
 
 impl Future for ConsumerSourceSupervisorHandle {
@@ -214,7 +245,8 @@ impl ConsumerSourceSupervisor {
         let consumer_id = self.consumer_id.clone();
 
         let mut inner = self.into_inner(factory);
-        let handle = tokio::spawn(async move { inner.run(rx_terminate).await });
+        let handle: JoinHandle<Result<(), anyhow::Error>> =
+            tokio::spawn(async move { inner.run(rx_terminate).await });
         Ok(ConsumerSourceSupervisorHandle {
             consumer_id,
             consumer_group_id,
@@ -223,10 +255,7 @@ impl ConsumerSourceSupervisor {
         })
     }
 
-    pub async fn spawn_with<F>(
-        self,
-        callable: F,
-    ) -> anyhow::Result<ConsumerSourceSupervisorHandle>
+    pub async fn spawn_with<F>(self, callable: F) -> anyhow::Result<ConsumerSourceSupervisorHandle>
     where
         F: Fn(ConsumerContext) -> BoxFuture<'static, anyhow::Result<ConsumerSourceHandle>>
             + Send
