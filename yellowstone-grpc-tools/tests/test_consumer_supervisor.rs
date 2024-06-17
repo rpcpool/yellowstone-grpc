@@ -1,13 +1,17 @@
 use {
     crate::common::TestContext,
+    common::TestContextBuilder,
     futures::{future, FutureExt},
     std::sync::Arc,
-    tokio::sync::{mpsc, watch},
+    tokio::{
+        sync::{mpsc, oneshot, watch},
+        task::JoinHandle,
+    },
     uuid::Uuid,
     yellowstone_grpc_tools::scylladb::{
         types::BlockchainEventType,
         yellowstone_log::consumer_group::{
-            consumer_source::{ConsumerSourceCommand, ConsumerSourceHandle},
+            consumer_source::ConsumerSourceHandle,
             consumer_supervisor::ConsumerSourceSupervisor,
             leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState},
             lock::ConsumerLocker,
@@ -26,7 +30,7 @@ mod common;
 /// -
 #[tokio::test]
 async fn test_supervisor() {
-    let ctx = TestContext::new().await.unwrap();
+    let ctx = TestContextBuilder::new().build().await.unwrap();
     let locker = ConsumerLocker(ctx.etcd.clone());
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let consumer_id = Uuid::new_v4().to_string();
@@ -55,21 +59,13 @@ async fn test_supervisor() {
 
     let handle = supervisor
         .spawn_with(move |ctx| {
-            let (tx, mut rx) = mpsc::channel::<ConsumerSourceCommand>(1);
+            let (tx, mut rx) = oneshot::channel();
             let tx_passthrough = tx_eavesdrop.clone();
-            let handle = tokio::spawn(async move {
+            let handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
                 tx_passthrough.send(0).await?;
-                loop {
-                    if let Some(cmd) = rx.recv().await {
-                        tx_passthrough.send(1).await?;
-                        match cmd {
-                            ConsumerSourceCommand::Stop => return Ok(()),
-                        }
-                    } else {
-                        tx_passthrough.send(1).await?;
-                        return Ok(());
-                    }
-                }
+                rx.await;
+                tx_passthrough.send(1).await?;
+                Ok(())
             });
             future::ready(Ok(ConsumerSourceHandle { tx, handle })).boxed()
         })

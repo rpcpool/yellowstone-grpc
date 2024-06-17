@@ -18,10 +18,13 @@ use {
         prepared_statement::PreparedStatement,
         Session,
     },
-    std::{collections::BTreeMap, sync::Arc, time::Duration},
+    std::{collections::BTreeMap, convert::identity, sync::Arc, time::Duration},
     thiserror::Error,
     tokio::{
-        sync::mpsc::{self, error::SendError},
+        sync::{
+            mpsc::{self, error::SendError},
+            oneshot,
+        },
         task::{JoinError, JoinHandle},
         time::Instant,
     },
@@ -74,35 +77,42 @@ impl FromBlockchainEvent for BlockchainEvent {
         blockchain_event
     }
 }
-
-#[derive(Clone)]
-pub enum ConsumerSourceCommand {
-    Stop,
-}
-
 pub struct ConsumerSourceHandle {
     // This is public to ease integration test
-    pub tx: mpsc::Sender<ConsumerSourceCommand>,
+    pub tx: oneshot::Sender<()>,
     pub handle: JoinHandle<anyhow::Result<()>>,
 }
 
 impl ConsumerSourceHandle {
-    pub async fn send(
-        &self,
-        cmd: ConsumerSourceCommand,
-    ) -> Result<(), SendError<ConsumerSourceCommand>> {
-        self.tx.send(cmd).await
+    // pub async fn send(
+    //     &self,
+    //     cmd: ConsumerSourceCommand,
+    // ) -> Result<(), SendError<ConsumerSourceCommand>> {
+    //     self.tx.send(cmd).await
+    // }
+
+    pub async fn gracefully_shutdown(self) -> anyhow::Result<()> {
+        info!("graceful before send");
+        if let Err(e) = self.tx.send(()) {
+            warn!("failed to send interrupt signal to consumer source: {e:?}");
+        }
+        info!("graceful after send");
+        let result = self.handle.await?;
+        info!("graceful hadle await: {result:?}");
+        result
     }
 }
 
 impl Future for ConsumerSourceHandle {
-    type Output = Result<anyhow::Result<()>, JoinError>;
+    type Output = anyhow::Result<()>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        self.handle.poll_unpin(cx)
+        self.handle
+            .poll_unpin(cx)
+            .map(|join_result| join_result.map_err(anyhow::Error::new).and_then(identity))
     }
 }
 
@@ -176,7 +186,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             .ctx
             .subscribed_event_types
             .contains(&BlockchainEventType::NewTransaction);
-
+        info!("b1,b2: ({b1}, {b2})");
         let (acc_shard_offsets, tx_shard_offsets) = match (b1, b2) {
             (true, false) => {
                 let map = self.get_shard_offset_map(BlockchainEventType::AccountUpdate);
@@ -193,7 +203,9 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             }
             (false, false) => panic!("no blockchain event subscribed to"),
         };
+        info!("before generating fencing token");
         let revision = self.ctx.generate_fencing_token().await?;
+        info!("generated fencing token: {revision}");
         let values = (
             acc_shard_offsets,
             tx_shard_offsets,
@@ -203,34 +215,36 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             &self.ctx.execution_id,
             revision,
         );
-
-        let lwt_result = self
+        info!("before lwt_result");
+        let row = self
             .ctx
             .session()
             .execute(&self.update_consumer_shard_offset_v2_ps, values)
-            .await?
-            .first_row_typed::<LwtResult>()?;
+            .await?;
 
+        info!("query result: {row:?}");
+
+        let row = row.first_row()?;
+        info!("row : {row:?}");
+        let lwt_result = row.into_typed::<LwtResult>()?;
+        info!("lwt_result {lwt_result:?}");
         if let LwtResult(false) = lwt_result {
             anyhow::bail!("Failed to update shard offset, lock is compromised");
         }
-
+        info!("suceessfully updated consumer shard offset v2");
         Ok(())
     }
 
     pub fn spawn(mut self) -> ConsumerSourceHandle {
         info!("spawn consumer source");
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move { self.run(rx).await });
 
         ConsumerSourceHandle { tx, handle }
     }
 
-    pub async fn run(
-        &mut self,
-        mut rx: mpsc::Receiver<ConsumerSourceCommand>,
-    ) -> anyhow::Result<()> {
+    pub async fn run(&mut self, mut rx: oneshot::Receiver<()>) -> anyhow::Result<()> {
         let consumer_id = self.ctx.consumer_id.to_owned();
         let mut commit_offset_deadline = Instant::now() + self.offset_commit_interval;
         const PRINT_CONSUMER_SLOT_REACH_DELAY: Duration = Duration::from_secs(5);
@@ -243,16 +257,13 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
         loop {
             for (shard_id, shard_it) in self.shard_iterators.iter_mut() {
                 match rx.try_recv() {
-                    Ok(_) => {
+                    Err(oneshot::error::TryRecvError::Empty) => (),
+                    _ => {
                         warn!("consumer {consumer_id} received an interrupted signal");
                         //self.update_consumer_shard_offsets().await?;
                         self.update_consumer_shard_offsets_v2().await?;
                         return Ok(());
                     }
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        anyhow::bail!("detected orphan consumer source")
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => (),
                 }
 
                 let maybe = shard_it.try_next().await?;
@@ -272,13 +283,18 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
                         max_seen_slot = block_chain_event.slot;
                         num_event_between_two_slots = 0;
                     }
-                    let t_send = Instant::now();
-                    if self.sender.send(T::from(block_chain_event)).await.is_err() {
-                        anyhow::bail!("consumer {consumer_id} closed its streaming half");
-                    }
-                    let send_latency = t_send.elapsed();
-                    if send_latency >= CLIENT_LAG_WARN_THRESHOLD {
-                        warn!("Slow read from consumer {consumer_id}, recorded latency: {send_latency:?}")
+                    tokio::select! {
+                        _ = &mut rx => {
+                            warn!("consumer {consumer_id} received an interrupt signal while sending blockchain event");
+                            //self.update_consumer_shard_offsets().await?;
+                            self.update_consumer_shard_offsets_v2().await?;
+                            return Ok(());
+                        }
+                        result = self.sender.send(T::from(block_chain_event)) => {
+                            if let Err(SendError(_)) = result {
+                                anyhow::bail!("consumer {consumer_id} closed its streaming half");
+                            }
+                        }
                     }
                     num_event_between_two_slots += 1;
                     t = Instant::now();

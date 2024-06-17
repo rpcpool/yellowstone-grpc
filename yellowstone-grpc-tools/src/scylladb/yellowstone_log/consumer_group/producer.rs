@@ -514,6 +514,7 @@ impl EtcdProducerMonitor {
 }
 
 pub struct ProducerDeadSignal {
+    // The actual signal that will be send when the producer is dead.
     rx: oneshot::Receiver<()>,
 
     // When dropped, this will signal any underlying thread implementation to terminate aswell.
@@ -537,6 +538,10 @@ impl ProducerDeadSignal {
         let (tx, rx) = oneshot::channel();
         let (tx_terminate, rx_terminate) = oneshot::channel();
         (Self { rx, tx_terminate }, tx, rx_terminate)
+    }
+
+    pub fn from(rx: oneshot::Receiver<()>, tx_terminate: oneshot::Sender<()>) -> Self {
+        Self { rx, tx_terminate }
     }
 }
 

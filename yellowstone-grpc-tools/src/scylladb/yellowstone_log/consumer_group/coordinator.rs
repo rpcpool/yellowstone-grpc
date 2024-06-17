@@ -78,8 +78,15 @@ struct LeaderHandle {
     inner: JoinHandle<anyhow::Result<()>>,
 }
 
+impl Drop for LeaderHandle {
+    fn drop(&mut self) {
+        warn!("dropping leader handle");
+    }
+}
+
 impl LeaderHandle {
     fn kill(self) -> () {
+        warn!("killing leader node");
         self.inner.abort();
     }
 }
@@ -477,12 +484,15 @@ impl ConsumerGroupCoordinatorBackend {
 
         let maybe_old_leader_handle = self.leader_handles.insert(consumer_group_id, leader_handle);
         if let Some(old_leader_handle) = maybe_old_leader_handle {
+            info!("killing old leader node");
             old_leader_handle.kill();
         };
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
+        let mut i = 0_u64;
         loop {
+            info!("coordinator backend loop {i}");
             let wait_for_election_result = if !self.background_leader_attempt.is_empty() {
                 let iter = self
                     .background_leader_attempt
@@ -505,7 +515,7 @@ impl ConsumerGroupCoordinatorBackend {
             } else {
                 future::pending().boxed()
             };
-
+            info!("coordinator waiting for events in loop {i}");
             tokio::select! {
                 Some(cmd) = self.rx.recv() => {
                     info!("receive a command");
@@ -526,13 +536,14 @@ impl ConsumerGroupCoordinatorBackend {
                 (result, i, _remaining_futs) = wait_for_consumer_to_quit => {
                     info!("consumer finished");
                     let resolved_handle = self.consumer_handles.remove(i);
-                    if let Err(supervisor_error) = result? {
+                    if let Err(supervisor_error) = result {
                         error!("supervisor failed with : {supervisor_error:?}");
                     }
                     let cg_id_text = Uuid::from_slice(&resolved_handle.consumer_group_id)?.to_string();
                     info!("group={}, instance={} finished", cg_id_text, resolved_handle.consumer_id);
                 },
                 ((cg_id, result), _, _) = wait_for_leader_to_quit => {
+                    warn!("detected leader quit inside coordinator backend loop");
                     let cg_id_text = Uuid::from_slice(&cg_id)?.to_string();
                     match result {
                         Ok(_) => info!("leader {cg_id_text} closed gracefully"),
@@ -540,6 +551,7 @@ impl ConsumerGroupCoordinatorBackend {
                     }
                 }
             }
+            i += 1;
         }
     }
 }

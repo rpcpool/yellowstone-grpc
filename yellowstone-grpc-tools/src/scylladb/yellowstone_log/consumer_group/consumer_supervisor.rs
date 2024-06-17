@@ -1,40 +1,31 @@
 use {
     super::{
         consumer_group_store::ScyllaConsumerGroupStore,
-        consumer_source::{ConsumerSource, ConsumerSourceHandle, FromBlockchainEvent},
+        consumer_source::ConsumerSourceHandle,
         context::ConsumerContext,
         leader::{ConsumerGroupState, IdleState, WaitingBarrierState},
         lock::ConsumerLock,
-        shard_iterator::{ShardFilter, ShardIterator},
     },
     crate::scylladb::{
         etcd_utils::{barrier::release_child, Revision},
         types::{ConsumerGroupId, ConsumerId},
-        yellowstone_log::consumer_group::{
-            consumer_source::ConsumerSourceCommand, error::DeadConsumerGroup,
-        },
+        yellowstone_log::consumer_group::error::DeadConsumerGroup,
     },
-    futures::{
-        future::{try_join_all, BoxFuture},
-        Future,
-    },
-    rdkafka::consumer::Consumer,
+    futures::{future::BoxFuture, Future, FutureExt},
     scylla::Session,
-    std::{
-        collections::{BTreeMap, BTreeSet},
-        process::Output,
-        sync::Arc,
-        time::Duration,
-    },
+    std::{convert::identity, sync::Arc, time::Duration},
     tokio::{
-        sync::{mpsc, oneshot, watch},
-        task::{JoinError, JoinHandle},
+        sync::{oneshot, watch},
+        task::JoinHandle,
         time::Instant,
     },
     tonic::async_trait,
-    tracing::{error, info},
+    tracing::{error, info, warn},
     uuid::Uuid,
 };
+
+const CONSUMER_SOURCE_SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
+const LEADER_IDLE_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ConsumerSourceSupervisor {
     consumer_group_id: ConsumerGroupId,
@@ -54,7 +45,7 @@ struct InnerSupervisor<F: ConsumerSourceSpawner> {
     session: Arc<Session>,
     consumer_group_store: ScyllaConsumerGroupStore,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
-    factory: F,
+    consumer_factory: F,
 }
 
 impl<F> InnerSupervisor<F>
@@ -64,15 +55,16 @@ where
     fn wait_for_state_change(
         &mut self,
         current_revision: Revision,
-    ) -> JoinHandle<anyhow::Result<(Revision, ConsumerGroupState)>> {
+    ) -> impl Future<Output = anyhow::Result<(Revision, ConsumerGroupState)>> {
         let mut state_watch = self.leader_state_watch.clone();
-        tokio::spawn(async move {
+        let h = tokio::spawn(async move {
             let (revision, new_state) = state_watch
                 .wait_for(|(revision, _)| *revision > current_revision)
                 .await?
                 .to_owned();
             Ok((revision, new_state))
-        })
+        });
+        h.map(|result| result.map_err(anyhow::Error::new).and_then(identity))
     }
 
     async fn handle_wait_barrier(&mut self, state: &WaitingBarrierState) -> anyhow::Result<()> {
@@ -127,7 +119,7 @@ where
             info!("in supervisor");
             self.leader_state_watch.mark_changed();
             let result =
-                tokio::time::timeout(Duration::from_secs(60), self.wait_for_idle_state()).await?;
+                tokio::time::timeout(LEADER_IDLE_STATE_TIMEOUT, self.wait_for_idle_state()).await?;
             if let Err(result) = result {
                 error!(
                     "ConsumerSourceSupervisor timeout while waiting for idle state: {}",
@@ -145,7 +137,15 @@ where
             let spawned_time = Instant::now();
             info!("ConsumerSourceSupervisor spawning consumer source...");
             // TODO : add timeout for source spawn
-            let mut handle = self.factory.spawn(ctx).await?;
+            let spawn_result = tokio::time::timeout(
+                CONSUMER_SOURCE_SPAWN_TIMEOUT,
+                self.consumer_factory.spawn(ctx),
+            )
+            .await;
+            let spawn_result =
+                spawn_result.expect("failed to spawn consumer source before timeout");
+
+            let mut consumer_source_handle = spawn_result?;
 
             let cg_id_text = Uuid::from_bytes(self.consumer_group_id).to_string();
             info!(
@@ -155,20 +155,30 @@ where
                 self.consumer_id
             );
             tokio::select! {
-                Ok(Err(e)) = &mut handle => {
-                    error!("ConsumerSourceSupervisor failed to run consumer source: {}", e);
-                    return Err(e);
+                result = &mut consumer_source_handle => {
+                    warn!("consumer source handle terminated");
+                    match result {
+                        Ok(_) => return Ok(()),
+                        Err(e) => {
+                            error!("ConsumerSourceSupervisor failed to run consumer source: {}", e);
+                            anyhow::bail!(e);
+                        },
+                    }
                 },
                 _ = &mut stop_signal => {
                     info!("ConsumerSourceSupervisor received terminate signal");
-                    handle.send(ConsumerSourceCommand::Stop).await?;
-                    handle.await??;
+                    //consumer_source_handle.send(ConsumerSourceCommand::Stop).await?;
+                    consumer_source_handle.gracefully_shutdown().await?;
+                    //consumer_source_handle.await??;
                     return Ok(())
                 },
-                Ok(Ok((revision, new_state))) = &mut new_state_signal => {
+                result = &mut new_state_signal => {
+                    let (revision, new_state) = result?;
                     info!("ConsumerSourceSupervisor received new state with revision {revision}");
-                    handle.send(ConsumerSourceCommand::Stop).await?;
-                    handle.await??;
+                    //let result = consumer_source_handle.send(ConsumerSourceCommand::Stop).await?;
+                    let result = tokio::time::timeout(Duration::from_secs(2), consumer_source_handle.gracefully_shutdown()).await??;
+                    info!("ConsumerSourceSupervisor result {result:?}");
+                    //consumer_source_handle.await??;
                     match new_state {
                         ConsumerGroupState::WaitingBarrier(wait_barrier_state) => {
                             self.handle_wait_barrier(&wait_barrier_state).await?;
@@ -178,6 +188,7 @@ where
                     };
                 },
             }
+            info!("end loop supervisor");
         }
     }
 }
@@ -196,7 +207,7 @@ impl Drop for ConsumerSourceSupervisorHandle {
 }
 
 impl Future for ConsumerSourceSupervisorHandle {
-    type Output = Result<anyhow::Result<()>, JoinError>;
+    type Output = anyhow::Result<()>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -204,7 +215,11 @@ impl Future for ConsumerSourceSupervisorHandle {
     ) -> std::task::Poll<Self::Output> {
         let handle = &mut self.handle;
         tokio::pin!(handle);
-        handle.poll(cx)
+        handle.poll(cx).map(|result| {
+            result
+                .map_err(anyhow::Error::new)
+                .and_then(|subresult| subresult)
+        })
     }
 }
 
@@ -274,7 +289,7 @@ impl ConsumerSourceSupervisor {
             session: self.session,
             consumer_group_store: self.consumer_group_store,
             leader_state_watch: self.leader_state_watch,
-            factory: factory,
+            consumer_factory: factory,
         }
     }
 

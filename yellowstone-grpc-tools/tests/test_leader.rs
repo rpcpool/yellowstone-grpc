@@ -1,6 +1,6 @@
 use {
     bincode::serialize,
-    common::TestContext,
+    common::{TestContext, TestContextBuilder},
     local_ip_address::{linux::local_ip, list_afinet_netifas},
     rdkafka::producer,
     std::{
@@ -19,22 +19,20 @@ use {
         scylladb::{
             etcd_utils::lock::try_lock,
             types::{BlockchainEventType, CommitmentLevel, ConsumerGroupInfo},
-            yellowstone_log::{
-                consumer_group,
-                consumer_group::{
-                    error::NoActiveProducer,
-                    etcd_path::get_producer_lock_path_v1,
-                    leader::{
-                        create_leader_state_log, leader_log_name_from_cg_id_v1,
-                        observe_consumer_group_state, observe_leader_changes, try_become_leader,
-                        ConsumerGroupHeader, ConsumerGroupLeaderNode, ConsumerGroupState,
-                        IdleState, LeaderInfo, LostProducerState,
-                    },
-                    lock::ConsumerLocker,
-                    timeline::{
-                        ComputingNextProducerState, ProducerProposalState, TimelineTranslator,
-                        TranslationState, TranslationStepError, TranslationStepResult,
-                    },
+            yellowstone_log::consumer_group::{
+                self,
+                error::NoActiveProducer,
+                etcd_path::get_producer_lock_path_v1,
+                leader::{
+                    create_leader_state_log, leader_log_name_from_cg_id_v1,
+                    observe_consumer_group_state, observe_leader_changes, try_become_leader,
+                    ConsumerGroupHeader, ConsumerGroupLeaderNode, ConsumerGroupState, IdleState,
+                    LeaderInfo, LostProducerState,
+                },
+                lock::ConsumerLocker,
+                timeline::{
+                    ComputingNextProducerState, ProducerProposalState, TimelineTranslator,
+                    TranslationState, TranslationStepError, TranslationStepResult,
                 },
             },
         },
@@ -45,7 +43,7 @@ mod common;
 
 #[tokio::test]
 async fn test_create_leader_state_log() {
-    let ctx = TestContext::new().await.unwrap();
+    let ctx = TestContextBuilder::new().build().await.unwrap();
     let mut etcd = ctx.etcd.clone();
 
     let revision0 = ctx.last_etcd_revision().await;
@@ -115,7 +113,7 @@ async fn test_create_leader_state_log() {
 
 #[tokio::test]
 async fn test_become_leader_and_resign() {
-    let ctx = TestContext::new().await.unwrap();
+    let ctx = TestContextBuilder::new().build().await.unwrap();
 
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
@@ -159,7 +157,7 @@ async fn test_become_leader_and_resign() {
 
 #[tokio::test]
 async fn test_leader_mutual_exclusion() {
-    let ctx = TestContext::new().await.unwrap();
+    let ctx = TestContextBuilder::new().build().await.unwrap();
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, _lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -229,7 +227,8 @@ impl TimelineTranslator for MockTimelineTranslator {
 
 #[tokio::test]
 async fn test_leader_state_transation_during_timeline_translation() {
-    let ctx = TestContext::new().await.unwrap();
+    let producer_id = [0x01];
+    let ctx = TestContextBuilder::new().build().await.unwrap();
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -240,7 +239,6 @@ async fn test_leader_state_transation_during_timeline_translation() {
     .await
     .unwrap()
     .unwrap();
-    let producer_id = [0x01];
 
     let producer_lock_keyname = get_producer_lock_path_v1(producer_id);
     let producer_lock = try_lock(ctx.etcd.clone(), &producer_lock_keyname)
@@ -281,7 +279,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let translator: Arc<dyn TimelineTranslator + Send + Sync> = Arc::new(translator);
     let mut leader_node = ConsumerGroupLeaderNode::new(
         ctx.etcd.clone(),
-        Arc::clone(&ctx.etcd_producer_monitor),
+        Arc::clone(&ctx.producer_monitor),
         leader_key,
         lease,
         translator,

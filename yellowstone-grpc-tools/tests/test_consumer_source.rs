@@ -1,5 +1,5 @@
 use {
-    common::TestContext,
+    common::{TestContext, TestContextBuilder},
     std::{collections::BTreeMap, sync::Arc, time::Duration},
     tokio::sync::{mpsc, oneshot},
     yellowstone_grpc_tools::{
@@ -9,7 +9,7 @@ use {
             yellowstone_log::{
                 common::SeekLocation,
                 consumer_group::{
-                    consumer_source::{ConsumerSource, ConsumerSourceCommand, FromBlockchainEvent},
+                    consumer_source::{ConsumerSource, FromBlockchainEvent},
                     context::ConsumerContext,
                     etcd_path::get_producer_lock_path_v1,
                     lock::ConsumerLocker,
@@ -35,7 +35,7 @@ impl FromBlockchainEvent for MockEvent {
 
 #[tokio::test]
 async fn test_consumer_source_run() {
-    let ctx = TestContext::new().await.unwrap();
+    let ctx = TestContextBuilder::new().build().await.unwrap();
     let etcd = ctx.etcd.clone();
     let producer_id = [0x00];
     let producer_info = ctx
@@ -118,11 +118,11 @@ async fn test_consumer_source_run() {
     .await
     .unwrap();
 
-    let (tx_cmd, rx_cmd) = mpsc::channel(1);
+    let (tx_cmd, rx_cmd) = oneshot::channel();
 
     let h = tokio::spawn(async move { cs.run(rx_cmd).await });
     let _event = source.recv().await.unwrap();
-    tx_cmd.send(ConsumerSourceCommand::Stop).await.unwrap();
+    tx_cmd.send(()).unwrap();
 
     h.await.unwrap().unwrap();
     // It should have persisted the offset before shutting down
