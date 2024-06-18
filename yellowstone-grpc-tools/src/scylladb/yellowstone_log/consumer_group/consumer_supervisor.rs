@@ -3,7 +3,7 @@ use {
         consumer_group_store::ScyllaConsumerGroupStore,
         consumer_source::ConsumerSourceHandle,
         context::ConsumerContext,
-        leader::{ConsumerGroupState, IdleState, WaitingBarrierState},
+        leader::{ConsumerGroupState, IdleState, LeaderInfo, WaitingBarrierState},
         lock::ConsumerLock,
     },
     crate::scylladb::{
@@ -35,6 +35,7 @@ pub struct ConsumerSourceSupervisor {
     session: Arc<Session>,
     consumer_group_store: ScyllaConsumerGroupStore,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
+    leader_info_watch: watch::Receiver<Option<LeaderInfo>>,
 }
 
 struct InnerSupervisor<F: ConsumerSourceSpawner> {
@@ -45,6 +46,7 @@ struct InnerSupervisor<F: ConsumerSourceSpawner> {
     session: Arc<Session>,
     consumer_group_store: ScyllaConsumerGroupStore,
     leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
+    leader_info_watch: watch::Receiver<Option<LeaderInfo>>,
     consumer_factory: F,
 }
 
@@ -73,8 +75,10 @@ where
             .iter()
             .any(|instance_id_blob| instance_id_blob.as_slice() == self.consumer_id.as_bytes());
         if is_in_wait_for {
+            info!("is in wait barrier");
             release_child(self.etcd.clone(), &state.barrier_key, &self.consumer_id).await
         } else {
+            info!("is not in wait barrier");
             Ok(())
         }
     }
@@ -116,19 +120,19 @@ where
 
     async fn run(&mut self, mut stop_signal: oneshot::Receiver<()>) -> anyhow::Result<()> {
         loop {
-            info!("in supervisor");
+            self.leader_info_watch.mark_changed();
             self.leader_state_watch.mark_changed();
-            let result =
-                tokio::time::timeout(LEADER_IDLE_STATE_TIMEOUT, self.wait_for_idle_state()).await?;
-            if let Err(result) = result {
-                error!(
-                    "ConsumerSourceSupervisor timeout while waiting for idle state: {}",
-                    result
-                );
-                return Err(result);
-            }
 
-            let (revision, idle_state) = result?;
+            let leader_info = tokio::time::timeout(
+                LEADER_IDLE_STATE_TIMEOUT,
+                self.leader_info_watch.wait_for(Option::is_some)
+            ).await??.to_owned().expect("leader info is none");
+
+            info!("supervisor detected current leader info to be: {leader_info:?}");
+
+            let (revision, idle_state) =
+                tokio::time::timeout(LEADER_IDLE_STATE_TIMEOUT, self.wait_for_idle_state()).await??;
+
             info!("ConsumerSourceSupervisor received idle state, revision: {revision}");
 
             let ctx = self.build_consumer_context(idle_state);
@@ -188,7 +192,6 @@ where
                     };
                 },
             }
-            info!("end loop supervisor");
         }
     }
 }
@@ -200,11 +203,6 @@ pub struct ConsumerSourceSupervisorHandle {
     handle: JoinHandle<anyhow::Result<()>>,
 }
 
-impl Drop for ConsumerSourceSupervisorHandle {
-    fn drop(&mut self) {
-        info!("dropped handle");
-    }
-}
 
 impl Future for ConsumerSourceSupervisorHandle {
     type Output = anyhow::Result<()>;
@@ -290,6 +288,7 @@ impl ConsumerSourceSupervisor {
             consumer_group_store: self.consumer_group_store,
             leader_state_watch: self.leader_state_watch,
             consumer_factory: factory,
+            leader_info_watch: self.leader_info_watch,
         }
     }
 
@@ -299,6 +298,7 @@ impl ConsumerSourceSupervisor {
         session: Arc<Session>,
         consumer_group_store: ScyllaConsumerGroupStore,
         leader_state_watch: watch::Receiver<(Revision, ConsumerGroupState)>,
+        leader_info_watch: watch::Receiver<Option<LeaderInfo>>,
     ) -> Self {
         let consumer_id = consumer_lock.consumer_id.clone();
         let consumer_group_id = consumer_lock.consumer_group_id.clone();
@@ -310,6 +310,7 @@ impl ConsumerSourceSupervisor {
             etcd,
             consumer_group_store,
             leader_state_watch,
+            leader_info_watch,
         }
     }
 }

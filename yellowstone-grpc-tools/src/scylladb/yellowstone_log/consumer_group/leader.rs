@@ -1,6 +1,6 @@
 use {
     super::{
-        etcd_path::get_instance_lock_prefix_v1,
+        etcd_path::{get_instance_lock_prefix_v1, parse_lock_key_v1},
         producer::ProducerMonitor,
         timeline::{self, ComputingNextProducerState, TimelineTranslator, TranslationState},
     },
@@ -208,17 +208,9 @@ impl ConsumerGroupLeaderNode {
                 None,
             )]);
 
-        info!("before update_state_machine inner (1)");
         let mut txn_client = self.etcd.kv_client();
-        info!("before update_state_machine inner (2)");
-        let txn_resp =
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                async move { txn_client.txn(txn).await },
-            )
-            .await;
-        info!("after update_state_machine inner: {txn_resp:?}");
-        let txn_resp = txn_resp??;
+        let txn_resp = txn_client.txn(txn).await?;
+
         anyhow::ensure!(
             txn_resp.succeeded(),
             LeaderNodeError::FailedToUpdateStateLog(format!("{txn_resp:?}"))
@@ -287,7 +279,7 @@ impl ConsumerGroupLeaderNode {
         &self,
         state: &LostProducerState,
     ) -> anyhow::Result<ConsumerGroupState> {
-        let barrier_key = Uuid::new_v4();
+        let barrier_key = generate_barrier_key_v1();
         let lease_id = self.etcd.lease_client().grant(10, None).await?.id();
         let lock_prefix = get_instance_lock_prefix_v1(self.consumer_group_id.clone());
         // TODO add healthcheck here
@@ -298,17 +290,20 @@ impl ConsumerGroupLeaderNode {
             .await?
             .kvs()
             .iter()
-            .map(|kv| kv.key().to_vec())
-            .collect::<Vec<_>>();
-
+            .map(|kv| kv.key())
+            .map(|lock_key| {
+                parse_lock_key_v1(lock_key)
+                    .map(|(_, consumer_id)| consumer_id.as_bytes().to_vec())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let _barrier = etcd_utils::barrier::new_barrier(
             self.etcd.clone(),
-            barrier_key.as_bytes(),
+            barrier_key.as_str(),
             &wait_for,
             lease_id,
         )
         .await?;
-
+        
         let next_state = ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
             header: state.header.clone(),
             lease_id,
@@ -323,8 +318,11 @@ impl ConsumerGroupLeaderNode {
         state: &WaitingBarrierState,
     ) -> anyhow::Result<ConsumerGroupState> {
         let barrier = get_barrier(self.etcd.clone(), &state.barrier_key).await?;
-
-        barrier.wait().await;
+        const BARRIER_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+        info!("waiting for barrier to be reached...");
+        if let Err(e) = tokio::time::timeout(BARRIER_WAIT_TIMEOUT, barrier.wait()).await {
+            warn!("wait barrier has reached timeout");
+        }
         Ok(ConsumerGroupState::InTimelineTranslation(
             InTimelineTranslationState {
                 header: state.header.to_owned(),
@@ -337,7 +335,7 @@ impl ConsumerGroupLeaderNode {
 
     ///
     /// This function is cancel safe
-    pub async fn next_state(&self) -> anyhow::Result<Option<ConsumerGroupState>> {
+    pub async fn step(&self) -> anyhow::Result<Option<ConsumerGroupState>> {
         let next_state = match &self.state {
             ConsumerGroupState::Init(header) => Some(ConsumerGroupState::InTimelineTranslation(
                 InTimelineTranslationState {
@@ -348,9 +346,11 @@ impl ConsumerGroupLeaderNode {
                 },
             )),
             ConsumerGroupState::LostProducer(inner) => {
+                info!("will handle lost producer");
                 Some(self.handle_lost_producer(inner).await?)
             }
             ConsumerGroupState::WaitingBarrier(inner) => {
+                info!("will handle wait barrier");
                 Some(self.handle_wait_barrier(inner).await?)
             }
             ConsumerGroupState::InTimelineTranslation(inner) => {
@@ -361,21 +361,20 @@ impl ConsumerGroupLeaderNode {
                 producer_id,
                 execution_id,
             }) => {
-                let is_alive = self.producer_monitor.is_producer_alive(*producer_id).await;
-                if !is_alive {
-                    warn!("received dead signal from producer {producer_id:?}");
-                    Some(ConsumerGroupState::LostProducer(LostProducerState {
-                        header: header.clone(),
-                        lost_producer_id: *producer_id,
-                        execution_id: execution_id.clone(),
-                    }))
-                } else {
-                    None
-                }
+                let signal = self
+                    .producer_monitor
+                    .get_producer_dead_signal(*producer_id)
+                    .await;
+                let _ = signal.await?;
+                warn!("received dead signal from producer {producer_id:?}");
+                Some(ConsumerGroupState::LostProducer(LostProducerState {
+                    header: header.clone(),
+                    lost_producer_id: *producer_id,
+                    execution_id: execution_id.clone(),
+                }))
             }
             ConsumerGroupState::Dead(inner) => Some(ConsumerGroupState::Dead(inner.clone())),
         };
-
         return Ok(next_state);
     }
 
@@ -398,13 +397,11 @@ impl ConsumerGroupLeaderNode {
     ) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                res = self.next_state() => {
+                res = self.step() => {
                     let maybe_next_state = res?;
                     if let Some(next_state) = maybe_next_state {
                         anyhow::ensure!(!matches!(&next_state, ConsumerGroupState::Dead(_)), DeadConsumerGroup(self.consumer_group_id.clone()));
-                        info!("updating state machine...");
                         self.update_state_machine(next_state).await?;
-                        info!("updated state machine!");
                     } else {
                         info!("skipping state transation no state change detected");
                     }
@@ -414,35 +411,13 @@ impl ConsumerGroupLeaderNode {
                     return Ok(())
                 }
             }
-
-            if matches!(self.state, ConsumerGroupState::Idle(_)) {
-                let idle_state = match &self.state {
-                    ConsumerGroupState::Idle(idle_state) => idle_state,
-                    _ => unreachable!(),
-                };
-
-                let mut signal = self
-                    .producer_monitor
-                    .get_producer_dead_signal(idle_state.producer_id)
-                    .await;
-
-                tokio::select! {
-                    _ = &mut signal => {
-                        warn!("received dead signal from producer {:?}", idle_state.producer_id);
-                        let next_state = ConsumerGroupState::LostProducer(LostProducerState {
-                            header: idle_state.header.clone(),
-                            lost_producer_id: idle_state.producer_id,
-                            execution_id: idle_state.execution_id.clone()
-                        });
-                        self.update_state_machine(next_state).await?;
-                    }
-                    _ = &mut interrupt_signal => {
-                        return Ok(())
-                    }
-                }
-            }
         }
     }
+}
+
+fn generate_barrier_key_v1() -> String {
+    let uuid_str = Uuid::new_v4().to_string();
+    format!("v1#barrier#{uuid_str}")
 }
 
 /// Creates a new leader state log for the given consumer group in etcd.

@@ -119,6 +119,14 @@ const GET_PRODUCER_EXECUTION_ID: &str = r###"
     PER PARTITION LIMIT 1
 "###;
 
+const LIST_PRODUCER_WITH_SLOT: &str = r###"
+    SELECT 
+        producer_id,
+        slot
+    FROM slot_producer_seen_mv  
+    WHERE slot IN ?
+"###;
+
 #[derive(Clone)]
 pub struct ScyllaProducerStore {
     session: Arc<Session>,
@@ -127,6 +135,7 @@ pub struct ScyllaProducerStore {
     get_shard_offset_in_slot_range_ps: PreparedStatement,
     get_min_producer_offset_ps: PreparedStatement,
     get_producer_execution_id_ps: PreparedStatement,
+    list_producer_with_slot_ps: PreparedStatement,
     producer_monitor: Arc<dyn ProducerMonitor>,
 }
 
@@ -149,6 +158,9 @@ impl ScyllaProducerStore {
 
         let mut get_producer_execution_id_ps = session.prepare(GET_PRODUCER_EXECUTION_ID).await?;
         get_producer_execution_id_ps.set_consistency(Consistency::Serial);
+
+        let list_producer_with_slot_ps = session.prepare(LIST_PRODUCER_WITH_SLOT).await?;
+
         Ok(ScyllaProducerStore {
             session,
             producer_monitor,
@@ -157,6 +169,7 @@ impl ScyllaProducerStore {
             get_shard_offset_in_slot_range_ps,
             get_min_producer_offset_ps,
             get_producer_execution_id_ps,
+            list_producer_with_slot_ps,
         })
     }
 
@@ -189,23 +202,10 @@ impl ScyllaProducerStore {
         slot_range: RangeInclusive<Slot>,
     ) -> anyhow::Result<Vec<ProducerId>> {
         let slot_values = slot_range
-            .map(|slot| format!("{slot}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let query_template = format!(
-            r###"
-                SELECT 
-                    producer_id,
-                    slot
-                FROM slot_producer_seen_mv  
-                WHERE slot IN ({slot_values})
-            "###
-        );
-        info!("query {query_template}");
+            .collect::<Vec<_>>();
 
         self.session
-            .query(query_template, &[])
+            .execute(&self.list_producer_with_slot_ps, (slot_values,))
             .await?
             .rows_typed_or_empty::<(ProducerId, Slot)>()
             .map(|result| result.map(|(producer_id, _slot)| producer_id))

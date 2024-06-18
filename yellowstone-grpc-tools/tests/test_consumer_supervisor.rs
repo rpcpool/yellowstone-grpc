@@ -1,22 +1,16 @@
 use {
-    crate::common::TestContext,
-    common::TestContextBuilder,
-    futures::{future, FutureExt},
-    std::sync::Arc,
-    tokio::{
+    crate::common::TestContext, common::TestContextBuilder, futures::{future, FutureExt}, local_ip_address::linux::local_ip, std::sync::Arc, tokio::{
         sync::{mpsc, oneshot, watch},
         task::JoinHandle,
-    },
-    uuid::Uuid,
-    yellowstone_grpc_tools::scylladb::{
+    }, uuid::Uuid, yellowstone_grpc_tools::scylladb::{
         types::BlockchainEventType,
         yellowstone_log::consumer_group::{
             consumer_source::ConsumerSourceHandle,
             consumer_supervisor::ConsumerSourceSupervisor,
-            leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState},
+            leader::{ConsumerGroupHeader, ConsumerGroupState, IdleState, LeaderInfo, LostProducerState},
             lock::ConsumerLocker,
         },
-    },
+    }
 };
 mod common;
 
@@ -45,6 +39,15 @@ async fn test_supervisor() {
         subscribed_blockchain_event_types: vec![BlockchainEventType::AccountUpdate],
         shard_assignments: Default::default(),
     };
+
+    let id = Uuid::new_v4();
+    let (tx_leader_info, rx_leader_info) = watch::channel(Some(
+        LeaderInfo {
+            ipaddr: local_ip().unwrap(),
+            id: id.as_bytes().to_vec(),
+        }
+    ));
+
     let (tx_state, rx_state) = watch::channel((1, ConsumerGroupState::Init(cg_header.clone())));
 
     let supervisor = ConsumerSourceSupervisor::new(
@@ -53,6 +56,7 @@ async fn test_supervisor() {
         Arc::clone(&ctx.session),
         ctx.consumer_group_store.clone(),
         rx_state,
+        rx_leader_info,
     );
 
     let (tx_eavesdrop, mut rx_eavesdrop) = mpsc::channel(1);

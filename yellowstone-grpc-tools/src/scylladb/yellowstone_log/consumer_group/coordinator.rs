@@ -17,7 +17,7 @@ use {
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap,
         },
-        yellowstone_log::common::SeekLocation,
+        yellowstone_log::{common::SeekLocation, consumer_group::leader},
     },
     etcd_client::LeaderKey,
     futures::{
@@ -52,12 +52,13 @@ pub struct ConsumerGroupCoordinatorBackend {
     leader_ifname: String,
 
     background_leader_attempt: BTreeMap<ConsumerGroupId, ElectionHandle>,
-
     leader_handles: BTreeMap<ConsumerGroupId, LeaderHandle>,
     consumer_handles: Vec<ConsumerSourceSupervisorHandle>,
+
     leader_election_watch_map: HashMap<ConsumerGroupId, watch::Receiver<Option<LeaderInfo>>>,
-    leader_state_watch_map:
-        HashMap<ConsumerGroupId, watch::Receiver<(Revision, ConsumerGroupState)>>,
+
+    tx_background_job: mpsc::Sender<CoordinatorBackgroundJobResult>,
+    rx_background_job: mpsc::Receiver<CoordinatorBackgroundJobResult>,
 }
 
 pub struct JoinGroupArgs {
@@ -76,12 +77,6 @@ struct LeaderHandle {
     consumer_group_id: ConsumerGroupId,
     tx_terminate: oneshot::Sender<()>,
     inner: JoinHandle<anyhow::Result<()>>,
-}
-
-impl Drop for LeaderHandle {
-    fn drop(&mut self) {
-        warn!("dropping leader handle");
-    }
 }
 
 impl LeaderHandle {
@@ -267,6 +262,7 @@ impl ConsumerGroupCoordinatorBackend {
         leader_ifname: String,
     ) -> (ConsumerGroupCoordinator, JoinHandle<anyhow::Result<()>>) {
         let (tx, rx) = mpsc::channel(10);
+        let (tx_background_job, rx_background_job) = mpsc::channel(10);
         let mut backend = ConsumerGroupCoordinatorBackend {
             rx,
             etcd: etcd.clone(),
@@ -279,8 +275,9 @@ impl ConsumerGroupCoordinatorBackend {
             leader_handles: Default::default(),
             consumer_handles: Default::default(),
             leader_election_watch_map: Default::default(),
-            leader_state_watch_map: Default::default(),
             producer_monitor,
+            tx_background_job,
+            rx_background_job,
         };
 
         let h = tokio::spawn(async move { backend.run().await });
@@ -291,36 +288,26 @@ impl ConsumerGroupCoordinatorBackend {
     fn try_become_leader_bg(&mut self, consumer_group_id: ConsumerGroupId) {
         let etcd = self.etcd.clone();
         let leader_ifname = self.leader_ifname.clone();
-        let fut = async move {
-            try_become_leader(
+        let callback = self.tx_background_job.clone();
+        tokio::spawn(async move {
+            let result = try_become_leader(
                 etcd,
                 consumer_group_id,
                 Duration::from_secs(5),
                 leader_ifname,
             )
-            .await
-        };
+            .await;
 
-        self.background_leader_attempt
-            .entry(consumer_group_id)
-            .or_insert_with(|| ElectionHandle::wrap(consumer_group_id, tokio::spawn(fut)));
+            callback.send(
+                CoordinatorBackgroundJobResult::Election {
+                    consumer_group_id,
+                    result
+                }
+            ).await
+        });
     }
 
-    async fn get_leader_state_watch(
-        &mut self,
-        consumer_group_id: ConsumerGroupId,
-    ) -> anyhow::Result<watch::Receiver<(i64, ConsumerGroupState)>> {
-        match self.leader_state_watch_map.entry(consumer_group_id.clone()) {
-            std::collections::hash_map::Entry::Occupied(o) => Ok(o.get().clone()),
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let watch =
-                    observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
-                Ok(v.insert(watch).clone())
-            }
-        }
-    }
-
-    async fn get_leader_election_watch(
+    async fn get_election_watch(
         &mut self,
         consumer_group_id: ConsumerGroupId,
     ) -> anyhow::Result<watch::Receiver<Option<LeaderInfo>>> {
@@ -337,7 +324,19 @@ impl ConsumerGroupCoordinatorBackend {
     }
 
     fn register_consumer_handle(&mut self, consumer_handle: ConsumerSourceSupervisorHandle) {
-        self.consumer_handles.push(consumer_handle);
+        //self.consumer_handles.push(consumer_handle);
+        let callback = self.tx_background_job.clone();
+
+        tokio::spawn(async move {
+            let consumer_group_id = consumer_handle.consumer_group_id.clone();
+            let consumer_id = consumer_handle.consumer_id.clone();
+            let result = consumer_handle.await;
+            let _ = callback.send(CoordinatorBackgroundJobResult::SupervisorQuit {
+                consumer_group_id,
+                consumer_id,
+                result
+            }).await;
+        });
     }
 
     async fn try_spawn_consumer_member(
@@ -354,7 +353,7 @@ impl ConsumerGroupCoordinatorBackend {
             .try_lock_instance_id(consumer_group_id, consumer_id)
             .await?;
         info!("lock acquired for consumer group {consumer_group_id:?} instance {consumer_id}");
-        let mut leader_election_watch = self.get_leader_election_watch(consumer_group_id).await?;
+        let mut leader_election_watch = self.get_election_watch(consumer_group_id).await?;
 
         let leader_state_watch =
             observe_consumer_group_state(self.etcd.clone(), consumer_group_id).await?;
@@ -378,6 +377,7 @@ impl ConsumerGroupCoordinatorBackend {
             Arc::clone(&self.session),
             self.consumer_group_store.clone(),
             leader_state_watch,
+            leader_election_watch.clone(),
         );
 
         let (tx, rx) = oneshot::channel();
@@ -473,7 +473,9 @@ impl ConsumerGroupCoordinatorBackend {
             )
             .await?;
 
-            leader.leader_loop(rx).await
+            let result = leader.leader_loop(rx).await;
+            error!("leader node finished: {result:?}");
+            result
         });
 
         let leader_handle = LeaderHandle {
@@ -481,77 +483,77 @@ impl ConsumerGroupCoordinatorBackend {
             tx_terminate: tx,
             inner: h,
         };
-
-        let maybe_old_leader_handle = self.leader_handles.insert(consumer_group_id, leader_handle);
-        if let Some(old_leader_handle) = maybe_old_leader_handle {
-            info!("killing old leader node");
-            old_leader_handle.kill();
-        };
+        let callback = self.tx_background_job.clone();
+        tokio::spawn(async move {
+            let (consumer_group_id, result) = leader_handle.await;
+            let _ = callback
+                .send(CoordinatorBackgroundJobResult::LeaderQuit { consumer_group_id, result })
+                .await;
+        });
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
         let mut i = 0_u64;
         loop {
             info!("coordinator backend loop {i}");
-            let wait_for_election_result = if !self.background_leader_attempt.is_empty() {
-                let iter = self
-                    .background_leader_attempt
-                    .values_mut()
-                    .map(|h| Pin::new(h));
-                select_all(iter).boxed()
-            } else {
-                future::pending().boxed()
-            };
-
-            let wait_for_consumer_to_quit = if !self.consumer_handles.is_empty() {
-                let iter = self.consumer_handles.iter_mut().map(|h| Pin::new(h));
-                select_all(iter).boxed()
-            } else {
-                future::pending().boxed()
-            };
-
-            let wait_for_leader_to_quit = if !self.leader_handles.is_empty() {
-                select_all(self.leader_handles.values_mut().map(|v| Pin::new(v))).boxed()
-            } else {
-                future::pending().boxed()
-            };
-            info!("coordinator waiting for events in loop {i}");
             tokio::select! {
                 Some(cmd) = self.rx.recv() => {
                     info!("receive a command");
                     self.interpret_command(cmd).await?;
                 },
-                ((cg_id, result), _, _) = wait_for_election_result => {
-                    self.background_leader_attempt.remove(&cg_id);
-                    let cg_id_text = Uuid::from_slice(&cg_id)?.to_string();
-                    match result {
-                        Ok(Some((leader_key, leader_lease))) => {
-                            info!("won leader election for cg-{cg_id_text}");
-                            self.create_leader_node(cg_id, leader_key, leader_lease);
+                bg_result = self.rx_background_job.recv() => {
+                    let bg_result = bg_result.ok_or(anyhow::anyhow!("background job channel closed"))?;
+                    match bg_result {
+                        CoordinatorBackgroundJobResult::SupervisorQuit { consumer_group_id, consumer_id, result }=> {
+                            info!("consumer finished");
+                            // let resolved_handle = self.consumer_handles.remove(i);
+                            if let Err(supervisor_error) = result {
+                                error!("supervisor failed with : {supervisor_error:?}");
+                            }
+                            let cg_id_text = Uuid::from_bytes(consumer_group_id).to_string();
+
+                            info!("group={}, instance={} finished", cg_id_text, consumer_id);
                         },
-                        Ok(None) => warn!("attempt to be leader failed"),
-                        Err(e) => warn!("a leader attempt failed with: {e:?}"),
+                        CoordinatorBackgroundJobResult::Election { consumer_group_id, result } => {
+                            let cg_id_text = Uuid::from_bytes(consumer_group_id).to_string();
+                            match result {
+                                Ok(Some((leader_key, leader_lease))) => {
+                                    info!("won leader election for cg-{cg_id_text}");
+                                    self.create_leader_node(consumer_group_id, leader_key, leader_lease);
+                                },
+                                Ok(None) => warn!("attempt to be leader failed"),
+                                Err(e) => warn!("a leader attempt failed with: {e:?}"),
+                            }
+                        }
+                        CoordinatorBackgroundJobResult::LeaderQuit { consumer_group_id, result } => {
+                            warn!("detected leader quit inside coordinator backend loop");
+                            let cg_id_text = Uuid::from_bytes(consumer_group_id).to_string();
+                            match result {
+                                Ok(_) => info!("leader {cg_id_text} closed gracefully"),
+                                Err(e) => error!("leader {cg_id_text} closed abnormally with: {e:?}"),
+                            }
+                        }
                     }
-                }
-                (result, i, _remaining_futs) = wait_for_consumer_to_quit => {
-                    info!("consumer finished");
-                    let resolved_handle = self.consumer_handles.remove(i);
-                    if let Err(supervisor_error) = result {
-                        error!("supervisor failed with : {supervisor_error:?}");
-                    }
-                    let cg_id_text = Uuid::from_slice(&resolved_handle.consumer_group_id)?.to_string();
-                    info!("group={}, instance={} finished", cg_id_text, resolved_handle.consumer_id);
                 },
-                ((cg_id, result), _, _) = wait_for_leader_to_quit => {
-                    warn!("detected leader quit inside coordinator backend loop");
-                    let cg_id_text = Uuid::from_slice(&cg_id)?.to_string();
-                    match result {
-                        Ok(_) => info!("leader {cg_id_text} closed gracefully"),
-                        Err(e) => error!("leader {cg_id_text} closed abnormally with: {e:?}"),
-                    }
-                }
             }
             i += 1;
         }
+    }
+}
+
+
+enum CoordinatorBackgroundJobResult {
+    SupervisorQuit {
+        consumer_group_id: ConsumerGroupId,
+        consumer_id: ConsumerId,
+        result: anyhow::Result<()>,
+    },
+    Election { 
+        consumer_group_id: ConsumerGroupId,
+        result: anyhow::Result<Option<(LeaderKey, ManagedLease)>> 
+    },
+    LeaderQuit { 
+        consumer_group_id: ConsumerGroupId,
+        result: anyhow::Result<()>,
     }
 }

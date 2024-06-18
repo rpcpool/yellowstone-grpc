@@ -84,21 +84,11 @@ pub struct ConsumerSourceHandle {
 }
 
 impl ConsumerSourceHandle {
-    // pub async fn send(
-    //     &self,
-    //     cmd: ConsumerSourceCommand,
-    // ) -> Result<(), SendError<ConsumerSourceCommand>> {
-    //     self.tx.send(cmd).await
-    // }
-
     pub async fn gracefully_shutdown(self) -> anyhow::Result<()> {
-        info!("graceful before send");
         if let Err(e) = self.tx.send(()) {
             warn!("failed to send interrupt signal to consumer source: {e:?}");
         }
-        info!("graceful after send");
         let result = self.handle.await?;
-        info!("graceful hadle await: {result:?}");
         result
     }
 }
@@ -186,7 +176,6 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             .ctx
             .subscribed_event_types
             .contains(&BlockchainEventType::NewTransaction);
-        info!("b1,b2: ({b1}, {b2})");
         let (acc_shard_offsets, tx_shard_offsets) = match (b1, b2) {
             (true, false) => {
                 let map = self.get_shard_offset_map(BlockchainEventType::AccountUpdate);
@@ -203,9 +192,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             }
             (false, false) => panic!("no blockchain event subscribed to"),
         };
-        info!("before generating fencing token");
         let revision = self.ctx.generate_fencing_token().await?;
-        info!("generated fencing token: {revision}");
         let values = (
             acc_shard_offsets,
             tx_shard_offsets,
@@ -215,23 +202,15 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             &self.ctx.execution_id,
             revision,
         );
-        info!("before lwt_result");
-        let row = self
+        let lwt_result = self
             .ctx
             .session()
             .execute(&self.update_consumer_shard_offset_v2_ps, values)
-            .await?;
-
-        info!("query result: {row:?}");
-
-        let row = row.first_row()?;
-        info!("row : {row:?}");
-        let lwt_result = row.into_typed::<LwtResult>()?;
-        info!("lwt_result {lwt_result:?}");
+            .await?
+            .first_row_typed::<LwtResult>()?;
         if let LwtResult(false) = lwt_result {
             anyhow::bail!("Failed to update shard offset, lock is compromised");
         }
-        info!("suceessfully updated consumer shard offset v2");
         Ok(())
     }
 

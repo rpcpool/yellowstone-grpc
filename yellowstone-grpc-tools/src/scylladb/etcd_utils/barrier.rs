@@ -1,6 +1,6 @@
 use {
     etcd_client::{GetOptions, KvClientPrefix, PutOptions, WatchFilterType, WatchOptions, Watcher},
-    futures::channel::oneshot,
+    futures::channel::oneshot, tracing::info,
 };
 
 pub struct Barrier {
@@ -64,24 +64,28 @@ pub async fn get_barrier(
 
 pub async fn release_child(
     etcd: etcd_client::Client,
-    barrier_key: &[u8],
+    barrier_key: impl AsRef<[u8]>,
     child: impl AsRef<[u8]>,
 ) -> anyhow::Result<()> {
-    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.to_vec());
+    info!("releasing child from barrier");
+    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.as_ref().to_vec());
     dir.delete(child.as_ref(), None).await?;
     Ok(())
 }
 
 pub async fn new_barrier<S>(
     etcd: etcd_client::Client,
-    barrier_key: &[u8],
+    barrier_key: impl AsRef<[u8]>,
     children: &[S],
     lease_id: i64,
 ) -> anyhow::Result<Barrier>
 where
     S: AsRef<[u8]>,
 {
-    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.to_vec());
+    let mut dir = KvClientPrefix::new(
+        etcd.kv_client(), 
+        barrier_key.as_ref().to_vec()
+    );
 
     let mut revision_to_watch_from = 1;
     for child in children {
@@ -102,7 +106,7 @@ where
 
     let (watch_handle, mut watch_stream) = wc
         .watch(
-            barrier_key,
+            barrier_key.as_ref(),
             Some(
                 WatchOptions::new()
                     .with_prefix()
@@ -131,7 +135,7 @@ where
     });
 
     Ok(Barrier {
-        key: barrier_key.to_vec(),
+        key: barrier_key.as_ref().to_vec(),
         watch_handle,
         watch_stream_kill_signal: tx,
         etcd_response: rx2,

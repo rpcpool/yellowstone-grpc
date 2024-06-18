@@ -1,12 +1,5 @@
 use {
-    futures::{channel::oneshot, future, FutureExt},
-    local_ip_address::{linux::local_ip, list_afinet_netifas},
-    scylla::{Session, SessionBuilder},
-    std::{collections::BTreeMap, sync::Arc},
-    tokio::sync::{broadcast, mpsc, watch, RwLock},
-    tonic::async_trait,
-    uuid::Uuid,
-    yellowstone_grpc_tools::{
+    futures::{channel::oneshot, future, FutureExt}, local_ip_address::{linux::local_ip, list_afinet_netifas}, scylla::{Session, SessionBuilder}, std::{collections::BTreeMap, sync::Arc}, tokio::sync::{broadcast, mpsc, watch, RwLock}, tonic::async_trait, tracing::info, uuid::Uuid, yellowstone_grpc_tools::{
         scylladb::{
             etcd_utils::Revision,
             types::{BlockchainEventType, ConsumerId, ProducerId},
@@ -23,7 +16,7 @@ use {
             },
         },
         setup_tracing,
-    },
+    }
 };
 
 pub struct TestContext {
@@ -169,8 +162,11 @@ impl MockProducerMonitor {
     }
 
     async fn send_kill_signal(&self, producer_id: ProducerId) {
-        let mut lock = self.inner.write().await;
-        if let Some(tx) = lock.dead_signals.remove(&producer_id) {
+        let maybe = {
+            let mut lock = self.inner.write().await;
+            lock.dead_signals.remove(&producer_id)
+        };
+        if let Some(tx) = maybe {
             let _ = tx.send(());
         }
     }
@@ -197,20 +193,21 @@ impl ProducerKiller for NullProducerKiller {
 #[async_trait]
 impl ProducerMonitor for MockProducerMonitor {
     async fn list_living_producers(&self) -> BTreeMap<ProducerId, i64> {
-        self.inner.read().await.living_producer.clone()
+        let ret = self.inner.read().await.living_producer.clone();
+        ret
     }
 
     async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
-        self.inner
+        let ret = self.inner
             .read()
             .await
             .living_producer
-            .contains_key(&producer_id)
+            .contains_key(&producer_id);
+        ret
     }
 
     async fn get_producer_dead_signal(&self, producer_id: ProducerId) -> ProducerDeadSignal {
         let (signal, tx, mut rx_terminate) = ProducerDeadSignal::new();
-
         let tx_broadcast = {
             let mut lock = self.inner.write().await;
 

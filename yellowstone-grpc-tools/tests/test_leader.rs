@@ -228,7 +228,9 @@ impl TimelineTranslator for MockTimelineTranslator {
 #[tokio::test]
 async fn test_leader_state_transation_during_timeline_translation() {
     let producer_id = [0x01];
-    let ctx = TestContextBuilder::new().build().await.unwrap();
+    let ctx = TestContextBuilder::new()
+        //.with_producer_monitor_provider(common::ProducerMonitorProvider::Mock { producer_ids: vec![producer_id] })
+        .build().await.unwrap();
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -287,31 +289,42 @@ async fn test_leader_state_transation_during_timeline_translation() {
     .await
     .unwrap();
 
-    leader_node.next_state().await.unwrap();
+    let h = tokio::spawn(async move { 
+        let result = leader_node
+        .step()
+        .await;
+        (leader_node, result)
+    });
 
     let (revision, state) = leader_state_log.borrow_and_update().to_owned();
 
     assert!(matches!(state, ConsumerGroupState::Idle(_)));
-
+    println!("is idle");
     producer_lock.revoke().await.unwrap();
 
-    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    let (mut leader_node, result) = h.await.unwrap();
+    result.unwrap();
+
+    let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
     let state = leader_node.state();
     assert!(matches!(state, ConsumerGroupState::LostProducer(_)));
+    println!("is LostProducer");
 
-    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
     let state = leader_node.state();
     assert!(matches!(state, ConsumerGroupState::WaitingBarrier(_)));
+    println!("is WaitingBarrier");
 
-    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
     let state = leader_node.state();
     assert!(matches!(
         state,
         ConsumerGroupState::InTimelineTranslation(_)
     ));
+    println!("is InTimelineTranslation");
 
     let inner_state = match state {
         ConsumerGroupState::InTimelineTranslation(inner) => inner,
@@ -329,7 +342,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
             "test".to_string(),
         ));
     }
-    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
 
     let state = leader_node.state();
@@ -347,7 +360,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         let mut w = lock.write().await;
         *w = Err(TranslationStepError::NoActiveProducer);
     }
-    let result = leader_node.next_state().await;
+    let result = leader_node.step().await;
     let err = result.err().unwrap();
     assert!(err
         .downcast_ref::<consumer_group::error::NoActiveProducer>()
@@ -358,7 +371,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         let mut w = lock.write().await;
         *w = Err(TranslationStepError::InternalError("test".to_string()));
     }
-    let result = leader_node.next_state().await;
+    let result = leader_node.step().await;
     assert!(result.is_err());
 
     // Leader should become dead if consumer group no longer exists
@@ -366,6 +379,6 @@ async fn test_leader_state_transation_during_timeline_translation() {
         let mut w = lock.write().await;
         *w = Err(TranslationStepError::ConsumerGroupNotFound);
     }
-    let next_state = leader_node.next_state().await.unwrap().unwrap();
+    let next_state = leader_node.step().await.unwrap().unwrap();
     assert!(matches!(next_state, ConsumerGroupState::Dead(_)));
 }

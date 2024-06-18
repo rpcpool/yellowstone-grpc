@@ -88,7 +88,7 @@ async fn test_coordinator_backend_successful_run() {
     assert!(event.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_coordinator_producer_kill_signal_then_revive_producer() {
     // let _ = setup_tracing();
     let (kill_producer_tx, kill_producer_rx) = broadcast::channel::<()>(1);
@@ -149,19 +149,8 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
         .await
         .unwrap();
 
-    loop {
-        let event = source.try_recv();
-        match event {
-            Ok(_) => {
-                println!("event slot : {}", event.unwrap().slot);
-            }
-            Err(mpsc::error::TryRecvError::Empty) => break,
-            _ => panic!("unexpected error"),
-        }
-    }
-
-    let res = source.recv().await;
-    println!("source.recv() is finished {}", res.is_some());
+    while let Some(_) = source.recv().await { }
+    //println!("source.recv() {}", res.is_some());
     println!(
         "backend handle is finished: {}",
         backend_handle.is_finished()
