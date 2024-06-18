@@ -413,7 +413,7 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
     producer_id: ProducerId,
     num_shards: usize,
 ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
-    let shard_list = (0..num_shards).map(|idx| idx as i64).collect::<Vec<_>>();
+    let shard_list = (0..num_shards).map(|idx| idx as ShardId).collect::<Vec<_>>();
 
     let query_last_period_commit = r###"
         SELECT
@@ -485,6 +485,84 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
 
     Ok(ret)
 }
+
+pub(crate) async fn get_max_shard_offsets_for_producer_v2(
+    session: Arc<Session>,
+    producer_id: ProducerId,
+    num_shards: usize,
+) -> anyhow::Result<BTreeMap<ShardId, ShardOffset>> {
+    let shard_list = (0..num_shards).map(|idx| idx as ShardId).collect::<Vec<_>>();
+
+    let query_last_period_commit = r###"
+        SELECT
+            shard_id,
+            period
+        FROM producer_period_commit_log
+        where producer_id = ?
+        AND shard_id IN ?
+        ORDER BY period DESC
+        PER PARTITION LIMIT 1
+    "###;
+
+    let mut current_period_foreach_shard = session
+        .query(query_last_period_commit, (producer_id, shard_list))
+        .await?
+        .rows_typed_or_empty::<(ShardId, ShardPeriod)>()
+        .map(|result| result.map(|(shard_id, period)| (shard_id, period + 1)))
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+    for shard_id in 0..num_shards {
+        // Put period 0 by default for each missing shard.
+        current_period_foreach_shard
+            .entry(shard_id as ShardId)
+            .or_insert(0);
+    }
+
+    let query_max_offset_for_shard_period = r###"
+        SELECT
+            offset
+        FROM log
+        WHERE 
+            shard_id = ?
+            AND producer_id = ?
+            AND period = ?
+        ORDER BY offset desc
+        PER PARTITION LIMIT 1        
+    "###;
+    let max_offset_for_shard_period_ps = session.prepare(query_max_offset_for_shard_period).await?;
+
+    //let mut js: JoinSet<anyhow::Result<(i16, i64)>> = JoinSet::new();
+    let shard_max_offset_pairs =
+        futures::future::try_join_all(current_period_foreach_shard.iter().map(
+            |(shard_id, curr_period)| {
+                let ps = max_offset_for_shard_period_ps.clone();
+                let session = Arc::clone(&session);
+                async move {
+                    let max_offset = session
+                        .execute(&ps, (shard_id, producer_id, curr_period))
+                        .await?
+                        .maybe_first_row_typed::<(ShardOffset,)>()?
+                        .map(|row| row.0)
+                        .unwrap_or(0);
+                    Ok::<_, anyhow::Error>((*shard_id, max_offset))
+                }
+            },
+        ))
+        .await?;
+
+    if shard_max_offset_pairs.len() != num_shards {
+        panic!("missing shard period commit information, make sure the period commit is initialize before computing shard offsets");
+    }
+
+    let ret = shard_max_offset_pairs
+        .into_iter()
+        .map(|(a, b)| (a, b))
+        .collect();
+
+    Ok(ret)
+}
+
+
 
 /// Spawns a round-robin dispatcher for sending `ShardCommand` messages to a list of shard mailboxes.
 ///
@@ -695,8 +773,15 @@ async fn load_producer_lock_state(
 async fn set_minimum_producer_offsets(
     session: Arc<Session>,
     producer_lock: &ProducerLock,
-    minimum_shard_offsets: &BTreeMap<ShardId, (ShardOffset, Slot)>,
+    minimum_shard_offsets: &BTreeMap<ShardId, ShardOffset>,
+    initial_slot: Slot,
 ) -> anyhow::Result<()> {
+
+    let minimum_shard_offsets = minimum_shard_offsets
+        .iter()
+        .map(|(k, v)| (*k, (*v, initial_slot)))
+        .collect::<BTreeMap<_, _>>();
+
     let ps = session
         .prepare(
             r###"
@@ -708,7 +793,7 @@ async fn set_minimum_producer_offsets(
         "###,
         )
         .await?;
-
+    info!("before setting minimum shard offsets...");
     let lwt = session
         .execute(&ps, (minimum_shard_offsets, producer_lock.producer_id))
         .await?
@@ -725,6 +810,7 @@ impl ScyllaSink {
     pub async fn new(
         etcd: etcd_client::Client,
         config: ScyllaSinkConfig,
+        initital_slot: Slot,
         hostname: impl AsRef<str>,
         username: impl Into<String>,
         password: impl Into<String>,
@@ -773,14 +859,18 @@ impl ScyllaSink {
         // Where we left of, it becomes new earliest offset available.
         // This is to prevent
         let shard_offsets =
-            get_max_shard_offsets_for_producer(Arc::clone(&session), producer_id, shard_count)
-                .await?;
+            get_max_shard_offsets_for_producer_v2(
+                Arc::clone(&session), 
+                producer_id, 
+                shard_count,
+            )
+            .await?;
 
-        set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets).await?;
+        set_minimum_producer_offsets(Arc::clone(&session), &producer_lock, &shard_offsets, initital_slot).await?;
 
         info!("Got back last offsets of all {shard_count} shards");
         let mut shard_handles = Vec::with_capacity(shard_count);
-        for (shard_id, (last_offset, _slot)) in shard_offsets.into_iter() {
+        for (shard_id, last_offset) in shard_offsets.into_iter() {
             let session = Arc::clone(&session);
             let shard = Shard::new(
                 session,
