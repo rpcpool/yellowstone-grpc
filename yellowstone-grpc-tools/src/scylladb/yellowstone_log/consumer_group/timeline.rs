@@ -9,6 +9,8 @@ use {
     serde::{Deserialize, Serialize},
     thiserror::Error,
     tonic::async_trait,
+    tracing::info,
+    uuid::Uuid,
 };
 
 /// Represents the state of computing the next producer in the timeline translation process.
@@ -160,7 +162,11 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             .get_lowest_common_slot_number(&state.consumer_group_id, Some(state.revision))
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
-
+        let uuid_str = Uuid::from_bytes(state.consumer_group_id).to_string();
+        info!(
+            "lower common slot number is {} for consumer group id {}",
+            lcs, uuid_str
+        );
         let slot_ranges = Some(lcs - 10..=lcs);
         let (producer_id, execution_id) = self
             .producer_queries

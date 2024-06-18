@@ -201,8 +201,7 @@ impl ScyllaProducerStore {
         &self,
         slot_range: RangeInclusive<Slot>,
     ) -> anyhow::Result<Vec<ProducerId>> {
-        let slot_values = slot_range
-            .collect::<Vec<_>>();
+        let slot_values = slot_range.collect::<Vec<_>>();
 
         self.session
             .execute(&self.list_producer_with_slot_ps, (slot_values,))

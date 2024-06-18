@@ -413,26 +413,21 @@ pub(crate) async fn get_max_shard_offsets_for_producer(
     producer_id: ProducerId,
     num_shards: usize,
 ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
-    let cql_shard_list = (0..num_shards)
-        .map(|shard_id| format!("{shard_id}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let shard_list = (0..num_shards).map(|idx| idx as i64).collect::<Vec<_>>();
 
-    let query_last_period_commit = format!(
-        r###"
+    let query_last_period_commit = r###"
         SELECT
             shard_id,
             period
         FROM producer_period_commit_log
         where producer_id = ?
-        AND shard_id IN ({cql_shard_list})
+        AND shard_id IN ?
         ORDER BY period DESC
         PER PARTITION LIMIT 1
-    "###
-    );
+    "###;
 
     let mut current_period_foreach_shard = session
-        .query(query_last_period_commit, (producer_id,))
+        .query(query_last_period_commit, (producer_id, shard_list))
         .await?
         .rows_typed_or_empty::<(ShardId, ShardPeriod)>()
         .map(|result| result.map(|(shard_id, period)| (shard_id, period + 1)))

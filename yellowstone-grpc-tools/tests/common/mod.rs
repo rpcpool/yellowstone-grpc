@@ -1,5 +1,13 @@
 use {
-    futures::{channel::oneshot, future, FutureExt}, local_ip_address::{linux::local_ip, list_afinet_netifas}, scylla::{Session, SessionBuilder}, std::{collections::BTreeMap, sync::Arc}, tokio::sync::{broadcast, mpsc, watch, RwLock}, tonic::async_trait, tracing::info, uuid::Uuid, yellowstone_grpc_tools::{
+    futures::{channel::oneshot, future, FutureExt},
+    local_ip_address::{linux::local_ip, list_afinet_netifas},
+    scylla::{Session, SessionBuilder},
+    std::{collections::BTreeMap, sync::Arc},
+    tokio::sync::{broadcast, mpsc, watch, RwLock},
+    tonic::async_trait,
+    tracing::info,
+    uuid::Uuid,
+    yellowstone_grpc_tools::{
         scylladb::{
             etcd_utils::Revision,
             types::{BlockchainEventType, ConsumerId, ProducerId},
@@ -16,7 +24,7 @@ use {
             },
         },
         setup_tracing,
-    }
+    },
 };
 
 pub struct TestContext {
@@ -198,7 +206,8 @@ impl ProducerMonitor for MockProducerMonitor {
     }
 
     async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
-        let ret = self.inner
+        let ret = self
+            .inner
             .read()
             .await
             .living_producer

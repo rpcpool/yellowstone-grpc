@@ -230,7 +230,9 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let producer_id = [0x01];
     let ctx = TestContextBuilder::new()
         //.with_producer_monitor_provider(common::ProducerMonitorProvider::Mock { producer_ids: vec![producer_id] })
-        .build().await.unwrap();
+        .build()
+        .await
+        .unwrap();
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -289,10 +291,8 @@ async fn test_leader_state_transation_during_timeline_translation() {
     .await
     .unwrap();
 
-    let h = tokio::spawn(async move { 
-        let result = leader_node
-        .step()
-        .await;
+    let h = tokio::spawn(async move {
+        let result = leader_node.step().await;
         (leader_node, result)
     });
 

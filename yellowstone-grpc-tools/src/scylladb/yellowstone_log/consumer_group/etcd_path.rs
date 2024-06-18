@@ -19,14 +19,22 @@ pub fn get_instance_lock_prefix_v1(consumer_group_id: ConsumerGroupId) -> String
     format!("v1#lock#cg-{uuid_str}#i-")
 }
 
-pub fn parse_lock_key_v1(lock_key: impl AsRef<[u8]>) -> anyhow::Result<(ConsumerGroupId, ConsumerId)> {
+pub fn parse_lock_key_v1(
+    lock_key: impl AsRef<[u8]>,
+) -> anyhow::Result<(ConsumerGroupId, ConsumerId)> {
     let s = String::from_utf8_lossy(lock_key.as_ref());
     let mut parts = s.split("#");
-    let _ = parts.next();   // skip v1#
-    let _ = parts.next();   // skip lock#
-    let cg_id = parts.next().ok_or(anyhow::anyhow!("invalid lock key format"))?;
-    let consumer_id = parts.next().ok_or(anyhow::anyhow!("invalid lock key format"))?;
-    let cg_id = cg_id.strip_prefix("cg-").ok_or(anyhow::anyhow!("invalid lock key format"))?;
+    let _ = parts.next(); // skip v1#
+    let _ = parts.next(); // skip lock#
+    let cg_id = parts
+        .next()
+        .ok_or(anyhow::anyhow!("invalid lock key format"))?;
+    let consumer_id = parts
+        .next()
+        .ok_or(anyhow::anyhow!("invalid lock key format"))?;
+    let cg_id = cg_id
+        .strip_prefix("cg-")
+        .ok_or(anyhow::anyhow!("invalid lock key format"))?;
     let consumer_id = consumer_id
         .strip_prefix("i-")
         .ok_or(anyhow::anyhow!("invalid lock key format"))?;

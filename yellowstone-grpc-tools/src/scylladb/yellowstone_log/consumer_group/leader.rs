@@ -292,8 +292,7 @@ impl ConsumerGroupLeaderNode {
             .iter()
             .map(|kv| kv.key())
             .map(|lock_key| {
-                parse_lock_key_v1(lock_key)
-                    .map(|(_, consumer_id)| consumer_id.as_bytes().to_vec())
+                parse_lock_key_v1(lock_key).map(|(_, consumer_id)| consumer_id.as_bytes().to_vec())
             })
             .collect::<Result<Vec<_>, _>>()?;
         let _barrier = etcd_utils::barrier::new_barrier(
@@ -303,7 +302,7 @@ impl ConsumerGroupLeaderNode {
             lease_id,
         )
         .await?;
-        
+
         let next_state = ConsumerGroupState::WaitingBarrier(WaitingBarrierState {
             header: state.header.clone(),
             lease_id,

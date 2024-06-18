@@ -1,5 +1,6 @@
 use {
     common::{MockProducerMonitor, TestContext, TestContextBuilder},
+    core::time,
     rdkafka::consumer,
     std::{collections::BTreeMap, sync::Arc, time::Duration},
     tokio::sync::{broadcast, mpsc, RwLock},
@@ -90,9 +91,7 @@ async fn test_coordinator_backend_successful_run() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_coordinator_producer_kill_signal_then_revive_producer() {
-    // let _ = setup_tracing();
-    let (kill_producer_tx, kill_producer_rx) = broadcast::channel::<()>(1);
-
+    let _ = setup_tracing();
     let producer_id = [0x00];
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
@@ -143,20 +142,19 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
     println!("event slot : {}", event.slot);
     assert!(event.slot > 0);
 
-    // Dropping the source shoud quit the consumer group
+    // Dropping the source should quit the consumer group
     ctx.producer_killer
         .kill_producer(producer_id)
         .await
         .unwrap();
 
-    while let Some(_) = source.recv().await { }
-    //println!("source.recv() {}", res.is_some());
-    println!(
-        "backend handle is finished: {}",
-        backend_handle.is_finished()
-    );
+    while let Some(_) = source.recv().await {}
+
+    // It takes a couple of second to release the consumer lock...
+    // tokio::time::sleep(time::Duration::from_secs(5)).await;
+
     // let (sink, mut source) = mpsc::channel::<BlockchainEvent>(1);
-    // // We should be albe to rejoin the group after quitting.
+    // // // We should be able to rejoin the group after quitting.
     // coordinator
     //     .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
     //     .await

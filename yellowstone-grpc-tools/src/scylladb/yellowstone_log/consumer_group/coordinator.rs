@@ -298,12 +298,12 @@ impl ConsumerGroupCoordinatorBackend {
             )
             .await;
 
-            callback.send(
-                CoordinatorBackgroundJobResult::Election {
+            callback
+                .send(CoordinatorBackgroundJobResult::Election {
                     consumer_group_id,
-                    result
-                }
-            ).await
+                    result,
+                })
+                .await
         });
     }
 
@@ -331,11 +331,13 @@ impl ConsumerGroupCoordinatorBackend {
             let consumer_group_id = consumer_handle.consumer_group_id.clone();
             let consumer_id = consumer_handle.consumer_id.clone();
             let result = consumer_handle.await;
-            let _ = callback.send(CoordinatorBackgroundJobResult::SupervisorQuit {
-                consumer_group_id,
-                consumer_id,
-                result
-            }).await;
+            let _ = callback
+                .send(CoordinatorBackgroundJobResult::SupervisorQuit {
+                    consumer_group_id,
+                    consumer_id,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -487,7 +489,10 @@ impl ConsumerGroupCoordinatorBackend {
         tokio::spawn(async move {
             let (consumer_group_id, result) = leader_handle.await;
             let _ = callback
-                .send(CoordinatorBackgroundJobResult::LeaderQuit { consumer_group_id, result })
+                .send(CoordinatorBackgroundJobResult::LeaderQuit {
+                    consumer_group_id,
+                    result,
+                })
                 .await;
         });
     }
@@ -541,19 +546,18 @@ impl ConsumerGroupCoordinatorBackend {
     }
 }
 
-
 enum CoordinatorBackgroundJobResult {
     SupervisorQuit {
         consumer_group_id: ConsumerGroupId,
         consumer_id: ConsumerId,
         result: anyhow::Result<()>,
     },
-    Election { 
+    Election {
         consumer_group_id: ConsumerGroupId,
-        result: anyhow::Result<Option<(LeaderKey, ManagedLease)>> 
+        result: anyhow::Result<Option<(LeaderKey, ManagedLease)>>,
     },
-    LeaderQuit { 
+    LeaderQuit {
         consumer_group_id: ConsumerGroupId,
         result: anyhow::Result<()>,
-    }
+    },
 }

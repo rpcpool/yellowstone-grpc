@@ -125,13 +125,17 @@ where
 
             let leader_info = tokio::time::timeout(
                 LEADER_IDLE_STATE_TIMEOUT,
-                self.leader_info_watch.wait_for(Option::is_some)
-            ).await??.to_owned().expect("leader info is none");
+                self.leader_info_watch.wait_for(Option::is_some),
+            )
+            .await??
+            .to_owned()
+            .expect("leader info is none");
 
             info!("supervisor detected current leader info to be: {leader_info:?}");
 
             let (revision, idle_state) =
-                tokio::time::timeout(LEADER_IDLE_STATE_TIMEOUT, self.wait_for_idle_state()).await??;
+                tokio::time::timeout(LEADER_IDLE_STATE_TIMEOUT, self.wait_for_idle_state())
+                    .await??;
 
             info!("ConsumerSourceSupervisor received idle state, revision: {revision}");
 
@@ -202,7 +206,6 @@ pub struct ConsumerSourceSupervisorHandle {
     tx_terminate: oneshot::Sender<()>,
     handle: JoinHandle<anyhow::Result<()>>,
 }
-
 
 impl Future for ConsumerSourceSupervisorHandle {
     type Output = anyhow::Result<()>;

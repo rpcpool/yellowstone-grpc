@@ -270,6 +270,7 @@ impl ScyllaConsumerGroupStore {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+
         let subscribed_events = consumer_group_info.subscribed_event_types;
         let rows = self
             .session
@@ -311,7 +312,7 @@ impl ScyllaConsumerGroupStore {
             })
             .min()
             .unwrap_or(i64::MAX);
-
+        info!("ici in get_lcs: {}", min_slot);
         if let Some(max_revision) = max_revision_opt {
             anyhow::ensure!(
                 max_revision >= shard_max_revision,

@@ -1,6 +1,7 @@
 use {
     etcd_client::{GetOptions, KvClientPrefix, PutOptions, WatchFilterType, WatchOptions, Watcher},
-    futures::channel::oneshot, tracing::info,
+    futures::channel::oneshot,
+    tracing::info,
 };
 
 pub struct Barrier {
@@ -82,10 +83,7 @@ pub async fn new_barrier<S>(
 where
     S: AsRef<[u8]>,
 {
-    let mut dir = KvClientPrefix::new(
-        etcd.kv_client(), 
-        barrier_key.as_ref().to_vec()
-    );
+    let mut dir = KvClientPrefix::new(etcd.kv_client(), barrier_key.as_ref().to_vec());
 
     let mut revision_to_watch_from = 1;
     for child in children {
