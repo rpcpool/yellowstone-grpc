@@ -181,10 +181,13 @@ impl MockProducerMonitor {
         lock.living_producer.insert(producer_id, 1);
     }
 
-    async fn send_kill_signal(&self, producer_id: ProducerId) {
+    pub async fn send_kill_signal(&self, producer_id: ProducerId, remove_producer: bool) {
         let maybe = {
             let mut lock = self.inner.write().await;
-            lock.living_producer.remove(&producer_id);
+            if remove_producer {
+                lock.living_producer.remove(&producer_id);
+            }
+
             lock.dead_signals.remove(&producer_id)
         };
         if let Some(tx) = maybe {
@@ -196,7 +199,7 @@ impl MockProducerMonitor {
 #[async_trait]
 impl ProducerKiller for MockProducerMonitor {
     async fn kill_producer(&self, producer_id: ProducerId) -> anyhow::Result<()> {
-        self.send_kill_signal(producer_id).await;
+        self.send_kill_signal(producer_id, true).await;
         Ok(())
     }
 }
