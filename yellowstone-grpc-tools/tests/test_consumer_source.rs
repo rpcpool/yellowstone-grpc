@@ -37,16 +37,10 @@ impl FromBlockchainEvent for MockEvent {
 async fn test_consumer_source_run() {
     let ctx = TestContextBuilder::new().build().await.unwrap();
     let etcd = ctx.etcd.clone();
-    let producer_id = [0x00];
+    let producer_id = ctx.producer_id;
     let producer_info = ctx
         .producer_store
         .get_producer_info(producer_id)
-        .await
-        .unwrap()
-        .unwrap();
-    let (revision, execution_id) = ctx
-        .producer_store
-        .get_execution_id(producer_id)
         .await
         .unwrap()
         .unwrap();
@@ -82,7 +76,7 @@ async fn test_consumer_source_run() {
         .get_shard_offset_map(
             &consumer_group_id,
             &consumer_id,
-            &execution_id,
+            &producer_id,
             BlockchainEventType::AccountUpdate,
         )
         .await
@@ -93,7 +87,6 @@ async fn test_consumer_source_run() {
         consumer_group_id: consumer_group_id,
         consumer_id: consumer_id.clone(),
         producer_id,
-        execution_id: execution_id.clone(),
         subscribed_event_types: subscribed_events.clone(),
         session: Arc::clone(&ctx.session),
         etcd: etcd.clone(),
@@ -131,7 +124,7 @@ async fn test_consumer_source_run() {
         .get_shard_offset_map(
             &consumer_group_id,
             &consumer_id,
-            &execution_id,
+            &producer_id,
             BlockchainEventType::AccountUpdate,
         )
         .await

@@ -13,8 +13,8 @@ use {
             Revision,
         },
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ExecutionId,
-            ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ProducerId, ShardId,
+            ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{
             common::SeekLocation,
@@ -80,7 +80,6 @@ impl ConsumerGroupState {
 pub struct LostProducerState {
     pub header: ConsumerGroupHeader,
     pub lost_producer_id: ProducerId,
-    pub execution_id: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -101,7 +100,6 @@ pub struct InTimelineTranslationState {
 pub struct IdleState {
     pub header: ConsumerGroupHeader,
     pub producer_id: ProducerId,
-    pub execution_id: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -245,7 +243,6 @@ impl ConsumerGroupLeaderNode {
                 TranslationState::Done(inner) => ConsumerGroupState::Idle(IdleState {
                     header: state.header.to_owned(),
                     producer_id: inner.producer_id,
-                    execution_id: inner.execution_id,
                 }),
                 anystate => ConsumerGroupState::InTimelineTranslation(InTimelineTranslationState {
                     header: state.header.to_owned(),
@@ -358,7 +355,6 @@ impl ConsumerGroupLeaderNode {
             ConsumerGroupState::Idle(IdleState {
                 header,
                 producer_id,
-                execution_id,
             }) => {
                 let signal = self
                     .producer_monitor
@@ -369,7 +365,6 @@ impl ConsumerGroupLeaderNode {
                 Some(ConsumerGroupState::LostProducer(LostProducerState {
                     header: header.clone(),
                     lost_producer_id: *producer_id,
-                    execution_id: execution_id.clone(),
                 }))
             }
             ConsumerGroupState::Dead(inner) => Some(ConsumerGroupState::Dead(inner.clone())),
@@ -454,11 +449,6 @@ pub async fn create_leader_state_log(
         producer_id: scylla_consumer_group_info
             .producer_id
             .expect("missing producer id"),
-
-        execution_id: scylla_consumer_group_info
-            .execution_id
-            .clone()
-            .expect("missing execution id"),
     });
 
     let state_log_key = leader_log_name_from_cg_id_v1(scylla_consumer_group_info.consumer_group_id);

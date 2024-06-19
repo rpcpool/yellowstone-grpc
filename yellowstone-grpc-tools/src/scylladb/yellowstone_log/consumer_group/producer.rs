@@ -9,8 +9,8 @@ use {
     crate::scylladb::{
         sink,
         types::{
-            CommitmentLevel, ExecutionId, ProducerExecutionInfo, ProducerId, ProducerInfo, ShardId,
-            ShardOffset, Slot,
+            CommitmentLevel, ProducerExecutionInfo, ProducerId, ProducerInfo, ShardId, ShardOffset,
+            Slot,
         },
         yellowstone_log::{
             common::SeekLocation,
@@ -64,8 +64,6 @@ const GET_PRODUCERS_CONSUMER_COUNT: &str = r###"
 const LIST_PRODUCER_LOCKS: &str = r###"
     SELECT
         producer_id,
-        execution_id,
-        revision,
         ipv4,
         minimum_shard_offset
     FROM producer_lock
@@ -104,19 +102,9 @@ const GET_PRODUCER_INFO_BY_ID: &str = r###"
 
 const GET_MIN_PRODUCER_OFFSET: &str = r###"
     SELECT
-        revision,
         minimum_shard_offset 
     FROM producer_lock 
     WHERE producer_id = ?
-"###;
-
-const GET_PRODUCER_EXECUTION_ID: &str = r###"
-    SELECT
-        revision,
-        execution_id
-    FROM producer_lock
-    WHERE producer_id = ?
-    PER PARTITION LIMIT 1
 "###;
 
 const LIST_PRODUCER_WITH_SLOT: &str = r###"
@@ -134,7 +122,6 @@ pub struct ScyllaProducerStore {
     list_producer_locks_ps: PreparedStatement,
     get_shard_offset_in_slot_range_ps: PreparedStatement,
     get_min_producer_offset_ps: PreparedStatement,
-    get_producer_execution_id_ps: PreparedStatement,
     list_producer_with_slot_ps: PreparedStatement,
     producer_monitor: Arc<dyn ProducerMonitor>,
 }
@@ -156,9 +143,6 @@ impl ScyllaProducerStore {
         let mut get_min_producer_offset_ps = session.prepare(GET_MIN_PRODUCER_OFFSET).await?;
         get_min_producer_offset_ps.set_consistency(Consistency::Serial);
 
-        let mut get_producer_execution_id_ps = session.prepare(GET_PRODUCER_EXECUTION_ID).await?;
-        get_producer_execution_id_ps.set_consistency(Consistency::Serial);
-
         let list_producer_with_slot_ps = session.prepare(LIST_PRODUCER_WITH_SLOT).await?;
 
         Ok(ScyllaProducerStore {
@@ -168,7 +152,6 @@ impl ScyllaProducerStore {
             list_producer_locks_ps,
             get_shard_offset_in_slot_range_ps,
             get_min_producer_offset_ps,
-            get_producer_execution_id_ps,
             list_producer_with_slot_ps,
         })
     }
@@ -192,7 +175,7 @@ impl ScyllaProducerStore {
             .execute(&self.list_producer_locks_ps, &[])
             .await?
             .rows_typed_or_empty::<ProducerExecutionInfo>()
-            .map(|result| result.map(|pl| ([pl.producer_id[0]], pl)))
+            .map(|result| result.map(|pl| (pl.producer_id, pl)))
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map_err(anyhow::Error::new)
     }
@@ -260,7 +243,7 @@ impl ScyllaProducerStore {
         &self,
         opt_slot_range: Option<RangeInclusive<Slot>>,
         commitment_level: CommitmentLevel,
-    ) -> anyhow::Result<(ProducerId, ExecutionId)> {
+    ) -> anyhow::Result<ProducerId> {
         let mut living_producers = self.producer_monitor.list_living_producers().await;
         info!("{} producer lock(s) detected", living_producers.len());
         let producer_exec_info_map = self.list_producer_locks().await?;
@@ -281,15 +264,11 @@ impl ScyllaProducerStore {
         let mut elligible_producers = producers_with_commitment_level
             .into_iter()
             .filter_map(|producer_id| {
-                living_producers.remove(&producer_id).and_then(|_revision| {
-                    producer_exec_info_map
-                        .get(&producer_id)
-                        .map(|producer_exec_info| {
-                            (producer_id, producer_exec_info.execution_id.clone())
-                        })
-                })
+                living_producers
+                    .remove(&producer_id)
+                    .map(|_revision| producer_id)
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<BTreeSet<_>>();
 
         anyhow::ensure!(!elligible_producers.is_empty(), ImpossibleTimelineSelection);
 
@@ -304,7 +283,7 @@ impl ScyllaProducerStore {
                 producers_with_slot.len()
             );
 
-            elligible_producers.retain(|k, _| producers_with_slot.contains(k));
+            elligible_producers.retain(|k| producers_with_slot.contains(k));
 
             anyhow::ensure!(
                 !elligible_producers.is_empty(),
@@ -323,39 +302,23 @@ impl ScyllaProducerStore {
 
         elligible_producers
             .into_iter()
-            .min_by_key(|(k, _)| producer_count_pairs.get(k).cloned().unwrap_or(0))
+            .min_by_key(|(k)| producer_count_pairs.get(k).cloned().unwrap_or(0))
             .ok_or(anyhow::anyhow!("No producer is available right now"))
     }
 
     pub async fn get_min_offset_for_producer(
         &self,
         producer_id: ProducerId,
-        max_revision_opt: Option<i64>,
     ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
-        let (remote_revision, offsets) = self
+        let (offsets,) = self
             .session
             .execute(&self.get_min_producer_offset_ps, (producer_id,))
             .await?
-            .first_row_typed::<(i64, Option<BTreeMap<ShardId, (ShardOffset, Slot)>>)>()?;
-
-        if let Some(max_revision) = max_revision_opt {
-            anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
-        }
+            .first_row_typed::<(Option<BTreeMap<ShardId, (ShardOffset, Slot)>>,)>()?;
 
         offsets.ok_or(anyhow::anyhow!(
             "Producer lock exists, but its minimum shard offset is not set."
         ))
-    }
-
-    pub async fn get_execution_id(
-        &self,
-        producer_id: ProducerId,
-    ) -> anyhow::Result<Option<(i64, ExecutionId)>> {
-        self.session
-            .execute(&self.get_producer_execution_id_ps, (producer_id,))
-            .await?
-            .maybe_first_row_typed::<(i64, ExecutionId)>()
-            .map_err(anyhow::Error::new)
     }
 
     pub async fn get_slot_shard_offsets(
@@ -416,17 +379,14 @@ impl ScyllaProducerStore {
             }
             SeekLocation::Earliest => {
                 info!("computing offset to earliest seek location");
-                self.get_min_offset_for_producer(producer_id, max_revision_opt)
-                    .await?
+                self.get_min_offset_for_producer(producer_id).await?
             }
             SeekLocation::SlotApprox {
                 desired_slot,
                 min_slot,
             } => {
                 info!("computing offset to approx slot seek location (0)");
-                let minium_producer_offsets = self
-                    .get_min_offset_for_producer(producer_id, max_revision_opt)
-                    .await?;
+                let minium_producer_offsets = self.get_min_offset_for_producer(producer_id).await?;
 
                 info!("computing offset to approx slot seek location (1)");
                 let shard_offsets_contain_slot = self

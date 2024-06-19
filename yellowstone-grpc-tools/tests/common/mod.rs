@@ -30,6 +30,7 @@ use {
 pub struct TestContext {
     pub session: Arc<Session>,
     pub etcd: etcd_client::Client,
+    pub producer_id: ProducerId,
     pub consumer_group_store: ScyllaConsumerGroupStore,
     pub producer_store: ScyllaProducerStore,
     pub producer_monitor: Arc<dyn ProducerMonitor>,
@@ -113,6 +114,7 @@ impl TestContextBuilder {
             producer_store,
             producer_monitor,
             producer_killer,
+            producer_id: ProducerId::try_from("00000000-0000-0000-0000-000000000000")?,
         };
         Ok(ctx)
     }

@@ -49,13 +49,11 @@ async fn test_create_leader_state_log() {
     let revision0 = ctx.last_etcd_revision().await;
 
     let consumer_group_id = Uuid::new_v4().into_bytes();
-    let producer_id = [0x00];
-    let execution_id = Uuid::new_v4().into_bytes();
+    let producer_id = ctx.producer_id;
     let consumer_group_info = ConsumerGroupInfo {
         consumer_group_id,
         group_type: yellowstone_grpc_tools::scylladb::types::ConsumerGroupType::Static,
         producer_id: Some(producer_id),
-        execution_id: Some(execution_id.to_vec()),
         revision: 1,
         commitment_level: Default::default(),
         subscribed_event_types: vec![BlockchainEventType::AccountUpdate],
@@ -79,7 +77,6 @@ async fn test_create_leader_state_log() {
             shard_assignments: Default::default(),
         },
         producer_id,
-        execution_id: execution_id.to_vec(),
     });
 
     assert_eq!(state, expected_state);
@@ -93,7 +90,6 @@ async fn test_create_leader_state_log() {
             shard_assignments: Default::default(),
         },
         producer_id,
-        execution_id: execution_id.to_vec(),
     });
     etcd.put(
         leader_log_name_from_cg_id_v1(consumer_group_id),
@@ -227,12 +223,12 @@ impl TimelineTranslator for MockTimelineTranslator {
 
 #[tokio::test]
 async fn test_leader_state_transation_during_timeline_translation() {
-    let producer_id = [0x01];
     let ctx = TestContextBuilder::new()
         //.with_producer_monitor_provider(common::ProducerMonitorProvider::Mock { producer_ids: vec![producer_id] })
         .build()
         .await
         .unwrap();
+    let producer_id = ctx.producer_id;
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -254,7 +250,6 @@ async fn test_leader_state_transation_during_timeline_translation() {
         consumer_group_id,
         group_type: yellowstone_grpc_tools::scylladb::types::ConsumerGroupType::Static,
         producer_id: Some(producer_id),
-        execution_id: Some(execution_id.to_vec()),
         revision: 1,
         commitment_level: Default::default(),
         subscribed_event_types: vec![BlockchainEventType::AccountUpdate],

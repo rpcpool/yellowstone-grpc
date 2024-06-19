@@ -10,7 +10,7 @@ use {
     },
     uuid::Uuid,
     yellowstone_grpc_tools::scylladb::{
-        types::BlockchainEventType,
+        types::{BlockchainEventType, ProducerId},
         yellowstone_log::consumer_group::{
             consumer_source::ConsumerSourceHandle,
             consumer_supervisor::ConsumerSourceSupervisor,
@@ -85,8 +85,7 @@ async fn test_supervisor() {
 
     let state2 = ConsumerGroupState::Idle(IdleState {
         header: cg_header.clone(),
-        producer_id: [0x00],
-        execution_id: vec![0x00],
+        producer_id: ctx.producer_id,
     });
     tx_state.send((2, state2)).unwrap();
 
@@ -96,8 +95,7 @@ async fn test_supervisor() {
 
     let state3 = ConsumerGroupState::LostProducer(LostProducerState {
         header: cg_header.clone(),
-        lost_producer_id: [0x00],
-        execution_id: vec![0x00],
+        lost_producer_id: ctx.producer_id,
     });
     tx_state.send((3, state3)).unwrap();
 
@@ -107,8 +105,7 @@ async fn test_supervisor() {
 
     let state4 = ConsumerGroupState::Idle(IdleState {
         header: cg_header.clone(),
-        producer_id: [0x01],
-        execution_id: vec![0x01],
+        producer_id: ProducerId::try_from("00000000-0000-0000-0000-000000000001").unwrap(),
     });
 
     tx_state.send((4, state4)).unwrap();

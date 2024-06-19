@@ -2,11 +2,12 @@ use {
     common::{MockProducerMonitor, TestContext, TestContextBuilder},
     core::time,
     rdkafka::consumer,
+    sha2::digest::typenum::Prod,
     std::{collections::BTreeMap, sync::Arc, time::Duration},
     tokio::sync::{broadcast, mpsc, RwLock},
     yellowstone_grpc_tools::{
         scylladb::{
-            types::{BlockchainEvent, BlockchainEventType, CommitmentLevel},
+            types::{BlockchainEvent, BlockchainEventType, CommitmentLevel, ProducerId},
             yellowstone_log::{
                 common::SeekLocation,
                 consumer_group::{
@@ -25,7 +26,7 @@ mod common;
 async fn test_coordinator_backend_successful_run() {
     let (kill_producer_tx, kill_producer_rx) = broadcast::channel::<()>(1);
 
-    let producer_id = [0x00];
+    let producer_id = ProducerId::try_from("00000000-0000-0000-0000-000000000000").unwrap();
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
             producer_ids: vec![producer_id],
@@ -34,12 +35,6 @@ async fn test_coordinator_backend_successful_run() {
         .await
         .unwrap();
     let etcd = ctx.etcd.clone();
-    let (revision, execution_id) = ctx
-        .producer_store
-        .get_execution_id(producer_id)
-        .await
-        .unwrap()
-        .unwrap();
     let consumer_id1 = String::from("test1");
     let consumer_id2 = String::from("test2");
     let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];
@@ -92,7 +87,7 @@ async fn test_coordinator_backend_successful_run() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_coordinator_producer_kill_signal_then_revive_producer() {
     let _ = setup_tracing();
-    let producer_id = [0x00];
+    let producer_id = ProducerId::ZERO;
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
             producer_ids: vec![producer_id],
@@ -101,12 +96,6 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
         .await
         .unwrap();
     let etcd = ctx.etcd.clone();
-    let (revision, execution_id) = ctx
-        .producer_store
-        .get_execution_id(producer_id)
-        .await
-        .unwrap()
-        .unwrap();
     let consumer_id1 = String::from("test1");
     let consumer_id2 = String::from("test2");
     let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];

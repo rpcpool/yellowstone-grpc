@@ -4,11 +4,11 @@ use {
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
-            ConsumerGroupType, ConsumerId, ExecutionId, ProducerId, ShardId, ShardOffset,
-            ShardOffsetMap, Slot,
+            ConsumerGroupType, ConsumerId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
     },
+    rdkafka::producer,
     scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
     std::{collections::BTreeMap, net::IpAddr, sync::Arc},
     tonic::async_trait,
@@ -23,14 +23,13 @@ const INSERT_STATIC_GROUP_MEMBER_OFFSETS: &str = r###"
         consumer_group_id, 
         consumer_id, 
         producer_id, 
-        execution_id,
         acc_shard_offset_map,
         tx_shard_offset_map,
         revision, 
         created_at, 
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
+    VALUES (?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
     IF NOT EXISTS
 "###;
 
@@ -39,7 +38,6 @@ const CREATE_STATIC_CONSUMER_GROUP: &str = r###"
         consumer_group_id,
         group_type,
         producer_id,
-        execution_id,
         commitment_level,
         subscribed_event_types,
         instance_id_shard_assignments,
@@ -48,7 +46,7 @@ const CREATE_STATIC_CONSUMER_GROUP: &str = r###"
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
 "###;
 
 const GET_STATIC_CONSUMER_GROUP: &str = r###"
@@ -56,7 +54,6 @@ const GET_STATIC_CONSUMER_GROUP: &str = r###"
         consumer_group_id,
         group_type,
         producer_id,
-        execution_id,
         revision,
         commitment_level,
         subscribed_event_types,
@@ -69,7 +66,6 @@ const GET_STATIC_CONSUMER_GROUP: &str = r###"
 const UPDATE_STATIC_CONSUMER_GROUP: &str = r###"
     UPDATE consumer_groups
     SET producer_id = ?,
-        execution_id = ?,
         revision = ?
     WHERE consumer_group_id = ?
     IF revision < ?
@@ -81,7 +77,7 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     WHERE 
         consumer_group_id = ?
         AND consumer_id = ?
-        AND execution_id = ?
+        AND producer_id = ?
     IF revision < ?
 "###;
 
@@ -93,7 +89,7 @@ const GET_ACC_UPDATE_SHARD_OFFSET: &str = r###"
     WHERE 
         consumer_group_id = ?
         AND consumer_id = ?
-        AND execution_id = ?
+        AND producer_id = ?
 "###;
 
 const GET_NEW_TX_SHARD_OFFSET: &str = r###"
@@ -104,7 +100,7 @@ const GET_NEW_TX_SHARD_OFFSET: &str = r###"
     WHERE 
         consumer_group_id = ?
         AND consumer_id = ?
-        AND execution_id = ?
+        AND producer_id = ?
 "###;
 
 const GET_SHARD_OFFSET_FOR_SPECIFIC_GROUP_MEMBER: &str = r###"
@@ -117,7 +113,7 @@ const GET_SHARD_OFFSET_FOR_SPECIFIC_GROUP_MEMBER: &str = r###"
     WHERE 
         consumer_group_id = ?
         AND consumer_id IN ?
-        AND execution_id = ?
+        AND producer_id = ?
 "###;
 
 #[derive(Clone)]
@@ -194,14 +190,14 @@ impl ScyllaConsumerGroupStore {
         &self,
         consumer_group_id: &ConsumerGroupId,
         consumer_id: &ConsumerId,
-        execution_id: &ExecutionId,
+        producer_id: &ProducerId,
         blockchain_event_type: BlockchainEventType,
     ) -> anyhow::Result<(i64, ShardOffsetMap)> {
         let ps = match blockchain_event_type {
             BlockchainEventType::AccountUpdate => &self.get_acc_update_shard_offset_ps,
             BlockchainEventType::NewTransaction => &self.get_new_tx_shard_offset_ps,
         };
-        let bind_values = (consumer_group_id, consumer_id, execution_id);
+        let bind_values = (consumer_group_id, consumer_id, producer_id);
 
         let row = self
             .session
@@ -216,16 +212,9 @@ impl ScyllaConsumerGroupStore {
         &self,
         consumer_group_id: &ConsumerGroupId,
         producer_id: &ProducerId,
-        execution_id: &ExecutionId,
         revision: i64,
     ) -> anyhow::Result<()> {
-        let bind_values = (
-            producer_id,
-            execution_id,
-            revision,
-            consumer_group_id,
-            revision,
-        );
+        let bind_values = (producer_id, revision, consumer_group_id, revision);
         let lwt_result = self
             .session
             .execute(&self.update_static_consumer_group_ps, bind_values)
@@ -262,8 +251,8 @@ impl ScyllaConsumerGroupStore {
             let remote_revision = consumer_group_info.revision;
             anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
         }
-        let execution_id = consumer_group_info
-            .execution_id
+        let producer_id = consumer_group_info
+            .producer_id
             .expect("cannot compute LCS of unused consumer group");
         let instance_id_in_clause = consumer_group_info
             .consumer_id_shard_assignments
@@ -276,7 +265,7 @@ impl ScyllaConsumerGroupStore {
             .session
             .execute(
                 &self.get_shard_offset_for_specific_group_member_ps,
-                (consumer_group_id, instance_id_in_clause, execution_id),
+                (consumer_group_id, instance_id_in_clause, producer_id),
             )
             .await?
             .rows_typed::<(ConsumerId, i64, ShardOffsetMap, ShardOffsetMap)>()?
@@ -334,7 +323,6 @@ impl ScyllaConsumerGroupStore {
     /// # Arguments
     /// * `consumer_group_id` - The ID of the consumer group.
     /// * `producer_id` - The ID of the producer.
-    /// * `execution_id` - The execution ID.
     /// * `shard_offset_map` - A map of shard IDs to their corresponding shard offset and slot.
     /// * `current_revision` - The current revision of the consumer group.
     ///
@@ -346,7 +334,6 @@ impl ScyllaConsumerGroupStore {
         &self,
         consumer_group_id: &ConsumerGroupId,
         producer_id: &ProducerId,
-        execution_id: &ExecutionId,
         shard_offset_map: &BTreeMap<ShardId, (ShardOffset, Slot)>,
         current_revision: i64,
     ) -> anyhow::Result<()> {
@@ -378,7 +365,6 @@ impl ScyllaConsumerGroupStore {
                 consumer_group_id.clone(),
                 consumer_id,
                 producer_id,
-                &execution_id,
                 &my_shard_offset_map,
                 &my_shard_offset_map,
                 current_revision,
@@ -395,7 +381,7 @@ impl ScyllaConsumerGroupStore {
                     current_revision,
                     consumer_group_id.clone(),
                     consumer_id,
-                    &execution_id,
+                    &producer_id,
                     current_revision,
                 );
                 let lwt_result2 = self
@@ -422,11 +408,6 @@ impl ScyllaConsumerGroupStore {
             .producer_id
             .expect("missing producer id during static group membership registration");
 
-        let execution_id = consumer_group_info
-            .execution_id
-            .clone()
-            .expect("consumer group does not have any execution id assigned yet");
-
         let shard_offset_map = self
             .producer_store
             .compute_offset(producer_id, seek_loc, None)
@@ -436,7 +417,6 @@ impl ScyllaConsumerGroupStore {
         self.set_static_group_members_shard_offset(
             &consumer_group_info.consumer_group_id,
             &producer_id,
-            &execution_id,
             &shard_offset_map,
             consumer_group_info.revision,
         )
@@ -464,11 +444,11 @@ impl ScyllaConsumerGroupStore {
             None
         };
 
-        let (producer_id, execution_id) = self
+        let producer_id = self
             .producer_store
             .get_producer_id_with_least_assigned_consumer(maybe_slot_range, commitment_level)
             .await?;
-        info!("create_static_consumer_group, computed producer_id={producer_id:?}, execution_id={execution_id:?}");
+        info!("create_static_consumer_group, computed producer_id={producer_id}");
         self.session
             .execute(
                 &self.create_static_consumer_group_ps,
@@ -476,7 +456,6 @@ impl ScyllaConsumerGroupStore {
                     consumer_group_id.as_bytes(),
                     ConsumerGroupType::Static,
                     producer_id,
-                    execution_id.clone(),
                     commitment_level,
                     subscribed_blockchain_event_types,
                     &shard_assignments,
@@ -496,7 +475,6 @@ impl ScyllaConsumerGroupStore {
             subscribed_event_types: subscribed_blockchain_event_types.to_vec(),
             group_type: ConsumerGroupType::Static,
             last_access_ip_address: remote_ip_addr,
-            execution_id: Some(execution_id),
         };
 
         self.create_static_group_members(&static_consumer_group_info, initial_offset)

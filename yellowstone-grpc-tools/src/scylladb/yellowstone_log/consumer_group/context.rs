@@ -5,10 +5,7 @@ use {
     },
     crate::scylladb::{
         etcd_utils::Revision,
-        types::{
-            BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId, ProducerId,
-            ShardOffsetMap,
-        },
+        types::{BlockchainEventType, ConsumerGroupId, ConsumerId, ProducerId, ShardOffsetMap},
     },
     scylla::Session,
     std::sync::Arc,
@@ -19,7 +16,6 @@ pub struct ConsumerContext {
     pub consumer_group_id: ConsumerGroupId,
     pub consumer_id: ConsumerId,
     pub producer_id: ProducerId,
-    pub execution_id: ExecutionId,
     pub subscribed_event_types: Vec<BlockchainEventType>,
     pub session: Arc<Session>,
     pub etcd: etcd_client::Client,
@@ -44,7 +40,7 @@ impl ConsumerContext {
             .get_shard_offset_map(
                 &self.consumer_group_id,
                 &self.consumer_id,
-                &self.execution_id,
+                &self.producer_id,
                 blockchain_event_type,
             )
             .await

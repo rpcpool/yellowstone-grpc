@@ -109,7 +109,6 @@ where
             consumer_group_id: state.header.consumer_group_id,
             consumer_id: self.consumer_id.clone(),
             producer_id: state.producer_id,
-            execution_id: state.execution_id,
             subscribed_event_types: state.header.subscribed_blockchain_event_types,
             session: Arc::clone(&self.session),
             etcd: self.etcd.clone(),

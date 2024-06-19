@@ -57,35 +57,34 @@ pub fn get_instance_fencing_token_key_path_v1(
 }
 
 pub fn get_producer_lock_path_v1(producer_id: ProducerId) -> String {
-    let producer_id_num = u8::from_be_bytes(producer_id);
-    format!("v1#lock#producers#p-{:0>4}", producer_id_num)
+    format!("v1#lock#producers#p-{producer_id}")
 }
 
 pub fn get_producer_id_from_lock_key_v1(lock_key: &[u8]) -> anyhow::Result<ProducerId> {
     let s = String::from_utf8_lossy(lock_key);
-    let number_part = s
+    let (producer_id, _) = s
         .split("#")
         .skip(3)
         .next()
+        .and_then(|s| s.strip_prefix("p-"))
+        .and_then(|s| s.split_once("/"))
         .ok_or(anyhow::anyhow!("invalid lock key format"))?;
-    trace!("get_producer_id_from_lock_key_v1 -- number_part : {number_part}");
-    let producer_id = &number_part[2..(2 + 4)].parse::<u8>()?;
-    Ok([*producer_id])
+    producer_id.try_into().map_err(anyhow::Error::new)
 }
 
 pub fn get_producer_lock_prefix_v1() -> String {
     String::from("v1#lock#producers#p-")
 }
 
-pub fn get_producer_fencing_token_key_path_v1(producer_id: ProducerId) -> String {
-    let producer_id_num = u8::from_be_bytes(producer_id);
-    format!("v1#fencing-token#producers#p-{:0>4}", producer_id_num)
-}
+// pub fn get_producer_fencing_token_key_path_v1(producer_id: ProducerId) -> String {
+//     let producer_id_num = u8::from_be_bytes(producer_id);
+//     format!("v1#fencing-token#producers#p-{:0>4}", producer_id_num)
+// }
 
-pub fn get_shard_fencing_token_key_path_v1(producer_id: ProducerId, shard_id: ShardId) -> String {
-    let producer_id_num = u8::from_be_bytes(producer_id);
-    format!(
-        "v1#fencing-token#shards#p-{:0>4}#s-{:0>5}",
-        producer_id_num, shard_id
-    )
-}
+// pub fn get_shard_fencing_token_key_path_v1(producer_id: ProducerId, shard_id: ShardId) -> String {
+//     let producer_id_num = u8::from_be_bytes(producer_id);
+//     format!(
+//         "v1#fencing-token#shards#p-{:0>4}#s-{:0>5}",
+//         producer_id_num, shard_id
+//     )
+// }

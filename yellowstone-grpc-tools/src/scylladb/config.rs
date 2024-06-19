@@ -4,6 +4,7 @@ use {
     serde::Deserialize,
     serde_with::{serde_as, DurationMilliSeconds},
     std::{net::SocketAddr, time::Duration},
+    uuid::Uuid,
 };
 
 const fn default_batch_len_limit() -> usize {
@@ -73,7 +74,9 @@ pub struct ConfigGrpc2ScyllaDB {
 
     pub etcd_endpoints: Vec<String>,
 
-    pub producer_id: u8,
+    pub num_shards: usize,
+
+    pub producer_id: Option<String>,
 
     // Optional network interface name used to write in the producer lock table.
     pub ifname: Option<String>,
@@ -95,7 +98,13 @@ pub struct ConfigGrpc2ScyllaDB {
 impl ConfigGrpc2ScyllaDB {
     pub fn get_scylladb_sink_config(&self) -> ScyllaSinkConfig {
         ScyllaSinkConfig {
-            producer_id: self.producer_id,
+            producer_id: self
+                .producer_id
+                .as_ref()
+                .map(|s| Uuid::try_parse(s.as_str()))
+                .transpose()
+                .expect("Invalid producer id"),
+            num_shards: self.num_shards,
             batch_len_limit: self.batch_len_limit,
             batch_size_kb_limit: self.batch_size_kb_limit,
             linger: self.linger,

@@ -1,7 +1,7 @@
 use {
     super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore},
     crate::scylladb::{
-        types::{ConsumerGroupId, ExecutionId, ProducerId, ShardOffsetMap},
+        types::{ConsumerGroupId, ProducerId, ShardOffsetMap},
         yellowstone_log::common::SeekLocation,
     },
     core::fmt,
@@ -26,7 +26,6 @@ pub struct ProducerProposalState {
     pub consumer_group_id: ConsumerGroupId,
     pub revision: i64,
     pub producer_id: ProducerId,
-    pub execution_id: ExecutionId,
     pub new_shard_offsets: ShardOffsetMap,
 }
 
@@ -34,7 +33,6 @@ pub struct ProducerProposalState {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TranslationDoneState {
     pub producer_id: ProducerId,
-    pub execution_id: ExecutionId,
     pub new_shard_offsets: ShardOffsetMap,
 }
 
@@ -168,7 +166,7 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             lcs, uuid_str
         );
         let slot_ranges = Some(lcs - 10..=lcs);
-        let (producer_id, execution_id) = self
+        let producer_id = self
             .producer_queries
             .get_producer_id_with_least_assigned_consumer(slot_ranges, cg_info.commitment_level)
             .await
@@ -188,7 +186,6 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             consumer_group_id: state.consumer_group_id,
             revision: state.revision,
             producer_id,
-            execution_id,
             new_shard_offsets,
         });
 
@@ -198,31 +195,21 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
     async fn accept_proposal(&self, state: ProducerProposalState) -> TranslationStepResult {
         let maybe = self
             .producer_queries
-            .get_execution_id(state.producer_id)
+            .get_producer_info(state.producer_id)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
 
-        match maybe {
-            Some((_, actual_execution_id)) => {
-                if actual_execution_id != state.execution_id {
-                    return Err(TranslationStepError::StaleProducerProposition(format!(
-                        "producer's execution id changed before translation could finish"
-                    )));
-                }
-            }
-            None => {
-                return Err(TranslationStepError::StaleProducerProposition(format!(
-                    "producer with id {:?} no longuer exists",
-                    state.producer_id
-                )))
-            }
+        if maybe.is_none() {
+            return Err(TranslationStepError::StaleProducerProposition(format!(
+                "poducer with id {} no longuer exists",
+                state.producer_id
+            )));
         }
 
         self.consumer_group_store
             .set_static_group_members_shard_offset(
                 &state.consumer_group_id,
                 &state.producer_id,
-                &state.execution_id,
                 &state.new_shard_offsets,
                 state.revision,
             )
@@ -233,7 +220,6 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             .update_consumer_group_producer(
                 &state.consumer_group_id,
                 &state.producer_id,
-                &state.execution_id,
                 state.revision,
             )
             .await
@@ -241,7 +227,6 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
 
         let done_state = TranslationDoneState {
             producer_id: state.producer_id,
-            execution_id: state.execution_id,
             new_shard_offsets: state.new_shard_offsets,
         };
         Ok(TranslationState::Done(done_state))

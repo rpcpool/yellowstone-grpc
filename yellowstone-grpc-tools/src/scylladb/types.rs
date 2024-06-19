@@ -9,7 +9,10 @@ use {
         FromRow, FromUserType, SerializeCql, SerializeRow,
     },
     serde::{Deserialize, Serialize},
+    sha2::digest::typenum::Prod,
     std::{collections::BTreeMap, iter::repeat, net::IpAddr},
+    tracing::error,
+    uuid::Uuid,
     yellowstone_grpc_proto::{
         geyser::{
             SubscribeUpdateAccount, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
@@ -24,11 +27,87 @@ pub type Slot = i64;
 pub type ShardId = i16;
 pub type ShardPeriod = i64;
 pub type ShardOffset = i64;
-pub type ProducerId = [u8; 1]; // one byte is enough to assign an id to a machine
+
+#[derive(Clone, Serialize, Deserialize, Copy, PartialOrd, Ord, Hash, PartialEq, Eq, DeepSizeOf)]
+pub struct ProducerId([u8; 16]);
+
+impl ProducerId {
+    pub const ZERO: ProducerId = ProducerId([0; 16]);
+
+    pub fn from_uuid(uuid: Uuid) -> Self {
+        ProducerId(uuid.into_bytes())
+    }
+
+    pub fn to_string(&self) -> String {
+        Uuid::from_bytes(self.0).to_string()
+    }
+
+    pub fn into_bytes(&self) -> [u8; 16] {
+        self.0
+    }
+}
+
+impl From<Uuid> for ProducerId {
+    fn from(uuid: Uuid) -> Self {
+        ProducerId::from_uuid(uuid)
+    }
+}
+
+impl TryFrom<&str> for ProducerId {
+    type Error = uuid::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Uuid::parse_str(value).map(ProducerId::from_uuid)
+    }
+}
+
+impl fmt::Debug for ProducerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ProducerId")
+            .field(&self.to_string())
+            .finish()
+    }
+}
+
+impl fmt::Display for ProducerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl AsRef<[u8]> for ProducerId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl SerializeCql for ProducerId {
+    fn serialize<'b>(
+        &self,
+        typ: &scylla::frame::response::result::ColumnType,
+        writer: scylla::serialize::CellWriter<'b>,
+    ) -> Result<
+        scylla::serialize::writers::WrittenCellProof<'b>,
+        scylla::serialize::SerializationError,
+    > {
+        let x = self.into_bytes();
+        SerializeCql::serialize(&x, typ, writer)
+    }
+}
+
+impl FromCqlVal<CqlValue> for ProducerId {
+    fn from_cql(cql_val: CqlValue) -> Result<Self, FromCqlValError> {
+        match cql_val {
+            CqlValue::Blob(blob) => Uuid::from_slice(&blob)
+                .map(ProducerId::from_uuid)
+                .map_err(|_| FromCqlValError::BadVal),
+            _ => Err(FromCqlValError::BadCqlType),
+        }
+    }
+}
+
 pub type ConsumerId = String;
 pub const SHARD_OFFSET_MODULO: i64 = 10000;
-pub const MIN_PROCUDER: ProducerId = [0x00];
-pub const MAX_PRODUCER: ProducerId = [0xFF];
 pub const UNDEFINED_SLOT: Slot = -1;
 
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
@@ -1040,9 +1119,7 @@ impl From<BlockchainEvent> for AccountUpdate {
 
 #[derive(FromRow, Debug, Clone)]
 pub struct ProducerExecutionInfo {
-    pub producer_id: Vec<u8>,
-    pub execution_id: Vec<u8>,
-    pub revision: i64,
+    pub producer_id: ProducerId,
     pub ipv4: IpAddr,
     pub minimum_shard_offset: BTreeMap<ShardId, (ShardOffset, Slot)>,
 }
@@ -1158,13 +1235,12 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
 }
 
 pub type ConsumerGroupId = [u8; 16];
-pub type ExecutionId = Vec<u8>;
+
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct ConsumerGroupInfo {
     pub consumer_group_id: ConsumerGroupId,
     pub group_type: ConsumerGroupType,
     pub producer_id: Option<ProducerId>,
-    pub execution_id: Option<ExecutionId>,
     pub revision: i64,
     pub commitment_level: CommitmentLevel,
     pub subscribed_event_types: Vec<BlockchainEventType>,

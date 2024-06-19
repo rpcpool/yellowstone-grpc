@@ -40,7 +40,6 @@ create table if not exists consumer_shard_offset_v2 (
     consumer_group_id blob,
     consumer_id text,
     producer_id blob,
-    execution_id blob,
     -- map<ShardId, <ShardOffset, Slot>>
     acc_shard_offset_map frozen<map<smallint, tuple<bigint, bigint>>>,
     tx_shard_offset_map frozen<map<smallint, tuple<bigint, bigint>>>,
@@ -51,7 +50,7 @@ create table if not exists consumer_shard_offset_v2 (
     -- to avoid failing to concurrent LWT, we to match the partition key
     -- to our distributed locking semantic, so we make sure no two instance
     -- try to do LWT on the same partition.
-    PRIMARY KEY ((consumer_group_id, consumer_id), execution_id)
+    PRIMARY KEY ((consumer_group_id, consumer_id), producer_id)
 );
 
 
@@ -59,7 +58,6 @@ create table if not exists consumer_groups (
     consumer_group_id blob,
     group_type smallint,
     producer_id blob,
-    execution_id blob,
     revision bigint,
     commitment_level smallint,
     subscribed_event_types frozen<set<smallint>>,
@@ -126,8 +124,6 @@ create table if not exists producer_info (
 
 create table if not exists producer_lock (
     producer_id blob,
-    execution_id blob,
-    revision bigint,
     ifname text,
     ipv4 inet,
     is_ready boolean,

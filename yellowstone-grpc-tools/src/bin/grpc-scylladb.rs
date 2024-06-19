@@ -167,12 +167,17 @@ impl ArgsAction {
             .connect()
             .await?;
         let etcd = etcd_client::Client::connect(config.etcd_endpoints, None).await?;
-        let mut geyser = client.subscribe_once(config.request.to_proto()).await?.peekable();
+        let mut geyser = client
+            .subscribe_once(config.request.to_proto())
+            .await?
+            .peekable();
         tokio::pin!(geyser);
         info!("Grpc subscription is successful .");
 
         let first_slot = loop {
-            let peek = geyser.as_mut().peek()
+            let peek = geyser
+                .as_mut()
+                .peek()
                 .await
                 .map(|inner| inner.to_owned())
                 .transpose()?
@@ -180,7 +185,7 @@ impl ArgsAction {
             let slot = match peek.update_oneof {
                 Some(UpdateOneof::Account(acc)) => acc.slot,
                 Some(UpdateOneof::Transaction(tx)) => tx.slot,
-                _ => { 
+                _ => {
                     geyser.next().await.transpose()?;
                     continue;
                 }

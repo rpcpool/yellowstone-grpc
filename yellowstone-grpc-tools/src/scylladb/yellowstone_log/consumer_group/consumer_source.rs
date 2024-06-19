@@ -7,8 +7,8 @@ use {
     crate::scylladb::{
         scylladb_utils::LwtResult,
         types::{
-            BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ExecutionId,
-            ProducerId, ShardId, ShardOffsetMap, Slot, UNDEFINED_SLOT,
+            BlockchainEvent, BlockchainEventType, ConsumerGroupId, ConsumerId, ProducerId, ShardId,
+            ShardOffsetMap, Slot, UNDEFINED_SLOT,
         },
     },
     core::fmt,
@@ -46,7 +46,7 @@ const UPDATE_CONSUMER_SHARD_OFFSET_V2: &str = r###"
     WHERE
         consumer_group_id = ?
         AND consumer_id = ?
-        AND execution_id = ?
+        AND producer_id = ?
     IF revision < ?
 "###;
 
@@ -199,7 +199,7 @@ impl<T: FromBlockchainEvent> ConsumerSource<T> {
             revision,
             &self.ctx.consumer_group_id,
             &self.ctx.consumer_id,
-            &self.ctx.execution_id,
+            &self.ctx.producer_id,
             revision,
         );
         let lwt_result = self
