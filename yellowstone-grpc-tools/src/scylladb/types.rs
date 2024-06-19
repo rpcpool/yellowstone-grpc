@@ -1,5 +1,5 @@
 use {
-    anyhow::{anyhow, Ok},
+    anyhow::anyhow,
     core::fmt,
     deepsize::DeepSizeOf,
     scylla::{
@@ -1234,6 +1234,38 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub enum TranslationStrategy {
+    #[default]
+    AllowLag,
+    StrictSlot,
+}
+
+impl FromCqlVal<CqlValue> for TranslationStrategy {
+    fn from_cql(cql_val: CqlValue) -> Result<Self, FromCqlValError> {
+        let code = i16::from_cql(cql_val)?;
+        match code {
+            0 => Ok(TranslationStrategy::AllowLag),
+            1 => Ok(TranslationStrategy::StrictSlot),
+            _ => Err(FromCqlValError::BadVal),
+        }
+    }
+}
+
+impl SerializeCql for TranslationStrategy {
+    fn serialize<'b>(
+        &self,
+        typ: &scylla::frame::response::result::ColumnType,
+        writer: scylla::serialize::CellWriter<'b>,
+    ) -> Result<scylla::serialize::writers::WrittenCellProof<'b>, scylla::serialize::SerializationError> {
+        let code: i16 = match self {
+            TranslationStrategy::AllowLag => 0,
+            TranslationStrategy::StrictSlot => 1,
+        };
+        SerializeCql::serialize(&code, typ, writer)
+    }
+}
+
 pub type ConsumerGroupId = [u8; 16];
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -1246,6 +1278,7 @@ pub struct ConsumerGroupInfo {
     pub subscribed_event_types: Vec<BlockchainEventType>,
     pub consumer_id_shard_assignments: BTreeMap<ConsumerId, Vec<ShardId>>,
     pub last_access_ip_address: Option<IpAddr>,
+    pub translation_strategy: Option<TranslationStrategy>,
 }
 
 pub type ShardOffsetMap = BTreeMap<ShardId, (ShardOffset, Slot)>;

@@ -1,7 +1,7 @@
 use {
     common::{MockProducerMonitor, ProducerKiller, TestContext, TestContextBuilder}, core::time, etcd_client::{GetOptions, WatchFilterType, WatchOptions}, futures::TryFutureExt, rdkafka::consumer, sha2::digest::typenum::Prod, std::{collections::BTreeMap, sync::Arc, time::Duration}, tokio::sync::{broadcast, mpsc, RwLock}, tokio_stream::StreamExt, yellowstone_grpc_tools::{
         scylladb::{
-            types::{BlockchainEvent, BlockchainEventType, CommitmentLevel, ProducerId},
+            types::{BlockchainEvent, BlockchainEventType, CommitmentLevel, ProducerId, TranslationStrategy},
             yellowstone_log::{
                 common::SeekLocation,
                 consumer_group::{
@@ -40,6 +40,7 @@ async fn test_coordinator_backend_successful_run() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();
@@ -101,6 +102,7 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();
@@ -151,6 +153,7 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();
@@ -229,6 +232,7 @@ async fn test_timeline_translation() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();
@@ -309,6 +313,7 @@ async fn test_multiple_consumer_joining_group() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();
@@ -359,6 +364,7 @@ async fn test_consumer_member_mutual_exclusion() {
             consumer_ids.clone(),
             CommitmentLevel::Processed,
             None,
+            Some(TranslationStrategy::AllowLag)
         )
         .await
         .unwrap();

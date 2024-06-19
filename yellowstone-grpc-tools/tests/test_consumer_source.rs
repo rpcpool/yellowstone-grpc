@@ -58,6 +58,7 @@ async fn test_consumer_source_run() {
             &subscribed_events,
             SeekLocation::Earliest,
             None,
+            None,
         )
         .await
         .unwrap();

@@ -59,16 +59,13 @@ create table if not exists consumer_groups (
     group_type smallint,
     producer_id blob,
     revision bigint,
+
     commitment_level smallint,
     subscribed_event_types frozen<set<smallint>>,
 
     -- fields for static consumer group only
     instance_id_shard_assignments frozen<map<text, set<smallint>>>,
-    -- instance_id_shard_assignments2 frozen<map<text, set<smallint>>>,
-    
-    -- acc_pubkeys_filter frozen<set<blob>>,
-    -- acc_owners_filer frozen<set<blob>>,
-    -- tx_account_keys_filter frozen<set<blob>>,
+    translation_strategy smallint,
 
     last_access_ip_address inet,
     created_at timestamp,

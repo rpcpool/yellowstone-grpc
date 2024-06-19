@@ -15,7 +15,7 @@ use {
     crate::scylladb::{
         etcd_utils::{lease::ManagedLease, Revision},
         types::{
-            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap,
+            BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerId, ShardOffsetMap, TranslationStrategy,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::leader},
     },
@@ -183,6 +183,7 @@ struct CreateConsumerGroupArgs {
     commitment_level: CommitmentLevel,
     consumer_id_list: Vec<ConsumerId>,
     requestor_ipaddr: Option<IpAddr>,
+    translation_strategy: Option<TranslationStrategy>,
 }
 
 type CommandCallback<T> = oneshot::Sender<T>;
@@ -208,6 +209,7 @@ impl ConsumerGroupCoordinator {
         consumer_id_list: Vec<ConsumerId>,
         commitment_level: CommitmentLevel,
         requestor_ipaddr: Option<IpAddr>,
+        translation_strategy: Option<TranslationStrategy>,
     ) -> anyhow::Result<ConsumerGroupId> {
         let args = CreateConsumerGroupArgs {
             seek_loc,
@@ -215,6 +217,7 @@ impl ConsumerGroupCoordinator {
             commitment_level,
             consumer_id_list,
             requestor_ipaddr,
+            translation_strategy: translation_strategy,
         };
 
         let (tx, rx) = oneshot::channel();
@@ -403,6 +406,7 @@ impl ConsumerGroupCoordinatorBackend {
                 &args.subscribed_blockchain_events,
                 args.seek_loc,
                 args.requestor_ipaddr,
+                args.translation_strategy,
             )
             .await
             .map_err(|e| {

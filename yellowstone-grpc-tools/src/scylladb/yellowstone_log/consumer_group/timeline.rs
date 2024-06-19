@@ -2,7 +2,7 @@ use {
     super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore}, crate::scylladb::{
         types::{ConsumerGroupId, ProducerId, ShardOffsetMap},
         yellowstone_log::common::SeekLocation,
-    }, core::fmt, futures::future, serde::{Deserialize, Serialize}, std::fmt::LowerExp, thiserror::Error, tonic::async_trait, tracing::{info, warn}, uuid::Uuid
+    }, core::fmt, futures::future, google_cloud_googleapis::pubsub::v1::cloud_storage_config::State, serde::{Deserialize, Serialize}, std::fmt::LowerExp, thiserror::Error, tonic::async_trait, tracing::{info, warn}, uuid::Uuid
 };
 
 /// Represents the state of computing the next producer in the timeline translation process.
@@ -43,6 +43,7 @@ pub enum TranslationStepError {
     InternalError(String),
     StaleProducerProposition(String),
 }
+
 
 impl fmt::Display for TranslationStepError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -178,9 +179,11 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             warn!("got an error while computing offset for producer id {}, {:?}", producer_id, new_shard_offsets);
         }
         let new_shard_offsets = new_shard_offsets?;
+        let consumer_group_id = state.consumer_group_id;
+        let revision = state.revision;
         let new_state = TranslationState::ProducerProposal(ProducerProposalState {
-            consumer_group_id: state.consumer_group_id,
-            revision: state.revision,
+            consumer_group_id,
+            revision,
             producer_id,
             new_shard_offsets,
         });
@@ -220,10 +223,11 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             )
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
-
+        let producer_id = state.producer_id;
+        let new_shard_offsets = state.new_shard_offsets;
         let done_state = TranslationDoneState {
-            producer_id: state.producer_id,
-            new_shard_offsets: state.new_shard_offsets,
+            producer_id,
+            new_shard_offsets
         };
         Ok(TranslationState::Done(done_state))
     }

@@ -59,6 +59,7 @@ async fn test_create_leader_state_log() {
         subscribed_event_types: vec![BlockchainEventType::AccountUpdate],
         consumer_id_shard_assignments: Default::default(),
         last_access_ip_address: None,
+        translation_strategy: Some(Default::default()),
     };
 
     let res = create_leader_state_log(ctx.etcd.clone(), &consumer_group_info).await;
@@ -255,6 +256,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         subscribed_event_types: vec![BlockchainEventType::AccountUpdate],
         consumer_id_shard_assignments: Default::default(),
         last_access_ip_address: None,
+        translation_strategy: Some(Default::default())
     };
 
     create_leader_state_log(ctx.etcd.clone(), &consumer_group_info)

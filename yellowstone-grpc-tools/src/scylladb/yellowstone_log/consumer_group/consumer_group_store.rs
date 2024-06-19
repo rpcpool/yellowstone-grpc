@@ -4,7 +4,7 @@ use {
         scylladb_utils::LwtResult,
         types::{
             BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo,
-            ConsumerGroupType, ConsumerId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot,
+            ConsumerGroupType, ConsumerId, ProducerId, ShardId, ShardOffset, ShardOffsetMap, Slot, TranslationStrategy,
         },
         yellowstone_log::{common::SeekLocation, consumer_group::error::StaleRevision},
     },
@@ -43,10 +43,11 @@ const CREATE_STATIC_CONSUMER_GROUP: &str = r###"
         instance_id_shard_assignments,
         last_access_ip_address,
         revision,
+        translation_strategy,
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, currentTimestamp(), currentTimestamp())
 "###;
 
 const GET_STATIC_CONSUMER_GROUP: &str = r###"
@@ -58,7 +59,8 @@ const GET_STATIC_CONSUMER_GROUP: &str = r###"
         commitment_level,
         subscribed_event_types,
         instance_id_shard_assignments,
-        last_access_ip_address
+        last_access_ip_address,
+        translation_strategy
     FROM consumer_groups
     WHERE consumer_group_id = ?
 "###;
@@ -429,6 +431,7 @@ impl ScyllaConsumerGroupStore {
         subscribed_blockchain_event_types: &[BlockchainEventType],
         initial_offset: SeekLocation,
         remote_ip_addr: Option<IpAddr>,
+        translation_strategy: Option<TranslationStrategy>,
     ) -> anyhow::Result<ConsumerGroupInfo> {
         let consumer_group_id = Uuid::new_v4();
         let shard_assignments = assign_shards(consumer_ids, NUM_SHARDS);
@@ -457,6 +460,7 @@ impl ScyllaConsumerGroupStore {
                     &shard_assignments,
                     remote_ip_addr,
                     0_i64,
+                    &translation_strategy,
                 ),
             )
             .await?;
@@ -471,6 +475,7 @@ impl ScyllaConsumerGroupStore {
             subscribed_event_types: subscribed_blockchain_event_types.to_vec(),
             group_type: ConsumerGroupType::Static,
             last_access_ip_address: remote_ip_addr,
+            translation_strategy,
         };
 
         self.create_static_group_members(&static_consumer_group_info, initial_offset)

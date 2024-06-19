@@ -1,8 +1,5 @@
 use {
-    common::{MockProducerMonitor, TestContext, TestContextBuilder},
-    std::{collections::BTreeMap, sync::Arc, time::Duration},
-    tokio::sync::{mpsc, oneshot, RwLock},
-    yellowstone_grpc_tools::{
+    common::{MockProducerMonitor, TestContext, TestContextBuilder}, rdkafka::client::DefaultClientContext, std::{collections::BTreeMap, sync::Arc, time::Duration}, tokio::sync::{mpsc, oneshot, RwLock}, yellowstone_grpc_tools::{
         scylladb::{
             etcd_utils::lock::{try_lock, ManagedLock},
             types::{BlockchainEvent, BlockchainEventType, CommitmentLevel, ProducerId, Slot},
@@ -19,7 +16,7 @@ use {
             },
         },
         setup_tracing,
-    },
+    }
 };
 
 mod common;
@@ -47,6 +44,7 @@ async fn test_get_lowest_common_slot_number() {
             &subscribed_events,
             SeekLocation::Earliest,
             None,
+            Some(Default::default()),
         )
         .await
         .unwrap();

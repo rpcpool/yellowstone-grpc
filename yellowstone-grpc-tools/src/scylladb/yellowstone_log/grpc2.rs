@@ -7,7 +7,7 @@ use {
     },
     crate::scylladb::{
         etcd_utils::lock::TryLockError,
-        types::{BlockchainEventType, CommitmentLevel},
+        types::{BlockchainEventType, CommitmentLevel, TranslationStrategy},
     },
     futures::{Stream, TryFutureExt},
     std::{pin::Pin, str::FromStr},
@@ -21,7 +21,7 @@ use {
         yellowstone::log::{
             yellowstone_log_server::YellowstoneLog, ConsumeRequest,
             CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse,
-            EventSubscriptionPolicy, JoinRequest,
+            EventSubscriptionPolicy, JoinRequest, TimelineTranslationPolicy,
         },
     },
 };
@@ -82,6 +82,12 @@ impl YellowstoneLog for ScyllaYsLog {
             }
         };
 
+        let ttp = request.timeline_translation_policy();
+        let translation_strategy = match ttp {
+            TimelineTranslationPolicy::AllowLag => TranslationStrategy::AllowLag,
+            TimelineTranslationPolicy::StrictSlot => TranslationStrategy::StrictSlot,
+        };
+
         let commitment_level = match request.commitment_level() {
             yellowstone_grpc_proto::geyser::CommitmentLevel::Processed => {
                 CommitmentLevel::Processed
@@ -102,12 +108,13 @@ impl YellowstoneLog for ScyllaYsLog {
                 instance_ids,
                 commitment_level,
                 remote_ip_addr,
+                Some(translation_strategy),
             )
             .await
             .map_err(map_lock_err_to_tonic_status)?;
-
-        Ok(Response::new(CreateStaticConsumerGroupResponse {
-            group_id: Uuid::from_bytes(consumer_group_id).to_string(),
+        let group_id = Uuid::from_bytes(consumer_group_id).to_string();
+        Ok(Response::new(CreateStaticConsumerGroupResponse { 
+            group_id,
         }))
     }
 
