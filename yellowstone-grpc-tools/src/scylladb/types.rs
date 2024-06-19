@@ -1234,7 +1234,7 @@ impl FromCqlVal<CqlValue> for ConsumerGroupType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Default)]
 pub enum TranslationStrategy {
     #[default]
     AllowLag,

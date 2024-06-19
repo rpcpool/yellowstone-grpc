@@ -250,24 +250,22 @@ impl ConsumerGroupLeaderNode {
                 }),
             }),
             Err(e) => match e {
-                timeline::TranslationStepError::ConsumerGroupNotFound => {
+                timeline::TimelienTranslatorError::ConsumerGroupNotFound => {
                     Ok(ConsumerGroupState::Dead(state.header.clone()))
                 }
-                timeline::TranslationStepError::StaleProducerProposition(_) => Ok(
+                timeline::TimelienTranslatorError::StaleProducerProposition(_) => Ok(
                     ConsumerGroupState::InTimelineTranslation(InTimelineTranslationState {
                         header: state.header.clone(),
-                        substate: TranslationState::ComputingNextProducer(
-                            ComputingNextProducerState {
-                                consumer_group_id: state.header.consumer_group_id,
-                                revision: self.last_revision,
-                            },
-                        ),
+                        substate: self.timeline_translator.begin_translation(
+                            self.consumer_group_id, 
+                            self.last_revision
+                        ).await?,
                     }),
                 ),
-                timeline::TranslationStepError::NoActiveProducer => {
+                timeline::TimelienTranslatorError::NoActiveProducer => {
                     anyhow::bail!(consumer_group::error::NoActiveProducer)
                 }
-                timeline::TranslationStepError::InternalError(e) => anyhow::bail!(e),
+                timeline::TimelienTranslatorError::InternalError(e) => anyhow::bail!(e),
             },
         }
     }
@@ -324,7 +322,8 @@ impl ConsumerGroupLeaderNode {
                 header: state.header.to_owned(),
                 substate: self
                     .timeline_translator
-                    .begin_translation(state.header.consumer_group_id, self.last_revision),
+                    .begin_translation(state.header.consumer_group_id, self.last_revision)
+                    .await?,
             },
         ))
     }
@@ -338,7 +337,8 @@ impl ConsumerGroupLeaderNode {
                     header: header.to_owned(),
                     substate: self
                         .timeline_translator
-                        .begin_translation(header.consumer_group_id, self.last_revision),
+                        .begin_translation(header.consumer_group_id, self.last_revision)
+                        .await?,
                 },
             )),
             ConsumerGroupState::LostProducer(inner) => {

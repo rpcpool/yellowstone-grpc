@@ -18,7 +18,7 @@ use {
     yellowstone_grpc_tools::{
         scylladb::{
             etcd_utils::lock::try_lock,
-            types::{BlockchainEventType, CommitmentLevel, ConsumerGroupInfo},
+            types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, TranslationStrategy},
             yellowstone_log::consumer_group::{
                 self,
                 error::NoActiveProducer,
@@ -31,8 +31,7 @@ use {
                 },
                 lock::ConsumerLocker,
                 timeline::{
-                    ComputingNextProducerState, ProducerProposalState, TimelineTranslator,
-                    TranslationState, TranslationStepError, TranslationStepResult,
+                    ComputingNextProducerState, ProducerProposalState, TimelienTranslatorError, TimelineTranslator, TranslationState, TranslationStepResult
                 },
             },
         },
@@ -206,6 +205,16 @@ struct MockTimelineTranslator {
 
 #[async_trait]
 impl TimelineTranslator for MockTimelineTranslator {
+
+    async fn begin_translation(&self, consumer_group_id: ConsumerGroupId, revision: i64) -> TranslationStepResult {
+        let translation_strategy = TranslationStrategy::AllowLag;
+        Ok(TranslationState::ComputingNextProducer(ComputingNextProducerState {
+            translation_strategy,
+            consumer_group_id,
+            revision,
+        }))
+    }
+
     async fn compute_next_producer(
         &self,
         state: ComputingNextProducerState,
@@ -265,9 +274,10 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let mut leader_state_log = observe_consumer_group_state(ctx.etcd.clone(), consumer_group_id)
         .await
         .unwrap();
-
-    let lock = RwLock::new(Ok::<_, TranslationStepError>(
+    let translation_strategy = TranslationStrategy::AllowLag;
+    let lock = RwLock::new(Ok::<_, TimelienTranslatorError>(
         TranslationState::ComputingNextProducer(ComputingNextProducerState {
+            translation_strategy,
             consumer_group_id,
             revision: 1,
         }),
@@ -335,7 +345,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     // If producer selection is stale it should go back to computing next producer
     {
         let mut w = lock.write().await;
-        *w = Err(TranslationStepError::StaleProducerProposition(
+        *w = Err(TimelienTranslatorError::StaleProducerProposition(
             "test".to_string(),
         ));
     }
@@ -355,7 +365,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     // leader node should fail fast if no producer is available
     {
         let mut w = lock.write().await;
-        *w = Err(TranslationStepError::NoActiveProducer);
+        *w = Err(TimelienTranslatorError::NoActiveProducer);
     }
     let result = leader_node.step().await;
     let err = result.err().unwrap();
@@ -366,7 +376,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     // leader node should fail fast if there is an internal error
     {
         let mut w = lock.write().await;
-        *w = Err(TranslationStepError::InternalError("test".to_string()));
+        *w = Err(TimelienTranslatorError::InternalError("test".to_string()));
     }
     let result = leader_node.step().await;
     assert!(result.is_err());
@@ -374,7 +384,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
     // Leader should become dead if consumer group no longer exists
     {
         let mut w = lock.write().await;
-        *w = Err(TranslationStepError::ConsumerGroupNotFound);
+        *w = Err(TimelienTranslatorError::ConsumerGroupNotFound);
     }
     let next_state = leader_node.step().await.unwrap().unwrap();
     assert!(matches!(next_state, ConsumerGroupState::Dead(_)));
