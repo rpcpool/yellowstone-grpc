@@ -31,14 +31,7 @@ async fn test_coordinator_backend_successful_run() {
     let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];
     let subscribed_events = vec![BlockchainEventType::AccountUpdate];
 
-    let (coordinator, backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
-        etcd.clone(),
-        Arc::clone(&ctx.session),
-        ctx.consumer_group_store.clone(),
-        ctx.producer_store.clone(),
-        Arc::clone(&ctx.producer_monitor),
-        ctx.default_ifname(),
-    );
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
 
     let consumer_group_id = coordinator
         .create_consumer_group(
@@ -56,9 +49,7 @@ async fn test_coordinator_backend_successful_run() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
         .await
         .unwrap();
-    println!("joined consumer group!!!");
     let event = source.recv().await.unwrap();
-    println!("event slot : {}", event.slot);
     assert!(event.slot > 0);
 
     // Dropping the source shoud quit the consumer group
@@ -81,7 +72,6 @@ async fn test_coordinator_backend_successful_run() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
         .await
         .unwrap();
-    println!("joined consumer group!!!");
     let event = source.recv().await;
     assert!(event.is_some());
 }
@@ -102,14 +92,7 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
     let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];
     let subscribed_events = vec![BlockchainEventType::AccountUpdate];
 
-    let (coordinator, backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
-        etcd.clone(),
-        Arc::clone(&ctx.session),
-        ctx.consumer_group_store.clone(),
-        ctx.producer_store.clone(),
-        Arc::clone(&ctx.producer_monitor),
-        ctx.default_ifname(),
-    );
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
 
     let consumer_group_id = coordinator
         .create_consumer_group(
@@ -127,9 +110,7 @@ async fn test_coordinator_producer_kill_signal_then_revive_producer() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
         .await
         .unwrap();
-    println!("joined consumer group!!!");
     let event = source.recv().await.unwrap();
-    println!("event slot : {}", event.slot);
     assert!(event.slot > 0);
 
     // Dropping the source should quit the consumer group
@@ -161,14 +142,7 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
     let consumer_ids = vec![consumer_id1.clone()];
     let subscribed_events = vec![BlockchainEventType::AccountUpdate];
 
-    let (coordinator, backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
-        etcd.clone(),
-        Arc::clone(&ctx.session),
-        ctx.consumer_group_store.clone(),
-        ctx.producer_store.clone(),
-        Arc::clone(&ctx.producer_monitor),
-        ctx.default_ifname(),
-    );
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
 
     let consumer_group_id = coordinator
         .create_consumer_group(
@@ -190,9 +164,7 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
         .await
         .unwrap();
-    println!("joined consumer group!!!");
     let event = source.recv().await.unwrap();
-    println!("event slot : {}", event.slot);
     assert!(event.slot > 0);
 
     let mut state_watch2 = state_watch.clone();
@@ -248,14 +220,7 @@ async fn test_timeline_translation() {
     let consumer_ids = vec![consumer_id1.clone()];
     let subscribed_events = vec![BlockchainEventType::AccountUpdate];
 
-    let (coordinator, backend_handle) = ConsumerGroupCoordinatorBackend::spawn(
-        etcd.clone(),
-        Arc::clone(&ctx.session),
-        ctx.consumer_group_store.clone(),
-        ctx.producer_store.clone(),
-        Arc::new(mock.clone()),
-        ctx.default_ifname(),
-    );
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
 
     let consumer_group_id = coordinator
         .create_consumer_group(
@@ -277,9 +242,7 @@ async fn test_timeline_translation() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
         .await
         .unwrap();
-    println!("joined consumer group!!!");
     let event = source.recv().await.unwrap();
-    println!("event slot : {}", event.slot);
     assert!(event.slot > 0);
 
     let mut state_watch2 = state_watch.clone();
@@ -308,10 +271,106 @@ async fn test_timeline_translation() {
 
     assert!(leader_info.is_some());
 
-    let (revision2, state) = state_watch
-        .wait_for(|(_, state)| matches!(state, ConsumerGroupState::Idle(_)))
+    let (revision2, state) = tokio::time::timeout(
+        Duration::from_secs(10),
+        state_watch.wait_for(|(_, state)| matches!(state, ConsumerGroupState::Idle(_)))
+    )
         .await
+        .unwrap()
         .unwrap()
         .to_owned();
     assert!(revision2 > revision1);
+}
+
+
+#[tokio::test]
+async fn test_multiple_consumer_joining_group() {
+    let producer_id = ProducerId::try_from("00000000-0000-0000-0000-000000000000").unwrap();
+    let ctx = TestContextBuilder::new()
+        .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
+            producer_ids: vec![producer_id],
+        })
+        .build()
+        .await
+        .unwrap();
+    let beginning_revision = ctx.last_etcd_revision().await;
+    let etcd = ctx.etcd.clone();
+    let consumer_id1 = String::from("test1");
+    let consumer_id2 = String::from("test2");
+    let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];
+    let subscribed_events = vec![BlockchainEventType::AccountUpdate];
+
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
+
+    let consumer_group_id = coordinator
+        .create_consumer_group(
+            SeekLocation::Earliest,
+            subscribed_events.clone(),
+            consumer_ids.clone(),
+            CommitmentLevel::Processed,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (sink1, mut source1) = mpsc::channel::<BlockchainEvent>(1);
+    let (sink2, mut source2) = mpsc::channel::<BlockchainEvent>(1);
+    coordinator
+        .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink1)
+        .await
+        .unwrap();
+    coordinator
+        .try_join_consumer_group(consumer_group_id, consumer_id2.clone(), None, sink2)
+        .await
+        .unwrap();
+    let event1 = source1.recv().await.unwrap();
+    let event2 = source2.recv().await.unwrap();
+    assert!(event1.slot > 0);
+    assert!(event2.slot > 0);
+    // Dropping the source shoud quit the consumer group, but don't exit other consumer member
+    drop(source1);
+    let event2 = source2.recv().await;
+    assert!(event2.is_some());
+}
+
+
+#[tokio::test]
+async fn test_consumer_member_mutual_exclusion() {
+    let producer_id = ProducerId::try_from("00000000-0000-0000-0000-000000000000").unwrap();
+    let ctx = TestContextBuilder::new()
+        .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
+            producer_ids: vec![producer_id],
+        })
+        .build()
+        .await
+        .unwrap();
+    let beginning_revision = ctx.last_etcd_revision().await;
+    let etcd = ctx.etcd.clone();
+    let consumer_id1 = String::from("test1");
+    let consumer_ids = vec![consumer_id1.clone()];
+    let subscribed_events = vec![BlockchainEventType::AccountUpdate];
+
+    let (coordinator, backend_handle) = ctx.spawn_coordinator();
+
+    let consumer_group_id = coordinator
+        .create_consumer_group(
+            SeekLocation::Earliest,
+            subscribed_events.clone(),
+            consumer_ids.clone(),
+            CommitmentLevel::Processed,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (sink1, mut source1) = mpsc::channel::<BlockchainEvent>(1);
+    let (sink2, mut source2) = mpsc::channel::<BlockchainEvent>(1);
+    coordinator
+        .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink1)
+        .await
+        .unwrap();
+    let result = coordinator
+        .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink2)
+        .await;
+    assert!(result.is_err());
 }

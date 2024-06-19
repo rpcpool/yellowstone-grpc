@@ -3,7 +3,7 @@ use {
     local_ip_address::{linux::local_ip, list_afinet_netifas},
     scylla::{Session, SessionBuilder},
     std::{collections::BTreeMap, sync::Arc},
-    tokio::sync::{broadcast, mpsc, watch, RwLock},
+    tokio::{sync::{broadcast, mpsc, watch, RwLock}, task::JoinHandle},
     tonic::async_trait,
     tracing::info,
     uuid::Uuid,
@@ -12,15 +12,12 @@ use {
             etcd_utils::Revision,
             types::{BlockchainEventType, ConsumerId, ProducerId},
             yellowstone_log::consumer_group::{
-                consumer_group_store::ScyllaConsumerGroupStore,
-                leader::{
+                consumer_group_store::ScyllaConsumerGroupStore, coordinator::{ConsumerGroupCoordinator, ConsumerGroupCoordinatorBackend}, leader::{
                     ConsumerGroupHeader, ConsumerGroupState, IdleState, LostProducerState,
                     WaitingBarrierState,
-                },
-                lock::{ConsumerLock, ConsumerLocker},
-                producer::{
+                }, lock::{ConsumerLock, ConsumerLocker}, producer::{
                     EtcdProducerMonitor, ProducerDeadSignal, ProducerMonitor, ScyllaProducerStore,
-                },
+                }
             },
         },
         setup_tracing,
@@ -144,6 +141,18 @@ impl TestContext {
             .map(|(ifname, _)| ifname)
             .unwrap()
             .to_owned()
+    }
+
+
+    pub fn spawn_coordinator(&self) -> (ConsumerGroupCoordinator, JoinHandle<anyhow::Result<()>>) {
+        ConsumerGroupCoordinatorBackend::spawn(
+            self.etcd.clone(),
+            Arc::clone(&self.session),
+            self.consumer_group_store.clone(),
+            self.producer_store.clone(),
+            Arc::clone(&self.producer_monitor),
+            self.default_ifname(),
+        )
     }
 }
 
