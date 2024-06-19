@@ -1,5 +1,5 @@
 use {
-    crate::scylladb::types::{CommitmentLevel, ConsumerGroupId, Slot},
+    crate::scylladb::{types::{CommitmentLevel, ConsumerGroupId, Slot}, yellowstone_log::common::SeekLocation},
     core::fmt,
     thiserror::Error,
 };
@@ -44,12 +44,12 @@ impl fmt::Display for ImpossibleTimelineSelection {
 /// This error is raised when no producer as seen the desired `slot`.
 ///
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub struct ImpossibleSlotOffset(pub Slot);
+pub struct ImpossibleSlotOffset(pub SeekLocation);
 
 impl fmt::Display for ImpossibleSlotOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let slot = self.0;
-        f.write_fmt(format_args!("ImpossbielInititalOffset({})", slot))
+        let slot = &self.0;
+        f.write_fmt(format_args!("ImpossbielInititalOffset({:?})", slot))
     }
 }
 

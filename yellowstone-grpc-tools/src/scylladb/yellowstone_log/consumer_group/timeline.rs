@@ -1,16 +1,8 @@
 use {
-    super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore},
-    crate::scylladb::{
+    super::{consumer_group_store::ScyllaConsumerGroupStore, producer::ScyllaProducerStore}, crate::scylladb::{
         types::{ConsumerGroupId, ProducerId, ShardOffsetMap},
         yellowstone_log::common::SeekLocation,
-    },
-    core::fmt,
-    futures::future,
-    serde::{Deserialize, Serialize},
-    thiserror::Error,
-    tonic::async_trait,
-    tracing::info,
-    uuid::Uuid,
+    }, core::fmt, futures::future, serde::{Deserialize, Serialize}, std::fmt::LowerExp, thiserror::Error, tonic::async_trait, tracing::{info, warn}, uuid::Uuid
 };
 
 /// Represents the state of computing the next producer in the timeline translation process.
@@ -144,9 +136,11 @@ pub struct ScyllaTimelineTranslator {
 
 #[async_trait]
 impl TimelineTranslator for ScyllaTimelineTranslator {
+
+    
     async fn compute_next_producer(
         &self,
-        state: ComputingNextProducerState,
+        state: ComputingNextProducerState
     ) -> TranslationStepResult {
         info!("computing next producer for consumer group id {}", Uuid::from_bytes(state.consumer_group_id));
         let cg_info = self
@@ -167,23 +161,23 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             lcs, uuid_str
         );
         let lower_bound = std::cmp::max(lcs - 10, 0);
-        let slot_ranges = Some(lower_bound..=lcs);
+        let slot_ranges = lower_bound..=lcs;
         let producer_id = self
             .producer_queries
-            .get_producer_id_with_least_assigned_consumer(slot_ranges, cg_info.commitment_level)
+            .get_producer_id_with_least_assigned_consumer(Some(slot_ranges.clone()), cg_info.commitment_level)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
         info!("candidate producer id is {}", producer_id);
-        let seek_loc = SeekLocation::SlotApprox {
-            desired_slot: lcs,
-            min_slot: lower_bound,
-        };
+        let seek_loc = SeekLocation::SlotApprox(slot_ranges);
         let new_shard_offsets = self
             .producer_queries
-            .compute_offset(producer_id, seek_loc, None)
+            .compute_offset(producer_id, seek_loc)
             .await
-            .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
-
+            .map_err(|e| TranslationStepError::InternalError(e.to_string()));
+        if new_shard_offsets.is_err() {
+            warn!("got an error while computing offset for producer id {}, {:?}", producer_id, new_shard_offsets);
+        }
+        let new_shard_offsets = new_shard_offsets?;
         let new_state = TranslationState::ProducerProposal(ProducerProposalState {
             consumer_group_id: state.consumer_group_id,
             revision: state.revision,

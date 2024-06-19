@@ -162,9 +162,11 @@ impl MockProducerMonitor {
         I: IntoIterator<Item = ProducerId>,
     {
         let mut living_producer = BTreeMap::new();
-        producer_iter.into_iter().for_each(|producer_id| {
-            living_producer.insert(producer_id, 1);
-        });
+        producer_iter
+            .into_iter()
+            .for_each(|producer_id| {
+                living_producer.insert(producer_id, 1);
+            });
 
         let inner = MockProducerMonitorInner {
             living_producer,

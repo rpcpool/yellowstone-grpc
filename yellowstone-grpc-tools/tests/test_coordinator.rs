@@ -1,29 +1,21 @@
 use {
-    common::{MockProducerMonitor, ProducerKiller, TestContext, TestContextBuilder},
-    core::time,
-    rdkafka::consumer,
-    sha2::digest::typenum::Prod,
-    std::{collections::BTreeMap, sync::Arc, time::Duration},
-    tokio::sync::{broadcast, mpsc, RwLock},
-    yellowstone_grpc_tools::{
+    common::{MockProducerMonitor, ProducerKiller, TestContext, TestContextBuilder}, core::time, etcd_client::{GetOptions, WatchFilterType, WatchOptions}, futures::TryFutureExt, rdkafka::consumer, sha2::digest::typenum::Prod, std::{collections::BTreeMap, sync::Arc, time::Duration}, tokio::sync::{broadcast, mpsc, RwLock}, tokio_stream::StreamExt, yellowstone_grpc_tools::{
         scylladb::{
             types::{BlockchainEvent, BlockchainEventType, CommitmentLevel, ProducerId},
             yellowstone_log::{
                 common::SeekLocation,
                 consumer_group::{
-                    consumer_group_store::ScyllaConsumerGroupStore, coordinator::ConsumerGroupCoordinatorBackend, leader::{observe_consumer_group_state, observe_leader_changes, ConsumerGroupState, InTimelineTranslationState}, producer::{ProducerMonitor, ScyllaProducerStore}
+                    consumer_group_store::ScyllaConsumerGroupStore, coordinator::ConsumerGroupCoordinatorBackend, etcd_path, leader::{observe_consumer_group_state, observe_leader_changes, ConsumerGroupState, InTimelineTranslationState}, producer::{ProducerMonitor, ScyllaProducerStore}
                 },
             },
         },
         setup_tracing,
-    },
+    }
 };
 mod common;
 
 #[tokio::test]
 async fn test_coordinator_backend_successful_run() {
-    let (kill_producer_tx, kill_producer_rx) = broadcast::channel::<()>(1);
-
     let producer_id = ProducerId::try_from("00000000-0000-0000-0000-000000000000").unwrap();
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
@@ -32,6 +24,7 @@ async fn test_coordinator_backend_successful_run() {
         .build()
         .await
         .unwrap();
+    let beginning_revision = ctx.last_etcd_revision().await;
     let etcd = ctx.etcd.clone();
     let consumer_id1 = String::from("test1");
     let consumer_id2 = String::from("test2");
@@ -72,6 +65,17 @@ async fn test_coordinator_backend_successful_run() {
     drop(source);
 
     let (sink, mut source) = mpsc::channel::<BlockchainEvent>(1);
+
+    // wait for lock to be released
+    let prefix = etcd_path::get_instance_lock_prefix_v1(consumer_group_id);
+    let watch_option = WatchOptions::new()
+        .with_prefix()
+        .with_start_revision(beginning_revision)
+        .with_filters(vec![WatchFilterType::NoPut]);
+    let (_, mut stream) = ctx.etcd.watch_client().watch(prefix, Some(watch_option)).await.unwrap();
+
+    let _lock_released = stream.next().await.unwrap().unwrap();
+
     // We should be albe to rejoin the group after quitting.
     coordinator
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
@@ -84,7 +88,6 @@ async fn test_coordinator_backend_successful_run() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_coordinator_producer_kill_signal_then_revive_producer() {
-    let _ = setup_tracing();
     let producer_id = ProducerId::ZERO;
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
@@ -229,7 +232,6 @@ async fn test_timeline_translation() {
     /// so the newly revived is part of the elligibilty list computed by the ScyllaTimelineTranslator.
     /// 
     /// This should allow us to test the timeline translation logic while having a single producer timeline.
-    let _ = setup_tracing();
     let producer_id1 = ProducerId::ZERO;
     let mock = MockProducerMonitor::from(vec![producer_id1]);
 
@@ -251,7 +253,7 @@ async fn test_timeline_translation() {
         Arc::clone(&ctx.session),
         ctx.consumer_group_store.clone(),
         ctx.producer_store.clone(),
-        Arc::clone(&ctx.producer_monitor),
+        Arc::new(mock.clone()),
         ctx.default_ifname(),
     );
 
@@ -266,7 +268,7 @@ async fn test_timeline_translation() {
         .await
         .unwrap();
 
-
+    let mut election_watch = observe_leader_changes(etcd, consumer_group_id).await.unwrap();
     let mut state_watch = observe_consumer_group_state(ctx.etcd.clone(), consumer_group_id).await.unwrap();
     state_watch.mark_changed();
 
@@ -292,12 +294,19 @@ async fn test_timeline_translation() {
 
     // Send kill signal, but don't remove producer from the alive list.
     mock.send_kill_signal(producer_id1, false).await;
+    let is_alive = mock.is_producer_alive(producer_id1).await;
+    assert!(is_alive);
 
     let (revision1, new_state) = handle.await.unwrap().unwrap();
 
     assert!(matches!(new_state, ConsumerGroupState::LostProducer(_)));
 
+    election_watch.mark_changed();
     state_watch.mark_changed();
+
+    let leader_info = election_watch.borrow_and_update().to_owned();
+
+    assert!(leader_info.is_some());
 
     let (revision2, state) = state_watch
         .wait_for(|(_, state)| matches!(state, ConsumerGroupState::Idle(_)))

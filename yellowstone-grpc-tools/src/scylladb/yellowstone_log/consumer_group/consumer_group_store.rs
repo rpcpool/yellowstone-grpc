@@ -409,7 +409,7 @@ impl ScyllaConsumerGroupStore {
 
         let shard_offset_map = self
             .producer_store
-            .compute_offset(producer_id, seek_loc, None)
+            .compute_offset(producer_id, seek_loc)
             .await?;
 
         info!("Shard offset has been computed successfully");
@@ -433,12 +433,9 @@ impl ScyllaConsumerGroupStore {
         let consumer_group_id = Uuid::new_v4();
         let shard_assignments = assign_shards(consumer_ids, NUM_SHARDS);
 
-        let maybe_slot_range = if let SeekLocation::SlotApprox {
-            desired_slot,
-            min_slot,
-        } = initial_offset
+        let maybe_slot_range = if let SeekLocation::SlotApprox(slot_ranges) = &initial_offset
         {
-            Some(min_slot..=desired_slot)
+            Some(slot_ranges.clone())
         } else {
             None
         };

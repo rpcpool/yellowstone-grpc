@@ -46,8 +46,8 @@ const GET_SHARD_OFFSET_AT_SLOT_APPROX: &str = r###"
     FROM producer_slot_seen
     where 
         producer_id = ?
-        AND slot <= ? 
         AND slot >= ?
+        AND slot <= ?
     ORDER BY slot desc
     LIMIT 1;
 "###;
@@ -245,7 +245,7 @@ impl ScyllaProducerStore {
     ) -> anyhow::Result<ProducerId> {
         let mut living_producers = self.producer_monitor.list_living_producers().await;
         info!("{} producer lock(s) detected", living_producers.len());
-        let producer_exec_info_map = self.list_producer_locks().await?;
+        
         anyhow::ensure!(!living_producers.is_empty(), NoActiveProducer);
 
         let producers_with_commitment_level = self
@@ -286,7 +286,7 @@ impl ScyllaProducerStore {
 
             anyhow::ensure!(
                 !elligible_producers.is_empty(),
-                ImpossibleSlotOffset(*slot_range.end())
+                ImpossibleSlotOffset(SeekLocation::SlotApprox(slot_range))
             );
         };
 
@@ -320,24 +320,24 @@ impl ScyllaProducerStore {
         ))
     }
 
-    pub async fn get_slot_shard_offsets(
+    pub async fn get_highest_slot_shard_offsets(
         &self,
-        slot: Slot,
-        min_slot: Slot,
+        slot_range: RangeInclusive<Slot>,
         producer_id: ProducerId,
     ) -> anyhow::Result<Option<BTreeMap<ShardId, (ShardOffset, Slot)>>> {
+        let (start, end) = (slot_range.start().clone(), slot_range.end().clone());
         let maybe = self
             .session
             .execute(
                 &self.get_shard_offset_in_slot_range_ps,
-                (producer_id, slot, min_slot),
+                (producer_id, start, end),
             )
             .await?
             .maybe_first_row_typed::<(Vec<(ShardId, ShardOffset)>, Slot)>()?;
 
         if let Some((offsets, slot_approx)) = maybe {
             info!(
-                "found producer({producer_id:?}) shard offsets within slot range: {min_slot}..={slot}"
+                "found producer({producer_id:?}) shard offsets within slot range: {start}..={end}"
             );
 
             Ok(Some(
@@ -355,13 +355,12 @@ impl ScyllaProducerStore {
         &self,
         producer_id: ProducerId,
         seek_loc: SeekLocation,
-        max_revision_opt: Option<i64>,
     ) -> anyhow::Result<BTreeMap<ShardId, (ShardOffset, Slot)>> {
         let producer_info = self
             .get_producer_info(producer_id)
             .await?
             .ok_or(anyhow::anyhow!("producer does not exists"))?;
-        let mut shard_offset_pairs: BTreeMap<ShardId, (ShardOffset, Slot)> = match seek_loc {
+        let mut shard_offset_pairs: BTreeMap<ShardId, (ShardOffset, Slot)> = match &seek_loc {
             SeekLocation::Latest => {
                 info!("computing offset to latest seek location");
                 sink::get_max_shard_offsets_for_producer(
@@ -375,18 +374,15 @@ impl ScyllaProducerStore {
                 info!("computing offset to earliest seek location");
                 self.get_min_offset_for_producer(producer_id).await?
             }
-            SeekLocation::SlotApprox {
-                desired_slot,
-                min_slot,
-            } => {
+            SeekLocation::SlotApprox(slot_range) => {
                 info!("computing offset to approx slot seek location (0)");
                 let minium_producer_offsets = self.get_min_offset_for_producer(producer_id).await?;
 
                 info!("computing offset to approx slot seek location (1)");
                 let shard_offsets_contain_slot = self
-                    .get_slot_shard_offsets(desired_slot, min_slot, producer_id)
+                    .get_highest_slot_shard_offsets(slot_range.clone(), producer_id)
                     .await?
-                    .ok_or(ImpossibleSlotOffset(desired_slot))?;
+                    .ok_or(ImpossibleSlotOffset(seek_loc.clone()))?;
 
                 info!("computing offset to approx slot seek location (2)");
                 let are_shard_offset_reachable =
@@ -395,13 +391,13 @@ impl ScyllaProducerStore {
                         .all(|(shard_id, (offset1, _))| {
                             minium_producer_offsets
                                 .get(shard_id)
-                                .filter(|(offset2, _)| offset1 > offset2)
+                                .filter(|(offset2, _)| offset1 >= offset2)
                                 .is_some()
                         });
 
                 info!("computing offset to approx slot seek location (3)");
                 if !are_shard_offset_reachable {
-                    anyhow::bail!(ImpossibleSlotOffset(desired_slot))
+                    anyhow::bail!(ImpossibleSlotOffset(seek_loc.clone()))
                 }
                 shard_offsets_contain_slot
             }
@@ -409,10 +405,7 @@ impl ScyllaProducerStore {
         info!("compute offset has been done");
         let adjustment: i64 = match seek_loc {
             SeekLocation::Earliest
-            | SeekLocation::SlotApprox {
-                desired_slot: _,
-                min_slot: _,
-            } => -1,
+            | SeekLocation::SlotApprox(_) => -1,
             SeekLocation::Latest => 0,
         };
 
@@ -524,6 +517,7 @@ impl ProducerMonitor for EtcdProducerMonitor {
     }
 
     async fn is_producer_alive(&self, producer_id: ProducerId) -> bool {
+        info!("in etcdproducermonitor");
         let producer_lock_path = get_producer_lock_path_v1(producer_id);
         let get_resp = self
             .etcd

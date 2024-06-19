@@ -1,6 +1,6 @@
 use {
     crate::scylladb::types::{BlockchainEventType, ConsumerId, ProducerId, ShardOffset, Slot},
-    serde::{Deserialize, Serialize},
+    serde::{Deserialize, Serialize}, std::ops::RangeInclusive,
 };
 
 pub type OldShardOffset = ShardOffset;
@@ -8,15 +8,14 @@ pub type OldShardOffset = ShardOffset;
 ///
 /// Initial position in the log when creating a new consumer.
 ///  
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 pub enum SeekLocation {
     Earliest,
+    
     #[default]
     Latest,
-    SlotApprox {
-        desired_slot: Slot,
-        min_slot: Slot,
-    },
+
+    SlotApprox(RangeInclusive<Slot>),
 }
 
 pub struct ConsumerInfo {

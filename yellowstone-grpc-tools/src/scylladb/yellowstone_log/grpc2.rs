@@ -78,10 +78,7 @@ impl YellowstoneLog for ScyllaYsLog {
                 let slot = request.at_slot.ok_or(tonic::Status::invalid_argument(
                     "Expected at_lot when initital_offset_policy is to `Slot`",
                 ))?;
-                SeekLocation::SlotApprox {
-                    desired_slot: slot,
-                    min_slot: slot,
-                }
+                SeekLocation::SlotApprox(slot..=slot)
             }
         };
 
