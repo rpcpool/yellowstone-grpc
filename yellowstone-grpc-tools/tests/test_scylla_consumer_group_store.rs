@@ -26,7 +26,6 @@ mod common;
 
 #[tokio::test]
 async fn test_get_lowest_common_slot_number() {
-    let _ = setup_tracing();
     let producer_id = ProducerId::ZERO;
     let ctx = TestContextBuilder::new()
         .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {

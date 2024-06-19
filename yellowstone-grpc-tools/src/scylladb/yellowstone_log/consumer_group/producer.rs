@@ -41,7 +41,6 @@ const DEFAULT_LAST_HEARTBEAT_TIME_DELTA: Duration = Duration::from_secs(10);
 
 const GET_SHARD_OFFSET_AT_SLOT_APPROX: &str = r###"
     SELECT
-        revision,
         shard_offset_map,
         slot
     FROM producer_slot_seen
@@ -326,7 +325,6 @@ impl ScyllaProducerStore {
         slot: Slot,
         min_slot: Slot,
         producer_id: ProducerId,
-        max_revision_opt: Option<i64>,
     ) -> anyhow::Result<Option<BTreeMap<ShardId, (ShardOffset, Slot)>>> {
         let maybe = self
             .session
@@ -335,16 +333,12 @@ impl ScyllaProducerStore {
                 (producer_id, slot, min_slot),
             )
             .await?
-            .maybe_first_row_typed::<(i64, Vec<(ShardId, ShardOffset)>, Slot)>()?;
+            .maybe_first_row_typed::<(Vec<(ShardId, ShardOffset)>, Slot)>()?;
 
-        if let Some((remote_revision, offsets, slot_approx)) = maybe {
+        if let Some((offsets, slot_approx)) = maybe {
             info!(
                 "found producer({producer_id:?}) shard offsets within slot range: {min_slot}..={slot}"
             );
-
-            if let Some(max_revision) = max_revision_opt {
-                anyhow::ensure!(max_revision >= remote_revision, StaleRevision(max_revision));
-            }
 
             Ok(Some(
                 offsets
@@ -390,7 +384,7 @@ impl ScyllaProducerStore {
 
                 info!("computing offset to approx slot seek location (1)");
                 let shard_offsets_contain_slot = self
-                    .get_slot_shard_offsets(desired_slot, min_slot, producer_id, max_revision_opt)
+                    .get_slot_shard_offsets(desired_slot, min_slot, producer_id)
                     .await?
                     .ok_or(ImpossibleSlotOffset(desired_slot))?;
 

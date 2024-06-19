@@ -42,6 +42,10 @@ pub enum ProducerMonitorProvider {
     Mock {
         producer_ids: Vec<ProducerId>,
     },
+    Custom {
+        producer_monitor: Arc<dyn ProducerMonitor>,
+        producer_kill: Arc<dyn ProducerKiller>,
+    },
     #[default]
     Etcd,
 }
@@ -97,6 +101,7 @@ impl TestContextBuilder {
                 Arc::new(EtcdProducerMonitor::new(etcd.clone())),
                 Arc::new(NullProducerKiller {}),
             ),
+           ProducerMonitorProvider::Custom { producer_monitor, producer_kill } => (producer_monitor, producer_kill)
         };
 
         let session = Arc::new(session);
@@ -171,9 +176,15 @@ impl MockProducerMonitor {
         }
     }
 
+    pub async fn add_producer_id(&self, producer_id: ProducerId) {
+        let mut lock = self.inner.write().await;
+        lock.living_producer.insert(producer_id, 1);
+    }
+
     async fn send_kill_signal(&self, producer_id: ProducerId) {
         let maybe = {
             let mut lock = self.inner.write().await;
+            lock.living_producer.remove(&producer_id);
             lock.dead_signals.remove(&producer_id)
         };
         if let Some(tx) = maybe {

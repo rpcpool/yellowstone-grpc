@@ -257,7 +257,6 @@ WITH CLUSTERING ORDER BY (offset desc);
 create table if not exists producer_slot_seen (
     producer_id blob,
     slot bigint,
-    revision bigint,
     shard_offset_map frozen<set<tuple<smallint, bigint>>>,
     created_at timestamp,
     primary key (producer_id, slot)

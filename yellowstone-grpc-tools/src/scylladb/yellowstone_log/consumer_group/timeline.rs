@@ -148,6 +148,7 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
         &self,
         state: ComputingNextProducerState,
     ) -> TranslationStepResult {
+        info!("computing next producer for consumer group id {}", Uuid::from_bytes(state.consumer_group_id));
         let cg_info = self
             .consumer_group_store
             .get_consumer_group_info(&state.consumer_group_id)
@@ -165,16 +166,17 @@ impl TimelineTranslator for ScyllaTimelineTranslator {
             "lower common slot number is {} for consumer group id {}",
             lcs, uuid_str
         );
-        let slot_ranges = Some(lcs - 10..=lcs);
+        let lower_bound = std::cmp::max(lcs - 10, 0);
+        let slot_ranges = Some(lower_bound..=lcs);
         let producer_id = self
             .producer_queries
             .get_producer_id_with_least_assigned_consumer(slot_ranges, cg_info.commitment_level)
             .await
             .map_err(|e| TranslationStepError::InternalError(e.to_string()))?;
-
+        info!("candidate producer id is {}", producer_id);
         let seek_loc = SeekLocation::SlotApprox {
             desired_slot: lcs,
-            min_slot: lcs - 10,
+            min_slot: lower_bound,
         };
         let new_shard_offsets = self
             .producer_queries
