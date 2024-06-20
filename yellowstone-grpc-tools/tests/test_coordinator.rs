@@ -339,7 +339,7 @@ async fn test_multiple_consumer_joining_group() {
 }
 
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_consumer_member_mutual_exclusion() {
     let producer_id = ProducerId::try_from("00000000-0000-0000-0000-000000000000").unwrap();
     let ctx = TestContextBuilder::new()
