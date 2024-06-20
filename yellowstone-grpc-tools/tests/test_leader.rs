@@ -1,24 +1,15 @@
 use {
-    bincode::serialize,
-    common::{TestContext, TestContextBuilder},
-    local_ip_address::{linux::local_ip, list_afinet_netifas},
-    rdkafka::producer,
-    std::{
+    bincode::serialize, common::{TestContext, TestContextBuilder}, local_ip_address::{linux::local_ip, list_afinet_netifas}, rdkafka::producer, sha2::digest::typenum::Prod, std::{
         borrow::BorrowMut,
         cell::{Ref, RefCell},
         f32::consts::E,
         os::linux::raw::stat,
         sync::Arc,
         time::Duration,
-    },
-    tokio::sync::RwLock,
-    tonic::async_trait,
-    tracing::info,
-    uuid::Uuid,
-    yellowstone_grpc_tools::{
+    }, tokio::sync::RwLock, tonic::async_trait, tracing::info, uuid::Uuid, yellowstone_grpc_tools::{
         scylladb::{
             etcd_utils::lock::try_lock,
-            types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, TranslationStrategy},
+            types::{BlockchainEventType, CommitmentLevel, ConsumerGroupId, ConsumerGroupInfo, ProducerId, TranslationStrategy},
             yellowstone_log::consumer_group::{
                 self,
                 error::NoActiveProducer,
@@ -36,7 +27,7 @@ use {
             },
         },
         setup_tracing,
-    },
+    }
 };
 mod common;
 
@@ -238,7 +229,7 @@ async fn test_leader_state_transation_during_timeline_translation() {
         .build()
         .await
         .unwrap();
-    let producer_id = ctx.producer_id;
+    let producer_id = ProducerId::from_uuid(Uuid::new_v4());
     let consumer_group_id = Uuid::new_v4().into_bytes();
     let (leader_key, lease) = try_become_leader(
         ctx.etcd.clone(),
@@ -306,7 +297,6 @@ async fn test_leader_state_transation_during_timeline_translation() {
     let (revision, state) = leader_state_log.borrow_and_update().to_owned();
 
     assert!(matches!(state, ConsumerGroupState::Idle(_)));
-    println!("is idle");
     producer_lock.revoke().await.unwrap();
 
     let (mut leader_node, result) = h.await.unwrap();
@@ -316,13 +306,11 @@ async fn test_leader_state_transation_during_timeline_translation() {
     leader_node.update_state_machine(next_state).await.unwrap();
     let state = leader_node.state();
     assert!(matches!(state, ConsumerGroupState::LostProducer(_)));
-    println!("is LostProducer");
 
     let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
     let state = leader_node.state();
     assert!(matches!(state, ConsumerGroupState::WaitingBarrier(_)));
-    println!("is WaitingBarrier");
 
     let next_state = leader_node.step().await.unwrap().unwrap();
     leader_node.update_state_machine(next_state).await.unwrap();
@@ -331,7 +319,6 @@ async fn test_leader_state_transation_during_timeline_translation() {
         state,
         ConsumerGroupState::InTimelineTranslation(_)
     ));
-    println!("is InTimelineTranslation");
 
     let inner_state = match state {
         ConsumerGroupState::InTimelineTranslation(inner) => inner,

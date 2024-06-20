@@ -21,7 +21,7 @@ use {
         },
     },
     chrono::{DateTime, TimeDelta, Utc},
-    etcd_client::{GetOptions, WatchOptions},
+    etcd_client::{GetOptions, WatchFilterType, WatchOptions},
     futures::{future::BoxFuture, Future, FutureExt},
     rdkafka::producer::Producer,
     scylla::{prepared_statement::PreparedStatement, statement::Consistency, Session},
@@ -539,12 +539,17 @@ impl ProducerMonitor for EtcdProducerMonitor {
     /// A `BoxFuture` that resolves to `()` when the producer is dead.
     async fn get_producer_dead_signal(&self, producer_id: ProducerId) -> ProducerDeadSignal {
         let producer_lock_path = get_producer_lock_path_v1(producer_id);
+        let watch_options = WatchOptions::new()
+            .with_prefix()
+            .with_filters(vec![
+                WatchFilterType::NoPut,
+            ]);
         let (mut watcher, mut stream) = self
             .etcd
             .watch_client()
             .watch(
                 producer_lock_path.as_bytes(),
-                Some(WatchOptions::new().with_prefix()),
+                Some(watch_options),
             )
             .await
             .expect("failed to acquire watch stream over producer lock");
@@ -568,8 +573,6 @@ impl ProducerMonitor for EtcdProducerMonitor {
             return signal;
         }
 
-        let anchor_revision = get_resp.kvs()[0].mod_revision();
-
         tokio::spawn(async move {
             'outer: loop {
                 tokio::select! {
@@ -578,27 +581,25 @@ impl ProducerMonitor for EtcdProducerMonitor {
                             break 'outer;
                         }
                     }
-                    Some(Ok(msg)) = stream.next() => {
+                    maybe = stream.next() => {
+                        let msg = match maybe {
+                            Some(Ok(msg)) => msg,
+                            other => {
+                                warn!("watch stream got an unexpected message: {other:?}");
+                                break 'outer;
+                            }
+                        };
                         for ev in msg.events() {
                             match ev.event_type() {
-                                etcd_client::EventType::Put => {
-                                    warn!("producer lock was updated");
-                                    let kv = ev.kv().expect("empty put response");
-                                    if kv.mod_revision() > anchor_revision {
-                                        break 'outer;
-                                    }
-                                }
                                 etcd_client::EventType::Delete => {
-                                    warn!("producer lock was deleted");
+                                    tx.send(()).expect("failed to send producer dead signal");
                                     break 'outer;
                                 }
+                                ev_type => unreachable!("unexpected event type: {ev_type:?}")
                             }
                         }
                     }
                 }
-            }
-            if tx.send(()).is_err() {
-                warn!("producer dead signal receiver half was terminated before signal was send");
             }
             let _ = watcher.cancel().await;
         });

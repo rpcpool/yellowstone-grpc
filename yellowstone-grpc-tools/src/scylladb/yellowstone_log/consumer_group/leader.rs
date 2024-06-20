@@ -47,6 +47,7 @@ use {
 };
 
 const LEADER_LEASE_TTL: Duration = Duration::from_secs(60);
+const DEAD_SIGNAL_ATTEMPT: usize = 3;
 
 #[derive(Serialize, Deserialize)]
 enum LeaderCommand {
@@ -328,6 +329,33 @@ impl ConsumerGroupLeaderNode {
         ))
     }
 
+    async fn handle_idle_state(&self, state: &IdleState) -> anyhow::Result<ConsumerGroupState> {
+        let producer_id = state.producer_id;
+        let mut remaining_attempt = DEAD_SIGNAL_ATTEMPT;
+        loop {
+            anyhow::ensure!(remaining_attempt > 0, "producer dead signal is unreliable");
+
+            // Dead signal is can drop because of transient error, therefore we need to retry
+            let signal = self
+                .producer_monitor
+                .get_producer_dead_signal(producer_id)
+                .await;
+
+            match signal.await {
+                Ok(_) => break,
+                Err(_) => {
+                    warn!("producer dead signal has been dropped, will retry... {remaining_attempt}");
+                    remaining_attempt -= 1
+                },
+            }
+        }
+        warn!("received dead signal from producer {producer_id}");
+        Ok(ConsumerGroupState::LostProducer(LostProducerState {
+            header: state.header.clone(),
+            lost_producer_id: producer_id,
+        }))
+    }
+
     ///
     /// This function is cancel safe
     pub async fn step(&self) -> anyhow::Result<Option<ConsumerGroupState>> {
@@ -352,20 +380,8 @@ impl ConsumerGroupLeaderNode {
             ConsumerGroupState::InTimelineTranslation(inner) => {
                 Some(self.handle_in_timeline_translation(inner).await?)
             }
-            ConsumerGroupState::Idle(IdleState {
-                header,
-                producer_id,
-            }) => {
-                let signal = self
-                    .producer_monitor
-                    .get_producer_dead_signal(*producer_id)
-                    .await;
-                let _ = signal.await?;
-                warn!("received dead signal from producer {producer_id:?}");
-                Some(ConsumerGroupState::LostProducer(LostProducerState {
-                    header: header.clone(),
-                    lost_producer_id: *producer_id,
-                }))
+            ConsumerGroupState::Idle(inner) => {
+                Some(self.handle_idle_state(inner).await?)
             }
             ConsumerGroupState::Dead(inner) => Some(ConsumerGroupState::Dead(inner.clone())),
         };
@@ -510,8 +526,14 @@ pub async fn observe_consumer_group_state(
                     }
                 }
                 // tokio's StreamExt::next is cancel safe
-                Some(result) = stream.next() => {
-                    let message = result.expect("watch stream was terminated early");
+                maybe = stream.next() => {
+                    let message = match maybe {
+                        Some(Ok(message)) => message,
+                        _ => {
+                            warn!("watch stream was terminated");
+                            break;
+                        }
+                    };
                     let events = message.events();
                     if events.iter().any(|ev| ev.event_type() == EventType::Delete) {
                         panic!("remote state log has been deleted")
@@ -612,14 +634,20 @@ pub async fn observe_leader_changes(
 
         'outer: loop {
             tokio::select! {
-
                 _ = tokio::time::sleep(Duration::from_secs(15)) => {
                     if tx.is_closed() {
                         break;
                     }
                 }
 
-                Some(Ok(msg)) = stream.next() => {
+                maybe = stream.next() => {
+                    let msg = match maybe {
+                        Some(Ok(msg)) => msg,
+                        _ => {
+                            warn!("watch stream was terminated");
+                            break;
+                        }
+                    };
                     for ev in msg.events() {
                         let payload = match ev.event_type() {
                             EventType::Put => ev.kv().map(|kv| {
@@ -682,7 +710,8 @@ pub async fn try_become_leader(
             warn!("failed to become leader in time");
             return Ok(None)
         },
-        Ok(mut campaign_resp) = ec.campaign(leader_name.as_str(), serde_json::to_string(&leader_info)?, lease.lease_id) => {
+        result = ec.campaign(leader_name.as_str(), serde_json::to_string(&leader_info)?, lease.lease_id) => {
+            let mut campaign_resp = result?;
             info!("became leader for {leader_name}");
             let payload = campaign_resp
                 .take_leader()

@@ -47,7 +47,11 @@ pub async fn get_barrier(
         while counter > 0 {
             tokio::select! {
                 _ = &mut rx => (),
-                Ok(Some(_)) = watch_stream.message() => {
+                result = watch_stream.message() => {
+                    match result {
+                        Ok(Some(_)) => (),
+                        _ => panic!("watch stream closed unexpectedly"),
+                    }
                     counter -= 1;
                 }
             }
@@ -124,7 +128,11 @@ where
         while counter > 0 {
             tokio::select! {
                 _ = &mut rx => (),
-                Ok(Some(_)) = watch_stream.message() => {
+                result = watch_stream.message() => {
+                    match result {
+                        Ok(Some(_)) => (),
+                        _ => panic!("watch stream closed unexpectedly"),
+                    }
                     counter -= 1;
                 }
             }

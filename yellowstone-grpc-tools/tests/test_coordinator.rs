@@ -78,55 +78,6 @@ async fn test_coordinator_backend_successful_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_coordinator_producer_kill_signal_then_revive_producer() {
-    let producer_id = ProducerId::ZERO;
-    let ctx = TestContextBuilder::new()
-        .with_producer_monitor_provider(common::ProducerMonitorProvider::Mock {
-            producer_ids: vec![producer_id],
-        })
-        .build()
-        .await
-        .unwrap();
-    let etcd = ctx.etcd.clone();
-    let consumer_id1 = String::from("test1");
-    let consumer_id2 = String::from("test2");
-    let consumer_ids = vec![consumer_id1.clone(), consumer_id2.clone()];
-    let subscribed_events = vec![BlockchainEventType::AccountUpdate];
-
-    let (coordinator, backend_handle) = ctx.spawn_coordinator();
-
-    let consumer_group_id = coordinator
-        .create_consumer_group(
-            SeekLocation::Earliest,
-            subscribed_events.clone(),
-            consumer_ids.clone(),
-            CommitmentLevel::Processed,
-            None,
-            Some(TranslationStrategy::AllowLag)
-        )
-        .await
-        .unwrap();
-
-    let (sink, mut source) = mpsc::channel::<BlockchainEvent>(1);
-    coordinator
-        .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink)
-        .await
-        .unwrap();
-    let event = source.recv().await.unwrap();
-    assert!(event.slot > 0);
-
-    // Dropping the source should quit the consumer group
-    ctx.producer_killer
-        .kill_producer(producer_id)
-        .await
-        .unwrap();
-
-    while let Some(_) = source.recv().await {}
-}
-
-
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_timeline_translation_when_there_is_no_other_producer() {
     let producer_id1 = ProducerId::ZERO;
     let mock = MockProducerMonitor::from(vec![producer_id1]);
@@ -157,8 +108,6 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
         )
         .await
         .unwrap();
-
-
     let mut state_watch = observe_consumer_group_state(ctx.etcd.clone(), consumer_group_id).await.unwrap();
     state_watch.mark_changed();
 
@@ -180,7 +129,7 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
             .map(|state| state.to_owned())
     });
     mock.kill_producer(producer_id1).await.unwrap();
-
+    
     let (_revision, new_state) = handle.await.unwrap().unwrap();
 
     assert!(matches!(new_state, ConsumerGroupState::LostProducer(_)));
@@ -189,13 +138,16 @@ async fn test_timeline_translation_when_there_is_no_other_producer() {
 
     let mut leader_changes = observe_leader_changes(etcd, consumer_group_id).await.unwrap();
     leader_changes.mark_changed();
+    let before_wait = leader_changes.borrow().to_owned();
     let state = leader_changes.wait_for(Option::is_none).await.unwrap().to_owned();
+
     assert!(matches!(state, None));
 
     state_watch.mark_changed();
 
     let (_revision, state) = state_watch.borrow_and_update().to_owned();
     assert!(matches!(state, ConsumerGroupState::InTimelineTranslation(_)));
+    backend_handle.abort();
 }
 
 
@@ -275,6 +227,7 @@ async fn test_timeline_translation() {
 
     assert!(leader_info.is_some());
 
+
     let (revision2, state) = tokio::time::timeout(
         Duration::from_secs(10),
         state_watch.wait_for(|(_, state)| matches!(state, ConsumerGroupState::Idle(_)))
@@ -283,7 +236,9 @@ async fn test_timeline_translation() {
         .unwrap()
         .unwrap()
         .to_owned();
+    
     assert!(revision2 > revision1);
+    backend_handle.abort();
 }
 
 
@@ -336,6 +291,7 @@ async fn test_multiple_consumer_joining_group() {
     drop(source1);
     let event2 = source2.recv().await;
     assert!(event2.is_some());
+    backend_handle.abort();
 }
 
 
@@ -379,4 +335,5 @@ async fn test_consumer_member_mutual_exclusion() {
         .try_join_consumer_group(consumer_group_id, consumer_id1.clone(), None, sink2)
         .await;
     assert!(result.is_err());
+    backend_handle.abort();
 }

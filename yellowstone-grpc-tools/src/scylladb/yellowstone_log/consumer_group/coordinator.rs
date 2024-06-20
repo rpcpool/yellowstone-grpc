@@ -506,7 +506,14 @@ impl ConsumerGroupCoordinatorBackend {
         loop {
             info!("coordinator backend loop {i}");
             tokio::select! {
-                Some(cmd) = self.rx.recv() => {
+                maybe_cmd = self.rx.recv() => {
+                    let cmd = match maybe_cmd {
+                        None => {
+                            info!("coordinator backend loop channel closed");
+                            return Ok(());
+                        },
+                        Some(cmd) => cmd
+                    };
                     info!("receive a command");
                     self.interpret_command(cmd).await?;
                 },

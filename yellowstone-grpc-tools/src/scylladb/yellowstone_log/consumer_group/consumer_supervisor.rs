@@ -24,8 +24,8 @@ use {
     uuid::Uuid,
 };
 
-const CONSUMER_SOURCE_SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
-const LEADER_IDLE_STATE_TIMEOUT: Duration = Duration::from_secs(5);
+const CONSUMER_SOURCE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
+const LEADER_IDLE_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct ConsumerSourceSupervisor {
     consumer_group_id: ConsumerGroupId,

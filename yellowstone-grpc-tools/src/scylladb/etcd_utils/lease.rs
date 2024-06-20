@@ -1,11 +1,9 @@
 use {
-    std::time::Duration,
-    tokio::{
+    hyper::StatusCode, std::time::Duration, tokio::{
         sync::{oneshot, watch},
         task::JoinHandle,
         time::Instant,
-    },
-    tracing::{error, warn},
+    }, tonic::{Code, Status}, tracing::{error, warn}
 };
 
 pub struct ManagedLease {
@@ -14,6 +12,8 @@ pub struct ManagedLease {
     tx_terminate: oneshot::Sender<()>,
     lifecycle_handle: JoinHandle<()>,
 }
+
+const REVOKE_ATTEMPT: usize = 3;
 
 impl ManagedLease {
     pub async fn new(
@@ -47,10 +47,34 @@ impl ManagedLease {
                     }
                 }
             }
-            client
-                .lease_revoke(lease_id)
-                .await
-                .expect("unable to pre-revoke lease");
+            let mut revoke_attempt =  REVOKE_ATTEMPT;
+            loop {
+                if revoke_attempt <= 0 {
+                    error!("failed to revoke lease early, will wait for ttl to expire");
+                    break;
+                }
+                let result = client.lease_revoke(lease_id).await;
+                match result {
+                    Ok(_) => {
+                        break;
+                    }
+                    Err(e) => {
+                        match e {
+                            etcd_client::Error::GRpcStatus(status) => {
+                                if status.code() == Code::Unknown {
+                                    warn!("got a transient error during early lease revocation, will retry...");
+                                    revoke_attempt -= 1;
+                                } else {
+                                    panic!("{}", status.to_string());
+                                }
+                            },
+                            _ => {
+                                panic!("{}", e.to_string());
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         let (wsender, wreceiver) = watch::channel(Instant::now());
