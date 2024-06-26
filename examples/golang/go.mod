@@ -1,4 +1,4 @@
-module github.com/rpcpool/solana-geyser-grpc/golang
+module github.com/rpcpool/yellowstone-grpc/examples/golang
 
 go 1.17
 
