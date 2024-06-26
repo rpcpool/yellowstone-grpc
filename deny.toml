@@ -30,4 +30,11 @@ ignore = [
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2021-0145
     # On windows, `atty` dereferences a potentially unaligned pointer.
     "RUSTSEC-2021-0145",
+
+    # curve25519-dalek 3.2.1
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0344
+    # Timing variability of any kind is problematic when working with  potentially secret values such as
+    # elliptic curve scalars, and such issues can potentially leak private keys and other secrets. Such a
+    # problem was recently discovered in `curve25519-dalek`.
+    "RUSTSEC-2024-0344",
 ]
