@@ -8,8 +8,7 @@ pub mod google_pubsub;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 pub mod prom;
-#[cfg(feature = "scylla")]
-pub mod scylladb;
+
 pub mod version;
 
 use {
