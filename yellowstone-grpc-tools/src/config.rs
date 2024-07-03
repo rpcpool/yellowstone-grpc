@@ -79,6 +79,7 @@ impl GrpcRequestToProto<SubscribeRequest> for ConfigGrpcRequest {
             commitment: self.commitment.map(|v| v.to_proto() as i32),
             accounts_data_slice: ConfigGrpcRequest::vec_to_proto(self.accounts_data_slice),
             ping: None,
+            consumer_group_info: None,
         }
     }
 }

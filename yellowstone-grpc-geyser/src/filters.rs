@@ -933,6 +933,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit);
@@ -963,6 +964,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
@@ -998,6 +1000,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -1032,6 +1035,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
@@ -1072,6 +1076,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1119,6 +1124,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1166,6 +1172,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1216,6 +1223,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();
@@ -1271,6 +1279,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            consumer_group_info: None,
         };
         let limit = ConfigGrpcFilters::default();
         let filter = Filter::new(&config, &limit).unwrap();

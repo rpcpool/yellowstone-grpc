@@ -5323,7 +5323,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-grpc-proto"
 version = "1.0.0+solana.1.18.17"
-source = "git+https://github.com/rpcpool/yellowstone-api.git?tag=v1.0.0+solana.1.18.17#9648edc90cc9da3dea161977b33a0b1515590818"
+source = "git+https://github.com/rpcpool/yellowstone-api.git?branch=consumer-group#95629eb104caa5677e93fefe68e58bb02f3f4595"
 dependencies = [
  "anyhow",
  "bincode",

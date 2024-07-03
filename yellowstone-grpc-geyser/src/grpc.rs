@@ -43,8 +43,7 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
-        convert_to,
-        prelude::{
+        convert_to, geyser::{CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse}, prelude::{
             geyser_server::{Geyser, GeyserServer},
             subscribe_update::UpdateOneof,
             CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
@@ -55,7 +54,7 @@ use {
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
             SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
-        },
+        }
     },
 };
 
@@ -722,6 +721,12 @@ pub struct GrpcService {
 }
 
 impl GrpcService {
+
+    #[allow(dead_code)]
+    async fn create_static_consumer_group(&self, _request: Request<CreateStaticConsumerGroupRequest>) -> TonicResult<Response<CreateStaticConsumerGroupResponse>> {
+        Err(Status::unimplemented("method disable"))
+    }
+
     #[allow(clippy::type_complexity)]
     pub async fn create(
         config: ConfigGrpc,
@@ -1130,6 +1135,7 @@ impl GrpcService {
                 commitment: None,
                 accounts_data_slice: Vec::new(),
                 ping: None,
+                consumer_group_info: None,
             },
             &config_filters,
         )
@@ -1289,6 +1295,10 @@ impl GrpcService {
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+
+    async fn create_static_consumer_group(&self, _request: Request<CreateStaticConsumerGroupRequest>) -> TonicResult<Response<CreateStaticConsumerGroupResponse>> {
+        Err(Status::unimplemented("kafka reader does not support static consumer groups"))
+    }
 
     async fn subscribe(
         &self,

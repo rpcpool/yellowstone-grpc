@@ -24,14 +24,14 @@ use {
     },
     tonic_health::server::health_reporter,
     tracing::{error, info},
-    yellowstone_grpc_proto::prelude::{
+    yellowstone_grpc_proto::{geyser::{CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse}, prelude::{
         geyser_server::{Geyser, GeyserServer},
         subscribe_update::UpdateOneof,
         GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
         GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest,
         GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest,
         PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
-    },
+    }},
 };
 
 #[derive(Debug)]
@@ -98,6 +98,10 @@ impl GrpcService {
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+
+    async fn create_static_consumer_group(&self, _request: Request<CreateStaticConsumerGroupRequest>) -> TonicResult<Response<CreateStaticConsumerGroupResponse>> {
+        Err(Status::unavailable("kafka reader does not support static consumer groups"))
+    }
 
     async fn subscribe(
         &self,
