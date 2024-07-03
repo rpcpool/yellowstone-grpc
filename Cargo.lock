@@ -396,15 +396,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
-name = "autotools"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aef8da1805e028a172334c3b680f93e71126f2327622faef2ec3d893c0a4ad77"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "axum"
 version = "0.6.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -848,6 +839,15 @@ name = "clap_lex"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "702fc72eb24e5a1e48ce58027a675bc24edd52096d5397d4aea7c6dd9eca0bd1"
+
+[[package]]
+name = "cmake"
+version = "0.1.50"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31c789563b815f77f4250caee12365734369f942439b7defd71e18a48197130"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "colorchoice"
@@ -2905,11 +2905,11 @@ checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "protobuf-src"
-version = "1.1.0+21.5"
+version = "2.0.1+26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7ac8852baeb3cc6fb83b93646fb93c0ffe5d14bf138c945ceb4b9948ee0e3c1"
+checksum = "f8ba1cfa4b9dc098926b8cce388bf434b93516db3ecf6e8b1a37eb643d733ee7"
 dependencies = [
- "autotools",
+ "cmake",
 ]
 
 [[package]]
@@ -5322,7 +5322,8 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.14.0+solana.1.18.17"
+version = "1.0.0+solana.1.18.17"
+source = "git+https://github.com/rpcpool/yellowstone-api.git?tag=v1.0.0+solana.1.18.17#9648edc90cc9da3dea161977b33a0b1515590818"
 dependencies = [
  "anyhow",
  "bincode",
