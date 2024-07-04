@@ -1,0 +1,18 @@
+[package]
+name = "proto-extra-a"
+edition = "2021"
+version = "1.14.0+solana.1.18.17"
+description = "Yellowstone gRPC Geyser Protobuf Definitions"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+prost = "0.12.1"
+proto-extra-b = { path = "../proto-extra-b" }
+tonic = "0.10.2"
+yellowstone-grpc-proto = { path = "../yellowstone-grpc-proto" }
+
+[build-dependencies]
+anyhow = "1.0.62"
+protobuf-src = "1.1.0"
+tonic-build = "0.10.2"

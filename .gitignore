@@ -1,6 +1,9 @@
 /target
 /test-ledger
 
+proto-extra-a/target
+proto-extra-b/target
+
 yellowstone-grpc-geyser/config-test.json
 dump.rdb
 *.sw?

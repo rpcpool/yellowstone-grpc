@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+import public "geyser.proto";
+
+package proto.b;
+
+service ProtoB {
+  rpc Consume(ConsumeRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+message ConsumeRequest {}
