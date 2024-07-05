@@ -12,6 +12,12 @@ pub mod solana {
     }
 }
 
+pub mod yellowstone {
+    pub mod log {
+        tonic::include_proto!("yellowstone.log");
+    }
+}
+
 pub mod prelude {
     pub use super::{geyser::*, solana::storage::confirmed_block::*};
 }

@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+
+import public "geyser.proto";
+
+package yellowstone.log;
+
+service YellowstoneLog {
+  rpc CreateStaticConsumerGroup(CreateStaticConsumerGroupRequest) returns (CreateStaticConsumerGroupResponse) {}
+  rpc Subscribe(stream SubscribeRequest) returns (stream geyser.SubscribeUpdate) {}
+}
+
+message SubscribeRequest {
+  optional string consumer_group_id = 1;
+  optional uint32 consumer_id = 2;
+  
+  optional AccountUpdateEventFilter account_update_event_filter = 3;
+  optional TransactionEventFilter tx_event_filter = 3;
+}
+
+message CreateStaticConsumerGroupResponse {
+  string group_id = 1;
+}
+
+enum InitialOffsetPolicy {
+  EARLIEST = 0;
+  LATEST = 1;
+  SLOT = 2;
+}
+
+enum EventSubscriptionPolicy {
+  ACCOUNT_UPDATE_ONLY = 0;
+  TRANSACTION_ONLY = 1;
+  BOTH = 2;
+}
+
+enum TimelineTranslationPolicy {
+  ALLOW_LAG = 0;
+  STRICT_SLOT = 1;
+}
+
+message CreateStaticConsumerGroupRequest {
+  optional uint32 member_count = 2;
+
+  InitialOffsetPolicy initial_offset_policy = 3;
+  geyser.CommitmentLevel commitment_level = 4;
+  EventSubscriptionPolicy event_subscription_policy = 5;
+  optional int64 at_slot = 6;
+  // timelineTranslationPolicy is used when an ingester is out of service and we need to translate a set
+  // of consumer to a different ingestion timeline. The policy describe what to do when we need to trigger timeline translation.
+  optional TimelineTranslationPolicy timeline_translation_policy = 7;
+  optional uint32 maximum_translation_slot_lag = 8;
+}
+
+
+/// The AccountUpdateEventFilter message defines filters for account update events. It includes the following fields:
+/// 
+/// pubkeys (1)
+/// A repeated field of bytes representing public keys. Events matching any of these public keys will be included in the filtered results.
+/// 
+/// owners (2)
+/// A repeated field of bytes representing account owners. Events matching any of these account owners will be included in the filtered results.
+message AccountUpdateEventFilter {
+  repeated string pubkeys = 1;
+  repeated string owners = 2;
+}
+
+/// The TransactionEventFilter message specifies filters for transaction events. It contains the following field:
+
+/// account_keys (1)
+/// A repeated field of bytes representing account keys. Events associated with any of these account keys will be included in the filtered results.
+message TransactionEventFilter {
+  repeated string account_keys = 1;
+}
