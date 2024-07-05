@@ -12,11 +12,11 @@ service YellowstoneLog {
 }
 
 message SubscribeRequest {
-  optional string consumer_group_id = 1;
+  string consumer_group_id = 1;
   optional uint32 consumer_id = 2;
   
   optional AccountUpdateEventFilter account_update_event_filter = 3;
-  optional TransactionEventFilter tx_event_filter = 3;
+  optional TransactionEventFilter tx_event_filter = 4;
 }
 
 message CreateStaticConsumerGroupResponse {
