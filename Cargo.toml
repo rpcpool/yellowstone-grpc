@@ -73,6 +73,5 @@ yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "=1.15.0
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "=1.14.0+solana.1.18.18" }
 
 [profile.release]
-debug = true
 lto = true
 codegen-units = 1
