@@ -69,7 +69,7 @@ mkdir -p "$installDir/lib"
 (
   set -x
   # shellcheck disable=SC2086 # Don't want to double quote $rust_version
-  cargo $maybeRustVersion build $maybeReleaseFlag --features scylladb
+  cargo $maybeRustVersion build $maybeReleaseFlag
 )
 
 cp -fv "target/$buildVariant/${GEYSER_PLUGIN_LIB}.$libExt" "$installDir"/lib/
