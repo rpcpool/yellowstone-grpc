@@ -49,6 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
+          components: rustfmt
 
       - uses: dtolnay/rust-toolchain@stable
         with:
