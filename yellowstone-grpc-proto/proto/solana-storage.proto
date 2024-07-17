@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package solana.storage.ConfirmedBlock;
 
-option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
 
 message ConfirmedBlock {
     string previous_blockhash = 1;
