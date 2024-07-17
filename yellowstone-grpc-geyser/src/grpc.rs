@@ -5,12 +5,12 @@ use {
         prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
     },
-    anyhow::Context,
-    log::{error, info},
-    solana_geyser_plugin_interface::geyser_plugin_interface::{
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
+    anyhow::Context,
+    log::{error, info},
     solana_sdk::{
         clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
@@ -442,7 +442,10 @@ impl<'a> MessageRef<'a> {
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
+                rewards: Some(convert_to::create_rewards_obj(
+                    message.rewards.as_slice(),
+                    None,
+                )),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,
@@ -469,7 +472,10 @@ impl<'a> MessageRef<'a> {
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
+                rewards: Some(convert_to::create_rewards_obj(
+                    message.rewards.as_slice(),
+                    None,
+                )),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),
                 parent_slot: message.parent_slot,

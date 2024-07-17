@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.11+solana.1.18.18"
+version = "1.0.0-rc.12+solana.2.0.2"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
@@ -35,7 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["signal", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip"] }
 tonic-health = { workspace = true }
