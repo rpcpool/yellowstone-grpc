@@ -1,9 +1,10 @@
 use {cargo_lock::Lockfile, std::collections::HashSet};
 
 fn main() -> anyhow::Result<()> {
-    let mut envs = vergen::EmitBuilder::builder();
-    envs.all_build().all_rustc();
-    envs.emit()?;
+    vergen::Emitter::default()
+        .add_instructions(&vergen::BuildBuilder::all_build()?)?
+        .add_instructions(&vergen::RustcBuilder::all_rustc()?)?
+        .emit()?;
 
     // vergen git version does not looks cool
     println!(
