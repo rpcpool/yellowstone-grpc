@@ -23,6 +23,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              ./target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0002
+          restore-keys: |
+            ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}
+
       - name: Set rust version
         run: |
           source ci/rust-version.sh
@@ -34,25 +46,14 @@ jobs:
           echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
           echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
 
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
           components: rustfmt
 
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_STABLE }}
-          components: clippy, rustfmt
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-              ~/.cargo/bin/
-              ~/.cargo/registry/index/
-              ~/.cargo/registry/cache/
-              ~/.cargo/git/db/
-              target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
 
       - name: Install dependencies
         run: |
