@@ -221,9 +221,11 @@ pub mod convert_to {
         }
     }
 
-    pub fn create_rewards_obj(rewards: &[Reward]) -> proto::Rewards {
+    pub fn create_rewards_obj(rewards: &[Reward], num_partitions: Option<u64>) -> proto::Rewards {
         proto::Rewards {
             rewards: create_rewards(rewards),
+            num_partitions: num_partitions
+                .map(|num_partitions| proto::NumPartitions { num_partitions }),
         }
     }
 
@@ -300,8 +302,9 @@ pub mod convert_from {
             transactions.push(create_tx_with_meta(tx)?);
         }
 
+        let block_rewards = ensure_some(block.rewards, "failed to get rewards")?;
         let mut rewards = vec![];
-        for reward in ensure_some(block.rewards, "failed to get rewards")?.rewards {
+        for reward in block_rewards.rewards {
             rewards.push(create_reward(reward)?);
         }
 
@@ -311,6 +314,7 @@ pub mod convert_from {
             parent_slot: block.parent_slot,
             transactions,
             rewards,
+            num_partitions: block_rewards.num_partitions.map(|msg| msg.num_partitions),
             block_time: Some(ensure_some(
                 block.block_time.map(|wrapper| wrapper.timestamp),
                 "failed to get block_time",
