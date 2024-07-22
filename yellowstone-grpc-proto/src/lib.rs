@@ -18,6 +18,7 @@ pub mod prelude {
 
 pub use {prost, tonic};
 
+#[cfg(feature = "convert")]
 pub mod convert_to {
     use {
         super::prelude as proto,
@@ -265,6 +266,7 @@ pub mod convert_to {
     }
 }
 
+#[cfg(feature = "convert")]
 pub mod convert_from {
     use {
         super::prelude as proto,
