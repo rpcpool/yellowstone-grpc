@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import public "solana-storage.proto";
 
-option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
 
 package geyser;
 
