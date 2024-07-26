@@ -55,7 +55,7 @@ export {
 
 export default class Client {
   _client: GeyserClient;
-
+  _insecureXToken: string | undefined;
   constructor(
     endpoint: string,
     xToken: string | undefined,
@@ -79,13 +79,24 @@ export default class Client {
       );
     } else {
       creds = ChannelCredentials.createInsecure();
+      if (xToken !== undefined) {
+        this._insecureXToken = xToken;
+      }
     }
 
     this._client = new GeyserClient(endpointURL.host, creds, channelOptions);
   }
 
+  private _getInsecureMetadata(): Metadata {
+    const metadata = new Metadata();
+    if (this._insecureXToken) {
+      metadata.add("x-token", this._insecureXToken);
+    }
+    return metadata;
+  }
+
   async subscribe() {
-    return await this._client.subscribe();
+    return await this._client.subscribe(this._getInsecureMetadata());
   }
 
   async subscribeOnce(
@@ -99,7 +110,7 @@ export default class Client {
     commitment: CommitmentLevel | undefined,
     accountsDataSlice: SubscribeRequestAccountsDataSlice[]
   ) {
-    const stream = await this._client.subscribe();
+    const stream = await this._client.subscribe(this._getInsecureMetadata());
 
     await new Promise<void>((resolve, reject) => {
       stream.write(
@@ -129,13 +140,17 @@ export default class Client {
 
   async ping(count: number): Promise<number> {
     return await new Promise<number>((resolve, reject) => {
-      this._client.ping({ count }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.count);
-        } else {
-          reject(err);
+      this._client.ping(
+        { count },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.count);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
@@ -143,37 +158,49 @@ export default class Client {
     commitment?: CommitmentLevel
   ): Promise<GetLatestBlockhashResponse> {
     return await new Promise<GetLatestBlockhashResponse>((resolve, reject) => {
-      this._client.getLatestBlockhash({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response);
-        } else {
-          reject(err);
+      this._client.getLatestBlockhash(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
   async getBlockHeight(commitment?: CommitmentLevel): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getBlockHeight({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.blockHeight);
-        } else {
-          reject(err);
+      this._client.getBlockHeight(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.blockHeight);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
   async getSlot(commitment?: CommitmentLevel): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getSlot({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.slot);
-        } else {
-          reject(err);
+      this._client.getSlot(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.slot);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
@@ -184,6 +211,7 @@ export default class Client {
     return await new Promise<IsBlockhashValidResponse>((resolve, reject) => {
       this._client.isBlockhashValid(
         { blockhash, commitment },
+        this._getInsecureMetadata(),
         (err, response) => {
           if (err === null || err === undefined) {
             resolve(response);
@@ -197,13 +225,17 @@ export default class Client {
 
   async getVersion(): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getVersion({}, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.version);
-        } else {
-          reject(err);
+      this._client.getVersion(
+        {},
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.version);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 }
