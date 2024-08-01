@@ -13,12 +13,16 @@ publish = true
 [dependencies]
 bincode = { workspace = true }
 prost = { workspace = true }
-solana-account-decoder = { workspace = true }
-solana-sdk = { workspace = true }
-solana-transaction-status = { workspace = true }
+solana-account-decoder = { workspace = true, optional = true }
+solana-sdk = { workspace = true, optional = true }
+solana-transaction-status = { workspace = true, optional = true }
 tonic = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
 protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
+
+[features]
+convert = ["dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
+default = ["convert"]
