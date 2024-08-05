@@ -37,7 +37,7 @@ serde_yaml = { workspace = true }
 sha2 = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-stream = { workspace = true }
-tonic = { workspace = true, features = ["gzip"] }
+tonic = { workspace = true, features = ["gzip", "zstd"] }
 tonic-health = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
