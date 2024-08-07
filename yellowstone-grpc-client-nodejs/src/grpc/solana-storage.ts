@@ -63,6 +63,7 @@ export interface ConfirmedBlock {
   rewards: Reward[];
   blockTime: UnixTimestamp | undefined;
   blockHeight: BlockHeight | undefined;
+  numPartitions: NumPartitions | undefined;
 }
 
 export interface ConfirmedTransaction {
@@ -177,6 +178,7 @@ export interface Reward {
 
 export interface Rewards {
   rewards: Reward[];
+  numPartitions: NumPartitions | undefined;
 }
 
 export interface UnixTimestamp {
@@ -185,6 +187,10 @@ export interface UnixTimestamp {
 
 export interface BlockHeight {
   blockHeight: string;
+}
+
+export interface NumPartitions {
+  numPartitions: string;
 }
 
 function createBaseConfirmedBlock(): ConfirmedBlock {
@@ -196,14 +202,12 @@ function createBaseConfirmedBlock(): ConfirmedBlock {
     rewards: [],
     blockTime: undefined,
     blockHeight: undefined,
+    numPartitions: undefined,
   };
 }
 
 export const ConfirmedBlock = {
-  encode(
-    message: ConfirmedBlock,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: ConfirmedBlock, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.previousBlockhash !== "") {
       writer.uint32(10).string(message.previousBlockhash);
     }
@@ -220,23 +224,19 @@ export const ConfirmedBlock = {
       Reward.encode(v!, writer.uint32(42).fork()).ldelim();
     }
     if (message.blockTime !== undefined) {
-      UnixTimestamp.encode(
-        message.blockTime,
-        writer.uint32(50).fork()
-      ).ldelim();
+      UnixTimestamp.encode(message.blockTime, writer.uint32(50).fork()).ldelim();
     }
     if (message.blockHeight !== undefined) {
-      BlockHeight.encode(
-        message.blockHeight,
-        writer.uint32(58).fork()
-      ).ldelim();
+      BlockHeight.encode(message.blockHeight, writer.uint32(58).fork()).ldelim();
+    }
+    if (message.numPartitions !== undefined) {
+      NumPartitions.encode(message.numPartitions, writer.uint32(66).fork()).ldelim();
     }
     return writer;
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): ConfirmedBlock {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseConfirmedBlock();
     while (reader.pos < end) {
@@ -268,9 +268,7 @@ export const ConfirmedBlock = {
             break;
           }
 
-          message.transactions.push(
-            ConfirmedTransaction.decode(reader, reader.uint32())
-          );
+          message.transactions.push(ConfirmedTransaction.decode(reader, reader.uint32()));
           continue;
         case 5:
           if (tag !== 42) {
@@ -293,6 +291,13 @@ export const ConfirmedBlock = {
 
           message.blockHeight = BlockHeight.decode(reader, reader.uint32());
           continue;
+        case 8:
+          if (tag !== 66) {
+            break;
+          }
+
+          message.numPartitions = NumPartitions.decode(reader, reader.uint32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -304,82 +309,63 @@ export const ConfirmedBlock = {
 
   fromJSON(object: any): ConfirmedBlock {
     return {
-      previousBlockhash: isSet(object.previousBlockhash)
-        ? String(object.previousBlockhash)
-        : "",
+      previousBlockhash: isSet(object.previousBlockhash) ? String(object.previousBlockhash) : "",
       blockhash: isSet(object.blockhash) ? String(object.blockhash) : "",
       parentSlot: isSet(object.parentSlot) ? String(object.parentSlot) : "0",
       transactions: Array.isArray(object?.transactions)
         ? object.transactions.map((e: any) => ConfirmedTransaction.fromJSON(e))
         : [],
-      rewards: Array.isArray(object?.rewards)
-        ? object.rewards.map((e: any) => Reward.fromJSON(e))
-        : [],
-      blockTime: isSet(object.blockTime)
-        ? UnixTimestamp.fromJSON(object.blockTime)
-        : undefined,
-      blockHeight: isSet(object.blockHeight)
-        ? BlockHeight.fromJSON(object.blockHeight)
-        : undefined,
+      rewards: Array.isArray(object?.rewards) ? object.rewards.map((e: any) => Reward.fromJSON(e)) : [],
+      blockTime: isSet(object.blockTime) ? UnixTimestamp.fromJSON(object.blockTime) : undefined,
+      blockHeight: isSet(object.blockHeight) ? BlockHeight.fromJSON(object.blockHeight) : undefined,
+      numPartitions: isSet(object.numPartitions) ? NumPartitions.fromJSON(object.numPartitions) : undefined,
     };
   },
 
   toJSON(message: ConfirmedBlock): unknown {
     const obj: any = {};
-    message.previousBlockhash !== undefined &&
-      (obj.previousBlockhash = message.previousBlockhash);
+    message.previousBlockhash !== undefined && (obj.previousBlockhash = message.previousBlockhash);
     message.blockhash !== undefined && (obj.blockhash = message.blockhash);
     message.parentSlot !== undefined && (obj.parentSlot = message.parentSlot);
     if (message.transactions) {
-      obj.transactions = message.transactions.map((e) =>
-        e ? ConfirmedTransaction.toJSON(e) : undefined
-      );
+      obj.transactions = message.transactions.map((e) => e ? ConfirmedTransaction.toJSON(e) : undefined);
     } else {
       obj.transactions = [];
     }
     if (message.rewards) {
-      obj.rewards = message.rewards.map((e) =>
-        e ? Reward.toJSON(e) : undefined
-      );
+      obj.rewards = message.rewards.map((e) => e ? Reward.toJSON(e) : undefined);
     } else {
       obj.rewards = [];
     }
     message.blockTime !== undefined &&
-      (obj.blockTime = message.blockTime
-        ? UnixTimestamp.toJSON(message.blockTime)
-        : undefined);
+      (obj.blockTime = message.blockTime ? UnixTimestamp.toJSON(message.blockTime) : undefined);
     message.blockHeight !== undefined &&
-      (obj.blockHeight = message.blockHeight
-        ? BlockHeight.toJSON(message.blockHeight)
-        : undefined);
+      (obj.blockHeight = message.blockHeight ? BlockHeight.toJSON(message.blockHeight) : undefined);
+    message.numPartitions !== undefined &&
+      (obj.numPartitions = message.numPartitions ? NumPartitions.toJSON(message.numPartitions) : undefined);
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<ConfirmedBlock>, I>>(
-    base?: I
-  ): ConfirmedBlock {
+  create<I extends Exact<DeepPartial<ConfirmedBlock>, I>>(base?: I): ConfirmedBlock {
     return ConfirmedBlock.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<ConfirmedBlock>, I>>(
-    object: I
-  ): ConfirmedBlock {
+  fromPartial<I extends Exact<DeepPartial<ConfirmedBlock>, I>>(object: I): ConfirmedBlock {
     const message = createBaseConfirmedBlock();
     message.previousBlockhash = object.previousBlockhash ?? "";
     message.blockhash = object.blockhash ?? "";
     message.parentSlot = object.parentSlot ?? "0";
-    message.transactions =
-      object.transactions?.map((e) => ConfirmedTransaction.fromPartial(e)) ||
-      [];
+    message.transactions = object.transactions?.map((e) => ConfirmedTransaction.fromPartial(e)) || [];
     message.rewards = object.rewards?.map((e) => Reward.fromPartial(e)) || [];
-    message.blockTime =
-      object.blockTime !== undefined && object.blockTime !== null
-        ? UnixTimestamp.fromPartial(object.blockTime)
-        : undefined;
-    message.blockHeight =
-      object.blockHeight !== undefined && object.blockHeight !== null
-        ? BlockHeight.fromPartial(object.blockHeight)
-        : undefined;
+    message.blockTime = (object.blockTime !== undefined && object.blockTime !== null)
+      ? UnixTimestamp.fromPartial(object.blockTime)
+      : undefined;
+    message.blockHeight = (object.blockHeight !== undefined && object.blockHeight !== null)
+      ? BlockHeight.fromPartial(object.blockHeight)
+      : undefined;
+    message.numPartitions = (object.numPartitions !== undefined && object.numPartitions !== null)
+      ? NumPartitions.fromPartial(object.numPartitions)
+      : undefined;
     return message;
   },
 };
@@ -389,31 +375,18 @@ function createBaseConfirmedTransaction(): ConfirmedTransaction {
 }
 
 export const ConfirmedTransaction = {
-  encode(
-    message: ConfirmedTransaction,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: ConfirmedTransaction, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.transaction !== undefined) {
-      Transaction.encode(
-        message.transaction,
-        writer.uint32(10).fork()
-      ).ldelim();
+      Transaction.encode(message.transaction, writer.uint32(10).fork()).ldelim();
     }
     if (message.meta !== undefined) {
-      TransactionStatusMeta.encode(
-        message.meta,
-        writer.uint32(18).fork()
-      ).ldelim();
+      TransactionStatusMeta.encode(message.meta, writer.uint32(18).fork()).ldelim();
     }
     return writer;
   },
 
-  decode(
-    input: _m0.Reader | Uint8Array,
-    length?: number
-  ): ConfirmedTransaction {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+  decode(input: _m0.Reader | Uint8Array, length?: number): ConfirmedTransaction {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseConfirmedTransaction();
     while (reader.pos < end) {
@@ -444,46 +417,31 @@ export const ConfirmedTransaction = {
 
   fromJSON(object: any): ConfirmedTransaction {
     return {
-      transaction: isSet(object.transaction)
-        ? Transaction.fromJSON(object.transaction)
-        : undefined,
-      meta: isSet(object.meta)
-        ? TransactionStatusMeta.fromJSON(object.meta)
-        : undefined,
+      transaction: isSet(object.transaction) ? Transaction.fromJSON(object.transaction) : undefined,
+      meta: isSet(object.meta) ? TransactionStatusMeta.fromJSON(object.meta) : undefined,
     };
   },
 
   toJSON(message: ConfirmedTransaction): unknown {
     const obj: any = {};
     message.transaction !== undefined &&
-      (obj.transaction = message.transaction
-        ? Transaction.toJSON(message.transaction)
-        : undefined);
-    message.meta !== undefined &&
-      (obj.meta = message.meta
-        ? TransactionStatusMeta.toJSON(message.meta)
-        : undefined);
+      (obj.transaction = message.transaction ? Transaction.toJSON(message.transaction) : undefined);
+    message.meta !== undefined && (obj.meta = message.meta ? TransactionStatusMeta.toJSON(message.meta) : undefined);
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<ConfirmedTransaction>, I>>(
-    base?: I
-  ): ConfirmedTransaction {
+  create<I extends Exact<DeepPartial<ConfirmedTransaction>, I>>(base?: I): ConfirmedTransaction {
     return ConfirmedTransaction.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<ConfirmedTransaction>, I>>(
-    object: I
-  ): ConfirmedTransaction {
+  fromPartial<I extends Exact<DeepPartial<ConfirmedTransaction>, I>>(object: I): ConfirmedTransaction {
     const message = createBaseConfirmedTransaction();
-    message.transaction =
-      object.transaction !== undefined && object.transaction !== null
-        ? Transaction.fromPartial(object.transaction)
-        : undefined;
-    message.meta =
-      object.meta !== undefined && object.meta !== null
-        ? TransactionStatusMeta.fromPartial(object.meta)
-        : undefined;
+    message.transaction = (object.transaction !== undefined && object.transaction !== null)
+      ? Transaction.fromPartial(object.transaction)
+      : undefined;
+    message.meta = (object.meta !== undefined && object.meta !== null)
+      ? TransactionStatusMeta.fromPartial(object.meta)
+      : undefined;
     return message;
   },
 };
@@ -493,10 +451,7 @@ function createBaseTransaction(): Transaction {
 }
 
 export const Transaction = {
-  encode(
-    message: Transaction,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: Transaction, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     for (const v of message.signatures) {
       writer.uint32(10).bytes(v!);
     }
@@ -507,8 +462,7 @@ export const Transaction = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): Transaction {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseTransaction();
     while (reader.pos < end) {
@@ -539,28 +493,19 @@ export const Transaction = {
 
   fromJSON(object: any): Transaction {
     return {
-      signatures: Array.isArray(object?.signatures)
-        ? object.signatures.map((e: any) => bytesFromBase64(e))
-        : [],
-      message: isSet(object.message)
-        ? Message.fromJSON(object.message)
-        : undefined,
+      signatures: Array.isArray(object?.signatures) ? object.signatures.map((e: any) => bytesFromBase64(e)) : [],
+      message: isSet(object.message) ? Message.fromJSON(object.message) : undefined,
     };
   },
 
   toJSON(message: Transaction): unknown {
     const obj: any = {};
     if (message.signatures) {
-      obj.signatures = message.signatures.map((e) =>
-        base64FromBytes(e !== undefined ? e : new Uint8Array(0))
-      );
+      obj.signatures = message.signatures.map((e) => base64FromBytes(e !== undefined ? e : new Uint8Array(0)));
     } else {
       obj.signatures = [];
     }
-    message.message !== undefined &&
-      (obj.message = message.message
-        ? Message.toJSON(message.message)
-        : undefined);
+    message.message !== undefined && (obj.message = message.message ? Message.toJSON(message.message) : undefined);
     return obj;
   },
 
@@ -568,15 +513,12 @@ export const Transaction = {
     return Transaction.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<Transaction>, I>>(
-    object: I
-  ): Transaction {
+  fromPartial<I extends Exact<DeepPartial<Transaction>, I>>(object: I): Transaction {
     const message = createBaseTransaction();
     message.signatures = object.signatures?.map((e) => e) || [];
-    message.message =
-      object.message !== undefined && object.message !== null
-        ? Message.fromPartial(object.message)
-        : undefined;
+    message.message = (object.message !== undefined && object.message !== null)
+      ? Message.fromPartial(object.message)
+      : undefined;
     return message;
   },
 };
@@ -593,10 +535,7 @@ function createBaseMessage(): Message {
 }
 
 export const Message = {
-  encode(
-    message: Message,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: Message, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.header !== undefined) {
       MessageHeader.encode(message.header, writer.uint32(10).fork()).ldelim();
     }
@@ -619,8 +558,7 @@ export const Message = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): Message {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseMessage();
     while (reader.pos < end) {
@@ -652,9 +590,7 @@ export const Message = {
             break;
           }
 
-          message.instructions.push(
-            CompiledInstruction.decode(reader, reader.uint32())
-          );
+          message.instructions.push(CompiledInstruction.decode(reader, reader.uint32()));
           continue;
         case 5:
           if (tag !== 40) {
@@ -668,9 +604,7 @@ export const Message = {
             break;
           }
 
-          message.addressTableLookups.push(
-            MessageAddressTableLookup.decode(reader, reader.uint32())
-          );
+          message.addressTableLookups.push(MessageAddressTableLookup.decode(reader, reader.uint32()));
           continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
@@ -683,50 +617,33 @@ export const Message = {
 
   fromJSON(object: any): Message {
     return {
-      header: isSet(object.header)
-        ? MessageHeader.fromJSON(object.header)
-        : undefined,
-      accountKeys: Array.isArray(object?.accountKeys)
-        ? object.accountKeys.map((e: any) => bytesFromBase64(e))
-        : [],
-      recentBlockhash: isSet(object.recentBlockhash)
-        ? bytesFromBase64(object.recentBlockhash)
-        : new Uint8Array(0),
+      header: isSet(object.header) ? MessageHeader.fromJSON(object.header) : undefined,
+      accountKeys: Array.isArray(object?.accountKeys) ? object.accountKeys.map((e: any) => bytesFromBase64(e)) : [],
+      recentBlockhash: isSet(object.recentBlockhash) ? bytesFromBase64(object.recentBlockhash) : new Uint8Array(0),
       instructions: Array.isArray(object?.instructions)
         ? object.instructions.map((e: any) => CompiledInstruction.fromJSON(e))
         : [],
       versioned: isSet(object.versioned) ? Boolean(object.versioned) : false,
       addressTableLookups: Array.isArray(object?.addressTableLookups)
-        ? object.addressTableLookups.map((e: any) =>
-            MessageAddressTableLookup.fromJSON(e)
-          )
+        ? object.addressTableLookups.map((e: any) => MessageAddressTableLookup.fromJSON(e))
         : [],
     };
   },
 
   toJSON(message: Message): unknown {
     const obj: any = {};
-    message.header !== undefined &&
-      (obj.header = message.header
-        ? MessageHeader.toJSON(message.header)
-        : undefined);
+    message.header !== undefined && (obj.header = message.header ? MessageHeader.toJSON(message.header) : undefined);
     if (message.accountKeys) {
-      obj.accountKeys = message.accountKeys.map((e) =>
-        base64FromBytes(e !== undefined ? e : new Uint8Array(0))
-      );
+      obj.accountKeys = message.accountKeys.map((e) => base64FromBytes(e !== undefined ? e : new Uint8Array(0)));
     } else {
       obj.accountKeys = [];
     }
     message.recentBlockhash !== undefined &&
       (obj.recentBlockhash = base64FromBytes(
-        message.recentBlockhash !== undefined
-          ? message.recentBlockhash
-          : new Uint8Array(0)
+        message.recentBlockhash !== undefined ? message.recentBlockhash : new Uint8Array(0),
       ));
     if (message.instructions) {
-      obj.instructions = message.instructions.map((e) =>
-        e ? CompiledInstruction.toJSON(e) : undefined
-      );
+      obj.instructions = message.instructions.map((e) => e ? CompiledInstruction.toJSON(e) : undefined);
     } else {
       obj.instructions = [];
     }
@@ -747,36 +664,25 @@ export const Message = {
 
   fromPartial<I extends Exact<DeepPartial<Message>, I>>(object: I): Message {
     const message = createBaseMessage();
-    message.header =
-      object.header !== undefined && object.header !== null
-        ? MessageHeader.fromPartial(object.header)
-        : undefined;
+    message.header = (object.header !== undefined && object.header !== null)
+      ? MessageHeader.fromPartial(object.header)
+      : undefined;
     message.accountKeys = object.accountKeys?.map((e) => e) || [];
     message.recentBlockhash = object.recentBlockhash ?? new Uint8Array(0);
-    message.instructions =
-      object.instructions?.map((e) => CompiledInstruction.fromPartial(e)) || [];
+    message.instructions = object.instructions?.map((e) => CompiledInstruction.fromPartial(e)) || [];
     message.versioned = object.versioned ?? false;
-    message.addressTableLookups =
-      object.addressTableLookups?.map((e) =>
-        MessageAddressTableLookup.fromPartial(e)
-      ) || [];
+    message.addressTableLookups = object.addressTableLookups?.map((e) => MessageAddressTableLookup.fromPartial(e)) ||
+      [];
     return message;
   },
 };
 
 function createBaseMessageHeader(): MessageHeader {
-  return {
-    numRequiredSignatures: 0,
-    numReadonlySignedAccounts: 0,
-    numReadonlyUnsignedAccounts: 0,
-  };
+  return { numRequiredSignatures: 0, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 0 };
 }
 
 export const MessageHeader = {
-  encode(
-    message: MessageHeader,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: MessageHeader, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.numRequiredSignatures !== 0) {
       writer.uint32(8).uint32(message.numRequiredSignatures);
     }
@@ -790,8 +696,7 @@ export const MessageHeader = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): MessageHeader {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseMessageHeader();
     while (reader.pos < end) {
@@ -829,12 +734,8 @@ export const MessageHeader = {
 
   fromJSON(object: any): MessageHeader {
     return {
-      numRequiredSignatures: isSet(object.numRequiredSignatures)
-        ? Number(object.numRequiredSignatures)
-        : 0,
-      numReadonlySignedAccounts: isSet(object.numReadonlySignedAccounts)
-        ? Number(object.numReadonlySignedAccounts)
-        : 0,
+      numRequiredSignatures: isSet(object.numRequiredSignatures) ? Number(object.numRequiredSignatures) : 0,
+      numReadonlySignedAccounts: isSet(object.numReadonlySignedAccounts) ? Number(object.numReadonlySignedAccounts) : 0,
       numReadonlyUnsignedAccounts: isSet(object.numReadonlyUnsignedAccounts)
         ? Number(object.numReadonlyUnsignedAccounts)
         : 0,
@@ -846,47 +747,31 @@ export const MessageHeader = {
     message.numRequiredSignatures !== undefined &&
       (obj.numRequiredSignatures = Math.round(message.numRequiredSignatures));
     message.numReadonlySignedAccounts !== undefined &&
-      (obj.numReadonlySignedAccounts = Math.round(
-        message.numReadonlySignedAccounts
-      ));
+      (obj.numReadonlySignedAccounts = Math.round(message.numReadonlySignedAccounts));
     message.numReadonlyUnsignedAccounts !== undefined &&
-      (obj.numReadonlyUnsignedAccounts = Math.round(
-        message.numReadonlyUnsignedAccounts
-      ));
+      (obj.numReadonlyUnsignedAccounts = Math.round(message.numReadonlyUnsignedAccounts));
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<MessageHeader>, I>>(
-    base?: I
-  ): MessageHeader {
+  create<I extends Exact<DeepPartial<MessageHeader>, I>>(base?: I): MessageHeader {
     return MessageHeader.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<MessageHeader>, I>>(
-    object: I
-  ): MessageHeader {
+  fromPartial<I extends Exact<DeepPartial<MessageHeader>, I>>(object: I): MessageHeader {
     const message = createBaseMessageHeader();
     message.numRequiredSignatures = object.numRequiredSignatures ?? 0;
     message.numReadonlySignedAccounts = object.numReadonlySignedAccounts ?? 0;
-    message.numReadonlyUnsignedAccounts =
-      object.numReadonlyUnsignedAccounts ?? 0;
+    message.numReadonlyUnsignedAccounts = object.numReadonlyUnsignedAccounts ?? 0;
     return message;
   },
 };
 
 function createBaseMessageAddressTableLookup(): MessageAddressTableLookup {
-  return {
-    accountKey: new Uint8Array(0),
-    writableIndexes: new Uint8Array(0),
-    readonlyIndexes: new Uint8Array(0),
-  };
+  return { accountKey: new Uint8Array(0), writableIndexes: new Uint8Array(0), readonlyIndexes: new Uint8Array(0) };
 }
 
 export const MessageAddressTableLookup = {
-  encode(
-    message: MessageAddressTableLookup,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: MessageAddressTableLookup, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.accountKey.length !== 0) {
       writer.uint32(10).bytes(message.accountKey);
     }
@@ -899,12 +784,8 @@ export const MessageAddressTableLookup = {
     return writer;
   },
 
-  decode(
-    input: _m0.Reader | Uint8Array,
-    length?: number
-  ): MessageAddressTableLookup {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+  decode(input: _m0.Reader | Uint8Array, length?: number): MessageAddressTableLookup {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseMessageAddressTableLookup();
     while (reader.pos < end) {
@@ -942,50 +823,32 @@ export const MessageAddressTableLookup = {
 
   fromJSON(object: any): MessageAddressTableLookup {
     return {
-      accountKey: isSet(object.accountKey)
-        ? bytesFromBase64(object.accountKey)
-        : new Uint8Array(0),
-      writableIndexes: isSet(object.writableIndexes)
-        ? bytesFromBase64(object.writableIndexes)
-        : new Uint8Array(0),
-      readonlyIndexes: isSet(object.readonlyIndexes)
-        ? bytesFromBase64(object.readonlyIndexes)
-        : new Uint8Array(0),
+      accountKey: isSet(object.accountKey) ? bytesFromBase64(object.accountKey) : new Uint8Array(0),
+      writableIndexes: isSet(object.writableIndexes) ? bytesFromBase64(object.writableIndexes) : new Uint8Array(0),
+      readonlyIndexes: isSet(object.readonlyIndexes) ? bytesFromBase64(object.readonlyIndexes) : new Uint8Array(0),
     };
   },
 
   toJSON(message: MessageAddressTableLookup): unknown {
     const obj: any = {};
     message.accountKey !== undefined &&
-      (obj.accountKey = base64FromBytes(
-        message.accountKey !== undefined
-          ? message.accountKey
-          : new Uint8Array(0)
-      ));
+      (obj.accountKey = base64FromBytes(message.accountKey !== undefined ? message.accountKey : new Uint8Array(0)));
     message.writableIndexes !== undefined &&
       (obj.writableIndexes = base64FromBytes(
-        message.writableIndexes !== undefined
-          ? message.writableIndexes
-          : new Uint8Array(0)
+        message.writableIndexes !== undefined ? message.writableIndexes : new Uint8Array(0),
       ));
     message.readonlyIndexes !== undefined &&
       (obj.readonlyIndexes = base64FromBytes(
-        message.readonlyIndexes !== undefined
-          ? message.readonlyIndexes
-          : new Uint8Array(0)
+        message.readonlyIndexes !== undefined ? message.readonlyIndexes : new Uint8Array(0),
       ));
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<MessageAddressTableLookup>, I>>(
-    base?: I
-  ): MessageAddressTableLookup {
+  create<I extends Exact<DeepPartial<MessageAddressTableLookup>, I>>(base?: I): MessageAddressTableLookup {
     return MessageAddressTableLookup.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<MessageAddressTableLookup>, I>>(
-    object: I
-  ): MessageAddressTableLookup {
+  fromPartial<I extends Exact<DeepPartial<MessageAddressTableLookup>, I>>(object: I): MessageAddressTableLookup {
     const message = createBaseMessageAddressTableLookup();
     message.accountKey = object.accountKey ?? new Uint8Array(0);
     message.writableIndexes = object.writableIndexes ?? new Uint8Array(0);
@@ -1016,10 +879,7 @@ function createBaseTransactionStatusMeta(): TransactionStatusMeta {
 }
 
 export const TransactionStatusMeta = {
-  encode(
-    message: TransactionStatusMeta,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: TransactionStatusMeta, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.err !== undefined) {
       TransactionError.encode(message.err, writer.uint32(10).fork()).ldelim();
     }
@@ -1075,12 +935,8 @@ export const TransactionStatusMeta = {
     return writer;
   },
 
-  decode(
-    input: _m0.Reader | Uint8Array,
-    length?: number
-  ): TransactionStatusMeta {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+  decode(input: _m0.Reader | Uint8Array, length?: number): TransactionStatusMeta {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseTransactionStatusMeta();
     while (reader.pos < end) {
@@ -1139,9 +995,7 @@ export const TransactionStatusMeta = {
             break;
           }
 
-          message.innerInstructions.push(
-            InnerInstructions.decode(reader, reader.uint32())
-          );
+          message.innerInstructions.push(InnerInstructions.decode(reader, reader.uint32()));
           continue;
         case 10:
           if (tag !== 80) {
@@ -1169,18 +1023,14 @@ export const TransactionStatusMeta = {
             break;
           }
 
-          message.preTokenBalances.push(
-            TokenBalance.decode(reader, reader.uint32())
-          );
+          message.preTokenBalances.push(TokenBalance.decode(reader, reader.uint32()));
           continue;
         case 8:
           if (tag !== 66) {
             break;
           }
 
-          message.postTokenBalances.push(
-            TokenBalance.decode(reader, reader.uint32())
-          );
+          message.postTokenBalances.push(TokenBalance.decode(reader, reader.uint32()));
           continue;
         case 9:
           if (tag !== 74) {
@@ -1235,63 +1085,38 @@ export const TransactionStatusMeta = {
 
   fromJSON(object: any): TransactionStatusMeta {
     return {
-      err: isSet(object.err)
-        ? TransactionError.fromJSON(object.err)
-        : undefined,
+      err: isSet(object.err) ? TransactionError.fromJSON(object.err) : undefined,
       fee: isSet(object.fee) ? String(object.fee) : "0",
-      preBalances: Array.isArray(object?.preBalances)
-        ? object.preBalances.map((e: any) => String(e))
-        : [],
-      postBalances: Array.isArray(object?.postBalances)
-        ? object.postBalances.map((e: any) => String(e))
-        : [],
+      preBalances: Array.isArray(object?.preBalances) ? object.preBalances.map((e: any) => String(e)) : [],
+      postBalances: Array.isArray(object?.postBalances) ? object.postBalances.map((e: any) => String(e)) : [],
       innerInstructions: Array.isArray(object?.innerInstructions)
-        ? object.innerInstructions.map((e: any) =>
-            InnerInstructions.fromJSON(e)
-          )
+        ? object.innerInstructions.map((e: any) => InnerInstructions.fromJSON(e))
         : [],
-      innerInstructionsNone: isSet(object.innerInstructionsNone)
-        ? Boolean(object.innerInstructionsNone)
-        : false,
-      logMessages: Array.isArray(object?.logMessages)
-        ? object.logMessages.map((e: any) => String(e))
-        : [],
-      logMessagesNone: isSet(object.logMessagesNone)
-        ? Boolean(object.logMessagesNone)
-        : false,
+      innerInstructionsNone: isSet(object.innerInstructionsNone) ? Boolean(object.innerInstructionsNone) : false,
+      logMessages: Array.isArray(object?.logMessages) ? object.logMessages.map((e: any) => String(e)) : [],
+      logMessagesNone: isSet(object.logMessagesNone) ? Boolean(object.logMessagesNone) : false,
       preTokenBalances: Array.isArray(object?.preTokenBalances)
         ? object.preTokenBalances.map((e: any) => TokenBalance.fromJSON(e))
         : [],
       postTokenBalances: Array.isArray(object?.postTokenBalances)
         ? object.postTokenBalances.map((e: any) => TokenBalance.fromJSON(e))
         : [],
-      rewards: Array.isArray(object?.rewards)
-        ? object.rewards.map((e: any) => Reward.fromJSON(e))
-        : [],
+      rewards: Array.isArray(object?.rewards) ? object.rewards.map((e: any) => Reward.fromJSON(e)) : [],
       loadedWritableAddresses: Array.isArray(object?.loadedWritableAddresses)
         ? object.loadedWritableAddresses.map((e: any) => bytesFromBase64(e))
         : [],
       loadedReadonlyAddresses: Array.isArray(object?.loadedReadonlyAddresses)
         ? object.loadedReadonlyAddresses.map((e: any) => bytesFromBase64(e))
         : [],
-      returnData: isSet(object.returnData)
-        ? ReturnData.fromJSON(object.returnData)
-        : undefined,
-      returnDataNone: isSet(object.returnDataNone)
-        ? Boolean(object.returnDataNone)
-        : false,
-      computeUnitsConsumed: isSet(object.computeUnitsConsumed)
-        ? String(object.computeUnitsConsumed)
-        : undefined,
+      returnData: isSet(object.returnData) ? ReturnData.fromJSON(object.returnData) : undefined,
+      returnDataNone: isSet(object.returnDataNone) ? Boolean(object.returnDataNone) : false,
+      computeUnitsConsumed: isSet(object.computeUnitsConsumed) ? String(object.computeUnitsConsumed) : undefined,
     };
   },
 
   toJSON(message: TransactionStatusMeta): unknown {
     const obj: any = {};
-    message.err !== undefined &&
-      (obj.err = message.err
-        ? TransactionError.toJSON(message.err)
-        : undefined);
+    message.err !== undefined && (obj.err = message.err ? TransactionError.toJSON(message.err) : undefined);
     message.fee !== undefined && (obj.fee = message.fee);
     if (message.preBalances) {
       obj.preBalances = message.preBalances.map((e) => e);
@@ -1304,39 +1129,29 @@ export const TransactionStatusMeta = {
       obj.postBalances = [];
     }
     if (message.innerInstructions) {
-      obj.innerInstructions = message.innerInstructions.map((e) =>
-        e ? InnerInstructions.toJSON(e) : undefined
-      );
+      obj.innerInstructions = message.innerInstructions.map((e) => e ? InnerInstructions.toJSON(e) : undefined);
     } else {
       obj.innerInstructions = [];
     }
-    message.innerInstructionsNone !== undefined &&
-      (obj.innerInstructionsNone = message.innerInstructionsNone);
+    message.innerInstructionsNone !== undefined && (obj.innerInstructionsNone = message.innerInstructionsNone);
     if (message.logMessages) {
       obj.logMessages = message.logMessages.map((e) => e);
     } else {
       obj.logMessages = [];
     }
-    message.logMessagesNone !== undefined &&
-      (obj.logMessagesNone = message.logMessagesNone);
+    message.logMessagesNone !== undefined && (obj.logMessagesNone = message.logMessagesNone);
     if (message.preTokenBalances) {
-      obj.preTokenBalances = message.preTokenBalances.map((e) =>
-        e ? TokenBalance.toJSON(e) : undefined
-      );
+      obj.preTokenBalances = message.preTokenBalances.map((e) => e ? TokenBalance.toJSON(e) : undefined);
     } else {
       obj.preTokenBalances = [];
     }
     if (message.postTokenBalances) {
-      obj.postTokenBalances = message.postTokenBalances.map((e) =>
-        e ? TokenBalance.toJSON(e) : undefined
-      );
+      obj.postTokenBalances = message.postTokenBalances.map((e) => e ? TokenBalance.toJSON(e) : undefined);
     } else {
       obj.postTokenBalances = [];
     }
     if (message.rewards) {
-      obj.rewards = message.rewards.map((e) =>
-        e ? Reward.toJSON(e) : undefined
-      );
+      obj.rewards = message.rewards.map((e) => e ? Reward.toJSON(e) : undefined);
     } else {
       obj.rewards = [];
     }
@@ -1355,52 +1170,36 @@ export const TransactionStatusMeta = {
       obj.loadedReadonlyAddresses = [];
     }
     message.returnData !== undefined &&
-      (obj.returnData = message.returnData
-        ? ReturnData.toJSON(message.returnData)
-        : undefined);
-    message.returnDataNone !== undefined &&
-      (obj.returnDataNone = message.returnDataNone);
-    message.computeUnitsConsumed !== undefined &&
-      (obj.computeUnitsConsumed = message.computeUnitsConsumed);
+      (obj.returnData = message.returnData ? ReturnData.toJSON(message.returnData) : undefined);
+    message.returnDataNone !== undefined && (obj.returnDataNone = message.returnDataNone);
+    message.computeUnitsConsumed !== undefined && (obj.computeUnitsConsumed = message.computeUnitsConsumed);
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TransactionStatusMeta>, I>>(
-    base?: I
-  ): TransactionStatusMeta {
+  create<I extends Exact<DeepPartial<TransactionStatusMeta>, I>>(base?: I): TransactionStatusMeta {
     return TransactionStatusMeta.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<TransactionStatusMeta>, I>>(
-    object: I
-  ): TransactionStatusMeta {
+  fromPartial<I extends Exact<DeepPartial<TransactionStatusMeta>, I>>(object: I): TransactionStatusMeta {
     const message = createBaseTransactionStatusMeta();
-    message.err =
-      object.err !== undefined && object.err !== null
-        ? TransactionError.fromPartial(object.err)
-        : undefined;
+    message.err = (object.err !== undefined && object.err !== null)
+      ? TransactionError.fromPartial(object.err)
+      : undefined;
     message.fee = object.fee ?? "0";
     message.preBalances = object.preBalances?.map((e) => e) || [];
     message.postBalances = object.postBalances?.map((e) => e) || [];
-    message.innerInstructions =
-      object.innerInstructions?.map((e) => InnerInstructions.fromPartial(e)) ||
-      [];
+    message.innerInstructions = object.innerInstructions?.map((e) => InnerInstructions.fromPartial(e)) || [];
     message.innerInstructionsNone = object.innerInstructionsNone ?? false;
     message.logMessages = object.logMessages?.map((e) => e) || [];
     message.logMessagesNone = object.logMessagesNone ?? false;
-    message.preTokenBalances =
-      object.preTokenBalances?.map((e) => TokenBalance.fromPartial(e)) || [];
-    message.postTokenBalances =
-      object.postTokenBalances?.map((e) => TokenBalance.fromPartial(e)) || [];
+    message.preTokenBalances = object.preTokenBalances?.map((e) => TokenBalance.fromPartial(e)) || [];
+    message.postTokenBalances = object.postTokenBalances?.map((e) => TokenBalance.fromPartial(e)) || [];
     message.rewards = object.rewards?.map((e) => Reward.fromPartial(e)) || [];
-    message.loadedWritableAddresses =
-      object.loadedWritableAddresses?.map((e) => e) || [];
-    message.loadedReadonlyAddresses =
-      object.loadedReadonlyAddresses?.map((e) => e) || [];
-    message.returnData =
-      object.returnData !== undefined && object.returnData !== null
-        ? ReturnData.fromPartial(object.returnData)
-        : undefined;
+    message.loadedWritableAddresses = object.loadedWritableAddresses?.map((e) => e) || [];
+    message.loadedReadonlyAddresses = object.loadedReadonlyAddresses?.map((e) => e) || [];
+    message.returnData = (object.returnData !== undefined && object.returnData !== null)
+      ? ReturnData.fromPartial(object.returnData)
+      : undefined;
     message.returnDataNone = object.returnDataNone ?? false;
     message.computeUnitsConsumed = object.computeUnitsConsumed ?? undefined;
     return message;
@@ -1412,10 +1211,7 @@ function createBaseTransactionError(): TransactionError {
 }
 
 export const TransactionError = {
-  encode(
-    message: TransactionError,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: TransactionError, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.err.length !== 0) {
       writer.uint32(10).bytes(message.err);
     }
@@ -1423,8 +1219,7 @@ export const TransactionError = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): TransactionError {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseTransactionError();
     while (reader.pos < end) {
@@ -1447,29 +1242,21 @@ export const TransactionError = {
   },
 
   fromJSON(object: any): TransactionError {
-    return {
-      err: isSet(object.err) ? bytesFromBase64(object.err) : new Uint8Array(0),
-    };
+    return { err: isSet(object.err) ? bytesFromBase64(object.err) : new Uint8Array(0) };
   },
 
   toJSON(message: TransactionError): unknown {
     const obj: any = {};
     message.err !== undefined &&
-      (obj.err = base64FromBytes(
-        message.err !== undefined ? message.err : new Uint8Array(0)
-      ));
+      (obj.err = base64FromBytes(message.err !== undefined ? message.err : new Uint8Array(0)));
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TransactionError>, I>>(
-    base?: I
-  ): TransactionError {
+  create<I extends Exact<DeepPartial<TransactionError>, I>>(base?: I): TransactionError {
     return TransactionError.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<TransactionError>, I>>(
-    object: I
-  ): TransactionError {
+  fromPartial<I extends Exact<DeepPartial<TransactionError>, I>>(object: I): TransactionError {
     const message = createBaseTransactionError();
     message.err = object.err ?? new Uint8Array(0);
     return message;
@@ -1481,10 +1268,7 @@ function createBaseInnerInstructions(): InnerInstructions {
 }
 
 export const InnerInstructions = {
-  encode(
-    message: InnerInstructions,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: InnerInstructions, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.index !== 0) {
       writer.uint32(8).uint32(message.index);
     }
@@ -1495,8 +1279,7 @@ export const InnerInstructions = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): InnerInstructions {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseInnerInstructions();
     while (reader.pos < end) {
@@ -1514,9 +1297,7 @@ export const InnerInstructions = {
             break;
           }
 
-          message.instructions.push(
-            InnerInstruction.decode(reader, reader.uint32())
-          );
+          message.instructions.push(InnerInstruction.decode(reader, reader.uint32()));
           continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
@@ -1540,46 +1321,31 @@ export const InnerInstructions = {
     const obj: any = {};
     message.index !== undefined && (obj.index = Math.round(message.index));
     if (message.instructions) {
-      obj.instructions = message.instructions.map((e) =>
-        e ? InnerInstruction.toJSON(e) : undefined
-      );
+      obj.instructions = message.instructions.map((e) => e ? InnerInstruction.toJSON(e) : undefined);
     } else {
       obj.instructions = [];
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<InnerInstructions>, I>>(
-    base?: I
-  ): InnerInstructions {
+  create<I extends Exact<DeepPartial<InnerInstructions>, I>>(base?: I): InnerInstructions {
     return InnerInstructions.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<InnerInstructions>, I>>(
-    object: I
-  ): InnerInstructions {
+  fromPartial<I extends Exact<DeepPartial<InnerInstructions>, I>>(object: I): InnerInstructions {
     const message = createBaseInnerInstructions();
     message.index = object.index ?? 0;
-    message.instructions =
-      object.instructions?.map((e) => InnerInstruction.fromPartial(e)) || [];
+    message.instructions = object.instructions?.map((e) => InnerInstruction.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseInnerInstruction(): InnerInstruction {
-  return {
-    programIdIndex: 0,
-    accounts: new Uint8Array(0),
-    data: new Uint8Array(0),
-    stackHeight: undefined,
-  };
+  return { programIdIndex: 0, accounts: new Uint8Array(0), data: new Uint8Array(0), stackHeight: undefined };
 }
 
 export const InnerInstruction = {
-  encode(
-    message: InnerInstruction,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: InnerInstruction, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.programIdIndex !== 0) {
       writer.uint32(8).uint32(message.programIdIndex);
     }
@@ -1596,8 +1362,7 @@ export const InnerInstruction = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): InnerInstruction {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseInnerInstruction();
     while (reader.pos < end) {
@@ -1642,47 +1407,29 @@ export const InnerInstruction = {
 
   fromJSON(object: any): InnerInstruction {
     return {
-      programIdIndex: isSet(object.programIdIndex)
-        ? Number(object.programIdIndex)
-        : 0,
-      accounts: isSet(object.accounts)
-        ? bytesFromBase64(object.accounts)
-        : new Uint8Array(0),
-      data: isSet(object.data)
-        ? bytesFromBase64(object.data)
-        : new Uint8Array(0),
-      stackHeight: isSet(object.stackHeight)
-        ? Number(object.stackHeight)
-        : undefined,
+      programIdIndex: isSet(object.programIdIndex) ? Number(object.programIdIndex) : 0,
+      accounts: isSet(object.accounts) ? bytesFromBase64(object.accounts) : new Uint8Array(0),
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
+      stackHeight: isSet(object.stackHeight) ? Number(object.stackHeight) : undefined,
     };
   },
 
   toJSON(message: InnerInstruction): unknown {
     const obj: any = {};
-    message.programIdIndex !== undefined &&
-      (obj.programIdIndex = Math.round(message.programIdIndex));
+    message.programIdIndex !== undefined && (obj.programIdIndex = Math.round(message.programIdIndex));
     message.accounts !== undefined &&
-      (obj.accounts = base64FromBytes(
-        message.accounts !== undefined ? message.accounts : new Uint8Array(0)
-      ));
+      (obj.accounts = base64FromBytes(message.accounts !== undefined ? message.accounts : new Uint8Array(0)));
     message.data !== undefined &&
-      (obj.data = base64FromBytes(
-        message.data !== undefined ? message.data : new Uint8Array(0)
-      ));
-    message.stackHeight !== undefined &&
-      (obj.stackHeight = Math.round(message.stackHeight));
+      (obj.data = base64FromBytes(message.data !== undefined ? message.data : new Uint8Array(0)));
+    message.stackHeight !== undefined && (obj.stackHeight = Math.round(message.stackHeight));
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<InnerInstruction>, I>>(
-    base?: I
-  ): InnerInstruction {
+  create<I extends Exact<DeepPartial<InnerInstruction>, I>>(base?: I): InnerInstruction {
     return InnerInstruction.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<InnerInstruction>, I>>(
-    object: I
-  ): InnerInstruction {
+  fromPartial<I extends Exact<DeepPartial<InnerInstruction>, I>>(object: I): InnerInstruction {
     const message = createBaseInnerInstruction();
     message.programIdIndex = object.programIdIndex ?? 0;
     message.accounts = object.accounts ?? new Uint8Array(0);
@@ -1693,18 +1440,11 @@ export const InnerInstruction = {
 };
 
 function createBaseCompiledInstruction(): CompiledInstruction {
-  return {
-    programIdIndex: 0,
-    accounts: new Uint8Array(0),
-    data: new Uint8Array(0),
-  };
+  return { programIdIndex: 0, accounts: new Uint8Array(0), data: new Uint8Array(0) };
 }
 
 export const CompiledInstruction = {
-  encode(
-    message: CompiledInstruction,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: CompiledInstruction, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.programIdIndex !== 0) {
       writer.uint32(8).uint32(message.programIdIndex);
     }
@@ -1718,8 +1458,7 @@ export const CompiledInstruction = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): CompiledInstruction {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseCompiledInstruction();
     while (reader.pos < end) {
@@ -1757,42 +1496,27 @@ export const CompiledInstruction = {
 
   fromJSON(object: any): CompiledInstruction {
     return {
-      programIdIndex: isSet(object.programIdIndex)
-        ? Number(object.programIdIndex)
-        : 0,
-      accounts: isSet(object.accounts)
-        ? bytesFromBase64(object.accounts)
-        : new Uint8Array(0),
-      data: isSet(object.data)
-        ? bytesFromBase64(object.data)
-        : new Uint8Array(0),
+      programIdIndex: isSet(object.programIdIndex) ? Number(object.programIdIndex) : 0,
+      accounts: isSet(object.accounts) ? bytesFromBase64(object.accounts) : new Uint8Array(0),
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
     };
   },
 
   toJSON(message: CompiledInstruction): unknown {
     const obj: any = {};
-    message.programIdIndex !== undefined &&
-      (obj.programIdIndex = Math.round(message.programIdIndex));
+    message.programIdIndex !== undefined && (obj.programIdIndex = Math.round(message.programIdIndex));
     message.accounts !== undefined &&
-      (obj.accounts = base64FromBytes(
-        message.accounts !== undefined ? message.accounts : new Uint8Array(0)
-      ));
+      (obj.accounts = base64FromBytes(message.accounts !== undefined ? message.accounts : new Uint8Array(0)));
     message.data !== undefined &&
-      (obj.data = base64FromBytes(
-        message.data !== undefined ? message.data : new Uint8Array(0)
-      ));
+      (obj.data = base64FromBytes(message.data !== undefined ? message.data : new Uint8Array(0)));
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<CompiledInstruction>, I>>(
-    base?: I
-  ): CompiledInstruction {
+  create<I extends Exact<DeepPartial<CompiledInstruction>, I>>(base?: I): CompiledInstruction {
     return CompiledInstruction.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<CompiledInstruction>, I>>(
-    object: I
-  ): CompiledInstruction {
+  fromPartial<I extends Exact<DeepPartial<CompiledInstruction>, I>>(object: I): CompiledInstruction {
     const message = createBaseCompiledInstruction();
     message.programIdIndex = object.programIdIndex ?? 0;
     message.accounts = object.accounts ?? new Uint8Array(0);
@@ -1802,20 +1526,11 @@ export const CompiledInstruction = {
 };
 
 function createBaseTokenBalance(): TokenBalance {
-  return {
-    accountIndex: 0,
-    mint: "",
-    uiTokenAmount: undefined,
-    owner: "",
-    programId: "",
-  };
+  return { accountIndex: 0, mint: "", uiTokenAmount: undefined, owner: "", programId: "" };
 }
 
 export const TokenBalance = {
-  encode(
-    message: TokenBalance,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: TokenBalance, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.accountIndex !== 0) {
       writer.uint32(8).uint32(message.accountIndex);
     }
@@ -1823,10 +1538,7 @@ export const TokenBalance = {
       writer.uint32(18).string(message.mint);
     }
     if (message.uiTokenAmount !== undefined) {
-      UiTokenAmount.encode(
-        message.uiTokenAmount,
-        writer.uint32(26).fork()
-      ).ldelim();
+      UiTokenAmount.encode(message.uiTokenAmount, writer.uint32(26).fork()).ldelim();
     }
     if (message.owner !== "") {
       writer.uint32(34).string(message.owner);
@@ -1838,8 +1550,7 @@ export const TokenBalance = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): TokenBalance {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseTokenBalance();
     while (reader.pos < end) {
@@ -1891,13 +1602,9 @@ export const TokenBalance = {
 
   fromJSON(object: any): TokenBalance {
     return {
-      accountIndex: isSet(object.accountIndex)
-        ? Number(object.accountIndex)
-        : 0,
+      accountIndex: isSet(object.accountIndex) ? Number(object.accountIndex) : 0,
       mint: isSet(object.mint) ? String(object.mint) : "",
-      uiTokenAmount: isSet(object.uiTokenAmount)
-        ? UiTokenAmount.fromJSON(object.uiTokenAmount)
-        : undefined,
+      uiTokenAmount: isSet(object.uiTokenAmount) ? UiTokenAmount.fromJSON(object.uiTokenAmount) : undefined,
       owner: isSet(object.owner) ? String(object.owner) : "",
       programId: isSet(object.programId) ? String(object.programId) : "",
     };
@@ -1905,34 +1612,26 @@ export const TokenBalance = {
 
   toJSON(message: TokenBalance): unknown {
     const obj: any = {};
-    message.accountIndex !== undefined &&
-      (obj.accountIndex = Math.round(message.accountIndex));
+    message.accountIndex !== undefined && (obj.accountIndex = Math.round(message.accountIndex));
     message.mint !== undefined && (obj.mint = message.mint);
     message.uiTokenAmount !== undefined &&
-      (obj.uiTokenAmount = message.uiTokenAmount
-        ? UiTokenAmount.toJSON(message.uiTokenAmount)
-        : undefined);
+      (obj.uiTokenAmount = message.uiTokenAmount ? UiTokenAmount.toJSON(message.uiTokenAmount) : undefined);
     message.owner !== undefined && (obj.owner = message.owner);
     message.programId !== undefined && (obj.programId = message.programId);
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TokenBalance>, I>>(
-    base?: I
-  ): TokenBalance {
+  create<I extends Exact<DeepPartial<TokenBalance>, I>>(base?: I): TokenBalance {
     return TokenBalance.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<TokenBalance>, I>>(
-    object: I
-  ): TokenBalance {
+  fromPartial<I extends Exact<DeepPartial<TokenBalance>, I>>(object: I): TokenBalance {
     const message = createBaseTokenBalance();
     message.accountIndex = object.accountIndex ?? 0;
     message.mint = object.mint ?? "";
-    message.uiTokenAmount =
-      object.uiTokenAmount !== undefined && object.uiTokenAmount !== null
-        ? UiTokenAmount.fromPartial(object.uiTokenAmount)
-        : undefined;
+    message.uiTokenAmount = (object.uiTokenAmount !== undefined && object.uiTokenAmount !== null)
+      ? UiTokenAmount.fromPartial(object.uiTokenAmount)
+      : undefined;
     message.owner = object.owner ?? "";
     message.programId = object.programId ?? "";
     return message;
@@ -1944,10 +1643,7 @@ function createBaseUiTokenAmount(): UiTokenAmount {
 }
 
 export const UiTokenAmount = {
-  encode(
-    message: UiTokenAmount,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: UiTokenAmount, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.uiAmount !== 0) {
       writer.uint32(9).double(message.uiAmount);
     }
@@ -1964,8 +1660,7 @@ export const UiTokenAmount = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): UiTokenAmount {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseUiTokenAmount();
     while (reader.pos < end) {
@@ -2013,32 +1708,24 @@ export const UiTokenAmount = {
       uiAmount: isSet(object.uiAmount) ? Number(object.uiAmount) : 0,
       decimals: isSet(object.decimals) ? Number(object.decimals) : 0,
       amount: isSet(object.amount) ? String(object.amount) : "",
-      uiAmountString: isSet(object.uiAmountString)
-        ? String(object.uiAmountString)
-        : "",
+      uiAmountString: isSet(object.uiAmountString) ? String(object.uiAmountString) : "",
     };
   },
 
   toJSON(message: UiTokenAmount): unknown {
     const obj: any = {};
     message.uiAmount !== undefined && (obj.uiAmount = message.uiAmount);
-    message.decimals !== undefined &&
-      (obj.decimals = Math.round(message.decimals));
+    message.decimals !== undefined && (obj.decimals = Math.round(message.decimals));
     message.amount !== undefined && (obj.amount = message.amount);
-    message.uiAmountString !== undefined &&
-      (obj.uiAmountString = message.uiAmountString);
+    message.uiAmountString !== undefined && (obj.uiAmountString = message.uiAmountString);
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<UiTokenAmount>, I>>(
-    base?: I
-  ): UiTokenAmount {
+  create<I extends Exact<DeepPartial<UiTokenAmount>, I>>(base?: I): UiTokenAmount {
     return UiTokenAmount.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<UiTokenAmount>, I>>(
-    object: I
-  ): UiTokenAmount {
+  fromPartial<I extends Exact<DeepPartial<UiTokenAmount>, I>>(object: I): UiTokenAmount {
     const message = createBaseUiTokenAmount();
     message.uiAmount = object.uiAmount ?? 0;
     message.decimals = object.decimals ?? 0;
@@ -2053,10 +1740,7 @@ function createBaseReturnData(): ReturnData {
 }
 
 export const ReturnData = {
-  encode(
-    message: ReturnData,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: ReturnData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.programId.length !== 0) {
       writer.uint32(10).bytes(message.programId);
     }
@@ -2067,8 +1751,7 @@ export const ReturnData = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): ReturnData {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseReturnData();
     while (reader.pos < end) {
@@ -2099,25 +1782,17 @@ export const ReturnData = {
 
   fromJSON(object: any): ReturnData {
     return {
-      programId: isSet(object.programId)
-        ? bytesFromBase64(object.programId)
-        : new Uint8Array(0),
-      data: isSet(object.data)
-        ? bytesFromBase64(object.data)
-        : new Uint8Array(0),
+      programId: isSet(object.programId) ? bytesFromBase64(object.programId) : new Uint8Array(0),
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
     };
   },
 
   toJSON(message: ReturnData): unknown {
     const obj: any = {};
     message.programId !== undefined &&
-      (obj.programId = base64FromBytes(
-        message.programId !== undefined ? message.programId : new Uint8Array(0)
-      ));
+      (obj.programId = base64FromBytes(message.programId !== undefined ? message.programId : new Uint8Array(0)));
     message.data !== undefined &&
-      (obj.data = base64FromBytes(
-        message.data !== undefined ? message.data : new Uint8Array(0)
-      ));
+      (obj.data = base64FromBytes(message.data !== undefined ? message.data : new Uint8Array(0)));
     return obj;
   },
 
@@ -2125,9 +1800,7 @@ export const ReturnData = {
     return ReturnData.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<ReturnData>, I>>(
-    object: I
-  ): ReturnData {
+  fromPartial<I extends Exact<DeepPartial<ReturnData>, I>>(object: I): ReturnData {
     const message = createBaseReturnData();
     message.programId = object.programId ?? new Uint8Array(0);
     message.data = object.data ?? new Uint8Array(0);
@@ -2136,20 +1809,11 @@ export const ReturnData = {
 };
 
 function createBaseReward(): Reward {
-  return {
-    pubkey: "",
-    lamports: "0",
-    postBalance: "0",
-    rewardType: 0,
-    commission: "",
-  };
+  return { pubkey: "", lamports: "0", postBalance: "0", rewardType: 0, commission: "" };
 }
 
 export const Reward = {
-  encode(
-    message: Reward,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: Reward, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.pubkey !== "") {
       writer.uint32(10).string(message.pubkey);
     }
@@ -2169,8 +1833,7 @@ export const Reward = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): Reward {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseReward();
     while (reader.pos < end) {
@@ -2225,9 +1888,7 @@ export const Reward = {
       pubkey: isSet(object.pubkey) ? String(object.pubkey) : "",
       lamports: isSet(object.lamports) ? String(object.lamports) : "0",
       postBalance: isSet(object.postBalance) ? String(object.postBalance) : "0",
-      rewardType: isSet(object.rewardType)
-        ? rewardTypeFromJSON(object.rewardType)
-        : 0,
+      rewardType: isSet(object.rewardType) ? rewardTypeFromJSON(object.rewardType) : 0,
       commission: isSet(object.commission) ? String(object.commission) : "",
     };
   },
@@ -2236,10 +1897,8 @@ export const Reward = {
     const obj: any = {};
     message.pubkey !== undefined && (obj.pubkey = message.pubkey);
     message.lamports !== undefined && (obj.lamports = message.lamports);
-    message.postBalance !== undefined &&
-      (obj.postBalance = message.postBalance);
-    message.rewardType !== undefined &&
-      (obj.rewardType = rewardTypeToJSON(message.rewardType));
+    message.postBalance !== undefined && (obj.postBalance = message.postBalance);
+    message.rewardType !== undefined && (obj.rewardType = rewardTypeToJSON(message.rewardType));
     message.commission !== undefined && (obj.commission = message.commission);
     return obj;
   },
@@ -2260,23 +1919,22 @@ export const Reward = {
 };
 
 function createBaseRewards(): Rewards {
-  return { rewards: [] };
+  return { rewards: [], numPartitions: undefined };
 }
 
 export const Rewards = {
-  encode(
-    message: Rewards,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: Rewards, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     for (const v of message.rewards) {
       Reward.encode(v!, writer.uint32(10).fork()).ldelim();
+    }
+    if (message.numPartitions !== undefined) {
+      NumPartitions.encode(message.numPartitions, writer.uint32(18).fork()).ldelim();
     }
     return writer;
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): Rewards {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseRewards();
     while (reader.pos < end) {
@@ -2289,6 +1947,13 @@ export const Rewards = {
 
           message.rewards.push(Reward.decode(reader, reader.uint32()));
           continue;
+        case 2:
+          if (tag !== 18) {
+            break;
+          }
+
+          message.numPartitions = NumPartitions.decode(reader, reader.uint32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2300,21 +1965,20 @@ export const Rewards = {
 
   fromJSON(object: any): Rewards {
     return {
-      rewards: Array.isArray(object?.rewards)
-        ? object.rewards.map((e: any) => Reward.fromJSON(e))
-        : [],
+      rewards: Array.isArray(object?.rewards) ? object.rewards.map((e: any) => Reward.fromJSON(e)) : [],
+      numPartitions: isSet(object.numPartitions) ? NumPartitions.fromJSON(object.numPartitions) : undefined,
     };
   },
 
   toJSON(message: Rewards): unknown {
     const obj: any = {};
     if (message.rewards) {
-      obj.rewards = message.rewards.map((e) =>
-        e ? Reward.toJSON(e) : undefined
-      );
+      obj.rewards = message.rewards.map((e) => e ? Reward.toJSON(e) : undefined);
     } else {
       obj.rewards = [];
     }
+    message.numPartitions !== undefined &&
+      (obj.numPartitions = message.numPartitions ? NumPartitions.toJSON(message.numPartitions) : undefined);
     return obj;
   },
 
@@ -2325,6 +1989,9 @@ export const Rewards = {
   fromPartial<I extends Exact<DeepPartial<Rewards>, I>>(object: I): Rewards {
     const message = createBaseRewards();
     message.rewards = object.rewards?.map((e) => Reward.fromPartial(e)) || [];
+    message.numPartitions = (object.numPartitions !== undefined && object.numPartitions !== null)
+      ? NumPartitions.fromPartial(object.numPartitions)
+      : undefined;
     return message;
   },
 };
@@ -2334,10 +2001,7 @@ function createBaseUnixTimestamp(): UnixTimestamp {
 }
 
 export const UnixTimestamp = {
-  encode(
-    message: UnixTimestamp,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: UnixTimestamp, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.timestamp !== "0") {
       writer.uint32(8).int64(message.timestamp);
     }
@@ -2345,8 +2009,7 @@ export const UnixTimestamp = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): UnixTimestamp {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseUnixTimestamp();
     while (reader.pos < end) {
@@ -2369,9 +2032,7 @@ export const UnixTimestamp = {
   },
 
   fromJSON(object: any): UnixTimestamp {
-    return {
-      timestamp: isSet(object.timestamp) ? String(object.timestamp) : "0",
-    };
+    return { timestamp: isSet(object.timestamp) ? String(object.timestamp) : "0" };
   },
 
   toJSON(message: UnixTimestamp): unknown {
@@ -2380,15 +2041,11 @@ export const UnixTimestamp = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<UnixTimestamp>, I>>(
-    base?: I
-  ): UnixTimestamp {
+  create<I extends Exact<DeepPartial<UnixTimestamp>, I>>(base?: I): UnixTimestamp {
     return UnixTimestamp.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<UnixTimestamp>, I>>(
-    object: I
-  ): UnixTimestamp {
+  fromPartial<I extends Exact<DeepPartial<UnixTimestamp>, I>>(object: I): UnixTimestamp {
     const message = createBaseUnixTimestamp();
     message.timestamp = object.timestamp ?? "0";
     return message;
@@ -2400,10 +2057,7 @@ function createBaseBlockHeight(): BlockHeight {
 }
 
 export const BlockHeight = {
-  encode(
-    message: BlockHeight,
-    writer: _m0.Writer = _m0.Writer.create()
-  ): _m0.Writer {
+  encode(message: BlockHeight, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.blockHeight !== "0") {
       writer.uint32(8).uint64(message.blockHeight);
     }
@@ -2411,8 +2065,7 @@ export const BlockHeight = {
   },
 
   decode(input: _m0.Reader | Uint8Array, length?: number): BlockHeight {
-    const reader =
-      input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
     let end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseBlockHeight();
     while (reader.pos < end) {
@@ -2435,15 +2088,12 @@ export const BlockHeight = {
   },
 
   fromJSON(object: any): BlockHeight {
-    return {
-      blockHeight: isSet(object.blockHeight) ? String(object.blockHeight) : "0",
-    };
+    return { blockHeight: isSet(object.blockHeight) ? String(object.blockHeight) : "0" };
   },
 
   toJSON(message: BlockHeight): unknown {
     const obj: any = {};
-    message.blockHeight !== undefined &&
-      (obj.blockHeight = message.blockHeight);
+    message.blockHeight !== undefined && (obj.blockHeight = message.blockHeight);
     return obj;
   },
 
@@ -2451,11 +2101,65 @@ export const BlockHeight = {
     return BlockHeight.fromPartial(base ?? {});
   },
 
-  fromPartial<I extends Exact<DeepPartial<BlockHeight>, I>>(
-    object: I
-  ): BlockHeight {
+  fromPartial<I extends Exact<DeepPartial<BlockHeight>, I>>(object: I): BlockHeight {
     const message = createBaseBlockHeight();
     message.blockHeight = object.blockHeight ?? "0";
+    return message;
+  },
+};
+
+function createBaseNumPartitions(): NumPartitions {
+  return { numPartitions: "0" };
+}
+
+export const NumPartitions = {
+  encode(message: NumPartitions, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.numPartitions !== "0") {
+      writer.uint32(8).uint64(message.numPartitions);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): NumPartitions {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseNumPartitions();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 8) {
+            break;
+          }
+
+          message.numPartitions = longToString(reader.uint64() as Long);
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): NumPartitions {
+    return { numPartitions: isSet(object.numPartitions) ? String(object.numPartitions) : "0" };
+  },
+
+  toJSON(message: NumPartitions): unknown {
+    const obj: any = {};
+    message.numPartitions !== undefined && (obj.numPartitions = message.numPartitions);
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NumPartitions>, I>>(base?: I): NumPartitions {
+    return NumPartitions.fromPartial(base ?? {});
+  },
+
+  fromPartial<I extends Exact<DeepPartial<NumPartitions>, I>>(object: I): NumPartitions {
+    const message = createBaseNumPartitions();
+    message.numPartitions = object.numPartitions ?? "0";
     return message;
   },
 };
@@ -2504,31 +2208,16 @@ function base64FromBytes(arr: Uint8Array): string {
   }
 }
 
-type Builtin =
-  | Date
-  | Function
-  | Uint8Array
-  | string
-  | number
-  | boolean
-  | undefined;
+type Builtin = Date | Function | Uint8Array | string | number | boolean | undefined;
 
-export type DeepPartial<T> = T extends Builtin
-  ? T
-  : T extends Array<infer U>
-  ? Array<DeepPartial<U>>
-  : T extends ReadonlyArray<infer U>
-  ? ReadonlyArray<DeepPartial<U>>
-  : T extends {}
-  ? { [K in keyof T]?: DeepPartial<T[K]> }
+export type DeepPartial<T> = T extends Builtin ? T
+  : T extends Array<infer U> ? Array<DeepPartial<U>> : T extends ReadonlyArray<infer U> ? ReadonlyArray<DeepPartial<U>>
+  : T extends {} ? { [K in keyof T]?: DeepPartial<T[K]> }
   : Partial<T>;
 
 type KeysOfUnion<T> = T extends T ? keyof T : never;
-export type Exact<P, I extends P> = P extends Builtin
-  ? P
-  : P & { [K in keyof P]: Exact<P[K], I[K]> } & {
-      [K in Exclude<keyof I, KeysOfUnion<P>>]: never;
-    };
+export type Exact<P, I extends P> = P extends Builtin ? P
+  : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
 
 function longToString(long: Long) {
   return long.toString();
