@@ -408,7 +408,7 @@ struct FilterSlotsInner {
 }
 
 impl FilterSlotsInner {
-    fn new(filter: &SubscribeRequestFilterSlots) -> Self {
+    fn new(filter: SubscribeRequestFilterSlots) -> Self {
         Self {
             filter_by_commitment: filter.filter_by_commitment.unwrap_or_default(),
         }
@@ -430,7 +430,7 @@ impl FilterSlots {
         Ok(Self {
             filters: configs
                 .iter()
-                .map(|(name, filter)| (name.clone(), FilterSlotsInner::new(filter)))
+                .map(|(name, filter)| (name.clone(), FilterSlotsInner::new(*filter)))
                 .collect(),
         })
     }
