@@ -176,6 +176,7 @@ impl ConfigGrpcCompression {
             .into_iter()
             .map(|value| match value {
                 "gzip" => Ok(CompressionEncoding::Gzip),
+                "zstd" => Ok(CompressionEncoding::Zstd),
                 value => Err(de::Error::custom(format!(
                     "Unknown compression format: {value}"
                 ))),
