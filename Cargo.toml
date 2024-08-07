@@ -76,7 +76,7 @@ yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "=1.15.0+s
 lto = true
 codegen-units = 1
 
-# https://github.com/anza-xyz/agave/blob/70efe819bcf70476926f06c473f29015b3269536/Cargo.toml#L549C1-L551C49
+# https://github.com/anza-xyz/agave/blob/v2.0.4/Cargo.toml#L502-L533
 [patch.crates-io.curve25519-dalek]
 git = "https://github.com/anza-xyz/curve25519-dalek.git"
 rev = "b500cdc2a920cd5bff9e2dd974d7b97349d61464"
