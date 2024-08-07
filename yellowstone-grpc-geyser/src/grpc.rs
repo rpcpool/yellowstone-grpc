@@ -6,7 +6,7 @@ use {
         version::GrpcVersionInfo,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
     anyhow::Context,
@@ -235,6 +235,7 @@ pub struct MessageBlock {
     pub parent_blockhash: String,
     pub blockhash: String,
     pub rewards: Vec<Reward>,
+    pub num_partitions: Option<u64>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
@@ -267,6 +268,7 @@ impl
             blockhash: blockinfo.blockhash,
             parent_blockhash: blockinfo.parent_blockhash,
             rewards: blockinfo.rewards,
+            num_partitions: blockinfo.num_partitions,
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
@@ -286,20 +288,22 @@ pub struct MessageBlockMeta {
     pub parent_blockhash: String,
     pub blockhash: String,
     pub rewards: Vec<Reward>,
+    pub num_partitions: Option<u64>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
     pub entries_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
+impl<'a> From<&'a ReplicaBlockInfoV4<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV4<'a>) -> Self {
         Self {
             parent_slot: blockinfo.parent_slot,
             slot: blockinfo.slot,
             parent_blockhash: blockinfo.parent_blockhash.to_string(),
             blockhash: blockinfo.blockhash.to_string(),
-            rewards: blockinfo.rewards.into(),
+            rewards: blockinfo.rewards.rewards.clone(),
+            num_partitions: blockinfo.rewards.num_partitions,
             block_time: blockinfo.block_time,
             block_height: blockinfo.block_height,
             executed_transaction_count: blockinfo.executed_transaction_count,
@@ -350,6 +354,7 @@ pub struct MessageBlockRef<'a> {
     pub parent_blockhash: &'a String,
     pub blockhash: &'a String,
     pub rewards: &'a Vec<Reward>,
+    pub num_partitions: Option<u64>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
@@ -382,6 +387,7 @@ impl<'a>
             parent_blockhash: &block.parent_blockhash,
             blockhash: &block.blockhash,
             rewards: &block.rewards,
+            num_partitions: block.num_partitions,
             block_time: block.block_time,
             block_height: block.block_height,
             executed_transaction_count: block.executed_transaction_count,
@@ -444,7 +450,7 @@ impl<'a> MessageRef<'a> {
                 blockhash: message.blockhash.clone(),
                 rewards: Some(convert_to::create_rewards_obj(
                     message.rewards.as_slice(),
-                    None,
+                    message.num_partitions,
                 )),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),
@@ -474,7 +480,7 @@ impl<'a> MessageRef<'a> {
                 blockhash: message.blockhash.clone(),
                 rewards: Some(convert_to::create_rewards_obj(
                     message.rewards.as_slice(),
-                    None,
+                    message.num_partitions,
                 )),
                 block_time: message.block_time.map(convert_to::create_timestamp),
                 block_height: message.block_height.map(convert_to::create_block_height),

@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.12+solana.2.0.2"
+version = "1.0.0-rc.12+solana.2.0.4"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
