@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
         filters::{Filter, FilterAccountsDataSlice},
-        prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        metrics::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
         version::GrpcVersionInfo,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -875,7 +875,7 @@ impl GrpcService {
 
                     // Update metrics
                     if let Message::Slot(slot_message) = message.as_ref() {
-                        prom::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                        metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                     }
 
                     // Update blocks info
@@ -925,7 +925,7 @@ impl GrpcService {
                                                     }
                                                     let reason = reasons.join(",");
 
-                                                    prom::update_invalid_blocks(format!("failed reconstruct {reason}"));
+                                                    metrics::update_invalid_blocks(format!("failed reconstruct {reason}"));
                                                     match block_fail_action {
                                                         ConfigBlockFailAction::Log => {
                                                             error!("failed reconstruct #{slot} {reason}");
@@ -952,7 +952,7 @@ impl GrpcService {
 
                         // If we already build Block message, new message will be a problem
                         if slot_messages.sealed && !(matches!(message.as_ref(), Message::Entry(_)) && slot_messages.entries_count == 0) {
-                            prom::update_invalid_blocks(format!("unexpected message {}", message.kind()));
+                            metrics::update_invalid_blocks(format!("unexpected message {}", message.kind()));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
                                     error!("unexpected message #{} -- {} (invalid order)", message.get_slot(), message.kind());
@@ -967,7 +967,7 @@ impl GrpcService {
                     match message.as_ref() {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
-                                prom::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
+                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
                                 match block_fail_action {
                                     ConfigBlockFailAction::Log => {
                                         error!("unexpected message #{} -- BlockMeta (duplicate)", message.get_slot());
@@ -1146,7 +1146,7 @@ impl GrpcService {
             &config_filters,
         )
         .expect("empty filter");
-        prom::update_subscriptions(&endpoint, None, Some(&filter));
+        metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
         CONNECTIONS_TOTAL.inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
@@ -1172,7 +1172,7 @@ impl GrpcService {
                             continue;
                         }
 
-                        prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                        metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                         filter = filter_new;
                         info!("client #{id}: filter updated");
                     }
@@ -1229,7 +1229,7 @@ impl GrpcService {
                                     continue;
                                 }
 
-                                prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                                metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
@@ -1292,7 +1292,7 @@ impl GrpcService {
 
         CONNECTIONS_TOTAL.dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
-        prom::update_subscriptions(&endpoint, Some(&filter), None);
+        metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
         drop_client();
     }
