@@ -7,7 +7,7 @@ pub mod config;
 pub mod google_pubsub;
 #[cfg(feature = "kafka")]
 pub mod kafka;
-pub mod prom;
+pub mod metrics;
 
 pub mod version;
 

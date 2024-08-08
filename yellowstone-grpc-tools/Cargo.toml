@@ -27,7 +27,10 @@ const-hex = { workspace = true, optional = true }
 futures = { workspace = true }
 google-cloud-googleapis = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true }
 json5 = { workspace = true }
 lazy_static = { workspace = true }
 prometheus = { workspace = true }
