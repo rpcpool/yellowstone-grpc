@@ -27,6 +27,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - solana: update to 2.0.4 ([#390](https://github.com/rpcpool/yellowstone-grpc/pull/390))
 - geyser: add `zstd` support ([#391](https://github.com/rpcpool/yellowstone-grpc/pull/391))
+- deps: update `hyper` to 1 ([#392](https://github.com/rpcpool/yellowstone-grpc/pull/392))
 
 ## 2024-07-12
 
