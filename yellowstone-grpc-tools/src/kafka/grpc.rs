@@ -68,7 +68,9 @@ impl GrpcService {
             broadcast_tx: broadcast_tx.clone(),
         })
         .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Zstd)
+        .send_compressed(CompressionEncoding::Zstd);
 
         let shutdown = Arc::new(Notify::new());
         let shutdown_grpc = Arc::clone(&shutdown);

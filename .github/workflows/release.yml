@@ -46,8 +46,8 @@ jobs:
 
       - name: Set rust version
         run: |
-          source ci/rust-version.sh
-          echo "RUST_STABLE=$rust_stable" | tee -a $GITHUB_ENV
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
 
       - name: Set env vars
         run: |
