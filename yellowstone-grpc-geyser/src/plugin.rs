@@ -81,6 +81,7 @@ impl GeyserPlugin for Plugin {
                     config.prometheus,
                     config.debug_clients_http.then_some(debug_client_rx),
                 )
+                .await
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
                 Ok::<_, GeyserPluginError>((
                     snapshot_channel,
