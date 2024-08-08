@@ -19,9 +19,9 @@ use {
             config::{Config, ConfigDedup, ConfigGrpc2Kafka, ConfigKafka2Grpc},
             dedup::KafkaDedup,
             grpc::GrpcService,
-            prom,
+            metrics,
         },
-        prom::{run_server as prometheus_run_server, GprcMessageKind},
+        metrics::{run_server as prometheus_run_server, GprcMessageKind},
         setup_tracing,
     },
 };
@@ -88,12 +88,13 @@ impl ArgsAction {
         }
 
         // input
-        let (consumer, kafka_error_rx1) = prom::StatsContext::create_stream_consumer(&kafka_config)
-            .context("failed to create kafka consumer")?;
+        let (consumer, kafka_error_rx1) =
+            metrics::StatsContext::create_stream_consumer(&kafka_config)
+                .context("failed to create kafka consumer")?;
         consumer.subscribe(&[&config.kafka_input])?;
 
         // output
-        let (kafka, kafka_error_rx2) = prom::StatsContext::create_future_producer(&kafka_config)
+        let (kafka, kafka_error_rx2) = metrics::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
 
         let mut kafka_error = false;
@@ -129,7 +130,7 @@ impl ArgsAction {
                 },
                 message = consumer.recv() => message,
             }?;
-            prom::recv_inc();
+            metrics::recv_inc();
             trace!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -170,13 +171,13 @@ impl ArgsAction {
                             debug!("kafka send message with key: {key}, result: {result:?}");
 
                             result?.map_err(|(error, _message)| error)?;
-                            prom::sent_inc(GprcMessageKind::Unknown);
+                            metrics::sent_inc(GprcMessageKind::Unknown);
                             Ok::<(), anyhow::Error>(())
                         }
                         Err(error) => Err(error.0.into()),
                     }
                 } else {
-                    prom::dedup_inc();
+                    metrics::dedup_inc();
                     Ok(())
                 }
             });
@@ -220,7 +221,7 @@ impl ArgsAction {
         }
 
         // Connect to kafka
-        let (kafka, kafka_error_rx) = prom::StatsContext::create_future_producer(&kafka_config)
+        let (kafka, kafka_error_rx) = metrics::StatsContext::create_future_producer(&kafka_config)
             .context("failed to create kafka producer")?;
         let mut kafka_error = false;
         tokio::pin!(kafka_error_rx);
@@ -294,7 +295,7 @@ impl ArgsAction {
                                 debug!("kafka send message with key: {key}, result: {result:?}");
 
                                 let _ = result?.map_err(|(error, _message)| error)?;
-                                prom::sent_inc(prom_kind);
+                                metrics::sent_inc(prom_kind);
                                 Ok::<(), anyhow::Error>(())
                             });
                             if send_tasks.len() >= config.kafka_queue_size {
@@ -344,8 +345,9 @@ impl ArgsAction {
 
         let (grpc_tx, grpc_shutdown) = GrpcService::run(config.listen, config.channel_capacity)?;
 
-        let (consumer, kafka_error_rx) = prom::StatsContext::create_stream_consumer(&kafka_config)
-            .context("failed to create kafka consumer")?;
+        let (consumer, kafka_error_rx) =
+            metrics::StatsContext::create_stream_consumer(&kafka_config)
+                .context("failed to create kafka consumer")?;
         let mut kafka_error = false;
         tokio::pin!(kafka_error_rx);
         consumer.subscribe(&[&config.kafka_topic])?;
@@ -359,7 +361,7 @@ impl ArgsAction {
                 },
                 message = consumer.recv() => message?,
             };
-            prom::recv_inc();
+            metrics::recv_inc();
             debug!(
                 "received message with key: {:?}",
                 message.key().and_then(|k| std::str::from_utf8(k).ok())
@@ -394,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Run prometheus server
     if let Some(address) = args.prometheus.or(config.prometheus) {
-        prometheus_run_server(address)?;
+        prometheus_run_server(address).await?;
     }
 
     // Create kafka config

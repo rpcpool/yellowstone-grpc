@@ -5,8 +5,8 @@
 pub mod config;
 pub mod filters;
 pub mod grpc;
+pub mod metrics;
 pub mod plugin;
-pub mod prom;
 pub mod version;
 
 pub fn get_thread_name() -> String {

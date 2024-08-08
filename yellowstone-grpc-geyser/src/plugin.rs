@@ -2,7 +2,7 @@ use {
     crate::{
         config::Config,
         grpc::{GrpcService, Message},
-        prom::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
+        metrics::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -81,6 +81,7 @@ impl GeyserPlugin for Plugin {
                     config.prometheus,
                     config.debug_clients_http.then_some(debug_client_rx),
                 )
+                .await
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
                 Ok::<_, GeyserPluginError>((
                     snapshot_channel,
@@ -164,7 +165,7 @@ impl GeyserPlugin for Plugin {
         self.with_inner(|inner| {
             let message = Message::Slot((slot, parent, status).into());
             inner.send_message(message);
-            prom::update_slot_status(status, slot);
+            metrics::update_slot_status(status, slot);
             Ok(())
         })
     }

@@ -1,21 +1,27 @@
 use {
     crate::{config::ConfigPrometheus, filters::Filter, version::VERSION as VERSION_INFO},
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
-    futures::future::FutureExt,
+    http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
-        server::conn::AddrStream,
-        service::{make_service_fn, service_fn},
-        Body, Request, Response, Server, StatusCode,
+        body::{Bytes, Incoming as BodyIncoming},
+        service::service_fn,
+        Request, Response, StatusCode,
     },
-    log::error,
+    hyper_util::{
+        rt::tokio::{TokioExecutor, TokioIo},
+        server::conn::auto::Builder as ServerBuilder,
+    },
+    log::{error, info},
     prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
+        convert::Infallible,
         sync::{Arc, Once},
     },
     tokio::{
-        sync::{mpsc, oneshot},
+        net::TcpListener,
+        sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
     yellowstone_grpc_proto::prelude::CommitmentLevel,
@@ -163,14 +169,14 @@ impl DebugClientStatuses {
 #[derive(Debug)]
 pub struct PrometheusService {
     debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
-    shutdown_signal: oneshot::Sender<()>,
+    shutdown: Arc<Notify>,
 }
 
 impl PrometheusService {
-    pub fn new(
+    pub async fn new(
         config: Option<ConfigPrometheus>,
         debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
-    ) -> hyper::Result<Self> {
+    ) -> std::io::Result<Self> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             macro_rules! register {
@@ -201,81 +207,105 @@ impl PrometheusService {
                 .inc();
         });
 
-        let (shutdown_signal, shutdown) = oneshot::channel();
+        let shutdown = Arc::new(Notify::new());
         let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
             if let Some(debug_clients_rx) = debug_clients_rx {
                 debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
             }
             let debug_clients_statuses2 = debug_clients_statuses.clone();
-            let make_service = make_service_fn(move |_: &AddrStream| {
-                let debug_clients_statuses = debug_clients_statuses2.clone();
-                async move {
-                    let debug_clients_statuses = debug_clients_statuses.clone();
-                    Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
-                        let debug_clients_statuses = debug_clients_statuses.clone();
-                        async move {
-                            let response = match req.uri().path() {
-                                "/metrics" => metrics_handler(),
-                                "/debug_clients" => {
-                                    if let Some(debug_clients_statuses) = &debug_clients_statuses {
-                                        let (status, body) =
-                                            match debug_clients_statuses.get_statuses().await {
-                                                Ok(body) => (StatusCode::OK, body),
-                                                Err(error) => (
-                                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                                    error.to_string(),
-                                                ),
-                                            };
-                                        build_http_response(status, Body::from(body))
-                                    } else {
-                                        not_found_handler()
-                                    }
-                                }
-                                _ => not_found_handler(),
-                            };
-                            Ok::<_, hyper::Error>(response)
-                        }
-                    }))
-                }
-            });
-            let server = Server::try_bind(&address)?.serve(make_service);
-            let shutdown = shutdown.map(|_| Ok(()));
+
+            let shutdown = Arc::clone(&shutdown);
+            let listener = TcpListener::bind(&address).await?;
+            info!("start prometheus server: {address}");
             tokio::spawn(async move {
-                if let Err(error) = tokio::try_join!(server, shutdown) {
-                    error!("prometheus service failed: {}", error);
+                loop {
+                    let stream = tokio::select! {
+                        () = shutdown.notified() => break,
+                        maybe_conn = listener.accept() => {
+                            match maybe_conn {
+                                Ok((stream, _addr)) => stream,
+                                Err(error) => {
+                                    error!("failed to accept new connection: {error}");
+                                    break;
+                                }
+                            }
+                        }
+                    };
+                    let debug_clients_statuses = debug_clients_statuses2.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = ServerBuilder::new(TokioExecutor::new())
+                            .serve_connection(
+                                TokioIo::new(stream),
+                                service_fn(move |req: Request<BodyIncoming>| {
+                                    let debug_clients_statuses = debug_clients_statuses.clone();
+                                    async move {
+                                        match req.uri().path() {
+                                            "/metrics" => metrics_handler(),
+                                            "/debug_clients" => {
+                                                if let Some(debug_clients_statuses) =
+                                                    &debug_clients_statuses
+                                                {
+                                                    let (status, body) =
+                                                        match debug_clients_statuses
+                                                            .get_statuses()
+                                                            .await
+                                                        {
+                                                            Ok(body) => (StatusCode::OK, body),
+                                                            Err(error) => (
+                                                                StatusCode::INTERNAL_SERVER_ERROR,
+                                                                error.to_string(),
+                                                            ),
+                                                        };
+                                                    Response::builder().status(status).body(
+                                                        BodyFull::new(Bytes::from(body)).boxed(),
+                                                    )
+                                                } else {
+                                                    not_found_handler()
+                                                }
+                                            }
+                                            _ => not_found_handler(),
+                                        }
+                                    }
+                                }),
+                            )
+                            .await
+                        {
+                            error!("failed to handle request: {error}");
+                        }
+                    });
                 }
             });
         }
 
         Ok(PrometheusService {
             debug_clients_statuses,
-            shutdown_signal,
+            shutdown,
         })
     }
 
     pub fn shutdown(self) {
         drop(self.debug_clients_statuses);
-        let _ = self.shutdown_signal.send(());
+        self.shutdown.notify_one();
     }
 }
 
-fn build_http_response(status: StatusCode, body: Body) -> Response<Body> {
-    Response::builder().status(status).body(body).unwrap()
-}
-
-fn metrics_handler() -> Response<Body> {
+fn metrics_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     let metrics = TextEncoder::new()
         .encode_to_string(&REGISTRY.gather())
         .unwrap_or_else(|error| {
             error!("could not encode custom metrics: {}", error);
             String::new()
         });
-    build_http_response(StatusCode::OK, Body::from(metrics))
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(BodyFull::new(Bytes::from(metrics)).boxed())
 }
 
-fn not_found_handler() -> Response<Body> {
-    build_http_response(StatusCode::NOT_FOUND, Body::empty())
+fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(BodyEmpty::new().boxed())
 }
 
 pub fn update_slot_status(status: SlotStatus, slot: u64) {

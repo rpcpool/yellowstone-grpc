@@ -1,5 +1,5 @@
 use {
-    crate::prom::GprcMessageKind,
+    crate::metrics::GprcMessageKind,
     prometheus::{Gauge, IntCounterVec, IntGaugeVec, Opts},
     yellowstone_grpc_proto::prelude::CommitmentLevel,
 };

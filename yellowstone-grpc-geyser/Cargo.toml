@@ -26,7 +26,10 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
-hyper = { workspace = true, features = ["server"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }

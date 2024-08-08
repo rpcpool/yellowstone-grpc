@@ -1,20 +1,26 @@
 #[cfg(feature = "google-pubsub")]
-use crate::google_pubsub::prom::{
+use crate::google_pubsub::metrics::{
     GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS, GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL,
     GOOGLE_PUBSUB_RECV_TOTAL, GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS, GOOGLE_PUBSUB_SENT_TOTAL,
     GOOGLE_PUBSUB_SLOT_TIP,
 };
 #[cfg(feature = "kafka")]
-use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
+use crate::kafka::metrics::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
 use {
     crate::version::VERSION as VERSION_INFO,
+    http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
-        server::conn::AddrStream,
-        service::{make_service_fn, service_fn},
-        Body, Request, Response, Server, StatusCode,
+        body::{Bytes, Incoming as BodyIncoming},
+        service::service_fn,
+        Request, Response, StatusCode,
+    },
+    hyper_util::{
+        rt::tokio::{TokioExecutor, TokioIo},
+        server::conn::auto::Builder as ServerBuilder,
     },
     prometheus::{IntCounterVec, Opts, Registry, TextEncoder},
-    std::{net::SocketAddr, sync::Once},
+    std::{convert::Infallible, net::SocketAddr, sync::Once},
+    tokio::net::TcpListener,
     tracing::{error, info},
     yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
 };
@@ -28,7 +34,7 @@ lazy_static::lazy_static! {
     ).unwrap();
 }
 
-pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
+pub async fn run_server(address: SocketAddr) -> anyhow::Result<()> {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
         macro_rules! register {
@@ -70,41 +76,55 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
             .inc();
     });
 
-    let make_service = make_service_fn(move |_: &AddrStream| async move {
-        Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| async move {
-            let response = match req.uri().path() {
-                "/metrics" => metrics_handler(),
-                _ => not_found_handler(),
-            };
-            Ok::<_, hyper::Error>(response)
-        }))
-    });
-    let server = Server::try_bind(&address)?.serve(make_service);
+    let listener = TcpListener::bind(&address).await?;
     info!("prometheus server started: {address:?}");
     tokio::spawn(async move {
-        if let Err(error) = server.await {
-            error!("prometheus server failed: {error:?}");
+        loop {
+            let stream = match listener.accept().await {
+                Ok((stream, _addr)) => stream,
+                Err(error) => {
+                    error!("failed to accept new connection: {error}");
+                    break;
+                }
+            };
+            tokio::spawn(async move {
+                if let Err(error) = ServerBuilder::new(TokioExecutor::new())
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(move |req: Request<BodyIncoming>| async move {
+                            match req.uri().path() {
+                                "/metrics" => metrics_handler(),
+                                _ => not_found_handler(),
+                            }
+                        }),
+                    )
+                    .await
+                {
+                    error!("failed to handle request: {error}");
+                }
+            });
         }
     });
 
     Ok(())
 }
 
-fn metrics_handler() -> Response<Body> {
+fn metrics_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     let metrics = TextEncoder::new()
         .encode_to_string(&REGISTRY.gather())
         .unwrap_or_else(|error| {
             error!("could not encode custom metrics: {}", error);
             String::new()
         });
-    Response::builder().body(Body::from(metrics)).unwrap()
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(BodyFull::new(Bytes::from(metrics)).boxed())
 }
 
-fn not_found_handler() -> Response<Body> {
+fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
-        .body(Body::empty())
-        .unwrap()
+        .body(BodyEmpty::new().boxed())
 }
 
 #[derive(Debug, Clone, Copy)]

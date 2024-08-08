@@ -20,9 +20,9 @@ use {
         create_shutdown,
         google_pubsub::{
             config::{Config, ConfigGrpc2PubSub},
-            prom,
+            metrics,
         },
-        prom::{run_server as prometheus_run_server, GprcMessageKind},
+        metrics::{run_server as prometheus_run_server, GprcMessageKind},
         setup_tracing,
     },
 };
@@ -146,7 +146,7 @@ impl ArgsAction {
                         messages.push(message);
                         prom_kinds.push(prom_kind);
                     } else if message.data.len() > config.batch.max_size_bytes {
-                        prom::drop_oversized_inc(prom_kind);
+                        metrics::drop_oversized_inc(prom_kind);
                         debug!("drop {prom_kind:?} message, size: {}", message.data.len());
                     } else {
                         prefetched_message = Some((message, prom_kind));
@@ -165,7 +165,7 @@ impl ArgsAction {
                     _ = &mut sleep => break,
                     maybe_result = send_task_fut => match maybe_result {
                         Some(result) => {
-                            prom::send_batches_dec();
+                            metrics::send_batches_dec();
                             result?;
                             continue;
                         }
@@ -177,11 +177,11 @@ impl ArgsAction {
                             .context("failed to get message from gRPC")?;
 
                         match &message {
-                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Ping(_)) } => prom::recv_inc(GprcMessageKind::Ping),
-                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Pong(_)) } => prom::recv_inc(GprcMessageKind::Pong),
+                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Ping(_)) } => metrics::recv_inc(GprcMessageKind::Ping),
+                            SubscribeUpdate { filters: _, update_oneof: Some(UpdateOneof::Pong(_)) } => metrics::recv_inc(GprcMessageKind::Pong),
                             SubscribeUpdate { filters: _, update_oneof: Some(value) } => {
                                 if let UpdateOneof::Slot(slot) = value {
-                                    prom::set_slot_tip(
+                                    metrics::set_slot_tip(
                                         CommitmentLevel::try_from(slot.status).expect("valid commitment"),
                                         slot.slot.try_into().expect("valid i64 slot"),
                                     );
@@ -194,7 +194,7 @@ impl ArgsAction {
                                 let prom_kind = GprcMessageKind::from(value);
                                 prefetched_message = Some((message, prom_kind));
 
-                                prom::recv_inc(prom_kind);
+                                metrics::recv_inc(prom_kind);
                             },
                             SubscribeUpdate { filters: _, update_oneof: None } => anyhow::bail!("received empty updat emessage"),
                         };
@@ -207,14 +207,14 @@ impl ArgsAction {
 
             while send_tasks.len() >= config.batch.max_in_progress {
                 if let Some(result) = send_tasks.join_next().await {
-                    prom::send_batches_dec();
+                    metrics::send_batches_dec();
                     result?;
                 }
             }
 
             let awaiters = publisher.publish_bulk(messages).await;
             for prom_kind in prom_kinds.iter().copied() {
-                prom::send_awaiters_inc(prom_kind);
+                metrics::send_awaiters_inc(prom_kind);
             }
             send_tasks.spawn(async move {
                 for (awaiter, prom_kind) in awaiters.into_iter().zip(prom_kinds.into_iter()) {
@@ -224,11 +224,11 @@ impl ArgsAction {
                     } else {
                         Ok(())
                     };
-                    prom::sent_inc(prom_kind, status);
-                    prom::send_awaiters_dec(prom_kind);
+                    metrics::sent_inc(prom_kind, status);
+                    metrics::send_awaiters_dec(prom_kind);
                 }
             });
-            prom::send_batches_inc();
+            metrics::send_batches_inc();
         }
 
         warn!("shutdown received...");
@@ -307,6 +307,7 @@ async fn main() -> anyhow::Result<()> {
     // Run prometheus server
     if let Some(address) = args.prometheus.or(config.prometheus) {
         prometheus_run_server(address)
+            .await
             .with_context(|| format!("failed to run server at: {:?}", address))?;
     }
 
