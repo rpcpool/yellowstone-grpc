@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.14.0+solana.2.0.2"
+version = "1.14.0+solana.2.0.5"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
