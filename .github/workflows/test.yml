@@ -32,9 +32,9 @@ jobs:
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
               ./target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0002
+          key: v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}
+            v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: Set rust version
         run: |
