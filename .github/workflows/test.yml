@@ -22,6 +22,15 @@ jobs:
         os: [ubuntu-20.04, ubuntu-22.04]
     runs-on: ["${{ matrix.os }}"]
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
       - uses: actions/checkout@v4
 
       - uses: actions/cache@v4
@@ -32,9 +41,9 @@ jobs:
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
               ./target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0002
+          key: v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}
+            v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: Set rust version
         run: |

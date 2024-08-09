@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-08-09
+
+- yellowstone-grpc-client-1.16.0+solana.2.0.5
+- yellowstone-grpc-geyser-1.16.0+solana.2.0.5
+- yellowstone-grpc-proto-1.15.0+solana.2.0.5
+- yellowstone-grpc-tools-1.0.0-rc.12+solana.2.0.5
+
+### Features
+
+- solana: update to 2.0.5 ([#395](https://github.com/rpcpool/yellowstone-grpc/pull/395))
+
 ## 2024-08-07
 
 - yellowstone-grpc-client-1.16.0+solana.2.0.4
@@ -36,7 +47,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - yellowstone-grpc-proto-1.15.0+solana.2.0.2
 - yellowstone-grpc-tools-1.0.0-rc.12+solana.2.0.2
 
-### Breaking
+### Features
 
 - solana: update to 2.0.2 ([#377](https://github.com/rpcpool/yellowstone-grpc/pull/377))
 
