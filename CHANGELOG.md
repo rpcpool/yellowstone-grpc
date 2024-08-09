@@ -25,7 +25,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- solana: update to 2.0.5 ([#394](https://github.com/rpcpool/yellowstone-grpc/pull/394))
+- solana: update to 2.0.5 ([#395](https://github.com/rpcpool/yellowstone-grpc/pull/395))
 
 ## 2024-08-07
 
