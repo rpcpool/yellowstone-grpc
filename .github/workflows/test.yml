@@ -22,6 +22,12 @@ jobs:
         os: [ubuntu-20.04, ubuntu-22.04]
     runs-on: ["${{ matrix.os }}"]
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 512
+          remove-dotnet: 'true'
+
       - uses: actions/checkout@v4
 
       - uses: actions/cache@v4
