@@ -34,22 +34,12 @@ enum EventSubscriptionPolicy {
   BOTH = 2;
 }
 
-enum TimelineTranslationPolicy {
-  ALLOW_LAG = 0;
-  STRICT_SLOT = 1;
-}
-
 message CreateStaticConsumerGroupRequest {
   optional uint32 member_count = 2;
-
   InitialOffsetPolicy initial_offset_policy = 3;
   geyser.CommitmentLevel commitment_level = 4;
   EventSubscriptionPolicy event_subscription_policy = 5;
   optional int64 at_slot = 6;
-  // timelineTranslationPolicy is used when an ingester is out of service and we need to translate a set
-  // of consumer to a different ingestion timeline. The policy describe what to do when we need to trigger timeline translation.
-  optional TimelineTranslationPolicy timeline_translation_policy = 7;
-  optional uint32 maximum_translation_slot_lag = 8;
 }
 
 
