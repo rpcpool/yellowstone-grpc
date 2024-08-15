@@ -14,9 +14,8 @@ service YellowstoneLog {
 message SubscribeRequest {
   string consumer_group_id = 1;
   optional uint32 consumer_id = 2;
-  
-  optional AccountUpdateEventFilter account_update_event_filter = 3;
-  optional TransactionEventFilter tx_event_filter = 4;
+  optional AccountUpdateFilter accounts = 3;
+  optional TransactionFilter transactions = 4;
 }
 
 message CreateStaticConsumerGroupResponse {
@@ -54,22 +53,22 @@ message CreateStaticConsumerGroupRequest {
 }
 
 
-/// The AccountUpdateEventFilter message defines filters for account update events. It includes the following fields:
+/// The AccountUpdateFilter message defines filters for account update events. It includes the following fields:
 /// 
 /// pubkeys (1)
 /// A repeated field of bytes representing public keys. Events matching any of these public keys will be included in the filtered results.
 /// 
 /// owners (2)
 /// A repeated field of bytes representing account owners. Events matching any of these account owners will be included in the filtered results.
-message AccountUpdateEventFilter {
-  repeated string pubkeys = 1;
-  repeated string owners = 2;
+message AccountUpdateFilter {
+  repeated string account = 1;
+  repeated string owner = 2;
 }
 
-/// The TransactionEventFilter message specifies filters for transaction events. It contains the following field:
+/// The TransactionFilter message specifies filters for transaction events. It contains the following field:
 
 /// account_keys (1)
 /// A repeated field of bytes representing account keys. Events associated with any of these account keys will be included in the filtered results.
-message TransactionEventFilter {
+message TransactionFilter {
   repeated string account_keys = 1;
 }
