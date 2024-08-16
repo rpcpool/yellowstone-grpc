@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.14.0+solana.2.0.5"
+version = "1.14.1+solana.2.0.5"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -28,5 +28,6 @@ serde_json = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, default-features = true }
