@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- example: fix tls root issue in rust example ([#404](https://github.com/rpcpool/yellowstone-grpc/pull/404))
+
 ### Features
 
 ### Breaking

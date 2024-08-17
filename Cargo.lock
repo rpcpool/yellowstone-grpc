@@ -5175,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.14.0+solana.2.0.5"
+version = "1.14.1+solana.2.0.5"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5192,6 +5192,7 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status",
  "tokio",
+ "tonic",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]

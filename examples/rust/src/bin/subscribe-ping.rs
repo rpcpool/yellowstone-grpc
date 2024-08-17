@@ -4,6 +4,7 @@ use {
     log::info,
     std::env,
     tokio::time::{interval, Duration},
+    tonic::transport::channel::ClientTlsConfig,
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
@@ -35,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
+        .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;

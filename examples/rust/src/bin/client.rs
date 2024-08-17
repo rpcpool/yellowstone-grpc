@@ -7,6 +7,7 @@ use {
     solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
     std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
     tokio::sync::Mutex,
+    tonic::transport::channel::ClientTlsConfig,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
     yellowstone_grpc_proto::prelude::{
         subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
@@ -57,6 +58,7 @@ impl Args {
             .x_token(self.x_token.clone())?
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(10))
+            .tls_config(ClientTlsConfig::new().with_native_roots())?
             .connect()
             .await
             .map_err(Into::into)
