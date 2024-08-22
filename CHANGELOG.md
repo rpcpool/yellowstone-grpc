@@ -12,11 +12,21 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- example: fix tls root issue in rust example ([#404](https://github.com/rpcpool/yellowstone-grpc/pull/404))
-
 ### Features
 
 ### Breaking
+
+## 2024-08-22
+
+- yellowstone-grpc-client-1.16.0+solana.2.0.5
+- yellowstone-grpc-geyser-1.16.1+solana.2.0.5
+- yellowstone-grpc-proto-1.15.0+solana.2.0.5
+- yellowstone-grpc-tools-1.0.0-rc.12+solana.2.0.5
+
+### Fixes
+
+- example: fix tls root issue in rust example ([#404](https://github.com/rpcpool/yellowstone-grpc/pull/404))
+- geyser: fix filter update loop on snapshot ([#410](https://github.com/rpcpool/yellowstone-grpc/pull/410))
 
 ## 2024-08-09
 
