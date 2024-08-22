@@ -1158,58 +1158,52 @@ impl GrpcService {
         let mut is_alive = true;
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{id}: going to receive snapshot data");
-
-            // we start with default filter, for snapshot we need wait actual filter first
             while is_alive {
-                match client_rx.recv().await {
-                    Some(Some(filter_new)) => {
-                        if let Some(msg) = filter_new.get_pong_msg() {
-                            if stream_tx.send(Ok(msg)).await.is_err() {
+                // Handle new filters and connection status
+                if let Ok(filter_msg) = client_rx.try_recv() {
+                    match filter_msg {
+                        Some(filter_new) => {
+                            if let Some(msg) = filter_new.get_pong_msg() {
+                                if stream_tx.send(Ok(msg)).await.is_err() {
+                                    error!("client #{id}: stream closed");
+                                    is_alive = false;
+                                }
+                                continue;
+                            }
+
+                            metrics::update_subscriptions(
+                                &endpoint,
+                                Some(&filter),
+                                Some(&filter_new),
+                            );
+                            filter = filter_new;
+                            info!("client #{id}: filter updated");
+                        }
+                        None => {
+                            is_alive = false;
+                        }
+                    }
+                }
+
+                // Handle snapshot messages
+                match snapshot_rx.try_recv() {
+                    Ok(Some(message)) => {
+                        MESSAGE_QUEUE_SIZE.dec();
+                        for message in filter.get_update(&message, None) {
+                            if stream_tx.send(Ok(message)).await.is_err() {
                                 error!("client #{id}: stream closed");
                                 is_alive = false;
                                 break;
                             }
-                            continue;
-                        }
-
-                        metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
-                        filter = filter_new;
-                        info!("client #{id}: filter updated");
-                    }
-                    Some(None) => {
-                        is_alive = false;
-                    }
-                    None => {
-                        is_alive = false;
-                    }
-                };
-            }
-
-            while is_alive {
-                let message = match snapshot_rx.try_recv() {
-                    Ok(message) => {
-                        MESSAGE_QUEUE_SIZE.dec();
-                        match message {
-                            Some(message) => message,
-                            None => break,
                         }
                     }
+                    Ok(None) => break,
                     Err(crossbeam_channel::TryRecvError::Empty) => {
-                        sleep(Duration::from_millis(1)).await;
-                        continue;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                     }
                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
                         error!("client #{id}: snapshot channel disconnected");
                         is_alive = false;
-                        break;
-                    }
-                };
-
-                for message in filter.get_update(&message, None) {
-                    if stream_tx.send(Ok(message)).await.is_err() {
-                        error!("client #{id}: stream closed");
-                        is_alive = false;
-                        break;
                     }
                 }
             }
