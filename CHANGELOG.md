@@ -14,8 +14,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- solana: bump proto/client version for publishing crates
-
 ### Breaking
 
 ## 2024-08-22
@@ -28,6 +26,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - geyser: fix filter update loop on snapshot ([#408](https://github.com/rpcpool/yellowstone-grpc/pull/408))
+
+### Features
+
+- solana: bump proto/client version for publishing crates
 
 ## 2024-08-09
 
