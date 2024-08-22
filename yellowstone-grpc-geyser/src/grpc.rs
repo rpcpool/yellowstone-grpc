@@ -1163,6 +1163,7 @@ impl GrpcService {
                         prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                         filter = filter_new;
                         info!("client #{id}: filter updated");
+                        break;
                     }
                     Some(None) => {
                         is_alive = false;
