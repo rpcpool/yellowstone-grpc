@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-08-23
+
+- yellowstone-grpc-client-1.16.2+solana.2.0.5
+- yellowstone-grpc-geyser-1.16.2+solana.2.0.5
+- yellowstone-grpc-proto-1.15.0+solana.2.0.5
+- yellowstone-grpc-tools-1.0.0-rc.12+solana.2.0.5
+
+### Fixes
+
+- geyser: fix `x-request-snapshot` handler ([#413](https://github.com/rpcpool/yellowstone-grpc/pull/413))
+
 ## 2024-08-22
 
 - yellowstone-grpc-client-1.16.1+solana.2.0.5
