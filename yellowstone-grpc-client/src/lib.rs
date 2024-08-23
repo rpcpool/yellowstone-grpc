@@ -305,11 +305,11 @@ impl GeyserGrpcBuilder {
     }
 
     // Include `x-request-snapshot`
-    pub fn set_x_request_snapshot(self, value: bool) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self {
+    pub fn set_x_request_snapshot(self, value: bool) -> Self {
+        Self {
             x_request_snapshot: value,
             ..self
-        })
+        }
     }
 
     // Endpoint options

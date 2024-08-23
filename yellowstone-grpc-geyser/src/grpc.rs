@@ -1110,7 +1110,6 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        x_request_snapshot: bool,
         config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
@@ -1145,19 +1144,17 @@ impl GrpcService {
         info!("client #{id}: new");
 
         let mut is_alive = true;
-        if x_request_snapshot {
-            if let Some(snapshot_rx) = snapshot_rx.take() {
-                Self::client_loop_snapshot(
-                    id,
-                    &endpoint,
-                    &stream_tx,
-                    &mut client_rx,
-                    snapshot_rx,
-                    &mut is_alive,
-                    &mut filter,
-                )
-                .await;
-            }
+        if let Some(snapshot_rx) = snapshot_rx.take() {
+            Self::client_loop_snapshot(
+                id,
+                &endpoint,
+                &stream_tx,
+                &mut client_rx,
+                snapshot_rx,
+                &mut is_alive,
+                &mut filter,
+            )
+            .await;
         }
 
         if is_alive {
@@ -1261,7 +1258,6 @@ impl GrpcService {
                         if stream_tx.send(Ok(msg)).await.is_err() {
                             error!("client #{id}: stream closed");
                             *is_alive = false;
-                            break;
                         }
                         continue;
                     }
@@ -1320,7 +1316,13 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
-        let snapshot_rx = self.snapshot_rx.lock().await.take();
+
+        let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
+        let snapshot_rx = if x_request_snapshot {
+            self.snapshot_rx.lock().await.take()
+        } else {
+            None
+        };
         let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
@@ -1366,7 +1368,6 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
-        let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
 
         let config_filters = Arc::clone(&self.config_filters);
         let incoming_stream_tx = stream_tx.clone();
@@ -1413,7 +1414,6 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
-            x_request_snapshot,
             Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
