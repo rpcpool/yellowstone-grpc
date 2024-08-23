@@ -1122,6 +1122,7 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
+        x_request_snapshot: bool,
         config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
@@ -1156,63 +1157,18 @@ impl GrpcService {
         info!("client #{id}: new");
 
         let mut is_alive = true;
-        if let Some(snapshot_rx) = snapshot_rx.take() {
-            info!("client #{id}: going to receive snapshot data");
-
-            // we start with default filter, for snapshot we need wait actual filter first
-            while is_alive {
-                match client_rx.recv().await {
-                    Some(Some(filter_new)) => {
-                        if let Some(msg) = filter_new.get_pong_msg() {
-                            if stream_tx.send(Ok(msg)).await.is_err() {
-                                error!("client #{id}: stream closed");
-                                is_alive = false;
-                                break;
-                            }
-                            continue;
-                        }
-
-                        metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
-                        filter = filter_new;
-                        info!("client #{id}: filter updated");
-                        break;
-                    }
-                    Some(None) => {
-                        is_alive = false;
-                    }
-                    None => {
-                        is_alive = false;
-                    }
-                };
-            }
-
-            while is_alive {
-                let message = match snapshot_rx.try_recv() {
-                    Ok(message) => {
-                        MESSAGE_QUEUE_SIZE.dec();
-                        match message {
-                            Some(message) => message,
-                            None => break,
-                        }
-                    }
-                    Err(crossbeam_channel::TryRecvError::Empty) => {
-                        sleep(Duration::from_millis(1)).await;
-                        continue;
-                    }
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        error!("client #{id}: snapshot channel disconnected");
-                        is_alive = false;
-                        break;
-                    }
-                };
-
-                for message in filter.get_update(&message, None) {
-                    if stream_tx.send(Ok(message)).await.is_err() {
-                        error!("client #{id}: stream closed");
-                        is_alive = false;
-                        break;
-                    }
-                }
+        if x_request_snapshot {
+            if let Some(snapshot_rx) = snapshot_rx.take() {
+                Self::client_loop_snapshot(
+                    id,
+                    &endpoint,
+                    &stream_tx,
+                    &mut client_rx,
+                    snapshot_rx,
+                    &mut is_alive,
+                    &mut filter,
+                )
+                .await;
             }
         }
 
@@ -1297,6 +1253,74 @@ impl GrpcService {
         info!("client #{id}: removed");
         drop_client();
     }
+
+    async fn client_loop_snapshot(
+        id: usize,
+        endpoint: &str,
+        stream_tx: &mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        client_rx: &mut mpsc::UnboundedReceiver<Option<Filter>>,
+        snapshot_rx: crossbeam_channel::Receiver<Option<Message>>,
+        is_alive: &mut bool,
+        filter: &mut Filter,
+    ) {
+        info!("client #{id}: going to receive snapshot data");
+
+        // we start with default filter, for snapshot we need wait actual filter first
+        while *is_alive {
+            match client_rx.recv().await {
+                Some(Some(filter_new)) => {
+                    if let Some(msg) = filter_new.get_pong_msg() {
+                        if stream_tx.send(Ok(msg)).await.is_err() {
+                            error!("client #{id}: stream closed");
+                            *is_alive = false;
+                            break;
+                        }
+                        continue;
+                    }
+
+                    metrics::update_subscriptions(endpoint, Some(filter), Some(&filter_new));
+                    *filter = filter_new;
+                    info!("client #{id}: filter updated");
+                    break;
+                }
+                Some(None) => {
+                    *is_alive = false;
+                }
+                None => {
+                    *is_alive = false;
+                }
+            };
+        }
+
+        while *is_alive {
+            let message = match snapshot_rx.try_recv() {
+                Ok(message) => {
+                    MESSAGE_QUEUE_SIZE.dec();
+                    match message {
+                        Some(message) => message,
+                        None => break,
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {
+                    sleep(Duration::from_millis(1)).await;
+                    continue;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    error!("client #{id}: snapshot channel disconnected");
+                    *is_alive = false;
+                    break;
+                }
+            };
+
+            for message in filter.get_update(&message, None) {
+                if stream_tx.send(Ok(message)).await.is_err() {
+                    error!("client #{id}: stream closed");
+                    *is_alive = false;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -1354,6 +1378,7 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
+        let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
 
         let config_filters = Arc::clone(&self.config_filters);
         let incoming_stream_tx = stream_tx.clone();
@@ -1400,6 +1425,7 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
+            x_request_snapshot,
             Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,

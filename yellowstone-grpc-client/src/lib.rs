@@ -9,7 +9,7 @@ use {
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
-        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
+        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
         service::interceptor::InterceptedService,
         transport::channel::{Channel, ClientTlsConfig, Endpoint},
         Request, Response, Status,
@@ -27,18 +27,18 @@ use {
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
-}
-
-impl From<Option<AsciiMetadataValue>> for InterceptorXToken {
-    fn from(x_token: Option<AsciiMetadataValue>) -> Self {
-        Self { x_token }
-    }
+    pub x_request_snapshot: bool,
 }
 
 impl Interceptor for InterceptorXToken {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         if let Some(x_token) = self.x_token.clone() {
             request.metadata_mut().insert("x-token", x_token);
+        }
+        if self.x_request_snapshot {
+            request
+                .metadata_mut()
+                .insert("x-request-snapshot", MetadataValue::from_static("true"));
         }
         Ok(request)
     }
@@ -215,6 +215,7 @@ pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
     pub x_token: Option<AsciiMetadataValue>,
+    pub x_request_snapshot: bool,
     pub send_compressed: Option<CompressionEncoding>,
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
@@ -227,6 +228,7 @@ impl GeyserGrpcBuilder {
         Self {
             endpoint,
             x_token: None,
+            x_request_snapshot: false,
             send_compressed: None,
             accept_compressed: None,
             max_decoding_message_size: None,
@@ -247,7 +249,10 @@ impl GeyserGrpcBuilder {
         self,
         channel: Channel,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
-        let interceptor: InterceptorXToken = self.x_token.into();
+        let interceptor = InterceptorXToken {
+            x_token: self.x_token,
+            x_request_snapshot: self.x_request_snapshot,
+        };
 
         let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
         if let Some(encoding) = self.send_compressed {
@@ -295,6 +300,14 @@ impl GeyserGrpcBuilder {
                 }
                 None => None,
             },
+            ..self
+        })
+    }
+
+    // Include `x-request-snapshot`
+    pub fn set_x_request_snapshot(self, value: bool) -> GeyserGrpcBuilderResult<Self> {
+        Ok(Self {
+            x_request_snapshot: value,
             ..self
         })
     }
