@@ -1276,7 +1276,7 @@ impl GrpcService {
             };
         }
 
-        'outer: while *is_alive {
+        while *is_alive {
             let message = match snapshot_rx.try_recv() {
                 Ok(message) => {
                     MESSAGE_QUEUE_SIZE.dec();
@@ -1291,6 +1291,7 @@ impl GrpcService {
                 }
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     error!("client #{id}: snapshot channel disconnected");
+                    *is_alive = false;
                     break;
                 }
             };
@@ -1298,7 +1299,8 @@ impl GrpcService {
             for message in filter.get_update(&message, None) {
                 if stream_tx.send(Ok(message)).await.is_err() {
                     error!("client #{id}: stream closed");
-                    break 'outer;
+                    *is_alive = false;
+                    break;
                 }
             }
         }
