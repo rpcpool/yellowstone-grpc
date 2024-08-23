@@ -9,7 +9,14 @@ use {
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
-    std::{concat, env, sync::Arc, time::Duration},
+    std::{
+        concat, env,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    },
     tokio::{
         runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
@@ -20,6 +27,7 @@ use {
 pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Option<crossbeam_channel::Sender<Option<Message>>>,
+    snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
@@ -93,6 +101,7 @@ impl GeyserPlugin for Plugin {
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel,
+            snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
             grpc_shutdown,
             prometheus,
@@ -132,7 +141,13 @@ impl GeyserPlugin for Plugin {
                 if let Some(channel) = &inner.snapshot_channel {
                     match channel.send(Some(message)) {
                         Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
-                        Err(_) => panic!("failed to send message to startup queue: channel closed"),
+                        Err(_) => {
+                            if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
+                                log::error!(
+                                    "failed to send message to startup queue: channel closed"
+                                )
+                            }
+                        }
                     }
                 }
             } else {
