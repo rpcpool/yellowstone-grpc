@@ -18,7 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2024-08-22
 
-- yellowstone-grpc-client-1.15.2+solana.1.18.22
+- yellowstone-grpc-client-1.15.3+solana.1.18.22
 - yellowstone-grpc-geyser-1.15.1+solana.1.18.22
 - yellowstone-grpc-proto-1.14.2+solana.1.18.22
 - yellowstone-grpc-tools-1.0.0-rc.11+solana.1.18.22
@@ -30,6 +30,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - solana: bump proto/client version for publishing crates
+- geyser: handle `x-request-snapshot` on client request ([#409](https://github.com/rpcpool/yellowstone-grpc/pull/409))
 
 ## 2024-08-09
 
