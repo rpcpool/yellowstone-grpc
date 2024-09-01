@@ -13,7 +13,7 @@ use {
         concat, env,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         time::Duration,
     },
@@ -26,7 +26,7 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    snapshot_channel: Option<crossbeam_channel::Sender<Option<Box<Message>>>>,
+    snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Option<Box<Message>>>>>,
     snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
     grpc_shutdown: Arc<Notify>,
@@ -101,7 +101,7 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
-            snapshot_channel,
+            snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
             grpc_shutdown,
@@ -138,7 +138,7 @@ impl GeyserPlugin for Plugin {
             };
 
             if is_startup {
-                if let Some(channel) = &inner.snapshot_channel {
+                if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
                     let message = Message::Account((account, slot, is_startup).into());
                     match channel.send(Some(Box::new(message))) {
                         Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
@@ -162,7 +162,7 @@ impl GeyserPlugin for Plugin {
 
     fn notify_end_of_startup(&self) -> PluginResult<()> {
         self.with_inner(|inner| {
-            if let Some(channel) = &inner.snapshot_channel {
+            if let Some(channel) = inner.snapshot_channel.lock().unwrap().take() {
                 match channel.send(None) {
                     Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
                     Err(_) => panic!("failed to send message to startup queue: channel closed"),
