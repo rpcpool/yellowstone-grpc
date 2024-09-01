@@ -14,7 +14,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: wrap message into `Box` in snapshot channel ([#???](https://github.com/rpcpool/yellowstone-grpc/pull/???))
+- geyser: wrap message into `Box` in snapshot channel ([#418](https://github.com/rpcpool/yellowstone-grpc/pull/418))
 
 ### Breaking
 
