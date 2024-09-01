@@ -26,7 +26,7 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    snapshot_channel: Option<crossbeam_channel::Sender<Option<Message>>>,
+    snapshot_channel: Option<crossbeam_channel::Sender<Option<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
     grpc_shutdown: Arc<Notify>,
@@ -137,10 +137,10 @@ impl GeyserPlugin for Plugin {
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Account((account, slot, is_startup).into());
             if is_startup {
                 if let Some(channel) = &inner.snapshot_channel {
-                    match channel.send(Some(message)) {
+                    let message = Message::Account((account, slot, is_startup).into());
+                    match channel.send(Some(Box::new(message))) {
                         Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
                         Err(_) => {
                             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
@@ -152,6 +152,7 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
+                let message = Message::Account((account, slot, is_startup).into());
                 inner.send_message(message);
             }
 

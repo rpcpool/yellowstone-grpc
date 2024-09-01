@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser: wrap message into `Box` in snapshot channel ([#???](https://github.com/rpcpool/yellowstone-grpc/pull/???))
+
 ### Breaking
 
 ## 2024-08-26
