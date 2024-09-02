@@ -13,7 +13,7 @@ use {
         concat, env,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         time::Duration,
     },
@@ -26,7 +26,7 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    snapshot_channel: Option<crossbeam_channel::Sender<Option<Message>>>,
+    snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
     grpc_shutdown: Arc<Notify>,
@@ -101,7 +101,7 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
-            snapshot_channel,
+            snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
             grpc_shutdown,
@@ -137,10 +137,10 @@ impl GeyserPlugin for Plugin {
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Account((account, slot, is_startup).into());
             if is_startup {
-                if let Some(channel) = &inner.snapshot_channel {
-                    match channel.send(Some(message)) {
+                if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
+                    let message = Message::Account((account, slot, is_startup).into());
+                    match channel.send(Box::new(message)) {
                         Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
                         Err(_) => {
                             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
@@ -152,6 +152,7 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
+                let message = Message::Account((account, slot, is_startup).into());
                 inner.send_message(message);
             }
 
@@ -161,12 +162,7 @@ impl GeyserPlugin for Plugin {
 
     fn notify_end_of_startup(&self) -> PluginResult<()> {
         self.with_inner(|inner| {
-            if let Some(channel) = &inner.snapshot_channel {
-                match channel.send(None) {
-                    Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
-                    Err(_) => panic!("failed to send message to startup queue: channel closed"),
-                }
-            }
+            let _snapshot_channel = inner.snapshot_channel.lock().unwrap().take();
             Ok(())
         })
     }

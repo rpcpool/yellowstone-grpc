@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-09-02
+
+- yellowstone-grpc-geyser-1.16.3+solana.2.0.7
+
+### Features
+
+- geyser: wrap message into `Box` in snapshot channel ([#418](https://github.com/rpcpool/yellowstone-grpc/pull/418))
+
 ## 2024-08-26
 
 - yellowstone-grpc-client-1.16.2+solana.2.0.7
