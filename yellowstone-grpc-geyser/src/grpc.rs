@@ -716,7 +716,7 @@ pub struct GrpcService {
     config_filters: Arc<ConfigGrpcFilters>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
-    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Option<Message>>>>,
+    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
 }
@@ -729,7 +729,7 @@ impl GrpcService {
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
     ) -> anyhow::Result<(
-        Option<crossbeam_channel::Sender<Option<Message>>>,
+        Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Arc<Message>>,
         Arc<Notify>,
     )> {
@@ -1113,7 +1113,7 @@ impl GrpcService {
         config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
-        mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
+        mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
@@ -1244,7 +1244,7 @@ impl GrpcService {
         endpoint: &str,
         stream_tx: &mpsc::Sender<TonicResult<SubscribeUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<Filter>>,
-        snapshot_rx: crossbeam_channel::Receiver<Option<Message>>,
+        snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         is_alive: &mut bool,
         filter: &mut Filter,
     ) {
@@ -1280,18 +1280,14 @@ impl GrpcService {
             let message = match snapshot_rx.try_recv() {
                 Ok(message) => {
                     MESSAGE_QUEUE_SIZE.dec();
-                    match message {
-                        Some(message) => message,
-                        None => break,
-                    }
+                    message
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {
                     sleep(Duration::from_millis(1)).await;
                     continue;
                 }
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    error!("client #{id}: snapshot channel disconnected");
-                    *is_alive = false;
+                    info!("client #{id}: end of startup");
                     break;
                 }
             };
