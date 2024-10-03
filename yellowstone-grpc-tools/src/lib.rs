@@ -9,6 +9,7 @@ pub mod version;
 
 use {
     futures::future::{BoxFuture, FutureExt},
+    std::io::{self, IsTerminal},
     tokio::signal::unix::{signal, SignalKind},
     tracing_subscriber::{
         filter::{EnvFilter, LevelFilter},
@@ -18,7 +19,8 @@ use {
 };
 
 pub fn setup_tracing() -> anyhow::Result<()> {
-    let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
+    // let is_atty = atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stderr);
+    let is_atty = io::stdout().is_terminal() && io::stderr().is_terminal();
     let io_layer = tracing_subscriber::fmt::layer().with_ansi(is_atty);
     let level_layer = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())

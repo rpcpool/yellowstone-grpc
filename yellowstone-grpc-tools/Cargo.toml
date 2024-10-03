@@ -21,7 +21,6 @@ required-features = ["kafka"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-atty = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
 futures = { workspace = true }
