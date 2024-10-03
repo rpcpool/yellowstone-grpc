@@ -31,3 +31,6 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, default-features = true }
+
+[lints]
+workspace = true

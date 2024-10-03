@@ -72,7 +72,7 @@ impl GeyserGrpcClient<()> {
 }
 
 impl<F: Interceptor> GeyserGrpcClient<F> {
-    pub fn new(
+    pub const fn new(
         health: HealthClient<InterceptedService<Channel, F>>,
         geyser: GeyserClient<InterceptedService<Channel, F>>,
     ) -> Self {
@@ -224,7 +224,7 @@ pub struct GeyserGrpcBuilder {
 
 impl GeyserGrpcBuilder {
     // Create new builder
-    fn new(endpoint: Endpoint) -> Self {
+    const fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
             x_token: None,
