@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- solana: relax dependencies ([#430](https://github.com/rpcpool/yellowstone-grpc/pull/430))
+
 ### Breaking
 
 ## 2024-09-12
