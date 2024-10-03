@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "1.16.2+solana.2.0.10"
+version = "1.16.2"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -20,3 +20,6 @@ yellowstone-grpc-proto = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.14.1+solana.2.0.10"
+version = "1.14.1"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -31,3 +31,6 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, default-features = true }
+
+[lints]
+workspace = true

@@ -1,10 +1,15 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod geyser {
+    #![allow(clippy::clone_on_ref_ptr)]
+    #![allow(clippy::missing_const_for_fn)]
+
     tonic::include_proto!("geyser");
 }
 
 pub mod solana {
+    #![allow(clippy::missing_const_for_fn)]
+
     pub mod storage {
         pub mod confirmed_block {
             tonic::include_proto!("solana.storage.confirmed_block");

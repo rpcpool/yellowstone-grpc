@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 1.14.1+solana.2.0.10
-    "yellowstone-grpc-client", # 1.16.2+solana.2.0.10
-    "yellowstone-grpc-geyser", # 1.16.3+solana.2.0.10
-    "yellowstone-grpc-proto", # 1.15.0+solana.2.0.10
-    "yellowstone-grpc-tools", # 1.0.0-rc.12+solana.2.0.10
+    "examples/rust", # 1.14.1
+    "yellowstone-grpc-client", # 1.16.2
+    "yellowstone-grpc-geyser", # 1.16.3
+    "yellowstone-grpc-proto", # 1.15.0
+    "yellowstone-grpc-tools", # 1.0.0-rc.12
 ]
 
 [workspace.package]
@@ -17,10 +17,9 @@ license = "AGPL-3.0"
 keywords = ["solana"]
 
 [workspace.dependencies]
-agave-geyser-plugin-interface = "=2.0.10"
+agave-geyser-plugin-interface = "~2.0.10"
 anyhow = "1.0.62"
 async-trait = "0.1.73"
-atty = "0.2.14"
 backoff = "0.4.0"
 base64 = "0.22.1"
 bincode = "1.3.3"
@@ -56,10 +55,10 @@ serde = "1.0.145"
 serde_json = "1.0.86"
 serde_yaml = "0.9.25"
 sha2 = "0.10.7"
-solana-account-decoder = "=2.0.10"
-solana-logger = "=2.0.10"
-solana-sdk = "=2.0.10"
-solana-transaction-status = "=2.0.10"
+solana-account-decoder = "~2.0.10"
+solana-logger = "~2.0.10"
+solana-sdk = "~2.0.10"
+solana-transaction-status = "~2.0.10"
 spl-token-2022 = "4.0.0"
 thiserror = "1.0"
 tokio = "1.21.2"
@@ -71,8 +70,13 @@ tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 uuid = "1.8.0"
 vergen = "9.0.0"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "=1.16.2+solana.2.0.10" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "=1.15.0+solana.2.0.10", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "1.16.2" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "1.15.0", default-features = false }
+
+[workspace.lints.clippy]
+clone_on_ref_ptr = "deny"
+missing_const_for_fn = "deny"
+trivially_copy_pass_by_ref = "deny"
 
 [profile.release]
 lto = true

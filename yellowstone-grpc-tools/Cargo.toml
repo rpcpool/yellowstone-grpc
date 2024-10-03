@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.12+solana.2.0.10"
+version = "1.0.0-rc.12"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
@@ -21,7 +21,6 @@ required-features = ["kafka"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-atty = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
 futures = { workspace = true }
@@ -68,3 +67,6 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 default = ["google-pubsub", "kafka"]
 google-pubsub = ["google-cloud-googleapis", "google-cloud-pubsub"]
 kafka = ["const-hex", "rdkafka", "sha2"]
+
+[lints]
+workspace = true

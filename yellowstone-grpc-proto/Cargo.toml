@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "1.15.0+solana.2.0.10"
+version = "1.15.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -26,3 +26,6 @@ tonic-build = { workspace = true }
 [features]
 convert = ["dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
 default = ["convert"]
+
+[lints]
+workspace = true
