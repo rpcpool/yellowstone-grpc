@@ -17,7 +17,6 @@ on:
       - 'v1.18'
     tags:
       - 'v*'
-      - 'tools-v*'
   workflow_dispatch:
 
 env:
@@ -83,24 +82,18 @@ jobs:
         run: |
           rm -rf \
             target/release/client.d \
-            target/release/config-check.d \
-            target/release/grpc-google-pubsub.d \
-            target/release/grpc-kafka.d
+            target/release/config-check.d
 
       - name: Remove debug information
         run: |
           strip \
             target/release/client \
-            target/release/config-check \
-            target/release/grpc-google-pubsub \
-            target/release/grpc-kafka
+            target/release/config-check
 
       - name: Rename binaries
         run: |
           mv target/release/client target/release/client-${{ matrix.os }}
           mv target/release/config-check target/release/config-check-${{ matrix.os }}
-          mv target/release/grpc-google-pubsub target/release/grpc-google-pubsub-${{ matrix.os }}
-          mv target/release/grpc-kafka target/release/grpc-kafka-${{ matrix.os }}
 
       - name: Rename lib for ubuntu22 release
         if: matrix.os == 'ubuntu-22.04'
@@ -122,8 +115,6 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
-            # target/release/grpc-google-pubsub*
-            target/release/grpc-kafka*
 
       - uses: actions/upload-artifact@v4
         with:
@@ -133,5 +124,3 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
-            # target/release/grpc-google-pubsub*
-            target/release/grpc-kafka*
