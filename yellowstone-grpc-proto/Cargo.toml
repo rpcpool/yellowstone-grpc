@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "1.14.2+solana.1.18.23"
+version = "1.14.2"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -22,3 +22,6 @@ tonic = { workspace = true }
 anyhow = { workspace = true }
 protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
+
+[lints]
+workspace = true

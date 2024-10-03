@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.13.0+solana.1.18.23"
+version = "1.13.0"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -30,3 +30,6 @@ solana-transaction-status = { workspace = true }
 tokio = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
+
+[lints]
+workspace = true

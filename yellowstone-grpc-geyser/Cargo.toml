@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "1.15.3+solana.1.18.23"
+version = "1.15.3"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -47,3 +47,6 @@ anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
+
+[lints]
+workspace = true
