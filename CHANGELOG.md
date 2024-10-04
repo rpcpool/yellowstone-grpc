@@ -14,10 +14,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Breaking
+
+## 2024-10-04
+
+- yellowstone-grpc-client-simple-2.0.0
+- yellowstone-grpc-client-2.0.0
+- yellowstone-grpc-geyser-2.0.0
+- yellowstone-grpc-proto-2.0.0
+
+### Features
+
 - solana: relax dependencies ([#430](https://github.com/rpcpool/yellowstone-grpc/pull/430))
 - tools: remove ([#431](https://github.com/rpcpool/yellowstone-grpc/pull/431))
-
-### Breaking
 
 ## 2024-09-12
 
