@@ -2,7 +2,7 @@
 
 This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo we have the plugin as well as sample clients for multiple languages.
 
-It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path. 
+It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path.
 
 For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
 
@@ -144,89 +144,6 @@ In order to mitigate this you need to send a message periodically. The `ping` fi
 The gRPC server already sends pings to the client, so you can simply reply with a ping and your connection will remain open.
 You can see in the rust example how to reply to the ping from the server with the client.
 
-### gRPC Tools
+### Projects based on Geyser gRPC
 
-#### Google Pub/Sub
-
-```bash
-$ cargo run --bin grpc-google-pubsub -- --help
-Yellowstone gRPC Google Pub/Sub Tool
-
-Usage: grpc-google-pubsub [OPTIONS] --config <CONFIG> <COMMAND>
-
-Commands:
-  grpc2pubsub        Receive data from gRPC and send them to the Pub/Sub
-  pubsub2stdout      Dev: subscribe to message from Pub/Sub and print them to Stdout
-  pubsubTopicCreate  Dev: create Pub/Sub topic
-  pubsubTopicDelete  Dev: delete Pub/Sub topic
-  help               Print this message or the help of the given subcommand(s)
-
-Options:
-  -c, --config <CONFIG>          Path to config file
-      --prometheus <PROMETHEUS>  Prometheus listen address
-  -h, --help                     Print help
-  -V, --version                  Print version
-```
-
-##### Development
-
-```bash
-# export creds
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/google/project/creds.json
-# send messages from gRPC to Google Pub/Sub
-cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json grpc2pubsub
-```
-
-with emulator:
-
-```bash
-# retrive `USER_CONFIG_DIR`
-$ gcloud info --format='get(config.paths.global_config_dir)'
-# run emulator, data dir by default: `<USER_CONFIG_DIR>/emulators/pubsub`
-$ gcloud beta emulators pubsub start
-...
-# send serialized gRPC messages to Google Pub/Sub with PUBSUB_EMULATOR_HOST
-$ PUBSUB_EMULATOR_HOST=localhost:8085 cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json grpc2pubsub
-# print type of messages from Google Pub/Sub with PUBSUB_EMULATOR_HOST
-$ PUBSUB_EMULATOR_HOST=localhost:8085 cargo run --bin grpc-google-pubsub -- --config yellowstone-grpc-tools/config-google-pubsub.json --prometheus 1 pubsub2stdout
-```
-
-#### Kafka
-
-In addition to gRPC Geyser Plugin we provide Kafka tool. This tool can works in 3 modes:
-
-- `grpc2kafka` — connect to gRPC with specified filter and sent all incoming messages to the Kafka
-- `dedup` — consume messages from Kafka and sent deduplicated messages to another topic (right now only support `memory` as deduplication backend)
-- `kafka2grpc` — provide gRPC endpoint with sending messages from Kafka
-
-```bash
-$ cargo run --bin grpc-kafka -- --help
-Yellowstone gRPC Kafka Tool
-
-Usage: grpc-kafka [OPTIONS] --config <CONFIG> <COMMAND>
-
-Commands:
-  dedup       Receive data from Kafka, deduplicate and send them back to Kafka
-  grpc2kafka  Receive data from gRPC and send them to the Kafka
-  kafka2grpc  Receive data from Kafka and send them over gRPC
-  help        Print this message or the help of the given subcommand(s)
-
-Options:
-  -c, --config <CONFIG>          Path to config file
-      --prometheus <PROMETHEUS>  Prometheus listen address
-  -h, --help                     Print help
-  -V, --version                  Print version
-```
-
-##### Development
-
-```bash
-# run kafka locally
-docker-compose -f ./yellowstone-grpc-tools/docker-kafka.yml up
-# create topic
-kafka_2.13-3.5.0/bin/kafka-topics.sh --bootstrap-server localhost:29092 --create --topic grpc1
-# send messages from gRPC to Kafka
-cargo run --bin grpc-kafka -- --config yellowstone-grpc-tools/config-kafka.json grpc2kafka
-# read messages from Kafka
-kafka_2.13-3.5.0/bin/kafka-console-consumer.sh --bootstrap-server localhost:29092 --topic grpc1
-```
+- https://github.com/rpcpool/yellowstone-grpc-kafka — forward gRPC stream to Kafka, dedup, read stream from Kafka with gRPC server
