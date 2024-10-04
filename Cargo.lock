@@ -4434,7 +4434,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "1.16.2"
+version = "2.0.0"
 dependencies = [
  "bytes",
  "futures",
@@ -4447,7 +4447,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "1.14.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "backoff",
@@ -4471,7 +4471,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "1.16.3"
+version = "2.0.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",
@@ -4507,7 +4507,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "1.15.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "bincode",
