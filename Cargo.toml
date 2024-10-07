@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 1.13.0
-    "yellowstone-grpc-client", # 1.15.4
-    "yellowstone-grpc-geyser", # 1.15.3
-    "yellowstone-grpc-proto", # 1.14.2
+    "examples/rust", # 1.13.0+solana.1.18.25
+    "yellowstone-grpc-client", # 1.15.4+solana.1.18.25
+    "yellowstone-grpc-geyser", # 1.15.3+solana.1.18.25
+    "yellowstone-grpc-proto", # 1.14.2+solana.1.18.25
 ]
 
 [workspace.package]
@@ -43,11 +43,11 @@ protobuf-src = "1.1.0"
 scylla = "0.13.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account-decoder = "~1.18.23"
-solana-geyser-plugin-interface = "~1.18.23"
-solana-logger = "~1.18.23"
-solana-sdk = "~1.18.23"
-solana-transaction-status = "~1.18.23"
+solana-account-decoder = "=1.18.25"
+solana-geyser-plugin-interface = "=1.18.25"
+solana-logger = "=1.18.25"
+solana-sdk = "=1.18.25"
+solana-transaction-status = "=1.18.25"
 spl-token-2022 = "0.9.0"
 thiserror = "1.0"
 tokio = "1.21.2"
