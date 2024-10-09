@@ -725,6 +725,7 @@ impl SlotMessages {
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
+    config_channel_capacity_filters: usize,
     config_filters: Arc<ConfigGrpcFilters>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
@@ -792,6 +793,7 @@ impl GrpcService {
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
+            config_channel_capacity_filters: config.channel_capacity_filters,
             config_filters: Arc::new(config.filters),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
@@ -1124,7 +1126,7 @@ impl GrpcService {
         endpoint: String,
         config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
-        mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
+        mut client_rx: mpsc::Receiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -1255,7 +1257,7 @@ impl GrpcService {
         id: usize,
         endpoint: &str,
         stream_tx: &mpsc::Sender<TonicResult<SubscribeUpdate>>,
-        client_rx: &mut mpsc::UnboundedReceiver<Option<Filter>>,
+        client_rx: &mut mpsc::Receiver<Option<Filter>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         is_alive: &mut bool,
         filter: &mut Filter,
@@ -1336,7 +1338,7 @@ impl Geyser for GrpcService {
         } else {
             self.config_channel_capacity
         });
-        let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let (client_tx, client_rx) = mpsc::channel(self.config_channel_capacity_filters);
         let notify_exit1 = Arc::new(Notify::new());
         let notify_exit2 = Arc::new(Notify::new());
 
@@ -1362,7 +1364,7 @@ impl Geyser for GrpcService {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {
-                                let _ = ping_client_tx.send(None);
+                                let _ = ping_client_tx.send(None).await;
                                 break;
                             }
                         }
@@ -1393,7 +1395,7 @@ impl Geyser for GrpcService {
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
                             if let Err(error) = match Filter::new(&request, &config_filters) {
-                                Ok(filter) => match incoming_client_tx.send(Some(filter)) {
+                                Ok(filter) => match incoming_client_tx.try_send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
                                 },
@@ -1403,7 +1405,7 @@ impl Geyser for GrpcService {
                                     "failed to create filter: {error}"
                                 )));
                                 if incoming_stream_tx.send(err).await.is_err() {
-                                    let _ = incoming_client_tx.send(None);
+                                    let _ = incoming_client_tx.send(None).await;
                                 }
                             }
                         }
@@ -1411,7 +1413,7 @@ impl Geyser for GrpcService {
                             break;
                         }
                         Err(_error) => {
-                            let _ = incoming_client_tx.send(None);
+                            let _ = incoming_client_tx.send(None).await;
                             break;
                         }
                     }

@@ -96,6 +96,12 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_usize_str"
     )]
     pub channel_capacity: usize,
+    /// Capacity of the channel with new filters
+    #[serde(
+        default = "ConfigGrpc::channel_capacity_filters_default",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub channel_capacity_filters: usize,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -127,6 +133,10 @@ impl ConfigGrpc {
 
     const fn channel_capacity_default() -> usize {
         250_000
+    }
+
+    const fn channel_capacity_filters_default() -> usize {
+        10
     }
 
     const fn unary_concurrency_limit_default() -> usize {
