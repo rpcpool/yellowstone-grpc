@@ -14,7 +14,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add option `channel_capacity_filters` ([#432](https://github.com/rpcpool/yellowstone-grpc/pull/432))
+- geyser: add option `channel_capacity_filters` ([#435](https://github.com/rpcpool/yellowstone-grpc/pull/435))
 
 ### Breaking
 
