@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser: add option `channel_capacity_filters` ([#435](https://github.com/rpcpool/yellowstone-grpc/pull/435))
+- proto: use `gzip`/`zstd` features by default ([#436](https://github.com/rpcpool/yellowstone-grpc/pull/436))
 
 ### Breaking
 
