@@ -1172,7 +1172,21 @@ impl GrpcService {
         if is_alive {
             'outer: loop {
                 tokio::select! {
-                    message = client_rx.recv() => {
+                    mut message = client_rx.recv() => {
+                        // forward to latest filter
+                        loop {
+                            match client_rx.try_recv() {
+                                Ok(message_new) => {
+                                    message = Some(message_new);
+                                }
+                                Err(mpsc::error::TryRecvError::Empty) => break,
+                                Err(mpsc::error::TryRecvError::Disconnected) => {
+                                    message = None;
+                                    break;
+                                }
+                            }
+                        }
+
                         match message {
                             Some(Some(filter_new)) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
