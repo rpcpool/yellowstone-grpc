@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: use `gzip`/`zstd` features by default ([#436](https://github.com/rpcpool/yellowstone-grpc/pull/436))
+
 ### Breaking
 
 ## 2024-10-04
