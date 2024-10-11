@@ -94,6 +94,7 @@ async function subscribeCommand(client, args) {
     entry: {},
     blocks: {},
     blocksMeta: {},
+    commitment: parseCommitmentLevel(args.commitment),
     accountsDataSlice: [],
     ping: undefined,
   };
