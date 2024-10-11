@@ -1,5 +1,11 @@
 # Golang client for Solana gRPC interface
 
+## DISCLAIMER
+
+This example can contains errors or be behind of the latest stable version, please use it only as an example of how your subscription can looks like. If you want well tested production ready example, please check our implementation on Rust.
+
+<hr>
+
 This is a sample golang client for the Solana gRPC interface.
 
 Requires golang 1.17

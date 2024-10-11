@@ -1,5 +1,11 @@
 # TypeScript client example
 
+## DISCLAIMER
+
+This example can contains errors or be behind of the latest stable version, please use it only as an example of how your subscription can looks like. If you want well tested production ready example, please check our implementation on Rust.
+
+<hr>
+
 This is a sample client for Solana geyser gRPC written in TypeScript.
 
 This can be used in the following way:
