@@ -44,6 +44,7 @@ message SubscribeRequestFilterAccounts {
 message SubscribeRequestFilterAccountsFilter {
   oneof filter {
     SubscribeRequestFilterAccountsFilterMemcmp memcmp = 1;
+    SubscribeRequestFilterAccountsFilterLamports lamports = 4;
     uint64 datasize = 2;
     bool token_account_state = 3;
   }
@@ -55,6 +56,15 @@ message SubscribeRequestFilterAccountsFilterMemcmp {
     bytes bytes = 2;
     string base58 = 3;
     string base64 = 4;
+  }
+}
+
+message SubscribeRequestFilterAccountsFilterLamports {
+  oneof value {
+    uint64 eq = 1;
+    uint64 ne = 2;
+    uint64 le = 3;
+    uint64 ge = 4;
   }
 }
 
