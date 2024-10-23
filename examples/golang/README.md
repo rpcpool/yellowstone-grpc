@@ -8,27 +8,27 @@ This example can contains errors or be behind of the latest stable version, plea
 
 This is a sample golang client for the Solana gRPC interface.
 
-Requires golang 1.17
+Requires golang 1.21
 
 Sample usage:
 
 ```
-go1.17 run ./cmd/grpc-client/ -endpoint https://api.rpcpool.com:443 -x-token <token> -slots
+go run ./cmd/grpc-client/ -endpoint https://api.rpcpool.com:443 -x-token <token> -slots
 ```
 
 You can also make non SSL connections:
 
 ```
-go1.17 run ./cmd/grpc-client/ -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
-````
+go run ./cmd/grpc-client/ -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
+```
 
 ## Updating protofiles
 
-Make sure you have protoc installed for go:
+Make sure you have the Protocol Buffer compiler (protoc) and its plugins installed for Go:
 
 ```
-$ go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
-$ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
+$ go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.1
+$ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 ```
 
 If you have `dnf` package manager:
