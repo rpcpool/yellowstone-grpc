@@ -1045,6 +1045,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                 })));
+                                prom::MISSED_STATUS_MESSAGE.inc();
                             }
                         }
                     }
