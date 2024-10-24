@@ -1057,6 +1057,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                 })));
+                                metrics::MISSED_STATUS_MESSAGE.inc();
                             }
                         }
                     }
