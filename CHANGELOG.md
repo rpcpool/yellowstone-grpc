@@ -13,6 +13,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - examples: fix commitment in TypeScript example ([#440](https://github.com/rpcpool/yellowstone-grpc/pull/440))
+- geyser: fix missed status messages ([#444](https://github.com/rpcpool/yellowstone-grpc/pull/444))
 
 ### Features
 

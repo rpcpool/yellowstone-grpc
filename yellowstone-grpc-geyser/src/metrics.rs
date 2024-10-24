@@ -12,7 +12,7 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
@@ -62,6 +62,8 @@ lazy_static::lazy_static! {
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
     ).unwrap();
+
+    pub static ref MISSED_STATUS_MESSAGE: IntCounter = IntCounter::new("missed_status_message_total", "Number of missed messages").unwrap();
 }
 
 #[derive(Debug)]
@@ -193,6 +195,7 @@ impl PrometheusService {
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
+            register!(MISSED_STATUS_MESSAGE);
 
             VERSION
                 .with_label_values(&[
