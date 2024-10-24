@@ -24,7 +24,23 @@ go run ./cmd/grpc-client/ -endpoint http://api.rpcpool.com:80 -x-token <token> -
 
 ## Updating protofiles
 
-Make sure you have the Protocol Buffer compiler (protoc) and its plugins installed for Go:
+Make sure you have protoc installed:
+
+```bash
+$ protoc --version
+libprotoc 28.3
+```
+
+And the golang plugins:
+
+```bash
+$ go list -f '{{.Path}} {{.Version}}' -m google.golang.org/protobuf
+google.golang.org/protobuf v1.35.1
+$ go list -f '{{.Path}} {{.Version}}' -m google.golang.org/grpc
+google.golang.org/grpc v1.67.1
+```
+
+If you don't have the protobuf go plugins installed, you can install them with:
 
 ```
 $ go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.1
