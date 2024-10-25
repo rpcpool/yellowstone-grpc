@@ -174,11 +174,13 @@ impl Filter {
 
 #[derive(Debug, Default, Clone)]
 struct FilterAccounts {
-    filters: Vec<(String, FilterAccountsData)>,
+    nonempty_txn_signature: Vec<(String, Option<bool>)>,
+    nonempty_txn_signature_required: HashSet<String>,
     account: HashMap<Pubkey, HashSet<String>>,
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
     owner_required: HashSet<String>,
+    filters: Vec<(String, FilterAccountsData)>,
 }
 
 impl FilterAccounts {
@@ -190,6 +192,12 @@ impl FilterAccounts {
 
         let mut this = Self::default();
         for (name, filter) in configs {
+            this.nonempty_txn_signature
+                .push((name.clone(), filter.nonempty_txn_signature));
+            if filter.nonempty_txn_signature.is_some() {
+                this.nonempty_txn_signature_required.insert(name.clone());
+            }
+
             ConfigGrpcFilters::check_any(
                 filter.account.is_empty() && filter.owner.is_empty(),
                 limit.any,
@@ -241,6 +249,7 @@ impl FilterAccounts {
         message: &'a MessageAccount,
     ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
         let mut filter = FilterAccountsMatch::new(self);
+        filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
@@ -338,6 +347,7 @@ impl FilterAccountsData {
 #[derive(Debug)]
 pub struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
+    nonempty_txn_signature: HashSet<&'a str>,
     account: HashSet<&'a str>,
     owner: HashSet<&'a str>,
     data: HashSet<&'a str>,
@@ -347,6 +357,7 @@ impl<'a> FilterAccountsMatch<'a> {
     fn new(filter: &'a FilterAccounts) -> Self {
         Self {
             filter,
+            nonempty_txn_signature: Default::default(),
             account: Default::default(),
             owner: Default::default(),
             data: Default::default(),
@@ -357,6 +368,16 @@ impl<'a> FilterAccountsMatch<'a> {
         if let Some(names) = map.get(key) {
             for name in names {
                 set.insert(name);
+            }
+        }
+    }
+
+    pub fn match_txn_signature(&mut self, txn_signature: &Option<Signature>) {
+        for (name, filter) in self.filter.nonempty_txn_signature.iter() {
+            if let Some(nonempty_txn_signature) = filter {
+                if *nonempty_txn_signature == txn_signature.is_some() {
+                    self.nonempty_txn_signature.insert(name);
+                }
             }
         }
     }
@@ -386,6 +407,11 @@ impl<'a> FilterAccountsMatch<'a> {
                 let af = &self.filter;
 
                 // If filter name in required but not in matched => return `false`
+                if af.nonempty_txn_signature_required.contains(name)
+                    && !self.nonempty_txn_signature.contains(name)
+                {
+                    return None;
+                }
                 if af.account_required.contains(name) && !self.account.contains(name) {
                     return None;
                 }
@@ -946,6 +972,7 @@ mod tests {
         accounts.insert(
             "solend".to_owned(),
             SubscribeRequestFilterAccounts {
+                nonempty_txn_signature: None,
                 account: vec![],
                 owner: vec![],
                 filters: vec![],
