@@ -126,6 +126,7 @@ async function subscribeCommand(client, args) {
     }
 
     request.accounts.client = {
+      nonemptyTxnSignature: args.accountsNonemptytxnsignature,
       account: args.accountsAccount,
       owner: args.accountsOwner,
       filters,
@@ -255,6 +256,10 @@ function parseCommandLineArgs() {
         accounts: {
           default: false,
           describe: "subscribe on accounts updates",
+          type: "boolean",
+        },
+        "accounts-nonemptytxnsignature": {
+          description: "filter by presence of field txn_signature",
           type: "boolean",
         },
         "accounts-account": {

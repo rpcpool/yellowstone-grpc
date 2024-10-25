@@ -114,6 +114,7 @@ export interface SubscribeRequest_EntryEntry {
 }
 
 export interface SubscribeRequestFilterAccounts {
+  nonemptyTxnSignature?: boolean | undefined;
   account: string[];
   owner: string[];
   filters: SubscribeRequestFilterAccountsFilter[];
@@ -1207,11 +1208,14 @@ export const SubscribeRequest_EntryEntry = {
 };
 
 function createBaseSubscribeRequestFilterAccounts(): SubscribeRequestFilterAccounts {
-  return { account: [], owner: [], filters: [] };
+  return { nonemptyTxnSignature: undefined, account: [], owner: [], filters: [] };
 }
 
 export const SubscribeRequestFilterAccounts = {
   encode(message: SubscribeRequestFilterAccounts, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.nonemptyTxnSignature !== undefined) {
+      writer.uint32(40).bool(message.nonemptyTxnSignature);
+    }
     for (const v of message.account) {
       writer.uint32(18).string(v!);
     }
@@ -1231,6 +1235,13 @@ export const SubscribeRequestFilterAccounts = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 5:
+          if (tag !== 40) {
+            break;
+          }
+
+          message.nonemptyTxnSignature = reader.bool();
+          continue;
         case 2:
           if (tag !== 18) {
             break;
@@ -1263,6 +1274,7 @@ export const SubscribeRequestFilterAccounts = {
 
   fromJSON(object: any): SubscribeRequestFilterAccounts {
     return {
+      nonemptyTxnSignature: isSet(object.nonemptyTxnSignature) ? Boolean(object.nonemptyTxnSignature) : undefined,
       account: Array.isArray(object?.account) ? object.account.map((e: any) => String(e)) : [],
       owner: Array.isArray(object?.owner) ? object.owner.map((e: any) => String(e)) : [],
       filters: Array.isArray(object?.filters)
@@ -1273,6 +1285,7 @@ export const SubscribeRequestFilterAccounts = {
 
   toJSON(message: SubscribeRequestFilterAccounts): unknown {
     const obj: any = {};
+    message.nonemptyTxnSignature !== undefined && (obj.nonemptyTxnSignature = message.nonemptyTxnSignature);
     if (message.account) {
       obj.account = message.account.map((e) => e);
     } else {
@@ -1299,6 +1312,7 @@ export const SubscribeRequestFilterAccounts = {
     object: I,
   ): SubscribeRequestFilterAccounts {
     const message = createBaseSubscribeRequestFilterAccounts();
+    message.nonemptyTxnSignature = object.nonemptyTxnSignature ?? undefined;
     message.account = object.account?.map((e) => e) || [];
     message.owner = object.owner?.map((e) => e) || [];
     message.filters = object.filters?.map((e) => SubscribeRequestFilterAccountsFilter.fromPartial(e)) || [];
