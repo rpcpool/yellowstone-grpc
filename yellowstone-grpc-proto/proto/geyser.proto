@@ -36,6 +36,7 @@ message SubscribeRequest {
 }
 
 message SubscribeRequestFilterAccounts {
+  optional bool nonempty_txn_signature = 5;
   repeated string account = 2;
   repeated string owner = 3;
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
