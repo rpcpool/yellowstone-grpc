@@ -323,7 +323,10 @@ impl FilterAccountsState {
     }
 
     fn is_empty(&self) -> bool {
-        self.memcmp.is_empty() && self.datasize.is_none() && !self.token_account_state
+        self.memcmp.is_empty()
+            && self.lamports.is_empty()
+            && self.datasize.is_none()
+            && !self.token_account_state
     }
 
     fn is_match(&self, data: &[u8], lamports: u64) -> bool {
