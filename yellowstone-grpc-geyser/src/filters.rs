@@ -19,11 +19,13 @@ use {
     },
     yellowstone_grpc_proto::prelude::{
         subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
         subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
     },
 };
@@ -174,7 +176,7 @@ impl Filter {
 
 #[derive(Debug, Default, Clone)]
 struct FilterAccounts {
-    filters: Vec<(String, FilterAccountsData)>,
+    filters: Vec<(String, FilterAccountsState)>,
     account: HashMap<Pubkey, HashSet<String>>,
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
@@ -212,7 +214,7 @@ impl FilterAccounts {
             )?;
 
             this.filters
-                .push((name.clone(), FilterAccountsData::new(&filter.filters)?));
+                .push((name.clone(), FilterAccountsState::new(&filter.filters)?));
         }
         Ok(this)
     }
@@ -243,7 +245,7 @@ impl FilterAccounts {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
-        filter.match_data(&message.account.data);
+        filter.match_data_lamports(&message.account.data, message.account.lamports);
         Box::new(std::iter::once((
             filter.get_filters(),
             MessageRef::Account(message),
@@ -252,13 +254,14 @@ impl FilterAccounts {
 }
 
 #[derive(Debug, Default, Clone)]
-struct FilterAccountsData {
+struct FilterAccountsState {
     memcmp: Vec<(usize, Vec<u8>)>,
+    lamports: Vec<FilterAccountsLamports>,
     datasize: Option<usize>,
     token_account_state: bool,
 }
 
-impl FilterAccountsData {
+impl FilterAccountsState {
     fn new(filters: &[SubscribeRequestFilterAccountsFilter]) -> anyhow::Result<Self> {
         const MAX_FILTERS: usize = 4;
         const MAX_DATA_SIZE: usize = 128;
@@ -293,6 +296,14 @@ impl FilterAccountsData {
                     anyhow::ensure!(data.len() <= MAX_DATA_SIZE, "data too large");
                     this.memcmp.push((memcmp.offset as usize, data));
                 }
+                Some(AccountsFilterDataOneof::Lamports(
+                    SubscribeRequestFilterAccountsFilterLamports { cmp },
+                )) => {
+                    let Some(cmp) = cmp else {
+                        anyhow::bail!("cmp for lamports should be defined");
+                    };
+                    this.lamports.push(cmp.into());
+                }
                 Some(AccountsFilterDataOneof::Datasize(datasize)) => {
                     anyhow::ensure!(
                         this.datasize.replace(*datasize as usize).is_none(),
@@ -315,11 +326,14 @@ impl FilterAccountsData {
         self.memcmp.is_empty() && self.datasize.is_none() && !self.token_account_state
     }
 
-    fn is_match(&self, data: &[u8]) -> bool {
+    fn is_match(&self, data: &[u8], lamports: u64) -> bool {
         if matches!(self.datasize, Some(datasize) if data.len() != datasize) {
             return false;
         }
         if self.token_account_state && !TokenAccount::valid_account_data(data) {
+            return false;
+        }
+        if self.lamports.iter().any(|f| !f.is_match(lamports)) {
             return false;
         }
         for (offset, bytes) in self.memcmp.iter() {
@@ -332,6 +346,36 @@ impl FilterAccountsData {
             }
         }
         true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterAccountsLamports {
+    Eq(u64),
+    Ne(u64),
+    Lt(u64),
+    Gt(u64),
+}
+
+impl From<&AccountsFilterLamports> for FilterAccountsLamports {
+    fn from(cmp: &AccountsFilterLamports) -> Self {
+        match cmp {
+            AccountsFilterLamports::Eq(value) => Self::Eq(*value),
+            AccountsFilterLamports::Ne(value) => Self::Ne(*value),
+            AccountsFilterLamports::Lt(value) => Self::Lt(*value),
+            AccountsFilterLamports::Gt(value) => Self::Gt(*value),
+        }
+    }
+}
+
+impl FilterAccountsLamports {
+    const fn is_match(self, lamports: u64) -> bool {
+        match self {
+            Self::Eq(value) => value == lamports,
+            Self::Ne(value) => value != lamports,
+            Self::Lt(value) => value < lamports,
+            Self::Gt(value) => value > lamports,
+        }
     }
 }
 
@@ -369,9 +413,9 @@ impl<'a> FilterAccountsMatch<'a> {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
     }
 
-    pub fn match_data(&mut self, data: &[u8]) {
+    pub fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
         for (name, filter) in self.filter.filters.iter() {
-            if filter.is_match(data) {
+            if filter.is_match(data, lamports) {
                 self.data.insert(name);
             }
         }
