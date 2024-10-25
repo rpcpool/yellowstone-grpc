@@ -280,7 +280,7 @@ impl Action {
                         }
                     }
                     for filter in args.accounts_lamports.iter() {
-                        match filter.split_once(',') {
+                        match filter.split_once(':') {
                             Some((cmp, value)) => {
                                 let Ok(value) = value.parse() else {
                                     anyhow::bail!("invalid lamports value: {value}");

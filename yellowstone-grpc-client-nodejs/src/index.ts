@@ -32,6 +32,7 @@ export {
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterMemcmp,
+  SubscribeRequestFilterAccountsFilterLamports,
   SubscribeRequestFilterBlocks,
   SubscribeRequestFilterBlocksMeta,
   SubscribeRequestFilterEntry,
