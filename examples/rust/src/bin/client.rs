@@ -108,6 +108,9 @@ struct ActionSubscribe {
     #[clap(long)]
     accounts: bool,
 
+    /// Filter by presence of field txn_signature
+    accounts_nonempty_txn_signature: Option<bool>,
+
     /// Filter by Account Pubkey
     #[clap(long)]
     accounts_account: Vec<String>,
@@ -288,6 +291,7 @@ impl Action {
                     accounts.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterAccounts {
+                            nonempty_txn_signature: args.accounts_nonempty_txn_signature,
                             account: accounts_account,
                             owner: args.accounts_owner.clone(),
                             filters,
