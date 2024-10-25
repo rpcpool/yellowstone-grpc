@@ -18,7 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - proto: use `gzip`/`zstd` features by default ([#436](https://github.com/rpcpool/yellowstone-grpc/pull/436))
 - geyser: optimize consuming of new filters ([#439](https://github.com/rpcpool/yellowstone-grpc/pull/439))
-- proto: add filter by lamports ([#4??](https://github.com/rpcpool/yellowstone-grpc/pull/4??))
+- proto: add filter by lamports ([#369](https://github.com/rpcpool/yellowstone-grpc/pull/369))
 
 ### Breaking
 
