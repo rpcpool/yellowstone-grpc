@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
         filters::{Filter, FilterAccountsDataSlice},
-        metrics::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -12,7 +12,7 @@ use {
     anyhow::Context,
     log::{error, info},
     solana_sdk::{
-        clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
+        clock::{Slot, UnixTimestamp, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
         signature::Signature,
         transaction::SanitizedTransaction,
@@ -678,6 +678,9 @@ struct SlotMessages {
     entries_count: usize,
     confirmed_at: Option<usize>,
     finalized_at: Option<usize>,
+    parent_slot: Option<Slot>,
+    confirmed: bool,
+    finalized: bool,
 }
 
 impl SlotMessages {
@@ -871,7 +874,7 @@ impl GrpcService {
         loop {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    metrics::message_queue_size_dec();
 
                     // Update metrics
                     if let Message::Slot(slot_message) = message.as_ref() {
@@ -947,6 +950,19 @@ impl GrpcService {
 
                     // Update block reconstruction info
                     let slot_messages = messages.entry(message.get_slot()).or_default();
+                    if let Message::Slot(msg) = message.as_ref() {
+                        match msg.status {
+                            CommitmentLevel::Processed => {
+                                slot_messages.parent_slot = msg.parent;
+                            },
+                            CommitmentLevel::Confirmed => {
+                                slot_messages.confirmed = true;
+                            },
+                            CommitmentLevel::Finalized => {
+                                slot_messages.finalized = true;
+                            },
+                        }
+                    }
                     if !matches!(message.as_ref(), Message::Slot(_)) {
                         slot_messages.messages.push(Some(Arc::clone(&message)));
 
@@ -1006,12 +1022,47 @@ impl GrpcService {
                     }
 
                     // Send messages to filter (and to clients)
-                    let mut messages_vec = vec![message];
+                    let mut messages_vec = Vec::with_capacity(4);
                     if let Some(sealed_block_msg) = sealed_block_msg {
                         messages_vec.push(sealed_block_msg);
                     }
+                    let slot_status = if let Message::Slot(msg) = message.as_ref() {
+                        Some((msg.slot, msg.status))
+                    } else {
+                        None
+                    };
+                    messages_vec.push(message);
 
-                    for message in messages_vec {
+                    // sometimes we do not receive all statuses
+                    if let Some((slot, status)) = slot_status {
+                        let mut slots = vec![slot];
+                        while let Some((parent, Some(entry))) = slots
+                            .pop()
+                            .and_then(|slot| messages.get(&slot))
+                            .and_then(|entry| entry.parent_slot)
+                            .map(|parent| (parent, messages.get_mut(&parent)))
+                        {
+                            if (status == CommitmentLevel::Confirmed && !entry.confirmed) ||
+                                (status == CommitmentLevel::Finalized && !entry.finalized)
+                            {
+                                if status == CommitmentLevel::Confirmed {
+                                    entry.confirmed = true;
+                                } else if status == CommitmentLevel::Finalized {
+                                    entry.finalized = true;
+                                }
+
+                                slots.push(parent);
+                                messages_vec.push(Arc::new(Message::Slot(MessageSlot {
+                                    slot: parent,
+                                    parent: entry.parent_slot,
+                                    status,
+                                })));
+                                metrics::missed_status_message_inc(status);
+                            }
+                        }
+                    }
+
+                    for message in messages_vec.into_iter().rev() {
                         if let Message::Slot(slot) = message.as_ref() {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
                                 CommitmentLevel::Processed => {
@@ -1148,7 +1199,7 @@ impl GrpcService {
         .expect("empty filter");
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
-        CONNECTIONS_TOTAL.inc();
+        metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
             filter: Box::new(filter.clone()),
@@ -1258,7 +1309,7 @@ impl GrpcService {
             }
         }
 
-        CONNECTIONS_TOTAL.dec();
+        metrics::connections_total_dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
         metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
@@ -1305,7 +1356,7 @@ impl GrpcService {
         while *is_alive {
             let message = match snapshot_rx.try_recv() {
                 Ok(message) => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    metrics::message_queue_size_dec();
                     message
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {

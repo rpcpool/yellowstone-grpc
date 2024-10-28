@@ -2,7 +2,7 @@ use {
     crate::{
         config::Config,
         grpc::{GrpcService, Message},
-        metrics::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
+        metrics::{self, PrometheusService},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -36,7 +36,7 @@ pub struct PluginInner {
 impl PluginInner {
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(Arc::new(message)).is_ok() {
-            MESSAGE_QUEUE_SIZE.inc();
+            metrics::message_queue_size_inc();
         }
     }
 }
@@ -141,7 +141,7 @@ impl GeyserPlugin for Plugin {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
                     let message = Message::Account((account, slot, is_startup).into());
                     match channel.send(Box::new(message)) {
-                        Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
+                        Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
                             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
                                 log::error!(
