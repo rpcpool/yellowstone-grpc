@@ -12,7 +12,7 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
@@ -63,7 +63,10 @@ lazy_static::lazy_static! {
         &["endpoint", "subscription"]
     ).unwrap();
 
-    pub static ref MISSED_STATUS_MESSAGE: IntCounter = IntCounter::new("missed_status_message_total", "Number of missed messages").unwrap();
+    static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
+        Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
+        &["status"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -323,11 +326,7 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
 
 pub fn update_slot_plugin_status(status: CommitmentLevel, slot: u64) {
     SLOT_STATUS_PLUGIN
-        .with_label_values(&[match status {
-            CommitmentLevel::Processed => "processed",
-            CommitmentLevel::Confirmed => "confirmed",
-            CommitmentLevel::Finalized => "finalized",
-        }])
+        .with_label_values(&[commitment_level_as_str(status)])
         .set(slot as i64);
 }
 
@@ -351,5 +350,19 @@ pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&F
                     .add((value as i64) * multiplier);
             }
         }
+    }
+}
+
+pub fn missed_status_message_inc(status: CommitmentLevel) {
+    MISSED_STATUS_MESSAGE
+        .with_label_values(&[commitment_level_as_str(status)])
+        .inc()
+}
+
+const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
+    match commitment {
+        CommitmentLevel::Processed => "processed",
+        CommitmentLevel::Confirmed => "confirmed",
+        CommitmentLevel::Finalized => "finalized",
     }
 }
