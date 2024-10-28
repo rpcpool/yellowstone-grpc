@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
         filters::{Filter, FilterAccountsDataSlice},
-        metrics::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -874,7 +874,7 @@ impl GrpcService {
         loop {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    metrics::message_queue_size_dec();
 
                     // Update metrics
                     if let Message::Slot(slot_message) = message.as_ref() {
@@ -1199,7 +1199,7 @@ impl GrpcService {
         .expect("empty filter");
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
-        CONNECTIONS_TOTAL.inc();
+        metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
             filter: Box::new(filter.clone()),
@@ -1309,7 +1309,7 @@ impl GrpcService {
             }
         }
 
-        CONNECTIONS_TOTAL.dec();
+        metrics::connections_total_dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
         metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
@@ -1356,7 +1356,7 @@ impl GrpcService {
         while *is_alive {
             let message = match snapshot_rx.try_recv() {
                 Ok(message) => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    metrics::message_queue_size_dec();
                     message
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {

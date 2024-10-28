@@ -35,26 +35,26 @@ lazy_static::lazy_static! {
         &["buildts", "git", "package", "proto", "rustc", "solana", "version"]
     ).unwrap();
 
-    pub static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
+    static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status", "Lastest received slot from Geyser"),
         &["status"]
     ).unwrap();
 
-    pub static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
+    static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
         &["status"]
     ).unwrap();
 
-    pub static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
+    static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("invalid_full_blocks_total", "Total number of fails on constructin full blocks"),
         &["reason"]
     ).unwrap();
 
-    pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
+    static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
         "message_queue_size", "Size of geyser message queue"
     ).unwrap();
 
-    pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
+    static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
         "connections_total", "Total number of connections to gRPC service"
     ).unwrap();
 
@@ -335,6 +335,22 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
         .with_label_values(&[reason.as_ref()])
         .inc();
     INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+}
+
+pub fn message_queue_size_inc() {
+    MESSAGE_QUEUE_SIZE.inc()
+}
+
+pub fn message_queue_size_dec() {
+    MESSAGE_QUEUE_SIZE.dec()
+}
+
+pub fn connections_total_inc() {
+    CONNECTIONS_TOTAL.inc()
+}
+
+pub fn connections_total_dec() {
+    CONNECTIONS_TOTAL.dec()
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
