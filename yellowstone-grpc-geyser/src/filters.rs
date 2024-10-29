@@ -773,7 +773,7 @@ impl FilterBlocks {
             };
 
             let entries = if inner.include_entries == Some(true) {
-                message.entries.iter().collect::<Vec<_>>()
+                message.entries.to_vec()
             } else {
                 vec![]
             };

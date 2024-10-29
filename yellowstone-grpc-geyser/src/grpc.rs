@@ -235,7 +235,7 @@ pub struct MessageBlock {
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries: Vec<MessageEntry>,
+    pub entries: Vec<Arc<MessageEntry>>,
 }
 
 impl
@@ -243,7 +243,7 @@ impl
         Arc<MessageBlockMeta>,
         Vec<Arc<MessageTransactionInfo>>,
         Vec<Arc<MessageAccountInfo>>,
-        Vec<MessageEntry>,
+        Vec<Arc<MessageEntry>>,
     )> for MessageBlock
 {
     fn from(
@@ -251,7 +251,7 @@ impl
             Arc<MessageBlockMeta>,
             Vec<Arc<MessageTransactionInfo>>,
             Vec<Arc<MessageAccountInfo>>,
-            Vec<MessageEntry>,
+            Vec<Arc<MessageEntry>>,
         ),
     ) -> Self {
         Self {
@@ -331,22 +331,22 @@ impl Message {
 }
 
 #[derive(Debug, Clone)]
-pub struct MessageBlockRef<'a> {
+pub struct MessageBlockRef {
     pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries: Vec<&'a MessageEntry>,
+    pub entries: Vec<Arc<MessageEntry>>,
 }
 
-impl<'a>
+impl
     From<(
         Arc<MessageBlockMeta>,
         Vec<Arc<MessageTransactionInfo>>,
         u64,
         Vec<Arc<MessageAccountInfo>>,
-        Vec<&'a MessageEntry>,
-    )> for MessageBlockRef<'a>
+        Vec<Arc<MessageEntry>>,
+    )> for MessageBlockRef
 {
     fn from(
         (meta, transactions, updated_account_count, accounts, entries): (
@@ -354,7 +354,7 @@ impl<'a>
             Vec<Arc<MessageTransactionInfo>>,
             u64,
             Vec<Arc<MessageAccountInfo>>,
-            Vec<&'a MessageEntry>,
+            Vec<Arc<MessageEntry>>,
         ),
     ) -> Self {
         Self {
@@ -375,7 +375,7 @@ pub enum MessageRef<'a> {
     Transaction(&'a MessageTransaction),
     TransactionStatus(&'a MessageTransaction),
     Entry(&'a MessageEntry),
-    Block(MessageBlockRef<'a>),
+    Block(MessageBlockRef),
     BlockMeta(&'a MessageBlockMeta),
 }
 
@@ -643,7 +643,7 @@ struct SlotMessages {
     block_meta: Option<Arc<MessageBlockMeta>>,
     transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
-    entries: Vec<MessageEntry>,
+    entries: Vec<Arc<MessageEntry>>,
     sealed: bool,
     entries_count: usize,
     confirmed_at: Option<usize>,
@@ -985,7 +985,7 @@ impl GrpcService {
                             }
                         }
                         Message::Entry(msg) => {
-                            slot_messages.entries.push(*msg);
+                            slot_messages.entries.push(Arc::new(*msg)); // TODO
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         _ => {}
