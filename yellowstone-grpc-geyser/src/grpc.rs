@@ -103,7 +103,7 @@ impl MessageAccountInfo {
 
 #[derive(Debug, Clone)]
 pub struct MessageAccount {
-    pub account: MessageAccountInfo,
+    pub account: Arc<MessageAccountInfo>,
     pub slot: u64,
     pub is_startup: bool,
 }
@@ -111,7 +111,7 @@ pub struct MessageAccount {
 impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
     fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV3<'a>, u64, bool)) -> Self {
         Self {
-            account: MessageAccountInfo {
+            account: Arc::new(MessageAccountInfo {
                 pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
                 lamports: account.lamports,
                 owner: Pubkey::try_from(account.owner).expect("valid Pubkey"),
@@ -120,7 +120,7 @@ impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
                 data: account.data.into(),
                 write_version: account.write_version,
                 txn_signature: account.txn.map(|txn| *txn.signature()),
-            },
+            }),
             slot,
             is_startup,
         }
@@ -171,20 +171,20 @@ impl MessageTransactionInfo {
 
 #[derive(Debug, Clone)]
 pub struct MessageTransaction {
-    pub transaction: MessageTransactionInfo,
+    pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
 }
 
 impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
     fn from((transaction, slot): (&'a ReplicaTransactionInfoV2<'a>, u64)) -> Self {
         Self {
-            transaction: MessageTransactionInfo {
+            transaction: Arc::new(MessageTransactionInfo {
                 signature: *transaction.signature,
                 is_vote: transaction.is_vote,
                 transaction: transaction.transaction.clone(),
                 meta: transaction.transaction_status_meta.clone(),
                 index: transaction.index,
-            },
+            }),
             slot,
         }
     }
@@ -240,9 +240,9 @@ pub struct MessageBlock {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
-    pub transactions: Vec<MessageTransactionInfo>,
+    pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
-    pub accounts: Vec<MessageAccountInfo>,
+    pub accounts: Vec<Arc<MessageAccountInfo>>,
     pub entries_count: u64,
     pub entries: Vec<MessageEntry>,
 }
@@ -250,16 +250,16 @@ pub struct MessageBlock {
 impl
     From<(
         MessageBlockMeta,
-        Vec<MessageTransactionInfo>,
-        Vec<MessageAccountInfo>,
+        Vec<Arc<MessageTransactionInfo>>,
+        Vec<Arc<MessageAccountInfo>>,
         Vec<MessageEntry>,
     )> for MessageBlock
 {
     fn from(
         (blockinfo, transactions, accounts, entries): (
             MessageBlockMeta,
-            Vec<MessageTransactionInfo>,
-            Vec<MessageAccountInfo>,
+            Vec<Arc<MessageTransactionInfo>>,
+            Vec<Arc<MessageAccountInfo>>,
             Vec<MessageEntry>,
         ),
     ) -> Self {
@@ -359,9 +359,9 @@ pub struct MessageBlockRef<'a> {
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
     pub executed_transaction_count: u64,
-    pub transactions: Vec<&'a MessageTransactionInfo>,
+    pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
-    pub accounts: Vec<&'a MessageAccountInfo>,
+    pub accounts: Vec<Arc<MessageAccountInfo>>,
     pub entries_count: u64,
     pub entries: Vec<&'a MessageEntry>,
 }
@@ -369,16 +369,16 @@ pub struct MessageBlockRef<'a> {
 impl<'a>
     From<(
         &'a MessageBlock,
-        Vec<&'a MessageTransactionInfo>,
-        Vec<&'a MessageAccountInfo>,
+        Vec<Arc<MessageTransactionInfo>>,
+        Vec<Arc<MessageAccountInfo>>,
         Vec<&'a MessageEntry>,
     )> for MessageBlockRef<'a>
 {
     fn from(
         (block, transactions, accounts, entries): (
             &'a MessageBlock,
-            Vec<&'a MessageTransactionInfo>,
-            Vec<&'a MessageAccountInfo>,
+            Vec<Arc<MessageTransactionInfo>>,
+            Vec<Arc<MessageAccountInfo>>,
             Vec<&'a MessageEntry>,
         ),
     ) -> Self {
@@ -672,7 +672,7 @@ impl BlockMetaStorage {
 struct SlotMessages {
     messages: Vec<Option<Arc<Message>>>, // Option is used for accounts with low write_version
     block_meta: Option<MessageBlockMeta>,
-    transactions: Vec<MessageTransactionInfo>,
+    transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
     entries: Vec<MessageEntry>,
     sealed: bool,
@@ -705,7 +705,7 @@ impl SlotMessages {
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
                         if let Message::Account(account) = item.as_ref() {
-                            accounts.push(account.account.clone());
+                            accounts.push(Arc::clone(&account.account));
                         }
                     }
 
@@ -998,7 +998,7 @@ impl GrpcService {
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         Message::Transaction(msg) => {
-                            slot_messages.transactions.push(msg.transaction.clone());
+                            slot_messages.transactions.push(Arc::clone(&msg.transaction));
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         // Dedup accounts by max write_version

@@ -16,6 +16,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         str::FromStr,
+        sync::Arc,
     },
     yellowstone_grpc_proto::prelude::{
         subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
@@ -742,7 +743,7 @@ impl FilterBlocks {
                             return None;
                         }
 
-                        Some(tx)
+                        Some(Arc::clone(tx))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -764,7 +765,7 @@ impl FilterBlocks {
                             return None;
                         }
 
-                        Some(account)
+                        Some(Arc::clone(account))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -870,7 +871,7 @@ mod tests {
             transaction::{SanitizedTransaction, Transaction},
         },
         solana_transaction_status::TransactionStatusMeta,
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::Arc},
         yellowstone_grpc_proto::geyser::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
         },
@@ -908,13 +909,13 @@ mod tests {
         };
         let sig = sanitized_transaction.signature();
         MessageTransaction {
-            transaction: MessageTransactionInfo {
+            transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: sanitized_transaction,
                 meta,
                 index: 1,
-            },
+            }),
             slot: 100,
         }
     }
