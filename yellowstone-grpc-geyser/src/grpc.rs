@@ -301,9 +301,9 @@ pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
-    Entry(MessageEntry),
-    Block(MessageBlock),
-    BlockMeta(MessageBlockMeta),
+    Entry(Arc<MessageEntry>),
+    Block(Arc<MessageBlock>),
+    BlockMeta(Arc<MessageBlockMeta>),
 }
 
 impl Message {
@@ -484,7 +484,7 @@ impl BlockhashStatus {
 
 #[derive(Debug, Default)]
 struct BlockMetaStorageInner {
-    blocks: HashMap<u64, MessageBlockMeta>,
+    blocks: HashMap<u64, Arc<MessageBlockMeta>>,
     blockhashes: HashMap<String, BlockhashStatus>,
     processed: Option<u64>,
     confirmed: Option<u64>,
@@ -639,7 +639,7 @@ impl BlockMetaStorage {
 
 #[derive(Debug, Default)]
 struct SlotMessages {
-    messages: Vec<Option<Arc<Message>>>, // Option is used for accounts with low write_version
+    messages: Vec<Option<Message>>, // Option is used for accounts with low write_version
     block_meta: Option<Arc<MessageBlockMeta>>,
     transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
@@ -654,7 +654,7 @@ struct SlotMessages {
 }
 
 impl SlotMessages {
-    pub fn try_seal(&mut self) -> Option<Arc<Message>> {
+    pub fn try_seal(&mut self) -> Option<Message> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
                 let executed_transaction_count = block_meta.executed_transaction_count as usize;
@@ -673,15 +673,15 @@ impl SlotMessages {
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
-                        if let Message::Account(account) = item.as_ref() {
+                        if let Message::Account(account) = item {
                             accounts.push(Arc::clone(&account.account));
                         }
                     }
 
-                    let message = Arc::new(Message::Block(
+                    let message = Message::Block(Arc::new(
                         (Arc::clone(block_meta), transactions, accounts, entries).into(),
                     ));
-                    self.messages.push(Some(Arc::clone(&message)));
+                    self.messages.push(Some(message.clone()));
 
                     self.sealed = true;
                     self.entries_count = entries_count;
@@ -702,7 +702,7 @@ pub struct GrpcService {
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
-    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
 }
 
@@ -715,7 +715,7 @@ impl GrpcService {
         is_reload: bool,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
-        mpsc::UnboundedSender<Arc<Message>>,
+        mpsc::UnboundedSender<Message>,
         Arc<Notify>,
     )> {
         // Bind service address
@@ -827,9 +827,9 @@ impl GrpcService {
     }
 
     async fn geyser_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Arc<Message>>,
+        mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
-        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
         block_fail_action: ConfigBlockFailAction,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
@@ -847,19 +847,19 @@ impl GrpcService {
                     metrics::message_queue_size_dec();
 
                     // Update metrics
-                    if let Message::Slot(slot_message) = message.as_ref() {
+                    if let Message::Slot(slot_message) = &message {
                         metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                     }
 
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                        if matches!(message.as_ref(), Message::Slot(_) | Message::BlockMeta(_)) {
-                            let _ = blocks_meta_tx.send(message.as_ref().clone());
+                        if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
+                            let _ = blocks_meta_tx.send(message.clone());
                         }
                     }
 
                     // Remove outdated block reconstruction info
-                    match message.as_ref() {
+                    match &message {
                         // On startup we can receive few Confirmed/Finalized slots without BlockMeta message
                         // With saved first Processed slot we can ignore errors caused by startup process
                         Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
@@ -920,7 +920,7 @@ impl GrpcService {
 
                     // Update block reconstruction info
                     let slot_messages = messages.entry(message.get_slot()).or_default();
-                    if let Message::Slot(msg) = message.as_ref() {
+                    if let Message::Slot(msg) = &message {
                         match msg.status {
                             CommitmentLevel::Processed => {
                                 slot_messages.parent_slot = msg.parent;
@@ -933,11 +933,11 @@ impl GrpcService {
                             },
                         }
                     }
-                    if !matches!(message.as_ref(), Message::Slot(_)) {
-                        slot_messages.messages.push(Some(Arc::clone(&message)));
+                    if !matches!(&message, Message::Slot(_)) {
+                        slot_messages.messages.push(Some(message.clone()));
 
                         // If we already build Block message, new message will be a problem
-                        if slot_messages.sealed && !(matches!(message.as_ref(), Message::Entry(_)) && slot_messages.entries_count == 0) {
+                        if slot_messages.sealed && !(matches!(&message, Message::Entry(_)) && slot_messages.entries_count == 0) {
                             metrics::update_invalid_blocks(format!("unexpected message {}", message.kind()));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
@@ -950,7 +950,7 @@ impl GrpcService {
                         }
                     }
                     let mut sealed_block_msg = None;
-                    match message.as_ref() {
+                    match &message {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
                                 metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
@@ -963,7 +963,7 @@ impl GrpcService {
                                     }
                                 }
                             }
-                            slot_messages.block_meta = Some(Arc::new(msg.clone())); // TODO
+                            slot_messages.block_meta = Some(Arc::clone(msg));
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         Message::Transaction(msg) => {
@@ -985,7 +985,7 @@ impl GrpcService {
                             }
                         }
                         Message::Entry(msg) => {
-                            slot_messages.entries.push(Arc::new(*msg)); // TODO
+                            slot_messages.entries.push(Arc::clone(msg));
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         _ => {}
@@ -996,7 +996,7 @@ impl GrpcService {
                     if let Some(sealed_block_msg) = sealed_block_msg {
                         messages_vec.push(sealed_block_msg);
                     }
-                    let slot_status = if let Message::Slot(msg) = message.as_ref() {
+                    let slot_status = if let Message::Slot(msg) = &message {
                         Some((msg.slot, msg.status))
                     } else {
                         None
@@ -1022,18 +1022,18 @@ impl GrpcService {
                                 }
 
                                 slots.push(parent);
-                                messages_vec.push(Arc::new(Message::Slot(MessageSlot {
+                                messages_vec.push(Message::Slot(MessageSlot {
                                     slot: parent,
                                     parent: entry.parent_slot,
                                     status,
-                                })));
+                                }));
                                 metrics::missed_status_message_inc(status);
                             }
                         }
                     }
 
                     for message in messages_vec.into_iter().rev() {
-                        if let Message::Slot(slot) = message.as_ref() {
+                        if let Message::Slot(slot) = &message {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
                                 CommitmentLevel::Processed => {
                                     (Vec::with_capacity(1), Vec::with_capacity(1))
@@ -1067,7 +1067,7 @@ impl GrpcService {
                             };
 
                             // processed
-                            processed_messages.push(Arc::clone(&message));
+                            processed_messages.push(message.clone());
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
@@ -1076,7 +1076,7 @@ impl GrpcService {
                                 .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                             // confirmed
-                            confirmed_messages.push(Arc::clone(&message));
+                            confirmed_messages.push(message.clone());
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
 
@@ -1087,7 +1087,7 @@ impl GrpcService {
                         } else {
                             let mut confirmed_messages = vec![];
                             let mut finalized_messages = vec![];
-                            if matches!(message.as_ref(), Message::Block(_)) {
+                            if matches!(&message, Message::Block(_)) {
                                 if let Some(slot_messages) = messages.get(&message.get_slot()) {
                                     if let Some(confirmed_at) = slot_messages.confirmed_at {
                                         confirmed_messages.extend(
@@ -1147,7 +1147,7 @@ impl GrpcService {
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
-        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
@@ -1269,7 +1269,7 @@ impl GrpcService {
 
                         if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
                             for message in messages.iter() {
-                                if let Message::Slot(slot_message) = message.as_ref() {
+                                if let Message::Slot(slot_message) = &message {
                                     DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
                                 }
                             }
