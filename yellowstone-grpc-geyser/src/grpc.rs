@@ -231,52 +231,34 @@ impl MessageEntry {
 
 #[derive(Debug, Clone)]
 pub struct MessageBlock {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: String,
-    pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub num_partitions: Option<u64>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
+    pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries_count: u64,
     pub entries: Vec<MessageEntry>,
 }
 
 impl
     From<(
-        MessageBlockMeta,
+        Arc<MessageBlockMeta>,
         Vec<Arc<MessageTransactionInfo>>,
         Vec<Arc<MessageAccountInfo>>,
         Vec<MessageEntry>,
     )> for MessageBlock
 {
     fn from(
-        (blockinfo, transactions, accounts, entries): (
-            MessageBlockMeta,
+        (meta, transactions, accounts, entries): (
+            Arc<MessageBlockMeta>,
             Vec<Arc<MessageTransactionInfo>>,
             Vec<Arc<MessageAccountInfo>>,
             Vec<MessageEntry>,
         ),
     ) -> Self {
         Self {
-            parent_slot: blockinfo.parent_slot,
-            slot: blockinfo.slot,
-            blockhash: blockinfo.blockhash,
-            parent_blockhash: blockinfo.parent_blockhash,
-            rewards: blockinfo.rewards,
-            num_partitions: blockinfo.num_partitions,
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
-            executed_transaction_count: blockinfo.executed_transaction_count,
+            meta,
             transactions,
             updated_account_count: accounts.len() as u64,
             accounts,
-            entries_count: entries.len() as u64,
             entries,
         }
     }
@@ -325,13 +307,13 @@ pub enum Message {
 }
 
 impl Message {
-    pub const fn get_slot(&self) -> u64 {
+    pub fn get_slot(&self) -> u64 {
         match self {
             Self::Slot(msg) => msg.slot,
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
-            Self::Block(msg) => msg.slot,
+            Self::Block(msg) => msg.meta.slot,
             Self::BlockMeta(msg) => msg.slot,
         }
     }
@@ -350,52 +332,36 @@ impl Message {
 
 #[derive(Debug, Clone)]
 pub struct MessageBlockRef<'a> {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: &'a String,
-    pub blockhash: &'a String,
-    pub rewards: &'a Vec<Reward>,
-    pub num_partitions: Option<u64>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
+    pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries_count: u64,
     pub entries: Vec<&'a MessageEntry>,
 }
 
 impl<'a>
     From<(
-        &'a MessageBlock,
+        Arc<MessageBlockMeta>,
         Vec<Arc<MessageTransactionInfo>>,
+        u64,
         Vec<Arc<MessageAccountInfo>>,
         Vec<&'a MessageEntry>,
     )> for MessageBlockRef<'a>
 {
     fn from(
-        (block, transactions, accounts, entries): (
-            &'a MessageBlock,
+        (meta, transactions, updated_account_count, accounts, entries): (
+            Arc<MessageBlockMeta>,
             Vec<Arc<MessageTransactionInfo>>,
+            u64,
             Vec<Arc<MessageAccountInfo>>,
             Vec<&'a MessageEntry>,
         ),
     ) -> Self {
         Self {
-            parent_slot: block.parent_slot,
-            slot: block.slot,
-            parent_blockhash: &block.parent_blockhash,
-            blockhash: &block.blockhash,
-            rewards: &block.rewards,
-            num_partitions: block.num_partitions,
-            block_time: block.block_time,
-            block_height: block.block_height,
-            executed_transaction_count: block.executed_transaction_count,
+            meta,
             transactions,
-            updated_account_count: block.updated_account_count,
+            updated_account_count,
             accounts,
-            entries_count: block.entries_count,
             entries,
         }
     }
@@ -447,17 +413,20 @@ impl<'a> MessageRef<'a> {
             }
             Self::Entry(message) => UpdateOneof::Entry(message.as_proto()),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
+                slot: message.meta.slot,
+                blockhash: message.meta.blockhash.clone(),
                 rewards: Some(convert_to::create_rewards_obj(
-                    message.rewards.as_slice(),
-                    message.num_partitions,
+                    message.meta.rewards.as_slice(),
+                    message.meta.num_partitions,
                 )),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
+                block_time: message.meta.block_time.map(convert_to::create_timestamp),
+                block_height: message
+                    .meta
+                    .block_height
+                    .map(convert_to::create_block_height),
+                parent_slot: message.meta.parent_slot,
+                parent_blockhash: message.meta.parent_blockhash.clone(),
+                executed_transaction_count: message.meta.executed_transaction_count,
                 transactions: message
                     .transactions
                     .iter()
@@ -469,7 +438,7 @@ impl<'a> MessageRef<'a> {
                     .iter()
                     .map(|acc| acc.as_proto(accounts_data_slice))
                     .collect(),
-                entries_count: message.entries_count,
+                entries_count: message.meta.entries_count,
                 entries: message
                     .entries
                     .iter()
@@ -671,7 +640,7 @@ impl BlockMetaStorage {
 #[derive(Debug, Default)]
 struct SlotMessages {
     messages: Vec<Option<Arc<Message>>>, // Option is used for accounts with low write_version
-    block_meta: Option<MessageBlockMeta>,
+    block_meta: Option<Arc<MessageBlockMeta>>,
     transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
     entries: Vec<MessageEntry>,
@@ -710,7 +679,7 @@ impl SlotMessages {
                     }
 
                     let message = Arc::new(Message::Block(
-                        (block_meta.clone(), transactions, accounts, entries).into(),
+                        (Arc::clone(block_meta), transactions, accounts, entries).into(),
                     ));
                     self.messages.push(Some(Arc::clone(&message)));
 
@@ -994,7 +963,7 @@ impl GrpcService {
                                     }
                                 }
                             }
-                            slot_messages.block_meta = Some(msg.clone());
+                            slot_messages.block_meta = Some(Arc::new(msg.clone())); // TODO
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         Message::Transaction(msg) => {

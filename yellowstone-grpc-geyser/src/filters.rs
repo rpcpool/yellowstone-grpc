@@ -780,7 +780,16 @@ impl FilterBlocks {
 
             (
                 vec![filter.clone()],
-                MessageRef::Block((message, transactions, accounts, entries).into()),
+                MessageRef::Block(
+                    (
+                        Arc::clone(&message.meta),
+                        transactions,
+                        message.updated_account_count,
+                        accounts,
+                        entries,
+                    )
+                        .into(),
+                ),
             )
         }))
     }
