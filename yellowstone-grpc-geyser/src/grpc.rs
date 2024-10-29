@@ -73,7 +73,7 @@ pub struct MessageAccountInfo {
 }
 
 impl MessageAccountInfo {
-    fn to_proto(
+    fn as_proto(
         &self,
         accounts_data_slice: &[FilterAccountsDataSlice],
     ) -> SubscribeUpdateAccountInfo {
@@ -158,7 +158,7 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    fn to_proto(&self) -> SubscribeUpdateTransactionInfo {
+    fn as_proto(&self) -> SubscribeUpdateTransactionInfo {
         SubscribeUpdateTransactionInfo {
             signature: self.signature.as_ref().into(),
             is_vote: self.is_vote,
@@ -190,7 +190,7 @@ impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
@@ -217,7 +217,7 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
 }
 
 impl MessageEntry {
-    fn to_proto(&self) -> SubscribeUpdateEntry {
+    fn as_proto(&self) -> SubscribeUpdateEntry {
         SubscribeUpdateEntry {
             slot: self.slot,
             index: self.index as u64,
@@ -414,7 +414,7 @@ pub enum MessageRef<'a> {
 }
 
 impl<'a> MessageRef<'a> {
-    pub fn to_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
@@ -422,12 +422,12 @@ impl<'a> MessageRef<'a> {
                 status: message.status as i32,
             }),
             Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(message.account.to_proto(accounts_data_slice)),
+                account: Some(message.account.as_proto(accounts_data_slice)),
                 slot: message.slot,
                 is_startup: message.is_startup,
             }),
             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(message.transaction.to_proto()),
+                transaction: Some(message.transaction.as_proto()),
                 slot: message.slot,
             }),
             Self::TransactionStatus(message) => {
@@ -445,7 +445,7 @@ impl<'a> MessageRef<'a> {
                     },
                 })
             }
-            Self::Entry(message) => UpdateOneof::Entry(message.to_proto()),
+            Self::Entry(message) => UpdateOneof::Entry(message.as_proto()),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
@@ -461,19 +461,19 @@ impl<'a> MessageRef<'a> {
                 transactions: message
                     .transactions
                     .iter()
-                    .map(|tx| tx.to_proto())
+                    .map(|tx| tx.as_proto())
                     .collect(),
                 updated_account_count: message.updated_account_count,
                 accounts: message
                     .accounts
                     .iter()
-                    .map(|acc| acc.to_proto(accounts_data_slice))
+                    .map(|acc| acc.as_proto(accounts_data_slice))
                     .collect(),
                 entries_count: message.entries_count,
                 entries: message
                     .entries
                     .iter()
-                    .map(|entry| entry.to_proto())
+                    .map(|entry| entry.as_proto())
                     .collect(),
             }),
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
@@ -1016,7 +1016,7 @@ impl GrpcService {
                             }
                         }
                         Message::Entry(msg) => {
-                            slot_messages.entries.push(msg.clone());
+                            slot_messages.entries.push(*msg);
                             sealed_block_msg = slot_messages.try_seal();
                         }
                         _ => {}

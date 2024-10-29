@@ -157,7 +157,7 @@ impl Filter {
                     } else {
                         Some(SubscribeUpdate {
                             filters,
-                            update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+                            update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
                         })
                     }
                 }),
