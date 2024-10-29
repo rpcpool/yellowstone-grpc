@@ -13,6 +13,7 @@ use {
     log::{error, info},
     solana_sdk::{
         clock::{Slot, UnixTimestamp, MAX_RECENT_BLOCKHASHES},
+        hash::HASH_BYTES,
         pubkey::Pubkey,
         signature::Signature,
         transaction::SanitizedTransaction,
@@ -194,7 +195,7 @@ pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
     pub num_hashes: u64,
-    pub hash: Vec<u8>,
+    pub hash: [u8; HASH_BYTES],
     pub executed_transaction_count: u64,
     pub starting_transaction_index: u64,
 }
@@ -205,7 +206,7 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
             slot: entry.slot,
             index: entry.index,
             num_hashes: entry.num_hashes,
-            hash: entry.hash.into(),
+            hash: entry.hash[0..32].try_into().expect("failed to create hash"),
             executed_transaction_count: entry.executed_transaction_count,
             starting_transaction_index: entry
                 .starting_transaction_index
@@ -221,7 +222,7 @@ impl MessageEntry {
             slot: self.slot,
             index: self.index as u64,
             num_hashes: self.num_hashes,
-            hash: self.hash.clone(),
+            hash: self.hash.into(),
             executed_transaction_count: self.executed_transaction_count,
             starting_transaction_index: self.starting_transaction_index,
         }
