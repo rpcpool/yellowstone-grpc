@@ -138,19 +138,19 @@ impl GeyserPlugin for Plugin {
             };
 
             if is_startup {
-                if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message = Message::Account((account, slot, is_startup).into());
-                    match channel.send(Box::new(message)) {
-                        Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
-                        Err(_) => {
-                            if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
-                                log::error!(
-                                    "failed to send message to startup queue: channel closed"
-                                )
-                            }
-                        }
-                    }
-                }
+                // if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
+                //     let message = Message::Account((account, slot, is_startup).into());
+                //     match channel.send(Box::new(message)) {
+                //         Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
+                //         Err(_) => {
+                //             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
+                //                 log::error!(
+                //                     "failed to send message to startup queue: channel closed"
+                //                 )
+                //             }
+                //         }
+                //     }
+                // }
             } else {
                 let message = Message::Account((account, slot, is_startup).into());
                 inner.send_message(message);
