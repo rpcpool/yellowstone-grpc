@@ -28,12 +28,67 @@ use {
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
             SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
             SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePong,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
         },
     },
 };
+
+impl MessageAccountInfo {
+    fn as_proto(
+        &self,
+        accounts_data_slice: &[FilterAccountsDataSlice],
+    ) -> SubscribeUpdateAccountInfo {
+        let data = if accounts_data_slice.is_empty() {
+            self.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+            for data_slice in accounts_data_slice {
+                if self.data.len() >= data_slice.end {
+                    data.extend_from_slice(&self.data[data_slice.start..data_slice.end]);
+                }
+            }
+            data
+        };
+        SubscribeUpdateAccountInfo {
+            pubkey: self.pubkey.as_ref().into(),
+            lamports: self.lamports,
+            owner: self.owner.as_ref().into(),
+            executable: self.executable,
+            rent_epoch: self.rent_epoch,
+            data,
+            write_version: self.write_version,
+            txn_signature: self.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+}
+
+impl MessageTransactionInfo {
+    pub fn as_proto(&self) -> SubscribeUpdateTransactionInfo {
+        SubscribeUpdateTransactionInfo {
+            signature: self.signature.as_ref().into(),
+            is_vote: self.is_vote,
+            transaction: Some(convert_to::create_transaction(&self.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&self.meta)),
+            index: self.index as u64,
+        }
+    }
+}
+
+impl MessageEntry {
+    pub fn as_proto(&self) -> SubscribeUpdateEntry {
+        SubscribeUpdateEntry {
+            slot: self.slot,
+            index: self.index as u64,
+            num_hashes: self.num_hashes,
+            hash: self.hash.into(),
+            executed_transaction_count: self.executed_transaction_count,
+            starting_transaction_index: self.starting_transaction_index,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MessageBlockRef {
@@ -73,7 +128,6 @@ impl
 }
 
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),

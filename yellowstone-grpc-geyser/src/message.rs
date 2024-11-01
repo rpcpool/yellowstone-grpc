@@ -1,5 +1,4 @@
 use {
-    crate::filters::FilterAccountsDataSlice,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
@@ -10,13 +9,7 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::sync::Arc,
-    yellowstone_grpc_proto::{
-        convert_to,
-        prelude::{
-            CommitmentLevel, SubscribeUpdateAccountInfo, SubscribeUpdateEntry,
-            SubscribeUpdateTransactionInfo,
-        },
-    },
+    yellowstone_grpc_proto::prelude::CommitmentLevel,
 };
 
 #[derive(Debug, Clone)]
@@ -29,35 +22,6 @@ pub struct MessageAccountInfo {
     pub data: Vec<u8>,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
-}
-
-impl MessageAccountInfo {
-    pub fn as_proto(
-        &self,
-        accounts_data_slice: &[FilterAccountsDataSlice],
-    ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
-            self.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
-                if self.data.len() >= data_slice.end {
-                    data.extend_from_slice(&self.data[data_slice.start..data_slice.end]);
-                }
-            }
-            data
-        };
-        SubscribeUpdateAccountInfo {
-            pubkey: self.pubkey.as_ref().into(),
-            lamports: self.lamports,
-            owner: self.owner.as_ref().into(),
-            executable: self.executable,
-            rent_epoch: self.rent_epoch,
-            data,
-            write_version: self.write_version,
-            txn_signature: self.txn_signature.map(|s| s.as_ref().into()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,18 +80,6 @@ pub struct MessageTransactionInfo {
     pub index: usize,
 }
 
-impl MessageTransactionInfo {
-    pub fn as_proto(&self) -> SubscribeUpdateTransactionInfo {
-        SubscribeUpdateTransactionInfo {
-            signature: self.signature.as_ref().into(),
-            is_vote: self.is_vote,
-            transaction: Some(convert_to::create_transaction(&self.transaction)),
-            meta: Some(convert_to::create_transaction_meta(&self.meta)),
-            index: self.index as u64,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct MessageTransaction {
     pub transaction: Arc<MessageTransactionInfo>,
@@ -171,19 +123,6 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
                 .starting_transaction_index
                 .try_into()
                 .expect("failed convert usize to u64"),
-        }
-    }
-}
-
-impl MessageEntry {
-    pub fn as_proto(&self) -> SubscribeUpdateEntry {
-        SubscribeUpdateEntry {
-            slot: self.slot,
-            index: self.index as u64,
-            num_hashes: self.num_hashes,
-            hash: self.hash.into(),
-            executed_transaction_count: self.executed_transaction_count,
-            starting_transaction_index: self.starting_transaction_index,
         }
     }
 }
