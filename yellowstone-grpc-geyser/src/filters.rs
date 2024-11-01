@@ -37,50 +37,13 @@ use {
 };
 
 #[derive(Debug, Clone)]
-pub struct MessageBlockRef {
-    pub meta: Arc<MessageBlockMeta>,
-    pub transactions: Vec<Arc<MessageTransactionInfo>>,
-    pub updated_account_count: u64,
-    pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries: Vec<Arc<MessageEntry>>,
-}
-
-impl
-    From<(
-        Arc<MessageBlockMeta>,
-        Vec<Arc<MessageTransactionInfo>>,
-        u64,
-        Vec<Arc<MessageAccountInfo>>,
-        Vec<Arc<MessageEntry>>,
-    )> for MessageBlockRef
-{
-    fn from(
-        (meta, transactions, updated_account_count, accounts, entries): (
-            Arc<MessageBlockMeta>,
-            Vec<Arc<MessageTransactionInfo>>,
-            u64,
-            Vec<Arc<MessageAccountInfo>>,
-            Vec<Arc<MessageEntry>>,
-        ),
-    ) -> Self {
-        Self {
-            meta,
-            transactions,
-            updated_account_count,
-            accounts,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub enum MessageRef<'a> {
     Slot(&'a MessageSlot),
     Account(&'a MessageAccount),
     Transaction(&'a MessageTransaction),
     TransactionStatus(&'a MessageTransaction),
     Entry(&'a MessageEntry),
-    Block(MessageBlockRef),
+    Block(MessageBlock),
     BlockMeta(&'a MessageBlockMeta),
 }
 
@@ -970,16 +933,13 @@ impl FilterBlocks {
 
             (
                 vec![filter.clone()],
-                MessageRef::Block(
-                    (
-                        Arc::clone(&message.meta),
-                        transactions,
-                        message.updated_account_count,
-                        accounts,
-                        entries,
-                    )
-                        .into(),
-                ),
+                MessageRef::Block(MessageBlock {
+                    meta: Arc::clone(&message.meta),
+                    transactions,
+                    updated_account_count: message.updated_account_count,
+                    accounts,
+                    entries,
+                }),
             )
         }))
     }
