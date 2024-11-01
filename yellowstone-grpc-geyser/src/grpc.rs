@@ -1,11 +1,8 @@
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
-        filters::{Filter, FilterAccountsDataSlice},
-        message::{
-            Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo,
-        },
+        filters::Filter,
+        message::{Message, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransactionInfo},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
@@ -39,154 +36,15 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
-    yellowstone_grpc_proto::{
-        convert_to,
-        prelude::{
-            geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
-            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdatePing, SubscribeUpdateSlot, SubscribeUpdateTransaction,
-            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
-        },
+    yellowstone_grpc_proto::prelude::{
+        geyser_server::{Geyser, GeyserServer},
+        subscribe_update::UpdateOneof,
+        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
+        GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest,
+        GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest,
+        PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
     },
 };
-
-#[derive(Debug, Clone)]
-pub struct MessageBlockRef {
-    pub meta: Arc<MessageBlockMeta>,
-    pub transactions: Vec<Arc<MessageTransactionInfo>>,
-    pub updated_account_count: u64,
-    pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub entries: Vec<Arc<MessageEntry>>,
-}
-
-impl
-    From<(
-        Arc<MessageBlockMeta>,
-        Vec<Arc<MessageTransactionInfo>>,
-        u64,
-        Vec<Arc<MessageAccountInfo>>,
-        Vec<Arc<MessageEntry>>,
-    )> for MessageBlockRef
-{
-    fn from(
-        (meta, transactions, updated_account_count, accounts, entries): (
-            Arc<MessageBlockMeta>,
-            Vec<Arc<MessageTransactionInfo>>,
-            u64,
-            Vec<Arc<MessageAccountInfo>>,
-            Vec<Arc<MessageEntry>>,
-        ),
-    ) -> Self {
-        Self {
-            meta,
-            transactions,
-            updated_account_count,
-            accounts,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum MessageRef<'a> {
-    Slot(&'a MessageSlot),
-    Account(&'a MessageAccount),
-    Transaction(&'a MessageTransaction),
-    TransactionStatus(&'a MessageTransaction),
-    Entry(&'a MessageEntry),
-    Block(MessageBlockRef),
-    BlockMeta(&'a MessageBlockMeta),
-}
-
-impl<'a> MessageRef<'a> {
-    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
-        match self {
-            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: message.slot,
-                parent: message.parent,
-                status: message.status as i32,
-            }),
-            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(message.account.as_proto(accounts_data_slice)),
-                slot: message.slot,
-                is_startup: message.is_startup,
-            }),
-            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(message.transaction.as_proto()),
-                slot: message.slot,
-            }),
-            Self::TransactionStatus(message) => {
-                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-                    slot: message.slot,
-                    signature: message.transaction.signature.as_ref().into(),
-                    is_vote: message.transaction.is_vote,
-                    index: message.transaction.index as u64,
-                    err: match &message.transaction.meta.status {
-                        Ok(()) => None,
-                        Err(err) => Some(SubscribeUpdateTransactionError {
-                            err: bincode::serialize(&err)
-                                .expect("transaction error to serialize to bytes"),
-                        }),
-                    },
-                })
-            }
-            Self::Entry(message) => UpdateOneof::Entry(message.as_proto()),
-            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-                slot: message.meta.slot,
-                blockhash: message.meta.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.meta.rewards.as_slice(),
-                    message.meta.num_partitions,
-                )),
-                block_time: message.meta.block_time.map(convert_to::create_timestamp),
-                block_height: message
-                    .meta
-                    .block_height
-                    .map(convert_to::create_block_height),
-                parent_slot: message.meta.parent_slot,
-                parent_blockhash: message.meta.parent_blockhash.clone(),
-                executed_transaction_count: message.meta.executed_transaction_count,
-                transactions: message
-                    .transactions
-                    .iter()
-                    .map(|tx| tx.as_proto())
-                    .collect(),
-                updated_account_count: message.updated_account_count,
-                accounts: message
-                    .accounts
-                    .iter()
-                    .map(|acc| acc.as_proto(accounts_data_slice))
-                    .collect(),
-                entries_count: message.meta.entries_count,
-                entries: message
-                    .entries
-                    .iter()
-                    .map(|entry| entry.as_proto())
-                    .collect(),
-            }),
-            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.rewards.as_slice(),
-                    message.num_partitions,
-                )),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-                entries_count: message.entries_count,
-            }),
-        }
-    }
-}
 
 #[derive(Debug)]
 struct BlockhashStatus {
