@@ -36,60 +36,6 @@ use {
     },
 };
 
-impl MessageAccountInfo {
-    fn as_proto(
-        &self,
-        accounts_data_slice: &[FilterAccountsDataSlice],
-    ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
-            self.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
-                if self.data.len() >= data_slice.end {
-                    data.extend_from_slice(&self.data[data_slice.start..data_slice.end]);
-                }
-            }
-            data
-        };
-        SubscribeUpdateAccountInfo {
-            pubkey: self.pubkey.as_ref().into(),
-            lamports: self.lamports,
-            owner: self.owner.as_ref().into(),
-            executable: self.executable,
-            rent_epoch: self.rent_epoch,
-            data,
-            write_version: self.write_version,
-            txn_signature: self.txn_signature.map(|s| s.as_ref().into()),
-        }
-    }
-}
-
-impl MessageTransactionInfo {
-    pub fn as_proto(&self) -> SubscribeUpdateTransactionInfo {
-        SubscribeUpdateTransactionInfo {
-            signature: self.signature.as_ref().into(),
-            is_vote: self.is_vote,
-            transaction: Some(convert_to::create_transaction(&self.transaction)),
-            meta: Some(convert_to::create_transaction_meta(&self.meta)),
-            index: self.index as u64,
-        }
-    }
-}
-
-impl MessageEntry {
-    pub fn as_proto(&self) -> SubscribeUpdateEntry {
-        SubscribeUpdateEntry {
-            slot: self.slot,
-            index: self.index as u64,
-            num_hashes: self.num_hashes,
-            hash: self.hash.into(),
-            executed_transaction_count: self.executed_transaction_count,
-            starting_transaction_index: self.starting_transaction_index,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct MessageBlockRef {
     pub meta: Arc<MessageBlockMeta>,
@@ -139,6 +85,54 @@ pub enum MessageRef<'a> {
 }
 
 impl<'a> MessageRef<'a> {
+    fn as_proto_account(
+        message: &MessageAccountInfo,
+        accounts_data_slice: &[FilterAccountsDataSlice],
+    ) -> SubscribeUpdateAccountInfo {
+        let data = if accounts_data_slice.is_empty() {
+            message.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+            for data_slice in accounts_data_slice {
+                if message.data.len() >= data_slice.end {
+                    data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
+                }
+            }
+            data
+        };
+        SubscribeUpdateAccountInfo {
+            pubkey: message.pubkey.as_ref().into(),
+            lamports: message.lamports,
+            owner: message.owner.as_ref().into(),
+            executable: message.executable,
+            rent_epoch: message.rent_epoch,
+            data,
+            write_version: message.write_version,
+            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+
+    fn as_proto_transaction(message: &MessageTransactionInfo) -> SubscribeUpdateTransactionInfo {
+        SubscribeUpdateTransactionInfo {
+            signature: message.signature.as_ref().into(),
+            is_vote: message.is_vote,
+            transaction: Some(convert_to::create_transaction(&message.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&message.meta)),
+            index: message.index as u64,
+        }
+    }
+
+    fn as_proto_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
+        SubscribeUpdateEntry {
+            slot: message.slot,
+            index: message.index as u64,
+            num_hashes: message.num_hashes,
+            hash: message.hash.into(),
+            executed_transaction_count: message.executed_transaction_count,
+            starting_transaction_index: message.starting_transaction_index,
+        }
+    }
+
     pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -147,12 +141,15 @@ impl<'a> MessageRef<'a> {
                 status: message.status as i32,
             }),
             Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(message.account.as_proto(accounts_data_slice)),
+                account: Some(Self::as_proto_account(
+                    message.account.as_ref(),
+                    accounts_data_slice,
+                )),
                 slot: message.slot,
                 is_startup: message.is_startup,
             }),
             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(message.transaction.as_proto()),
+                transaction: Some(Self::as_proto_transaction(message.transaction.as_ref())),
                 slot: message.slot,
             }),
             Self::TransactionStatus(message) => {
@@ -170,7 +167,7 @@ impl<'a> MessageRef<'a> {
                     },
                 })
             }
-            Self::Entry(message) => UpdateOneof::Entry(message.as_proto()),
+            Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.meta.slot,
                 blockhash: message.meta.blockhash.clone(),
@@ -189,19 +186,19 @@ impl<'a> MessageRef<'a> {
                 transactions: message
                     .transactions
                     .iter()
-                    .map(|tx| tx.as_proto())
+                    .map(|tx| Self::as_proto_transaction(tx.as_ref()))
                     .collect(),
                 updated_account_count: message.updated_account_count,
                 accounts: message
                     .accounts
                     .iter()
-                    .map(|acc| acc.as_proto(accounts_data_slice))
+                    .map(|acc| Self::as_proto_account(acc.as_ref(), accounts_data_slice))
                     .collect(),
                 entries_count: message.meta.entries_count,
                 entries: message
                     .entries
                     .iter()
-                    .map(|entry| entry.as_proto())
+                    .map(|entry| Self::as_proto_entry(entry.as_ref()))
                     .collect(),
             }),
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
