@@ -1,7 +1,8 @@
 use {
     crate::{
         config::Config,
-        grpc::{GrpcService, Message},
+        grpc::GrpcService,
+        message::Message,
         metrics::{self, PrometheusService},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{

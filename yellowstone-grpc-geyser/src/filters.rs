@@ -5,9 +5,10 @@ use {
             ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
             ConfigGrpcFiltersTransactions,
         },
-        grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
-            MessageSlot, MessageTransaction,
+        grpc::MessageRef,
+        message::{
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransaction,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -870,7 +871,8 @@ mod tests {
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
-            grpc::{Message, MessageRef, MessageTransaction, MessageTransactionInfo},
+            grpc::MessageRef,
+            message::{Message, MessageTransaction, MessageTransactionInfo},
         },
         solana_sdk::{
             hash::Hash,
