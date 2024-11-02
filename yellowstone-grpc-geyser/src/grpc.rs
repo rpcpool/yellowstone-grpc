@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
-        filters::Filter,
+        filters::{Filter, FilterNames},
         message::{Message, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransactionInfo},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
@@ -287,6 +287,7 @@ pub struct GrpcService {
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+    filter_names: Arc<Mutex<FilterNames>>,
 }
 
 impl GrpcService {
@@ -343,6 +344,12 @@ impl GrpcService {
                 .context("failed to apply tls_config")?;
         }
 
+        let filter_names = Arc::new(Mutex::new(FilterNames::new(
+            config.filter_name_size_limit,
+            config.filter_names_size_limit,
+            config.filter_names_cleanup_interval,
+        )));
+
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -354,6 +361,7 @@ impl GrpcService {
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
             debug_clients_tx,
+            filter_names,
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -726,7 +734,6 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
@@ -734,22 +741,7 @@ impl GrpcService {
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
-        let mut filter = Filter::new(
-            &SubscribeRequest {
-                accounts: HashMap::new(),
-                slots: HashMap::new(),
-                transactions: HashMap::new(),
-                transactions_status: HashMap::new(),
-                blocks: HashMap::new(),
-                blocks_meta: HashMap::new(),
-                entry: HashMap::new(),
-                commitment: None,
-                accounts_data_slice: Vec::new(),
-                ping: None,
-            },
-            &config_filters,
-        )
-        .expect("empty filter");
+        let mut filter = Filter::default();
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
         metrics::connections_total_inc();
@@ -996,6 +988,7 @@ impl Geyser for GrpcService {
             .unwrap_or_else(|| "".to_owned());
 
         let config_filters = Arc::clone(&self.config_filters);
+        let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
@@ -1010,7 +1003,10 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            if let Err(error) = match Filter::new(&request, &config_filters) {
+                            let mut filter_names = filter_names.lock().await;
+                            filter_names.try_clean();
+
+                            if let Err(error) = match Filter::new(&request, &config_filters, &mut filter_names) {
                                 Ok(filter) => match incoming_client_tx.send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
@@ -1040,7 +1036,6 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
-            Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
             snapshot_rx,

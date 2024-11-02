@@ -4,7 +4,7 @@ use {
     },
     serde::{de, Deserialize, Deserializer},
     solana_sdk::pubkey::Pubkey,
-    std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path},
+    std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path, time::Duration},
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
 };
@@ -110,6 +110,18 @@ pub struct ConfigGrpc {
     pub filters: ConfigGrpcFilters,
     /// x_token to enforce on connections
     pub x_token: Option<String>,
+    /// Filter name size limit
+    #[serde(default = "ConfigGrpc::default_filter_name_size_limit")]
+    pub filter_name_size_limit: usize,
+    /// Number of cached filter names before doing cleanup
+    #[serde(default = "ConfigGrpc::default_filter_names_size_limit")]
+    pub filter_names_size_limit: usize,
+    /// Cleanup interval once filter names reached `filter_names_size_limit`
+    #[serde(
+        default = "ConfigGrpc::default_filter_names_cleanup_interval",
+        with = "humantime_serde"
+    )]
+    pub filter_names_cleanup_interval: Duration,
 }
 
 impl ConfigGrpc {
@@ -131,6 +143,18 @@ impl ConfigGrpc {
 
     const fn unary_concurrency_limit_default() -> usize {
         Semaphore::MAX_PERMITS
+    }
+
+    const fn default_filter_name_size_limit() -> usize {
+        32
+    }
+
+    const fn default_filter_names_size_limit() -> usize {
+        1_024
+    }
+
+    const fn default_filter_names_cleanup_interval() -> Duration {
+        Duration::from_secs(1)
     }
 }
 
