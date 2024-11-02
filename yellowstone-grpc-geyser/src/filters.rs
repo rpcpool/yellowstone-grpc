@@ -92,7 +92,7 @@ impl FilterNames {
     ) -> Self {
         Self {
             name_size_limit,
-            names: HashSet::with_capacity(1024),
+            names: HashSet::with_capacity(names_size_limit),
             names_size_limit,
             cleanup_ts: Instant::now(),
             cleanup_interval,
