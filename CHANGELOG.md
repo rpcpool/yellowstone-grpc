@@ -21,6 +21,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: optimize consuming of new filters ([#439](https://github.com/rpcpool/yellowstone-grpc/pull/439))
 - proto: add filter by lamports ([#369](https://github.com/rpcpool/yellowstone-grpc/pull/369))
 - geyser: use Arc wrapped messages in block message ([#446](https://github.com/rpcpool/yellowstone-grpc/pull/446))
+- node: remove generated grpc files ([#447](https://github.com/rpcpool/yellowstone-grpc/pull/447))
 
 ### Breaking
 
