@@ -3,6 +3,7 @@ import Client, {
   CommitmentLevel,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
+  SubscribeRequestFilterAccountsFilterLamports,
 } from "@triton-one/yellowstone-grpc";
 
 async function main() {
@@ -123,6 +124,37 @@ async function subscribeCommand(client, args) {
 
     if (args.accounts.datasize) {
       filters.push({ datasize: args.accounts.datasize });
+    }
+
+    if (args.accounts.lamports) {
+      for (let filter in args.accounts.lamports) {
+        const filterSpec = filter.split(":", 1);
+        if (filterSpec.length != 2) {
+          throw new Error("invalid lamports");
+        }
+
+        const [cmp, value] = filterSpec;
+        let lamports: SubscribeRequestFilterAccountsFilterLamports = {};
+        switch (cmp) {
+          case "eq": {
+            lamports.eq = value;
+          }
+          case "ne": {
+            lamports.ne = value;
+          }
+          case "lt": {
+            lamports.lt = value;
+          }
+          case "gt": {
+            lamports.gt = value;
+          }
+          default:
+            throw new Error("invalid lamports cmp");
+        }
+        filters.push({
+          lamports,
+        });
+      }
     }
 
     request.accounts.client = {
@@ -282,6 +314,12 @@ function parseCommandLineArgs() {
           default: false,
           describe: "filter valid token accounts",
           type: "boolean",
+        },
+        "accounts-lamports": {
+          default: [],
+          describe:
+            "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
+          type: "array",
         },
         "accounts-dataslice": {
           default: [],

@@ -121,6 +121,7 @@ export interface SubscribeRequestFilterAccounts {
 
 export interface SubscribeRequestFilterAccountsFilter {
   memcmp?: SubscribeRequestFilterAccountsFilterMemcmp | undefined;
+  lamports?: SubscribeRequestFilterAccountsFilterLamports | undefined;
   datasize?: string | undefined;
   tokenAccountState?: boolean | undefined;
 }
@@ -130,6 +131,13 @@ export interface SubscribeRequestFilterAccountsFilterMemcmp {
   bytes?: Uint8Array | undefined;
   base58?: string | undefined;
   base64?: string | undefined;
+}
+
+export interface SubscribeRequestFilterAccountsFilterLamports {
+  eq?: string | undefined;
+  ne?: string | undefined;
+  lt?: string | undefined;
+  gt?: string | undefined;
 }
 
 export interface SubscribeRequestFilterSlots {
@@ -1307,13 +1315,16 @@ export const SubscribeRequestFilterAccounts = {
 };
 
 function createBaseSubscribeRequestFilterAccountsFilter(): SubscribeRequestFilterAccountsFilter {
-  return { memcmp: undefined, datasize: undefined, tokenAccountState: undefined };
+  return { memcmp: undefined, lamports: undefined, datasize: undefined, tokenAccountState: undefined };
 }
 
 export const SubscribeRequestFilterAccountsFilter = {
   encode(message: SubscribeRequestFilterAccountsFilter, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.memcmp !== undefined) {
       SubscribeRequestFilterAccountsFilterMemcmp.encode(message.memcmp, writer.uint32(10).fork()).ldelim();
+    }
+    if (message.lamports !== undefined) {
+      SubscribeRequestFilterAccountsFilterLamports.encode(message.lamports, writer.uint32(34).fork()).ldelim();
     }
     if (message.datasize !== undefined) {
       writer.uint32(16).uint64(message.datasize);
@@ -1337,6 +1348,13 @@ export const SubscribeRequestFilterAccountsFilter = {
           }
 
           message.memcmp = SubscribeRequestFilterAccountsFilterMemcmp.decode(reader, reader.uint32());
+          continue;
+        case 4:
+          if (tag !== 34) {
+            break;
+          }
+
+          message.lamports = SubscribeRequestFilterAccountsFilterLamports.decode(reader, reader.uint32());
           continue;
         case 2:
           if (tag !== 16) {
@@ -1364,6 +1382,9 @@ export const SubscribeRequestFilterAccountsFilter = {
   fromJSON(object: any): SubscribeRequestFilterAccountsFilter {
     return {
       memcmp: isSet(object.memcmp) ? SubscribeRequestFilterAccountsFilterMemcmp.fromJSON(object.memcmp) : undefined,
+      lamports: isSet(object.lamports)
+        ? SubscribeRequestFilterAccountsFilterLamports.fromJSON(object.lamports)
+        : undefined,
       datasize: isSet(object.datasize) ? String(object.datasize) : undefined,
       tokenAccountState: isSet(object.tokenAccountState) ? Boolean(object.tokenAccountState) : undefined,
     };
@@ -1373,6 +1394,9 @@ export const SubscribeRequestFilterAccountsFilter = {
     const obj: any = {};
     message.memcmp !== undefined &&
       (obj.memcmp = message.memcmp ? SubscribeRequestFilterAccountsFilterMemcmp.toJSON(message.memcmp) : undefined);
+    message.lamports !== undefined && (obj.lamports = message.lamports
+      ? SubscribeRequestFilterAccountsFilterLamports.toJSON(message.lamports)
+      : undefined);
     message.datasize !== undefined && (obj.datasize = message.datasize);
     message.tokenAccountState !== undefined && (obj.tokenAccountState = message.tokenAccountState);
     return obj;
@@ -1390,6 +1414,9 @@ export const SubscribeRequestFilterAccountsFilter = {
     const message = createBaseSubscribeRequestFilterAccountsFilter();
     message.memcmp = (object.memcmp !== undefined && object.memcmp !== null)
       ? SubscribeRequestFilterAccountsFilterMemcmp.fromPartial(object.memcmp)
+      : undefined;
+    message.lamports = (object.lamports !== undefined && object.lamports !== null)
+      ? SubscribeRequestFilterAccountsFilterLamports.fromPartial(object.lamports)
       : undefined;
     message.datasize = object.datasize ?? undefined;
     message.tokenAccountState = object.tokenAccountState ?? undefined;
@@ -1495,6 +1522,107 @@ export const SubscribeRequestFilterAccountsFilterMemcmp = {
     message.bytes = object.bytes ?? undefined;
     message.base58 = object.base58 ?? undefined;
     message.base64 = object.base64 ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSubscribeRequestFilterAccountsFilterLamports(): SubscribeRequestFilterAccountsFilterLamports {
+  return { eq: undefined, ne: undefined, lt: undefined, gt: undefined };
+}
+
+export const SubscribeRequestFilterAccountsFilterLamports = {
+  encode(message: SubscribeRequestFilterAccountsFilterLamports, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.eq !== undefined) {
+      writer.uint32(8).uint64(message.eq);
+    }
+    if (message.ne !== undefined) {
+      writer.uint32(16).uint64(message.ne);
+    }
+    if (message.lt !== undefined) {
+      writer.uint32(24).uint64(message.lt);
+    }
+    if (message.gt !== undefined) {
+      writer.uint32(32).uint64(message.gt);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): SubscribeRequestFilterAccountsFilterLamports {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSubscribeRequestFilterAccountsFilterLamports();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 8) {
+            break;
+          }
+
+          message.eq = longToString(reader.uint64() as Long);
+          continue;
+        case 2:
+          if (tag !== 16) {
+            break;
+          }
+
+          message.ne = longToString(reader.uint64() as Long);
+          continue;
+        case 3:
+          if (tag !== 24) {
+            break;
+          }
+
+          message.lt = longToString(reader.uint64() as Long);
+          continue;
+        case 4:
+          if (tag !== 32) {
+            break;
+          }
+
+          message.gt = longToString(reader.uint64() as Long);
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SubscribeRequestFilterAccountsFilterLamports {
+    return {
+      eq: isSet(object.eq) ? String(object.eq) : undefined,
+      ne: isSet(object.ne) ? String(object.ne) : undefined,
+      lt: isSet(object.lt) ? String(object.lt) : undefined,
+      gt: isSet(object.gt) ? String(object.gt) : undefined,
+    };
+  },
+
+  toJSON(message: SubscribeRequestFilterAccountsFilterLamports): unknown {
+    const obj: any = {};
+    message.eq !== undefined && (obj.eq = message.eq);
+    message.ne !== undefined && (obj.ne = message.ne);
+    message.lt !== undefined && (obj.lt = message.lt);
+    message.gt !== undefined && (obj.gt = message.gt);
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SubscribeRequestFilterAccountsFilterLamports>, I>>(
+    base?: I,
+  ): SubscribeRequestFilterAccountsFilterLamports {
+    return SubscribeRequestFilterAccountsFilterLamports.fromPartial(base ?? {});
+  },
+
+  fromPartial<I extends Exact<DeepPartial<SubscribeRequestFilterAccountsFilterLamports>, I>>(
+    object: I,
+  ): SubscribeRequestFilterAccountsFilterLamports {
+    const message = createBaseSubscribeRequestFilterAccountsFilterLamports();
+    message.eq = object.eq ?? undefined;
+    message.ne = object.ne ?? undefined;
+    message.lt = object.lt ?? undefined;
+    message.gt = object.gt ?? undefined;
     return message;
   },
 };
