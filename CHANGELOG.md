@@ -22,6 +22,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: add filter by lamports ([#369](https://github.com/rpcpool/yellowstone-grpc/pull/369))
 - geyser: use Arc wrapped messages in block message ([#446](https://github.com/rpcpool/yellowstone-grpc/pull/446))
 - node: remove generated grpc files ([#447](https://github.com/rpcpool/yellowstone-grpc/pull/447))
+- proto: add txn_signature filter ([#445](https://github.com/rpcpool/yellowstone-grpc/pull/445))
 
 ### Breaking
 

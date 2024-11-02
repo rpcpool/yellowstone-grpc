@@ -161,6 +161,7 @@ async function subscribeCommand(client, args) {
       account: args.accountsAccount,
       owner: args.accountsOwner,
       filters,
+      nonemptyTxnSignature: args.accountsNonemptytxnsignature,
     };
   }
 
@@ -320,6 +321,10 @@ function parseCommandLineArgs() {
           describe:
             "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
           type: "array",
+        },
+        "accounts-nonemptytxnsignature": {
+          description: "filter by presence of field txn_signature",
+          type: "boolean",
         },
         "accounts-dataslice": {
           default: [],
