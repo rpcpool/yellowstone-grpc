@@ -198,6 +198,29 @@ pub struct Filter {
     ping: Option<i32>,
 }
 
+impl Default for Filter {
+    fn default() -> Self {
+        Self {
+            accounts: FilterAccounts::default(),
+            slots: FilterSlots::default(),
+            transactions: FilterTransactions {
+                filter_type: FilterTransactionsType::Transaction,
+                filters: HashMap::new(),
+            },
+            transactions_status: FilterTransactions {
+                filter_type: FilterTransactionsType::TransactionStatus,
+                filters: HashMap::new(),
+            },
+            entry: FilterEntry::default(),
+            blocks: FilterBlocks::default(),
+            blocks_meta: FilterBlocksMeta::default(),
+            commitment: CommitmentLevel::Processed,
+            accounts_data_slice: vec![],
+            ping: None,
+        }
+    }
+}
+
 impl Filter {
     pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
         Ok(Self {

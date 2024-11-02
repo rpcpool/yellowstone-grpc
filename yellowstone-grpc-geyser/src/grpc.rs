@@ -726,7 +726,6 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        config_filters: Arc<ConfigGrpcFilters>,
         stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
@@ -734,22 +733,7 @@ impl GrpcService {
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
-        let mut filter = Filter::new(
-            &SubscribeRequest {
-                accounts: HashMap::new(),
-                slots: HashMap::new(),
-                transactions: HashMap::new(),
-                transactions_status: HashMap::new(),
-                blocks: HashMap::new(),
-                blocks_meta: HashMap::new(),
-                entry: HashMap::new(),
-                commitment: None,
-                accounts_data_slice: Vec::new(),
-                ping: None,
-            },
-            &config_filters,
-        )
-        .expect("empty filter");
+        let mut filter = Filter::default();
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
         metrics::connections_total_inc();
@@ -1040,7 +1024,6 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
-            Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
             snapshot_rx,
