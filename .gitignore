@@ -5,10 +5,11 @@ test-ledger
 target
 
 # Node.js
-examples/typescript/node_modules
 examples/typescript/dist
-yellowstone-grpc-client-nodejs/node_modules
+examples/typescript/node_modules
 yellowstone-grpc-client-nodejs/dist
+yellowstone-grpc-client-nodejs/node_modules
+yellowstone-grpc-client-nodejs/src/grpc
 
 # Python
 venv
