@@ -13,12 +13,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - examples: fix commitment in TypeScript example ([#440](https://github.com/rpcpool/yellowstone-grpc/pull/440))
+- geyser: fix missed status messages ([#444](https://github.com/rpcpool/yellowstone-grpc/pull/444))
 
 ### Features
 
 - proto: use `gzip`/`zstd` features by default ([#436](https://github.com/rpcpool/yellowstone-grpc/pull/436))
 - geyser: optimize consuming of new filters ([#439](https://github.com/rpcpool/yellowstone-grpc/pull/439))
-- proto: add txn_signature filter ([#4??](https://github.com/rpcpool/yellowstone-grpc/pull/4??))
+- proto: add filter by lamports ([#369](https://github.com/rpcpool/yellowstone-grpc/pull/369))
+- geyser: use Arc wrapped messages in block message ([#446](https://github.com/rpcpool/yellowstone-grpc/pull/446))
+- node: remove generated grpc files ([#447](https://github.com/rpcpool/yellowstone-grpc/pull/447))
+- proto: add txn_signature filter ([#445](https://github.com/rpcpool/yellowstone-grpc/pull/445))
 
 ### Breaking
 

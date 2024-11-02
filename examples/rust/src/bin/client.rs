@@ -10,13 +10,14 @@ use {
     tonic::transport::channel::ClientTlsConfig,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
     yellowstone_grpc_proto::prelude::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
+        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
         subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterMemcmp,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+        SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
         SubscribeUpdateTransaction, SubscribeUpdateTransactionStatus,
     },
@@ -134,6 +135,10 @@ struct ActionSubscribe {
     /// Filter valid token accounts
     #[clap(long)]
     accounts_token_account_state: bool,
+
+    /// Filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`
+    #[clap(long)]
+    accounts_lamports: Vec<String>,
 
     /// Receive only part of updated data account, format: `offset,size`
     #[clap(long)]
@@ -262,7 +267,7 @@ impl Action {
                         match filter.split_once(',') {
                             Some((offset, data)) => {
                                 filters.push(SubscribeRequestFilterAccountsFilter {
-                                    filter: Some(AccountsFilterDataOneof::Memcmp(
+                                    filter: Some(AccountsFilterOneof::Memcmp(
                                         SubscribeRequestFilterAccountsFilterMemcmp {
                                             offset: offset
                                                 .parse()
@@ -279,13 +284,38 @@ impl Action {
                     }
                     if let Some(datasize) = args.accounts_datasize {
                         filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterDataOneof::Datasize(datasize)),
+                            filter: Some(AccountsFilterOneof::Datasize(datasize)),
                         });
                     }
                     if args.accounts_token_account_state {
                         filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterDataOneof::TokenAccountState(true)),
+                            filter: Some(AccountsFilterOneof::TokenAccountState(true)),
                         });
+                    }
+                    for filter in args.accounts_lamports.iter() {
+                        match filter.split_once(':') {
+                            Some((cmp, value)) => {
+                                let Ok(value) = value.parse() else {
+                                    anyhow::bail!("invalid lamports value: {value}");
+                                };
+                                filters.push(SubscribeRequestFilterAccountsFilter {
+                                    filter: Some(AccountsFilterOneof::Lamports(
+                                        SubscribeRequestFilterAccountsFilterLamports {
+                                            cmp: Some(match cmp {
+                                                "eq" => AccountsFilterLamports::Eq(value),
+                                                "ne" => AccountsFilterLamports::Ne(value),
+                                                "lt" => AccountsFilterLamports::Lt(value),
+                                                "gt" => AccountsFilterLamports::Gt(value),
+                                                _ => {
+                                                    anyhow::bail!("invalid lamports filter: {cmp}")
+                                                }
+                                            }),
+                                        },
+                                    )),
+                                });
+                            }
+                            _ => anyhow::bail!("invalid lamports"),
+                        }
                     }
 
                     accounts.insert(

@@ -1,8 +1,9 @@
 use {
     crate::{
         config::Config,
-        grpc::{GrpcService, Message},
-        metrics::{self, PrometheusService, MESSAGE_QUEUE_SIZE},
+        grpc::GrpcService,
+        message::Message,
+        metrics::{self, PrometheusService},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -28,15 +29,15 @@ pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
-    grpc_channel: mpsc::UnboundedSender<Arc<Message>>,
+    grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
 }
 
 impl PluginInner {
     fn send_message(&self, message: Message) {
-        if self.grpc_channel.send(Arc::new(message)).is_ok() {
-            MESSAGE_QUEUE_SIZE.inc();
+        if self.grpc_channel.send(message).is_ok() {
+            metrics::message_queue_size_inc();
         }
     }
 }
@@ -141,7 +142,7 @@ impl GeyserPlugin for Plugin {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
                     let message = Message::Account((account, slot, is_startup).into());
                     match channel.send(Box::new(message)) {
-                        Ok(()) => MESSAGE_QUEUE_SIZE.inc(),
+                        Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
                             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
                                 log::error!(
@@ -211,7 +212,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaEntryInfoVersions::V0_0_2(entry) => entry,
             };
 
-            let message = Message::Entry(entry.into());
+            let message = Message::Entry(Arc::new(entry.into()));
             inner.send_message(message);
 
             Ok(())
@@ -233,7 +234,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
 
-            let message = Message::BlockMeta(blockinfo.into());
+            let message = Message::BlockMeta(Arc::new(blockinfo.into()));
             inner.send_message(message);
 
             Ok(())
