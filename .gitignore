@@ -15,9 +15,9 @@ yellowstone-grpc-client-nodejs/src/grpc
 venv
 __pycache__/
 
-# Config
-yellowstone-grpc-geyser/config-test.json
-
 # IDE
 .idea
 .vscode
+
+# Configs
+yellowstone-grpc-geyser/config-test.json
