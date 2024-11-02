@@ -35,32 +35,37 @@ lazy_static::lazy_static! {
         &["buildts", "git", "package", "proto", "rustc", "solana", "version"]
     ).unwrap();
 
-    pub static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
+    static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status", "Lastest received slot from Geyser"),
         &["status"]
     ).unwrap();
 
-    pub static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
+    static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
         &["status"]
     ).unwrap();
 
-    pub static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
+    static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("invalid_full_blocks_total", "Total number of fails on constructin full blocks"),
         &["reason"]
     ).unwrap();
 
-    pub static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
+    static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
         "message_queue_size", "Size of geyser message queue"
     ).unwrap();
 
-    pub static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
+    static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
         "connections_total", "Total number of connections to gRPC service"
     ).unwrap();
 
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
+    ).unwrap();
+
+    static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
+        Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
+        &["status"]
     ).unwrap();
 }
 
@@ -193,6 +198,7 @@ impl PrometheusService {
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
+            register!(MISSED_STATUS_MESSAGE);
 
             VERSION
                 .with_label_values(&[
@@ -320,11 +326,7 @@ pub fn update_slot_status(status: SlotStatus, slot: u64) {
 
 pub fn update_slot_plugin_status(status: CommitmentLevel, slot: u64) {
     SLOT_STATUS_PLUGIN
-        .with_label_values(&[match status {
-            CommitmentLevel::Processed => "processed",
-            CommitmentLevel::Confirmed => "confirmed",
-            CommitmentLevel::Finalized => "finalized",
-        }])
+        .with_label_values(&[commitment_level_as_str(status)])
         .set(slot as i64);
 }
 
@@ -333,6 +335,22 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
         .with_label_values(&[reason.as_ref()])
         .inc();
     INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+}
+
+pub fn message_queue_size_inc() {
+    MESSAGE_QUEUE_SIZE.inc()
+}
+
+pub fn message_queue_size_dec() {
+    MESSAGE_QUEUE_SIZE.dec()
+}
+
+pub fn connections_total_inc() {
+    CONNECTIONS_TOTAL.inc()
+}
+
+pub fn connections_total_dec() {
+    CONNECTIONS_TOTAL.dec()
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
@@ -348,5 +366,19 @@ pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&F
                     .add((value as i64) * multiplier);
             }
         }
+    }
+}
+
+pub fn missed_status_message_inc(status: CommitmentLevel) {
+    MISSED_STATUS_MESSAGE
+        .with_label_values(&[commitment_level_as_str(status)])
+        .inc()
+}
+
+const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
+    match commitment {
+        CommitmentLevel::Processed => "processed",
+        CommitmentLevel::Confirmed => "confirmed",
+        CommitmentLevel::Finalized => "finalized",
     }
 }
