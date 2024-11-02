@@ -14,9 +14,11 @@ use {
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
+        borrow::Borrow,
         collections::{HashMap, HashSet},
         str::FromStr,
         sync::Arc,
+        time::{Duration, Instant},
     },
     yellowstone_grpc_proto::{
         convert_to,
@@ -37,6 +39,93 @@ use {
         },
     },
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum FilterError {
+    #[error("invalid filter name (max allowed size {limit}), found {size}")]
+    OversizedFilterName { limit: usize, size: usize },
+}
+
+pub type FilterResult<T> = Result<T, FilterError>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FilterName(Arc<String>);
+
+impl AsRef<str> for FilterName {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for FilterName {
+    #[inline]
+    fn borrow(&self) -> &str {
+        &self.0[..]
+    }
+}
+
+impl FilterName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(Arc::new(name.into()))
+    }
+
+    pub fn is_uniq(&self) -> bool {
+        Arc::strong_count(&self.0) == 1
+    }
+}
+
+#[derive(Debug)]
+pub struct FilterNames {
+    name_size_limit: usize,
+    names: HashSet<FilterName>,
+    names_size_limit: usize,
+    cleanup_ts: Instant,
+    cleanup_interval: Duration,
+}
+
+impl FilterNames {
+    pub fn new(
+        name_size_limit: usize,
+        names_size_limit: usize,
+        cleanup_interval: Duration,
+    ) -> Self {
+        Self {
+            name_size_limit,
+            names: HashSet::with_capacity(1024),
+            names_size_limit,
+            cleanup_ts: Instant::now(),
+            cleanup_interval,
+        }
+    }
+
+    pub fn try_clean(&mut self) {
+        if self.names.len() > self.names_size_limit
+            && self.cleanup_ts.elapsed() > self.cleanup_interval
+        {
+            self.names.retain(|name| !name.is_uniq());
+            self.cleanup_ts = Instant::now();
+        }
+    }
+
+    pub fn get(&mut self, name: &str) -> FilterResult<FilterName> {
+        match self.names.get(name) {
+            Some(name) => Ok(name.clone()),
+            None => {
+                if name.len() > self.name_size_limit {
+                    Err(FilterError::OversizedFilterName {
+                        limit: self.name_size_limit,
+                        size: name.len(),
+                    })
+                } else {
+                    let name = FilterName::new(name);
+                    self.names.insert(name.clone());
+                    Ok(name)
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum FilteredMessage<'a> {
@@ -222,23 +311,29 @@ impl Default for Filter {
 }
 
 impl Filter {
-    pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
+    pub fn new(
+        config: &SubscribeRequest,
+        limit: &ConfigGrpcFilters,
+        names: &mut FilterNames,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
-            slots: FilterSlots::new(&config.slots, &limit.slots)?,
+            accounts: FilterAccounts::new(&config.accounts, &limit.accounts, names)?,
+            slots: FilterSlots::new(&config.slots, &limit.slots, names)?,
             transactions: FilterTransactions::new(
                 &config.transactions,
                 &limit.transactions,
                 FilterTransactionsType::Transaction,
+                names,
             )?,
             transactions_status: FilterTransactions::new(
                 &config.transactions_status,
                 &limit.transactions_status,
                 FilterTransactionsType::TransactionStatus,
+                names,
             )?,
-            entry: FilterEntry::new(&config.entry, &limit.entry)?,
-            blocks: FilterBlocks::new(&config.blocks, &limit.blocks)?,
-            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta)?,
+            entry: FilterEntry::new(&config.entry, &limit.entry, names)?,
+            blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
+            blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
             accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
             ping: config.ping.as_ref().map(|msg| msg.id),
@@ -308,7 +403,7 @@ impl Filter {
         &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
@@ -335,7 +430,10 @@ impl Filter {
                         None
                     } else {
                         Some(SubscribeUpdate {
-                            filters,
+                            filters: filters
+                                .iter()
+                                .map(|name| name.as_ref().to_string())
+                                .collect(),
                             update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
                         })
                     }
@@ -353,28 +451,30 @@ impl Filter {
 
 #[derive(Debug, Default, Clone)]
 struct FilterAccounts {
-    nonempty_txn_signature: Vec<(String, Option<bool>)>,
-    nonempty_txn_signature_required: HashSet<String>,
-    account: HashMap<Pubkey, HashSet<String>>,
-    account_required: HashSet<String>,
-    owner: HashMap<Pubkey, HashSet<String>>,
-    owner_required: HashSet<String>,
-    filters: Vec<(String, FilterAccountsState)>,
+    nonempty_txn_signature: Vec<(FilterName, Option<bool>)>,
+    nonempty_txn_signature_required: HashSet<FilterName>,
+    account: HashMap<Pubkey, HashSet<FilterName>>,
+    account_required: HashSet<FilterName>,
+    owner: HashMap<Pubkey, HashSet<FilterName>>,
+    owner_required: HashSet<FilterName>,
+    filters: Vec<(FilterName, FilterAccountsState)>,
 }
 
 impl FilterAccounts {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
         limit: &ConfigGrpcFiltersAccounts,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         let mut this = Self::default();
         for (name, filter) in configs {
             this.nonempty_txn_signature
-                .push((name.clone(), filter.nonempty_txn_signature));
+                .push((names.get(name)?, filter.nonempty_txn_signature));
             if filter.nonempty_txn_signature.is_some() {
-                this.nonempty_txn_signature_required.insert(name.clone());
+                this.nonempty_txn_signature_required
+                    .insert(names.get(name)?);
             }
 
             ConfigGrpcFilters::check_any(
@@ -388,6 +488,7 @@ impl FilterAccounts {
                 &mut this.account,
                 &mut this.account_required,
                 name,
+                names,
                 Filter::decode_pubkeys(&filter.account, &limit.account_reject),
             )?;
 
@@ -395,30 +496,32 @@ impl FilterAccounts {
                 &mut this.owner,
                 &mut this.owner_required,
                 name,
+                names,
                 Filter::decode_pubkeys(&filter.owner, &limit.owner_reject),
             )?;
 
             this.filters
-                .push((name.clone(), FilterAccountsState::new(&filter.filters)?));
+                .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
         }
         Ok(this)
     }
 
     fn set(
-        map: &mut HashMap<Pubkey, HashSet<String>>,
-        map_required: &mut HashSet<String>,
+        map: &mut HashMap<Pubkey, HashSet<FilterName>>,
+        map_required: &mut HashSet<FilterName>,
         name: &str,
+        names: &mut FilterNames,
         keys: impl Iterator<Item = anyhow::Result<Pubkey>>,
     ) -> anyhow::Result<bool> {
         let mut required = false;
         for maybe_key in keys {
-            if map.entry(maybe_key?).or_default().insert(name.to_string()) {
+            if map.entry(maybe_key?).or_default().insert(names.get(name)?) {
                 required = true;
             }
         }
 
         if required {
-            map_required.insert(name.to_string());
+            map_required.insert(names.get(name)?);
         }
         Ok(required)
     }
@@ -426,7 +529,7 @@ impl FilterAccounts {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageAccount,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
@@ -588,10 +691,14 @@ impl<'a> FilterAccountsMatch<'a> {
         }
     }
 
-    fn extend(set: &mut HashSet<&'a str>, map: &'a HashMap<Pubkey, HashSet<String>>, key: &Pubkey) {
+    fn extend(
+        set: &mut HashSet<&'a str>,
+        map: &'a HashMap<Pubkey, HashSet<FilterName>>,
+        key: &Pubkey,
+    ) {
         if let Some(names) = map.get(key) {
             for name in names {
-                set.insert(name);
+                set.insert(name.as_ref());
             }
         }
     }
@@ -600,7 +707,7 @@ impl<'a> FilterAccountsMatch<'a> {
         for (name, filter) in self.filter.nonempty_txn_signature.iter() {
             if let Some(nonempty_txn_signature) = filter {
                 if *nonempty_txn_signature == txn_signature.is_some() {
-                    self.nonempty_txn_signature.insert(name);
+                    self.nonempty_txn_signature.insert(name.as_ref());
                 }
             }
         }
@@ -617,17 +724,17 @@ impl<'a> FilterAccountsMatch<'a> {
     pub fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
         for (name, filter) in self.filter.filters.iter() {
             if filter.is_match(data, lamports) {
-                self.data.insert(name);
+                self.data.insert(name.as_ref());
             }
         }
     }
 
-    pub fn get_filters(&self) -> Vec<String> {
+    pub fn get_filters(&self) -> Vec<FilterName> {
         self.filter
             .filters
             .iter()
-            .filter_map(|(name, filter)| {
-                let name = name.as_str();
+            .filter_map(|(filter_name, filter)| {
+                let name = filter_name.as_ref();
                 let af = &self.filter;
 
                 // If filter name in required but not in matched => return `false`
@@ -646,7 +753,7 @@ impl<'a> FilterAccountsMatch<'a> {
                     return None;
                 }
 
-                Some(name.to_string())
+                Some(filter_name.clone())
             })
             .collect()
     }
@@ -667,21 +774,26 @@ impl FilterSlotsInner {
 
 #[derive(Debug, Default, Clone)]
 struct FilterSlots {
-    filters: HashMap<String, FilterSlotsInner>,
+    filters: HashMap<FilterName, FilterSlotsInner>,
 }
 
 impl FilterSlots {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterSlots>,
         limit: &ConfigGrpcFiltersSlots,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
                 .iter()
-                .map(|(name, filter)| (name.clone(), FilterSlotsInner::new(*filter)))
-                .collect(),
+                .map(|(name, filter)| {
+                    names
+                        .get(name)
+                        .map(|name| (name, FilterSlotsInner::new(*filter)))
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -689,7 +801,7 @@ impl FilterSlots {
         &'a self,
         message: &'a MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters
                 .iter()
@@ -725,7 +837,7 @@ pub struct FilterTransactionsInner {
 #[derive(Debug, Clone)]
 pub struct FilterTransactions {
     filter_type: FilterTransactionsType,
-    filters: HashMap<String, FilterTransactionsInner>,
+    filters: HashMap<FilterName, FilterTransactionsInner>,
 }
 
 impl FilterTransactions {
@@ -733,6 +845,7 @@ impl FilterTransactions {
         configs: &HashMap<String, SubscribeRequestFilterTransactions>,
         limit: &ConfigGrpcFiltersTransactions,
         filter_type: FilterTransactionsType,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
@@ -760,7 +873,7 @@ impl FilterTransactions {
             )?;
 
             filters.insert(
-                name.clone(),
+                names.get(name)?,
                 FilterTransactionsInner {
                     vote: filter.vote,
                     failed: filter.failed,
@@ -797,7 +910,7 @@ impl FilterTransactions {
     pub fn get_filters<'a>(
         &'a self,
         message: &'a MessageTransaction,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         let filters = self
             .filters
             .iter()
@@ -883,29 +996,29 @@ impl FilterTransactions {
 
 #[derive(Debug, Default, Clone)]
 struct FilterEntry {
-    filters: Vec<String>,
+    filters: Vec<FilterName>,
 }
 
 impl FilterEntry {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterEntry>,
         limit: &ConfigGrpcFiltersEntry,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
                 .iter()
-                // .filter_map(|(name, _filter)| Some(name.clone()))
-                .map(|(name, _filter)| name.clone())
-                .collect(),
+                .map(|(name, _filter)| names.get(name))
+                .collect::<Result<_, _>>()?,
         })
     }
 
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageEntry,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters.clone(),
             FilteredMessage::Entry(message),
@@ -923,13 +1036,14 @@ pub struct FilterBlocksInner {
 
 #[derive(Debug, Default, Clone)]
 struct FilterBlocks {
-    filters: HashMap<String, FilterBlocksInner>,
+    filters: HashMap<FilterName, FilterBlocksInner>,
 }
 
 impl FilterBlocks {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocks>,
         limit: &ConfigGrpcFiltersBlocks,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
@@ -957,7 +1071,7 @@ impl FilterBlocks {
             );
 
             this.filters.insert(
-                name.clone(),
+                names.get(name)?,
                 FilterBlocksInner {
                     account_include: Filter::decode_pubkeys_into_vec(
                         &filter.account_include,
@@ -975,7 +1089,7 @@ impl FilterBlocks {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageBlock,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(self.filters.iter().map(move |(filter, inner)| {
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
@@ -1045,29 +1159,29 @@ impl FilterBlocks {
 
 #[derive(Debug, Default, Clone)]
 struct FilterBlocksMeta {
-    filters: Vec<String>,
+    filters: Vec<FilterName>,
 }
 
 impl FilterBlocksMeta {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterBlocksMeta>,
         limit: &ConfigGrpcFiltersBlocksMeta,
+        names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
         Ok(Self {
             filters: configs
                 .iter()
-                // .filter_map(|(name, _filter)| Some(name.clone()))
-                .map(|(name, _filter)| name.clone())
-                .collect(),
+                .map(|(name, _filter)| names.get(name))
+                .collect::<Result<_, _>>()?,
         })
     }
 
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageBlockMeta,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters.clone(),
             FilteredMessage::BlockMeta(message),
@@ -1115,7 +1229,7 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
-        super::FilteredMessage,
+        super::{FilterName, FilterNames, FilteredMessage},
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
@@ -1129,11 +1243,15 @@ mod tests {
             transaction::{SanitizedTransaction, Transaction},
         },
         solana_transaction_status::TransactionStatusMeta,
-        std::{collections::HashMap, sync::Arc},
+        std::{collections::HashMap, sync::Arc, time::Duration},
         yellowstone_grpc_proto::geyser::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
         },
     };
+
+    fn create_filter_names() -> FilterNames {
+        FilterNames::new(64, 1024, Duration::from_secs(1))
+    }
 
     fn create_message_transaction(
         keypair: &Keypair,
@@ -1194,7 +1312,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, &mut create_filter_names());
         assert!(filter.is_ok());
     }
 
@@ -1226,7 +1344,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, &mut create_filter_names());
         // filter should fail
         assert!(filter.is_err());
     }
@@ -1261,7 +1379,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, &mut create_filter_names());
         // filter should fail
         assert!(filter.is_err());
     }
@@ -1295,7 +1413,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
-        let filter_res = Filter::new(&config, &limit);
+        let filter_res = Filter::new(&config, &limit, &mut create_filter_names());
         // filter should succeed
         assert!(filter_res.is_ok());
     }
@@ -1334,16 +1452,16 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec!["serum"]);
+        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
         assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert_eq!(updates[1].0, Vec::<FilterName>::new());
         assert!(matches!(
             updates[1].1,
             FilteredMessage::TransactionStatus(_)
@@ -1384,16 +1502,16 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec!["serum"]);
+        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
         assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert_eq!(updates[1].0, Vec::<FilterName>::new());
         assert!(matches!(
             updates[1].1,
             FilteredMessage::TransactionStatus(_)
@@ -1434,7 +1552,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
@@ -1484,7 +1602,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         let message_transaction = create_message_transaction(
             &keypair_x,
@@ -1493,9 +1611,9 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec!["serum"]);
+        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
         assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<String>::new());
+        assert_eq!(updates[1].0, Vec::<FilterName>::new());
         assert!(matches!(
             updates[1].1,
             FilteredMessage::TransactionStatus(_)
@@ -1542,7 +1660,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);
