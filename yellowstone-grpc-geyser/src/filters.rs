@@ -5,9 +5,9 @@ use {
             ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
             ConfigGrpcFiltersTransactions,
         },
-        grpc::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageRef,
-            MessageSlot, MessageTransaction,
+        message::{
+            Message, MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+            MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -16,17 +16,171 @@ use {
     std::{
         collections::{HashMap, HashSet},
         str::FromStr,
+        sync::Arc,
     },
-    yellowstone_grpc_proto::prelude::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
+    yellowstone_grpc_proto::{
+        convert_to,
+        prelude::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePong,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
+        },
     },
 };
+
+#[derive(Debug, Clone)]
+pub enum FilteredMessage<'a> {
+    Slot(&'a MessageSlot),
+    Account(&'a MessageAccount),
+    Transaction(&'a MessageTransaction),
+    TransactionStatus(&'a MessageTransaction),
+    Entry(&'a MessageEntry),
+    Block(MessageBlock),
+    BlockMeta(&'a MessageBlockMeta),
+}
+
+impl<'a> FilteredMessage<'a> {
+    fn as_proto_account(
+        message: &MessageAccountInfo,
+        accounts_data_slice: &[FilterAccountsDataSlice],
+    ) -> SubscribeUpdateAccountInfo {
+        let data = if accounts_data_slice.is_empty() {
+            message.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
+            for data_slice in accounts_data_slice {
+                if message.data.len() >= data_slice.end {
+                    data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
+                }
+            }
+            data
+        };
+        SubscribeUpdateAccountInfo {
+            pubkey: message.pubkey.as_ref().into(),
+            lamports: message.lamports,
+            owner: message.owner.as_ref().into(),
+            executable: message.executable,
+            rent_epoch: message.rent_epoch,
+            data,
+            write_version: message.write_version,
+            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+
+    fn as_proto_transaction(message: &MessageTransactionInfo) -> SubscribeUpdateTransactionInfo {
+        SubscribeUpdateTransactionInfo {
+            signature: message.signature.as_ref().into(),
+            is_vote: message.is_vote,
+            transaction: Some(convert_to::create_transaction(&message.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&message.meta)),
+            index: message.index as u64,
+        }
+    }
+
+    fn as_proto_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
+        SubscribeUpdateEntry {
+            slot: message.slot,
+            index: message.index as u64,
+            num_hashes: message.num_hashes,
+            hash: message.hash.into(),
+            executed_transaction_count: message.executed_transaction_count,
+            starting_transaction_index: message.starting_transaction_index,
+        }
+    }
+
+    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+        match self {
+            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: message.slot,
+                parent: message.parent,
+                status: message.status as i32,
+            }),
+            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(Self::as_proto_account(
+                    message.account.as_ref(),
+                    accounts_data_slice,
+                )),
+                slot: message.slot,
+                is_startup: message.is_startup,
+            }),
+            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                transaction: Some(Self::as_proto_transaction(message.transaction.as_ref())),
+                slot: message.slot,
+            }),
+            Self::TransactionStatus(message) => {
+                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
+                    slot: message.slot,
+                    signature: message.transaction.signature.as_ref().into(),
+                    is_vote: message.transaction.is_vote,
+                    index: message.transaction.index as u64,
+                    err: match &message.transaction.meta.status {
+                        Ok(()) => None,
+                        Err(err) => Some(SubscribeUpdateTransactionError {
+                            err: bincode::serialize(&err)
+                                .expect("transaction error to serialize to bytes"),
+                        }),
+                    },
+                })
+            }
+            Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
+            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
+                slot: message.meta.slot,
+                blockhash: message.meta.blockhash.clone(),
+                rewards: Some(convert_to::create_rewards_obj(
+                    message.meta.rewards.as_slice(),
+                    message.meta.num_partitions,
+                )),
+                block_time: message.meta.block_time.map(convert_to::create_timestamp),
+                block_height: message
+                    .meta
+                    .block_height
+                    .map(convert_to::create_block_height),
+                parent_slot: message.meta.parent_slot,
+                parent_blockhash: message.meta.parent_blockhash.clone(),
+                executed_transaction_count: message.meta.executed_transaction_count,
+                transactions: message
+                    .transactions
+                    .iter()
+                    .map(|tx| Self::as_proto_transaction(tx.as_ref()))
+                    .collect(),
+                updated_account_count: message.updated_account_count,
+                accounts: message
+                    .accounts
+                    .iter()
+                    .map(|acc| Self::as_proto_account(acc.as_ref(), accounts_data_slice))
+                    .collect(),
+                entries_count: message.meta.entries_count,
+                entries: message
+                    .entries
+                    .iter()
+                    .map(|entry| Self::as_proto_entry(entry.as_ref()))
+                    .collect(),
+            }),
+            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                slot: message.slot,
+                blockhash: message.blockhash.clone(),
+                rewards: Some(convert_to::create_rewards_obj(
+                    message.rewards.as_slice(),
+                    message.num_partitions,
+                )),
+                block_time: message.block_time.map(convert_to::create_timestamp),
+                block_height: message.block_height.map(convert_to::create_block_height),
+                parent_slot: message.parent_slot,
+                parent_blockhash: message.parent_blockhash.clone(),
+                executed_transaction_count: message.executed_transaction_count,
+                entries_count: message.entries_count,
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Filter {
@@ -129,7 +283,7 @@ impl Filter {
         &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         match message {
             Message::Account(message) => self.accounts.get_filters(message),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
@@ -157,7 +311,7 @@ impl Filter {
                     } else {
                         Some(SubscribeUpdate {
                             filters,
-                            update_oneof: Some(message.to_proto(&self.accounts_data_slice)),
+                            update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
                         })
                     }
                 }),
@@ -239,14 +393,14 @@ impl FilterAccounts {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageAccount,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data(&message.account.data);
         Box::new(std::iter::once((
             filter.get_filters(),
-            MessageRef::Account(message),
+            FilteredMessage::Account(message),
         )))
     }
 }
@@ -439,7 +593,7 @@ impl FilterSlots {
         &'a self,
         message: &'a MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters
                 .iter()
@@ -451,7 +605,7 @@ impl FilterSlots {
                     }
                 })
                 .collect(),
-            MessageRef::Slot(message),
+            FilteredMessage::Slot(message),
         )))
     }
 }
@@ -547,7 +701,7 @@ impl FilterTransactions {
     pub fn get_filters<'a>(
         &'a self,
         message: &'a MessageTransaction,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         let filters = self
             .filters
             .iter()
@@ -622,8 +776,10 @@ impl FilterTransactions {
             })
             .collect();
         let message = match self.filter_type {
-            FilterTransactionsType::Transaction => MessageRef::Transaction(message),
-            FilterTransactionsType::TransactionStatus => MessageRef::TransactionStatus(message),
+            FilterTransactionsType::Transaction => FilteredMessage::Transaction(message),
+            FilterTransactionsType::TransactionStatus => {
+                FilteredMessage::TransactionStatus(message)
+            }
         };
         Box::new(std::iter::once((filters, message)))
     }
@@ -653,10 +809,10 @@ impl FilterEntry {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageEntry,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters.clone(),
-            MessageRef::Entry(message),
+            FilteredMessage::Entry(message),
         )))
     }
 }
@@ -723,7 +879,7 @@ impl FilterBlocks {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageBlock,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(self.filters.iter().map(move |(filter, inner)| {
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
@@ -742,7 +898,7 @@ impl FilterBlocks {
                             return None;
                         }
 
-                        Some(tx)
+                        Some(Arc::clone(tx))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -764,7 +920,7 @@ impl FilterBlocks {
                             return None;
                         }
 
-                        Some(account)
+                        Some(Arc::clone(account))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -772,14 +928,20 @@ impl FilterBlocks {
             };
 
             let entries = if inner.include_entries == Some(true) {
-                message.entries.iter().collect::<Vec<_>>()
+                message.entries.to_vec()
             } else {
                 vec![]
             };
 
             (
                 vec![filter.clone()],
-                MessageRef::Block((message, transactions, accounts, entries).into()),
+                FilteredMessage::Block(MessageBlock {
+                    meta: Arc::clone(&message.meta),
+                    transactions,
+                    updated_account_count: message.updated_account_count,
+                    accounts,
+                    entries,
+                }),
             )
         }))
     }
@@ -809,10 +971,10 @@ impl FilterBlocksMeta {
     fn get_filters<'a>(
         &'a self,
         message: &'a MessageBlockMeta,
-    ) -> Box<dyn Iterator<Item = (Vec<String>, MessageRef<'a>)> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = (Vec<String>, FilteredMessage<'a>)> + Send + 'a> {
         Box::new(std::iter::once((
             self.filters.clone(),
-            MessageRef::BlockMeta(message),
+            FilteredMessage::BlockMeta(message),
         )))
     }
 }
@@ -857,10 +1019,11 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
+        super::FilteredMessage,
         crate::{
             config::ConfigGrpcFilters,
             filters::Filter,
-            grpc::{Message, MessageRef, MessageTransaction, MessageTransactionInfo},
+            message::{Message, MessageTransaction, MessageTransactionInfo},
         },
         solana_sdk::{
             hash::Hash,
@@ -870,7 +1033,7 @@ mod tests {
             transaction::{SanitizedTransaction, Transaction},
         },
         solana_transaction_status::TransactionStatusMeta,
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::Arc},
         yellowstone_grpc_proto::geyser::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
         },
@@ -908,13 +1071,13 @@ mod tests {
         };
         let sig = sanitized_transaction.signature();
         MessageTransaction {
-            transaction: MessageTransactionInfo {
+            transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: sanitized_transaction,
                 meta,
                 index: 1,
-            },
+            }),
             slot: 100,
         }
     }
@@ -1082,9 +1245,12 @@ mod tests {
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].0, vec!["serum"]);
-        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
         assert_eq!(updates[1].0, Vec::<String>::new());
-        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
+        assert!(matches!(
+            updates[1].1,
+            FilteredMessage::TransactionStatus(_)
+        ));
     }
 
     #[test]
@@ -1129,9 +1295,12 @@ mod tests {
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].0, vec!["serum"]);
-        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
         assert_eq!(updates[1].0, Vec::<String>::new());
-        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
+        assert!(matches!(
+            updates[1].1,
+            FilteredMessage::TransactionStatus(_)
+        ));
     }
 
     #[test]
@@ -1228,9 +1397,12 @@ mod tests {
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].0, vec!["serum"]);
-        assert!(matches!(updates[0].1, MessageRef::Transaction(_)));
+        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
         assert_eq!(updates[1].0, Vec::<String>::new());
-        assert!(matches!(updates[1].1, MessageRef::TransactionStatus(_)));
+        assert!(matches!(
+            updates[1].1,
+            FilteredMessage::TransactionStatus(_)
+        ));
     }
 
     #[test]

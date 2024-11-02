@@ -19,6 +19,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - proto: use `gzip`/`zstd` features by default ([#436](https://github.com/rpcpool/yellowstone-grpc/pull/436))
 - geyser: optimize consuming of new filters ([#439](https://github.com/rpcpool/yellowstone-grpc/pull/439))
+- geyser: use Arc wrapped messages in block message ([#446](https://github.com/rpcpool/yellowstone-grpc/pull/446))
 
 ### Breaking
 
