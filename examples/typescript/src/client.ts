@@ -116,6 +116,16 @@ async function subscribeCommand(client, args) {
       }
     }
 
+    if (args.accounts.tokenaccountstate) {
+      filters.push({
+        tokenAccountState: args.accounts.tokenaccountstate,
+      });
+    }
+
+    if (args.accounts.datasize) {
+      filters.push({ datasize: args.accounts.datasize });
+    }
+
     if (args.accounts.lamports) {
       for (let filter in args.accounts.lamports) {
         const filterSpec = filter.split(":", 1);
@@ -145,16 +155,6 @@ async function subscribeCommand(client, args) {
           lamports,
         });
       }
-    }
-
-    if (args.accounts.tokenaccountstate) {
-      filters.push({
-        tokenAccountState: args.accounts.tokenaccountstate,
-      });
-    }
-
-    if (args.accounts.datasize) {
-      filters.push({ datasize: args.accounts.datasize });
     }
 
     request.accounts.client = {
@@ -305,12 +305,6 @@ function parseCommandLineArgs() {
             "filter by offset and data, format: `offset,data in base58`",
           type: "array",
         },
-        "accounts-lamports": {
-          default: [],
-          describe:
-            "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
-          type: "array",
-        },
         "accounts-datasize": {
           default: 0,
           describe: "filter by data size",
@@ -320,6 +314,12 @@ function parseCommandLineArgs() {
           default: false,
           describe: "filter valid token accounts",
           type: "boolean",
+        },
+        "accounts-lamports": {
+          default: [],
+          describe:
+            "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
+          type: "array",
         },
         "accounts-dataslice": {
           default: [],

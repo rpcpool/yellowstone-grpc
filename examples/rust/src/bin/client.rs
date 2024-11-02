@@ -125,10 +125,6 @@ struct ActionSubscribe {
     #[clap(long)]
     accounts_memcmp: Vec<String>,
 
-    /// Filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`
-    #[clap(long)]
-    accounts_lamports: Vec<String>,
-
     /// Filter by Data size
     #[clap(long)]
     accounts_datasize: Option<u64>,
@@ -136,6 +132,10 @@ struct ActionSubscribe {
     /// Filter valid token accounts
     #[clap(long)]
     accounts_token_account_state: bool,
+
+    /// Filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`
+    #[clap(long)]
+    accounts_lamports: Vec<String>,
 
     /// Receive only part of updated data account, format: `offset,size`
     #[clap(long)]
@@ -279,6 +279,16 @@ impl Action {
                             _ => anyhow::bail!("invalid memcmp"),
                         }
                     }
+                    if let Some(datasize) = args.accounts_datasize {
+                        filters.push(SubscribeRequestFilterAccountsFilter {
+                            filter: Some(AccountsFilterOneof::Datasize(datasize)),
+                        });
+                    }
+                    if args.accounts_token_account_state {
+                        filters.push(SubscribeRequestFilterAccountsFilter {
+                            filter: Some(AccountsFilterOneof::TokenAccountState(true)),
+                        });
+                    }
                     for filter in args.accounts_lamports.iter() {
                         match filter.split_once(':') {
                             Some((cmp, value)) => {
@@ -303,16 +313,6 @@ impl Action {
                             }
                             _ => anyhow::bail!("invalid lamports"),
                         }
-                    }
-                    if let Some(datasize) = args.accounts_datasize {
-                        filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterOneof::Datasize(datasize)),
-                        });
-                    }
-                    if args.accounts_token_account_state {
-                        filters.push(SubscribeRequestFilterAccountsFilter {
-                            filter: Some(AccountsFilterOneof::TokenAccountState(true)),
-                        });
                     }
 
                     accounts.insert(

@@ -410,9 +410,9 @@ impl FilterAccounts {
 #[derive(Debug, Default, Clone)]
 struct FilterAccountsState {
     memcmp: Vec<(usize, Vec<u8>)>,
-    lamports: Vec<FilterAccountsLamports>,
     datasize: Option<usize>,
     token_account_state: bool,
+    lamports: Vec<FilterAccountsLamports>,
 }
 
 impl FilterAccountsState {
@@ -450,14 +450,6 @@ impl FilterAccountsState {
                     anyhow::ensure!(data.len() <= MAX_DATA_SIZE, "data too large");
                     this.memcmp.push((memcmp.offset as usize, data));
                 }
-                Some(AccountsFilterDataOneof::Lamports(
-                    SubscribeRequestFilterAccountsFilterLamports { cmp },
-                )) => {
-                    let Some(cmp) = cmp else {
-                        anyhow::bail!("cmp for lamports should be defined");
-                    };
-                    this.lamports.push(cmp.into());
-                }
                 Some(AccountsFilterDataOneof::Datasize(datasize)) => {
                     anyhow::ensure!(
                         this.datasize.replace(*datasize as usize).is_none(),
@@ -467,6 +459,14 @@ impl FilterAccountsState {
                 Some(AccountsFilterDataOneof::TokenAccountState(value)) => {
                     anyhow::ensure!(value, "token_account_state only allowed to be true");
                     this.token_account_state = true;
+                }
+                Some(AccountsFilterDataOneof::Lamports(
+                    SubscribeRequestFilterAccountsFilterLamports { cmp },
+                )) => {
+                    let Some(cmp) = cmp else {
+                        anyhow::bail!("cmp for lamports should be defined");
+                    };
+                    this.lamports.push(cmp.into());
                 }
                 None => {
                     anyhow::bail!("filter should be defined");
@@ -478,9 +478,9 @@ impl FilterAccountsState {
 
     fn is_empty(&self) -> bool {
         self.memcmp.is_empty()
-            && self.lamports.is_empty()
             && self.datasize.is_none()
             && !self.token_account_state
+            && self.lamports.is_empty()
     }
 
     fn is_match(&self, data: &[u8], lamports: u64) -> bool {
