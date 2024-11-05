@@ -14,7 +14,7 @@ use {
         sync::Arc,
     },
     yellowstone_grpc_geyser_messages::{
-        filter::{FilterName, FilterNames},
+        filter::{FilterName, FilterNames, Message as FilteredMessage2},
         geyser::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
             MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
@@ -32,10 +32,9 @@ use {
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
         },
     },
@@ -339,30 +338,41 @@ impl Filter {
         &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = SubscribeUpdate> + Send + 'a> {
+    ) -> Box<dyn Iterator<Item = FilteredMessage2> + Send + 'a> {
         Box::new(
             self.get_filters(message, commitment)
                 .filter_map(|(filters, message)| {
                     if filters.is_empty() {
                         None
                     } else {
-                        Some(SubscribeUpdate {
-                            filters: filters
-                                .iter()
-                                .map(|name| name.as_ref().to_string())
-                                .collect(),
-                            update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
-                        })
+                        Some(FilteredMessage2 { filters })
+                        // TODO
+                        // Some(SubscribeUpdate {
+                        //     filters: filters
+                        //         .iter()
+                        //         .map(|name| name.as_ref().to_string())
+                        //         .collect(),
+                        //     update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
+                        // })
                     }
                 }),
         )
     }
 
-    pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
-        self.ping.map(|id| SubscribeUpdate {
+    pub fn get_pong_msg(&self) -> Option<FilteredMessage2> {
+        self.ping.map(|id| FilteredMessage2 {
             filters: vec![],
-            update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
+            // TODO
+            // update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
         })
+    }
+
+    pub const fn create_ping_message() -> FilteredMessage2 {
+        FilteredMessage2 {
+            filters: vec![],
+            // TODO
+            // update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+        }
     }
 }
 

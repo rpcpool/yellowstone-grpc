@@ -5,7 +5,7 @@ use {
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
-    anyhow::Context,
+    anyhow::Context as _,
     log::{error, info},
     solana_sdk::{
         clock::{Slot, MAX_RECENT_BLOCKHASHES},
@@ -36,19 +36,20 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_geyser_messages::{
-        filter::FilterNames,
+        filter::{FilterNames, Message as FilteredMessage},
         geyser::{
             CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
             MessageTransactionInfo,
         },
     },
-    yellowstone_grpc_proto::prelude::{
-        geyser_server::{Geyser, GeyserServer},
-        subscribe_update::UpdateOneof,
-        CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
-        GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-        GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
-        PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
+    yellowstone_grpc_proto::{
+        geyser_weak::geyser_server::{Geyser, GeyserServer},
+        prelude::{
+            CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
+        },
     },
 };
 
@@ -750,7 +751,7 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        stream_tx: mpsc::Sender<TonicResult<FilteredMessage>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
@@ -880,7 +881,7 @@ impl GrpcService {
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
-        stream_tx: &mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        stream_tx: &mpsc::Sender<TonicResult<FilteredMessage>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<Filter>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         is_alive: &mut bool,
@@ -943,7 +944,7 @@ impl GrpcService {
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+    type SubscribeStream = ReceiverStream<TonicResult<FilteredMessage>>;
 
     async fn subscribe(
         &self,
@@ -973,18 +974,14 @@ impl Geyser for GrpcService {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
 
-            let ping_msg = SubscribeUpdate {
-                filters: vec![],
-                update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-            };
-
             loop {
                 tokio::select! {
                     _ = &mut exit => {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
+                        let msg = Filter::create_ping_message();
+                        match ping_stream_tx.try_send(Ok(msg)) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {

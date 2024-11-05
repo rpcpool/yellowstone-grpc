@@ -4527,6 +4527,7 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status",
  "thiserror",
+ "tonic",
 ]
 
 [[package]]

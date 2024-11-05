@@ -1,8 +1,11 @@
-use std::{
-    borrow::Borrow,
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, Instant},
+use {
+    std::{
+        borrow::Borrow,
+        collections::HashSet,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tonic::{codec::EncodeBuf, Status},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -89,5 +92,16 @@ impl FilterNames {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Message {
+    pub filters: Vec<FilterName>,
+}
+
+impl Message {
+    pub fn encode(self, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
+        todo!()
     }
 }

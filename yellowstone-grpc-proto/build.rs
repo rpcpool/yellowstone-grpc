@@ -15,10 +15,10 @@ fn main() -> anyhow::Result<()> {
                 .name("subscribe")
                 .route_name("Subscribe")
                 .input_type("crate::geyser::SubscribeRequest")
-                .output_type("crate::geyser::SubscribeUpdate")
-                // .output_type("crate::weak::FilteredMessageWithNames")
-                .codec_path("tonic::codec::ProstCodec")
-                // .codec_path("crate::geyser_custom::SubscribeCodec")
+                // .output_type("crate::geyser::SubscribeUpdate")
+                // .codec_path("tonic::codec::ProstCodec")
+                .output_type("crate::geyser_weak::FilteredMessage")
+                .codec_path("crate::geyser_weak::SubscribeCodec")
                 .client_streaming()
                 .server_streaming()
                 .build(),
@@ -78,7 +78,19 @@ fn main() -> anyhow::Result<()> {
                 .build(),
         )
         .build();
-    Builder::new().compile(&[geyser_service]);
+    Builder::new()
+        .build_client(false)
+        .compile(&[geyser_service]);
+
+    // patching generated custom struct
+    let mut location = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+    location.push("geyser.Geyser.rs");
+    let geyser_rs = std::fs::read_to_string(location.clone())?;
+    let geyser_rs = geyser_rs.replace(
+        "let codec = crate::geyser_weak::SubscribeCodec::default();",
+        "let codec = crate::geyser_weak::SubscribeCodec::<crate::geyser_weak::FilteredMessage, _>::default();",
+    );
+    std::fs::write(location, geyser_rs)?;
 
     Ok(())
 }
