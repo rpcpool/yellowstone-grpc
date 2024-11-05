@@ -1,4 +1,6 @@
 use {
+    bytes::buf::BufMut,
+    prost::encoding::{encode_key, encode_varint, message, WireType},
     std::{
         borrow::Borrow,
         collections::HashSet,
@@ -97,11 +99,56 @@ impl FilterNames {
 
 #[derive(Debug)]
 pub struct Message {
-    pub filters: Vec<FilterName>,
+    pub filters: Vec<FilterName>, // 1
+    pub message: MessageWeak,     // 2, 3, 4, 10, 5, 6, 9, 7, 8
 }
 
 impl Message {
     pub fn encode(self, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
-        todo!()
+        for name in self.filters.iter().map(|filter| filter.as_ref()) {
+            encode_key(1, WireType::LengthDelimited, buf);
+            encode_varint(name.len() as u64, buf);
+            buf.put_slice(name.as_bytes());
+        }
+        self.message.encode(buf)
     }
 }
+
+#[derive(Debug)]
+pub enum MessageWeak {
+    Account,               // 2
+    Slot,                  // 3
+    Transaction,           // 4
+    TransactionStatus,     // 10
+    Block,                 // 5
+    Ping,                  // 6
+    Pong(MessageWeakPong), // 9
+    BlockMeta,             // 7
+    Entry,                 // 8
+}
+
+impl MessageWeak {
+    pub fn encode(self, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
+        match self {
+            MessageWeak::Account => todo!(),
+            MessageWeak::Slot => todo!(),
+            MessageWeak::Transaction => todo!(),
+            MessageWeak::TransactionStatus => todo!(),
+            MessageWeak::Block => todo!(),
+            MessageWeak::Ping => encode_key(6, WireType::LengthDelimited, buf),
+            MessageWeak::Pong(msg) => message::encode(9, &msg, buf),
+            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::Entry => todo!(),
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(prost::Message)]
+pub struct MessageWeakPong {
+    #[prost(int32, tag = "1")]
+    pub id: i32,
+}
+
+// pub struct MessageWeakEntry

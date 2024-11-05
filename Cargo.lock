@@ -4523,6 +4523,8 @@ version = "2.0.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "bincode",
+ "bytes",
+ "prost",
  "solana-sdk",
  "solana-transaction-status",
  "thiserror",

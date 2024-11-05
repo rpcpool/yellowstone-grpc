@@ -14,7 +14,10 @@ use {
         sync::Arc,
     },
     yellowstone_grpc_geyser_messages::{
-        filter::{FilterName, FilterNames, Message as FilteredMessage2},
+        filter::{
+            FilterName, FilterNames, Message as FilteredMessage2,
+            MessageWeak as FilteredMessageWeak, MessageWeakPong as FilteredMessageWeakPong,
+        },
         geyser::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
             MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
@@ -345,8 +348,8 @@ impl Filter {
                     if filters.is_empty() {
                         None
                     } else {
-                        Some(FilteredMessage2 { filters })
-                        // TODO
+                        todo!()
+                        // Some(FilteredMessage2 { filters })
                         // Some(SubscribeUpdate {
                         //     filters: filters
                         //         .iter()
@@ -362,16 +365,14 @@ impl Filter {
     pub fn get_pong_msg(&self) -> Option<FilteredMessage2> {
         self.ping.map(|id| FilteredMessage2 {
             filters: vec![],
-            // TODO
-            // update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
+            message: FilteredMessageWeak::Pong(FilteredMessageWeakPong { id }),
         })
     }
 
     pub const fn create_ping_message() -> FilteredMessage2 {
         FilteredMessage2 {
             filters: vec![],
-            // TODO
-            // update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+            message: FilteredMessageWeak::Ping,
         }
     }
 }
