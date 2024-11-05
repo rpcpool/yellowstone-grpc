@@ -4508,7 +4508,6 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status",
  "spl-token-2022",
- "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
