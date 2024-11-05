@@ -8,6 +8,7 @@ use {
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
+        borrow::Cow,
         collections::{HashMap, HashSet},
         ops::Range,
         str::FromStr,
@@ -15,177 +16,80 @@ use {
     },
     yellowstone_grpc_geyser_messages::{
         filter::{
-            FilterName, FilterNames, Message as FilteredMessage2,
-            MessageWeak as FilteredMessageWeak, MessageWeakPong as FilteredMessageWeakPong,
+            FilterName, FilterNames, Message as FilteredMessage,
+            MessageWeak as FilteredMessageWeak, MessageWeakBlock as FilteredMessageWeakBlock,
         },
         geyser::{
-            CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
-            MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
-            MessageTransactionInfo,
+            CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry,
+            MessageSlot, MessageTransaction,
         },
     },
-    yellowstone_grpc_proto::{
-        convert_to,
-        prelude::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
-        },
+    yellowstone_grpc_proto::prelude::{
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions,
     },
 };
 
-#[derive(Debug, Clone)]
-pub enum FilteredMessage<'a> {
-    Slot(&'a MessageSlot),
-    Account(&'a MessageAccount),
-    Transaction(&'a MessageTransaction),
-    TransactionStatus(&'a MessageTransaction),
-    Entry(&'a MessageEntry),
-    Block(MessageBlock),
-    BlockMeta(&'a MessageBlockMeta),
+pub enum FilteredMessages<'a> {
+    Once(Option<FilteredMessage>),
+    Pair((Option<FilteredMessage>, Option<FilteredMessage>)),
+    Boxed(Box<dyn Iterator<Item = FilteredMessage> + Send + 'a>),
 }
 
-impl<'a> FilteredMessage<'a> {
-    fn as_proto_account(
-        message: &MessageAccountInfo,
-        accounts_data_slice: &[Range<usize>],
-    ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
-            message.data.clone()
+impl FilteredMessages<'_> {
+    fn wrap(filters: Cow<'_, [FilterName]>, msg: FilteredMessageWeak) -> Option<FilteredMessage> {
+        if filters.is_empty() {
+            None
         } else {
-            let mut data =
-                Vec::with_capacity(accounts_data_slice.iter().map(|s| s.end - s.start).sum());
-            for slice in accounts_data_slice {
-                if message.data.len() >= slice.end {
-                    data.extend_from_slice(&message.data[slice.start..slice.end]);
-                }
-            }
-            data
-        };
-        SubscribeUpdateAccountInfo {
-            pubkey: message.pubkey.as_ref().into(),
-            lamports: message.lamports,
-            owner: message.owner.as_ref().into(),
-            executable: message.executable,
-            rent_epoch: message.rent_epoch,
-            data,
-            write_version: message.write_version,
-            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
+            Some(FilteredMessage::new(filters.into_owned(), msg))
         }
     }
 
-    fn as_proto_transaction(message: &MessageTransactionInfo) -> SubscribeUpdateTransactionInfo {
-        SubscribeUpdateTransactionInfo {
-            signature: message.signature.as_ref().into(),
-            is_vote: message.is_vote,
-            transaction: Some(convert_to::create_transaction(&message.transaction)),
-            meta: Some(convert_to::create_transaction_meta(&message.meta)),
-            index: message.index as u64,
-        }
+    pub fn once(filters: Cow<'_, [FilterName]>, msg: FilteredMessageWeak) -> Self {
+        Self::Once(Self::wrap(filters, msg))
     }
 
-    fn as_proto_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
-        SubscribeUpdateEntry {
-            slot: message.slot,
-            index: message.index as u64,
-            num_hashes: message.num_hashes,
-            hash: message.hash.into(),
-            executed_transaction_count: message.executed_transaction_count,
-            starting_transaction_index: message.starting_transaction_index,
-        }
+    pub fn pair(
+        item1: (Vec<FilterName>, FilteredMessageWeak),
+        item2: (Vec<FilterName>, FilteredMessageWeak),
+    ) -> Self {
+        Self::Pair((
+            Self::wrap(item1.0.into(), item1.1),
+            Self::wrap(item2.0.into(), item2.1),
+        ))
     }
+}
 
-    pub fn as_proto(&self, accounts_data_slice: &[Range<usize>]) -> UpdateOneof {
+impl<'a> Iterator for FilteredMessages<'a> {
+    type Item = FilteredMessage;
+
+    fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: message.slot,
-                parent: message.parent,
-                status: message.status as i32,
-            }),
-            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(Self::as_proto_account(
-                    message.account.as_ref(),
-                    accounts_data_slice,
-                )),
-                slot: message.slot,
-                is_startup: message.is_startup,
-            }),
-            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(Self::as_proto_transaction(message.transaction.as_ref())),
-                slot: message.slot,
-            }),
-            Self::TransactionStatus(message) => {
-                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-                    slot: message.slot,
-                    signature: message.transaction.signature.as_ref().into(),
-                    is_vote: message.transaction.is_vote,
-                    index: message.transaction.index as u64,
-                    err: match &message.transaction.meta.status {
-                        Ok(()) => None,
-                        Err(err) => Some(SubscribeUpdateTransactionError {
-                            err: bincode::serialize(&err)
-                                .expect("transaction error to serialize to bytes"),
-                        }),
-                    },
-                })
+            Self::Once(msg) => msg.take(),
+            Self::Pair((item1, item2)) => item1.take().or_else(|| item2.take()),
+            Self::Boxed(it) => it.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Once(msg) => {
+                let total = if msg.is_some() { 1 } else { 0 };
+                (total, Some(total))
             }
-            Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
-            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-                slot: message.meta.slot,
-                blockhash: message.meta.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.meta.rewards.as_slice(),
-                    message.meta.num_partitions,
-                )),
-                block_time: message.meta.block_time.map(convert_to::create_timestamp),
-                block_height: message
-                    .meta
-                    .block_height
-                    .map(convert_to::create_block_height),
-                parent_slot: message.meta.parent_slot,
-                parent_blockhash: message.meta.parent_blockhash.clone(),
-                executed_transaction_count: message.meta.executed_transaction_count,
-                transactions: message
-                    .transactions
-                    .iter()
-                    .map(|tx| Self::as_proto_transaction(tx.as_ref()))
-                    .collect(),
-                updated_account_count: message.updated_account_count,
-                accounts: message
-                    .accounts
-                    .iter()
-                    .map(|acc| Self::as_proto_account(acc.as_ref(), accounts_data_slice))
-                    .collect(),
-                entries_count: message.meta.entries_count,
-                entries: message
-                    .entries
-                    .iter()
-                    .map(|entry| Self::as_proto_entry(entry.as_ref()))
-                    .collect(),
-            }),
-            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.rewards.as_slice(),
-                    message.num_partitions,
-                )),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-                entries_count: message.entries_count,
-            }),
+            Self::Pair((item1, item2)) => {
+                let total =
+                    if item1.is_some() { 1 } else { 0 } + if item2.is_some() { 1 } else { 0 };
+                (total, Some(total))
+            }
+            Self::Boxed(it) => it.size_hint(),
         }
     }
 }
@@ -196,7 +100,7 @@ pub struct Filter {
     slots: FilterSlots,
     transactions: FilterTransactions,
     transactions_status: FilterTransactions,
-    entry: FilterEntry,
+    entries: FilterEntries,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
@@ -217,7 +121,7 @@ impl Default for Filter {
                 filter_type: FilterTransactionsType::TransactionStatus,
                 filters: HashMap::new(),
             },
-            entry: FilterEntry::default(),
+            entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
@@ -248,7 +152,7 @@ impl Filter {
                 FilterTransactionsType::TransactionStatus,
                 names,
             )?,
-            entry: FilterEntry::new(&config.entry, &limit.entry, names)?,
+            entries: FilterEntries::new(&config.entry, &limit.entry, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
@@ -298,7 +202,7 @@ impl Filter {
                 "transactions_status",
                 self.transactions_status.filters.len(),
             ),
-            ("entry", self.entry.filters.len()),
+            ("entry", self.entries.filters.len()),
             ("blocks", self.blocks.filters.len()),
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
@@ -307,7 +211,7 @@ impl Filter {
                     + self.slots.filters.len()
                     + self.transactions.filters.len()
                     + self.transactions_status.filters.len()
-                    + self.entry.filters.len()
+                    + self.entries.filters.len()
                     + self.blocks.filters.len()
                     + self.blocks_meta.filters.len(),
             ),
@@ -322,55 +226,31 @@ impl Filter {
         &'a self,
         message: &'a Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> FilteredMessages<'a> {
         match message {
-            Message::Account(message) => self.accounts.get_filters(message),
+            Message::Account(message) => self
+                .accounts
+                .get_filters(message, &self.accounts_data_slice),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => Box::new(
-                self.transactions
-                    .get_filters(message)
-                    .chain(self.transactions_status.get_filters(message)),
+            Message::Transaction(message) => FilteredMessages::pair(
+                self.transactions.get_filters(message),
+                self.transactions_status.get_filters(message),
             ),
-            Message::Entry(message) => self.entry.get_filters(message),
-            Message::Block(message) => self.blocks.get_filters(message),
+            Message::Entry(message) => self.entries.get_filters(message),
+            Message::Block(message) => self.blocks.get_filters(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
     }
 
-    pub fn get_update<'a>(
-        &'a self,
-        message: &'a Message,
-        commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = FilteredMessage2> + Send + 'a> {
-        Box::new(
-            self.get_filters(message, commitment)
-                .filter_map(|(filters, message)| {
-                    if filters.is_empty() {
-                        None
-                    } else {
-                        todo!()
-                        // Some(FilteredMessage2 { filters })
-                        // Some(SubscribeUpdate {
-                        //     filters: filters
-                        //         .iter()
-                        //         .map(|name| name.as_ref().to_string())
-                        //         .collect(),
-                        //     update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
-                        // })
-                    }
-                }),
-        )
-    }
-
-    pub fn get_pong_msg(&self) -> Option<FilteredMessage2> {
-        self.ping.map(|id| FilteredMessage2 {
+    pub fn get_pong_msg(&self) -> Option<FilteredMessage> {
+        self.ping.map(|id| FilteredMessage {
             filters: vec![],
-            message: FilteredMessageWeak::Pong(FilteredMessageWeakPong { id }),
+            message: FilteredMessageWeak::pong(id),
         })
     }
 
-    pub const fn create_ping_message() -> FilteredMessage2 {
-        FilteredMessage2 {
+    pub const fn create_ping_message() -> FilteredMessage {
+        FilteredMessage {
             filters: vec![],
             message: FilteredMessageWeak::Ping,
         }
@@ -454,19 +334,20 @@ impl FilterAccounts {
         Ok(required)
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageAccount,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    fn get_filters(
+        &self,
+        message: &MessageAccount,
+        accounts_data_slice: &[Range<usize>],
+    ) -> FilteredMessages {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
-        Box::new(std::iter::once((
-            filter.get_filters(),
-            FilteredMessage::Account(message),
-        )))
+        FilteredMessages::once(
+            filter.get_filters().into(),
+            FilteredMessageWeak::account(message, accounts_data_slice.to_vec()),
+        )
     }
 }
 
@@ -725,24 +606,24 @@ impl FilterSlots {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageSlot,
+    fn get_filters(
+        &self,
+        message: &MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters
-                .iter()
-                .filter_map(|(name, inner)| {
-                    if !inner.filter_by_commitment || commitment == Some(message.status) {
-                        Some(name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            FilteredMessage::Slot(message),
-        )))
+    ) -> FilteredMessages {
+        let filters = self
+            .filters
+            .iter()
+            .filter_map(|(name, inner)| {
+                if !inner.filter_by_commitment || commitment == Some(message.status) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        FilteredMessages::once(filters.into(), FilteredMessageWeak::slot(*message))
     }
 }
 
@@ -835,10 +716,10 @@ impl FilterTransactions {
         })
     }
 
-    pub fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageTransaction,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    pub fn get_filters(
+        &self,
+        message: &MessageTransaction,
+    ) -> (Vec<FilterName>, FilteredMessageWeak) {
         let filters = self
             .filters
             .iter()
@@ -912,22 +793,24 @@ impl FilterTransactions {
                 Some(name.clone())
             })
             .collect();
+
         let message = match self.filter_type {
-            FilterTransactionsType::Transaction => FilteredMessage::Transaction(message),
+            FilterTransactionsType::Transaction => FilteredMessageWeak::transaction(message),
             FilterTransactionsType::TransactionStatus => {
-                FilteredMessage::TransactionStatus(message)
+                FilteredMessageWeak::transaction_status(message)
             }
         };
-        Box::new(std::iter::once((filters, message)))
+
+        (filters, message)
     }
 }
 
 #[derive(Debug, Default, Clone)]
-struct FilterEntry {
+struct FilterEntries {
     filters: Vec<FilterName>,
 }
 
-impl FilterEntry {
+impl FilterEntries {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterEntry>,
         limit: &ConfigGrpcFiltersEntry,
@@ -943,14 +826,11 @@ impl FilterEntry {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageEntry,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters.clone(),
-            FilteredMessage::Entry(message),
-        )))
+    fn get_filters(&self, message: &Arc<MessageEntry>) -> FilteredMessages {
+        FilteredMessages::once(
+            self.filters.as_slice().into(),
+            FilteredMessageWeak::entry(message),
+        )
     }
 }
 
@@ -1016,9 +896,10 @@ impl FilterBlocks {
 
     fn get_filters<'a>(
         &'a self,
-        message: &'a MessageBlock,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(self.filters.iter().map(move |(filter, inner)| {
+        message: &'a Arc<MessageBlock>,
+        accounts_data_slice: &'a [Range<usize>],
+    ) -> FilteredMessages<'a> {
+        FilteredMessages::Boxed(Box::new(self.filters.iter().map(move |(filter, inner)| {
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
                 message
@@ -1071,17 +952,18 @@ impl FilterBlocks {
                 vec![]
             };
 
-            (
+            FilteredMessage::new(
                 vec![filter.clone()],
-                FilteredMessage::Block(MessageBlock {
+                FilteredMessageWeak::block(FilteredMessageWeakBlock {
                     meta: Arc::clone(&message.meta),
                     transactions,
                     updated_account_count: message.updated_account_count,
+                    accounts_data_slice: accounts_data_slice.to_vec(),
                     accounts,
                     entries,
                 }),
             )
-        }))
+        })))
     }
 }
 
@@ -1106,14 +988,11 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageBlockMeta,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters.clone(),
-            FilteredMessage::BlockMeta(message),
-        )))
+    fn get_filters(&self, message: &Arc<MessageBlockMeta>) -> FilteredMessages {
+        FilteredMessages::once(
+            self.filters.as_slice().into(),
+            FilteredMessageWeak::block_meta(message),
+        )
     }
 }
 
@@ -1151,7 +1030,7 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
-        super::{FilterName, FilterNames, FilteredMessage},
+        super::{FilterName, FilterNames},
         crate::{config::ConfigGrpcFilters, filters::Filter},
         solana_sdk::{
             hash::Hash,
@@ -1162,8 +1041,9 @@ mod tests {
         },
         solana_transaction_status::TransactionStatusMeta,
         std::{collections::HashMap, sync::Arc, time::Duration},
-        yellowstone_grpc_geyser_messages::geyser::{
-            Message, MessageTransaction, MessageTransactionInfo,
+        yellowstone_grpc_geyser_messages::{
+            filter::MessageWeak as FilteredMessageWeak,
+            geyser::{Message, MessageTransaction, MessageTransactionInfo},
         },
         yellowstone_grpc_proto::geyser::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
@@ -1380,12 +1260,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredMessageWeak::Transaction
+        ));
+        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert!(matches!(
+            updates[1].message,
+            FilteredMessageWeak::TransactionStatus
         ));
     }
 
@@ -1430,12 +1313,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredMessageWeak::Transaction
+        ));
+        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert!(matches!(
+            updates[1].message,
+            FilteredMessageWeak::TransactionStatus
         ));
     }
 
@@ -1478,8 +1364,8 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(filters.is_empty());
+        for message in filter.get_filters(&message, None) {
+            assert!(message.filters.is_empty());
         }
     }
 
@@ -1532,12 +1418,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredMessageWeak::Transaction
+        ));
+        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert!(matches!(
+            updates[1].message,
+            FilteredMessageWeak::TransactionStatus
         ));
     }
 
@@ -1586,8 +1475,8 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(filters.is_empty());
+        for message in filter.get_filters(&message, None) {
+            assert!(message.filters.is_empty());
         }
     }
 }
