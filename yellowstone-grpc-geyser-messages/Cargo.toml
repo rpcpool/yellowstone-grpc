@@ -16,7 +16,6 @@ bincode = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
 thiserror = { workspace = true }
-yellowstone-grpc-proto = { workspace = true, features = ["convert"] }
 
 [lints]
 workspace = true

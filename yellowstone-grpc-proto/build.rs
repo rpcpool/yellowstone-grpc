@@ -1,5 +1,84 @@
+use tonic_build::manual::{Builder, Method, Service};
+
 fn main() -> anyhow::Result<()> {
     std::env::set_var("PROTOC", protobuf_src::protoc());
+
+    // build protos
     tonic_build::compile_protos("proto/geyser.proto")?;
+
+    // build with accepting our custom struct
+    let geyser_service = Service::builder()
+        .name("Geyser")
+        .package("geyser")
+        .method(
+            Method::builder()
+                .name("subscribe")
+                .route_name("Subscribe")
+                .input_type("crate::geyser::SubscribeRequest")
+                .output_type("crate::geyser::SubscribeUpdate")
+                // .output_type("crate::weak::FilteredMessageWithNames")
+                .codec_path("tonic::codec::ProstCodec")
+                // .codec_path("crate::geyser_custom::SubscribeCodec")
+                .client_streaming()
+                .server_streaming()
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("ping")
+                .route_name("Ping")
+                .input_type("crate::geyser::PingRequest")
+                .output_type("crate::geyser::PongResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("get_latest_blockhash")
+                .route_name("GetLatestBlockhash")
+                .input_type("crate::geyser::GetLatestBlockhashRequest")
+                .output_type("crate::geyser::GetLatestBlockhashResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("get_block_height")
+                .route_name("GetBlockHeight")
+                .input_type("crate::geyser::GetBlockHeightRequest")
+                .output_type("crate::geyser::GetBlockHeightResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("get_slot")
+                .route_name("GetSlot")
+                .input_type("crate::geyser::GetSlotRequest")
+                .output_type("crate::geyser::GetSlotResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("is_blockhash_valid")
+                .route_name("IsBlockhashValid")
+                .input_type("crate::geyser::IsBlockhashValidRequest")
+                .output_type("crate::geyser::IsBlockhashValidResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
+                .name("get_version")
+                .route_name("GetVersion")
+                .input_type("crate::geyser::GetVersionRequest")
+                .output_type("crate::geyser::GetVersionResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .build();
+    Builder::new().compile(&[geyser_service]);
+
     Ok(())
 }

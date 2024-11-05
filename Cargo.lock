@@ -4527,7 +4527,6 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status",
  "thiserror",
- "yellowstone-grpc-proto",
 ]
 
 [[package]]
@@ -4543,6 +4542,7 @@ dependencies = [
  "solana-transaction-status",
  "tonic",
  "tonic-build",
+ "yellowstone-grpc-geyser-messages",
 ]
 
 [[package]]

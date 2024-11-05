@@ -9,7 +9,6 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::sync::Arc,
-    yellowstone_grpc_proto::prelude::CommitmentLevel as CommitmentLevelProto,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,27 +16,6 @@ pub enum CommitmentLevel {
     Processed,
     Confirmed,
     Finalized,
-}
-
-impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
-    fn eq(&self, other: &CommitmentLevelProto) -> bool {
-        matches!(
-            (self, other),
-            (Self::Processed, CommitmentLevelProto::Processed)
-                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
-                | (Self::Finalized, CommitmentLevelProto::Finalized)
-        )
-    }
-}
-
-impl From<CommitmentLevelProto> for CommitmentLevel {
-    fn from(status: CommitmentLevelProto) -> Self {
-        match status {
-            CommitmentLevelProto::Processed => Self::Processed,
-            CommitmentLevelProto::Confirmed => Self::Confirmed,
-            CommitmentLevelProto::Finalized => Self::Finalized,
-        }
-    }
 }
 
 impl From<SlotStatus> for CommitmentLevel {

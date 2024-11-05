@@ -5,6 +5,40 @@ pub mod geyser {
     #![allow(clippy::missing_const_for_fn)]
 
     tonic::include_proto!("geyser");
+
+    #[cfg(feature = "geyser_weak")]
+    use yellowstone_grpc_geyser_messages::geyser::CommitmentLevel as CommitmentLevelMessages;
+
+    #[cfg(feature = "geyser_weak")]
+    impl PartialEq<CommitmentLevel> for CommitmentLevelMessages {
+        fn eq(&self, other: &CommitmentLevel) -> bool {
+            matches!(
+                (self, other),
+                (Self::Processed, CommitmentLevel::Processed)
+                    | (Self::Confirmed, CommitmentLevel::Confirmed)
+                    | (Self::Finalized, CommitmentLevel::Finalized)
+            )
+        }
+    }
+
+    #[cfg(feature = "geyser_weak")]
+    impl From<CommitmentLevel> for CommitmentLevelMessages {
+        fn from(status: CommitmentLevel) -> Self {
+            match status {
+                CommitmentLevel::Processed => Self::Processed,
+                CommitmentLevel::Confirmed => Self::Confirmed,
+                CommitmentLevel::Finalized => Self::Finalized,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "geyser_weak")]
+pub mod geyser_weak {
+    #![allow(clippy::clone_on_ref_ptr)]
+    #![allow(clippy::missing_const_for_fn)]
+
+    tonic::include_proto!("geyser.Geyser");
 }
 
 pub mod solana {
