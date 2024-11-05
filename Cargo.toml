@@ -4,6 +4,7 @@ members = [
     "examples/rust", # 2.0.0
     "yellowstone-grpc-client", # 2.0.0
     "yellowstone-grpc-geyser", # 2.0.0
+    "yellowstone-grpc-geyser-messages", # 2.0.0
     "yellowstone-grpc-proto", # 2.0.0
 ]
 
@@ -61,6 +62,7 @@ tonic-build = "0.12.1"
 tonic-health = "0.12.1"
 vergen = "9.0.0"
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "2.0.0" }
+yellowstone-grpc-geyser-messages = { path = "yellowstone-grpc-geyser-messages", version = "2.0.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "2.0.0", default-features = false }
 
 [workspace.lints.clippy]

@@ -2,7 +2,6 @@ use {
     crate::{
         config::Config,
         grpc::GrpcService,
-        message::Message,
         metrics::{self, PrometheusService},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -22,6 +21,7 @@ use {
         runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
     },
+    yellowstone_grpc_geyser_messages::geyser::Message,
 };
 
 #[derive(Debug)]

@@ -1,8 +1,7 @@
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
-        filters::{Filter, FilterNames},
-        message::{Message, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransactionInfo},
+        filters::Filter,
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
@@ -36,13 +35,20 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
+    yellowstone_grpc_geyser_messages::{
+        filter::FilterNames,
+        geyser::{
+            CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransactionInfo,
+        },
+    },
     yellowstone_grpc_proto::prelude::{
         geyser_server::{Geyser, GeyserServer},
         subscribe_update::UpdateOneof,
-        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
-        GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest,
-        GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest,
-        PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
+        CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
+        GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+        GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
+        PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
     },
 };
 
@@ -153,10 +159,12 @@ impl BlockMetaStorage {
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::try_from(commitment).map_err(|_error| {
-            let msg = format!("failed to create CommitmentLevel from {commitment:?}");
-            Status::unknown(msg)
-        })
+        CommitmentLevelProto::try_from(commitment)
+            .map(Into::into)
+            .map_err(|_error| {
+                let msg = format!("failed to create CommitmentLevel from {commitment:?}");
+                Status::unknown(msg)
+            })
     }
 
     async fn get_block<F, T>(
@@ -529,13 +537,21 @@ impl GrpcService {
 
                         // If we already build Block message, new message will be a problem
                         if slot_messages.sealed && !(matches!(&message, Message::Entry(_)) && slot_messages.entries_count == 0) {
-                            metrics::update_invalid_blocks(format!("unexpected message {}", message.kind()));
+                            let kind = match &message {
+                                Message::Slot(_) => "Slot",
+                                Message::Account(_) => "Account",
+                                Message::Transaction(_) => "Transaction",
+                                Message::Entry(_) => "Entry",
+                                Message::BlockMeta(_) => "BlockMeta",
+                                Message::Block(_) => "Block",
+                            };
+                            metrics::update_invalid_blocks(format!("unexpected message {}", kind));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
-                                    error!("unexpected message #{} -- {} (invalid order)", message.get_slot(), message.kind());
+                                    error!("unexpected message #{} -- {} (invalid order)", message.get_slot(), kind);
                                 }
                                 ConfigBlockFailAction::Panic => {
-                                    panic!("unexpected message #{} -- {} (invalid order)", message.get_slot(), message.kind());
+                                    panic!("unexpected message #{} -- {} (invalid order)", message.get_slot(), kind);
                                 }
                             }
                         }

@@ -1,24 +1,25 @@
 use {
-    crate::{
-        config::{
-            ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
-            ConfigGrpcFiltersTransactions,
-        },
-        message::{
-            Message, MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
-            MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo,
-        },
+    crate::config::{
+        ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
+        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
+        ConfigGrpcFiltersTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
-        borrow::Borrow,
         collections::{HashMap, HashSet},
+        ops::Range,
         str::FromStr,
         sync::Arc,
-        time::{Duration, Instant},
+    },
+    yellowstone_grpc_geyser_messages::{
+        filter::{FilterName, FilterNames},
+        geyser::{
+            CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
+            MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+            MessageTransactionInfo,
+        },
     },
     yellowstone_grpc_proto::{
         convert_to,
@@ -26,8 +27,8 @@ use {
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
@@ -39,93 +40,6 @@ use {
         },
     },
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum FilterError {
-    #[error("invalid filter name (max allowed size {limit}), found {size}")]
-    OversizedFilterName { limit: usize, size: usize },
-}
-
-pub type FilterResult<T> = Result<T, FilterError>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FilterName(Arc<String>);
-
-impl AsRef<str> for FilterName {
-    #[inline]
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Borrow<str> for FilterName {
-    #[inline]
-    fn borrow(&self) -> &str {
-        &self.0[..]
-    }
-}
-
-impl FilterName {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(Arc::new(name.into()))
-    }
-
-    pub fn is_uniq(&self) -> bool {
-        Arc::strong_count(&self.0) == 1
-    }
-}
-
-#[derive(Debug)]
-pub struct FilterNames {
-    name_size_limit: usize,
-    names: HashSet<FilterName>,
-    names_size_limit: usize,
-    cleanup_ts: Instant,
-    cleanup_interval: Duration,
-}
-
-impl FilterNames {
-    pub fn new(
-        name_size_limit: usize,
-        names_size_limit: usize,
-        cleanup_interval: Duration,
-    ) -> Self {
-        Self {
-            name_size_limit,
-            names: HashSet::with_capacity(names_size_limit),
-            names_size_limit,
-            cleanup_ts: Instant::now(),
-            cleanup_interval,
-        }
-    }
-
-    pub fn try_clean(&mut self) {
-        if self.names.len() > self.names_size_limit
-            && self.cleanup_ts.elapsed() > self.cleanup_interval
-        {
-            self.names.retain(|name| !name.is_uniq());
-            self.cleanup_ts = Instant::now();
-        }
-    }
-
-    pub fn get(&mut self, name: &str) -> FilterResult<FilterName> {
-        match self.names.get(name) {
-            Some(name) => Ok(name.clone()),
-            None => {
-                if name.len() > self.name_size_limit {
-                    Err(FilterError::OversizedFilterName {
-                        limit: self.name_size_limit,
-                        size: name.len(),
-                    })
-                } else {
-                    let name = FilterName::new(name);
-                    self.names.insert(name.clone());
-                    Ok(name)
-                }
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum FilteredMessage<'a> {
@@ -141,15 +55,16 @@ pub enum FilteredMessage<'a> {
 impl<'a> FilteredMessage<'a> {
     fn as_proto_account(
         message: &MessageAccountInfo,
-        accounts_data_slice: &[FilterAccountsDataSlice],
+        accounts_data_slice: &[Range<usize>],
     ) -> SubscribeUpdateAccountInfo {
         let data = if accounts_data_slice.is_empty() {
             message.data.clone()
         } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
-                if message.data.len() >= data_slice.end {
-                    data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
+            let mut data =
+                Vec::with_capacity(accounts_data_slice.iter().map(|s| s.end - s.start).sum());
+            for slice in accounts_data_slice {
+                if message.data.len() >= slice.end {
+                    data.extend_from_slice(&message.data[slice.start..slice.end]);
                 }
             }
             data
@@ -187,7 +102,7 @@ impl<'a> FilteredMessage<'a> {
         }
     }
 
-    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+    pub fn as_proto(&self, accounts_data_slice: &[Range<usize>]) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
@@ -283,7 +198,7 @@ pub struct Filter {
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
-    accounts_data_slice: Vec<FilterAccountsDataSlice>,
+    accounts_data_slice: Vec<Range<usize>>,
     ping: Option<i32>,
 }
 
@@ -342,9 +257,11 @@ impl Filter {
 
     fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
         let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::try_from(commitment).map_err(|_error| {
-            anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}")
-        })
+        CommitmentLevelProto::try_from(commitment)
+            .map(Into::into)
+            .map_err(|_error| {
+                anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}")
+            })
     }
 
     fn decode_pubkeys<'a>(
@@ -1190,25 +1107,19 @@ impl FilterBlocksMeta {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FilterAccountsDataSlice {
-    pub start: usize,
-    pub end: usize,
-    pub length: usize,
-}
-
-impl From<&SubscribeRequestAccountsDataSlice> for FilterAccountsDataSlice {
-    fn from(data_slice: &SubscribeRequestAccountsDataSlice) -> Self {
-        Self {
-            start: data_slice.offset as usize,
-            end: (data_slice.offset + data_slice.length) as usize,
-            length: data_slice.length as usize,
-        }
-    }
-}
+pub struct FilterAccountsDataSlice;
 
 impl FilterAccountsDataSlice {
-    pub fn create(slices: &[SubscribeRequestAccountsDataSlice]) -> anyhow::Result<Vec<Self>> {
-        let slices = slices.iter().map(Into::into).collect::<Vec<Self>>();
+    pub fn create(
+        slices: &[SubscribeRequestAccountsDataSlice],
+    ) -> anyhow::Result<Vec<Range<usize>>> {
+        let slices = slices
+            .iter()
+            .map(|s| Range {
+                start: s.offset as usize,
+                end: (s.offset + s.length) as usize,
+            })
+            .collect::<Vec<_>>();
 
         for (i, slice_a) in slices.iter().enumerate() {
             // check order
@@ -1230,11 +1141,7 @@ impl FilterAccountsDataSlice {
 mod tests {
     use {
         super::{FilterName, FilterNames, FilteredMessage},
-        crate::{
-            config::ConfigGrpcFilters,
-            filters::Filter,
-            message::{Message, MessageTransaction, MessageTransactionInfo},
-        },
+        crate::{config::ConfigGrpcFilters, filters::Filter},
         solana_sdk::{
             hash::Hash,
             message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
@@ -1244,6 +1151,9 @@ mod tests {
         },
         solana_transaction_status::TransactionStatusMeta,
         std::{collections::HashMap, sync::Arc, time::Duration},
+        yellowstone_grpc_geyser_messages::geyser::{
+            Message, MessageTransaction, MessageTransactionInfo,
+        },
         yellowstone_grpc_proto::geyser::{
             SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
         },

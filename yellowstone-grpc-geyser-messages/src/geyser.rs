@@ -9,8 +9,63 @@ use {
     },
     solana_transaction_status::{Reward, TransactionStatusMeta},
     std::sync::Arc,
-    yellowstone_grpc_proto::prelude::CommitmentLevel,
+    yellowstone_grpc_proto::prelude::CommitmentLevel as CommitmentLevelProto,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitmentLevel {
+    Processed,
+    Confirmed,
+    Finalized,
+}
+
+impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
+    fn eq(&self, other: &CommitmentLevelProto) -> bool {
+        matches!(
+            (self, other),
+            (Self::Processed, CommitmentLevelProto::Processed)
+                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
+                | (Self::Finalized, CommitmentLevelProto::Finalized)
+        )
+    }
+}
+
+impl From<CommitmentLevelProto> for CommitmentLevel {
+    fn from(status: CommitmentLevelProto) -> Self {
+        match status {
+            CommitmentLevelProto::Processed => Self::Processed,
+            CommitmentLevelProto::Confirmed => Self::Confirmed,
+            CommitmentLevelProto::Finalized => Self::Finalized,
+        }
+    }
+}
+
+impl From<SlotStatus> for CommitmentLevel {
+    fn from(status: SlotStatus) -> Self {
+        match status {
+            SlotStatus::Processed => Self::Processed,
+            SlotStatus::Confirmed => Self::Confirmed,
+            SlotStatus::Rooted => Self::Finalized,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MessageSlot {
+    pub slot: u64,
+    pub parent: Option<u64>,
+    pub status: CommitmentLevel,
+}
+
+impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
+    fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
+        Self {
+            slot,
+            parent,
+            status: status.into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MessageAccountInfo {
@@ -46,27 +101,6 @@ impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
             }),
             slot,
             is_startup,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MessageSlot {
-    pub slot: u64,
-    pub parent: Option<u64>,
-    pub status: CommitmentLevel,
-}
-
-impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
-    fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
-        Self {
-            slot,
-            parent,
-            status: match status {
-                SlotStatus::Processed => CommitmentLevel::Processed,
-                SlotStatus::Confirmed => CommitmentLevel::Confirmed,
-                SlotStatus::Rooted => CommitmentLevel::Finalized,
-            },
         }
     }
 }
@@ -128,6 +162,37 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct MessageBlockMeta {
+    pub parent_slot: u64,
+    pub slot: u64,
+    pub parent_blockhash: String,
+    pub blockhash: String,
+    pub rewards: Vec<Reward>,
+    pub num_partitions: Option<u64>,
+    pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<u64>,
+    pub executed_transaction_count: u64,
+    pub entries_count: u64,
+}
+
+impl<'a> From<&'a ReplicaBlockInfoV4<'a>> for MessageBlockMeta {
+    fn from(blockinfo: &'a ReplicaBlockInfoV4<'a>) -> Self {
+        Self {
+            parent_slot: blockinfo.parent_slot,
+            slot: blockinfo.slot,
+            parent_blockhash: blockinfo.parent_blockhash.to_string(),
+            blockhash: blockinfo.blockhash.to_string(),
+            rewards: blockinfo.rewards.rewards.clone(),
+            num_partitions: blockinfo.rewards.num_partitions,
+            block_time: blockinfo.block_time,
+            block_height: blockinfo.block_height,
+            executed_transaction_count: blockinfo.executed_transaction_count,
+            entries_count: blockinfo.entry_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MessageBlock {
     pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
@@ -163,44 +228,13 @@ impl
 }
 
 #[derive(Debug, Clone)]
-pub struct MessageBlockMeta {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: String,
-    pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub num_partitions: Option<u64>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
-    pub entries_count: u64,
-}
-
-impl<'a> From<&'a ReplicaBlockInfoV4<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV4<'a>) -> Self {
-        Self {
-            parent_slot: blockinfo.parent_slot,
-            slot: blockinfo.slot,
-            parent_blockhash: blockinfo.parent_blockhash.to_string(),
-            blockhash: blockinfo.blockhash.to_string(),
-            rewards: blockinfo.rewards.rewards.clone(),
-            num_partitions: blockinfo.rewards.num_partitions,
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
-            executed_transaction_count: blockinfo.executed_transaction_count,
-            entries_count: blockinfo.entry_count,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
     Entry(Arc<MessageEntry>),
-    Block(Arc<MessageBlock>),
     BlockMeta(Arc<MessageBlockMeta>),
+    Block(Arc<MessageBlock>),
 }
 
 impl Message {
@@ -210,19 +244,8 @@ impl Message {
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
-            Self::Block(msg) => msg.meta.slot,
             Self::BlockMeta(msg) => msg.slot,
-        }
-    }
-
-    pub const fn kind(&self) -> &'static str {
-        match self {
-            Self::Slot(_) => "Slot",
-            Self::Account(_) => "Account",
-            Self::Transaction(_) => "Transaction",
-            Self::Entry(_) => "Entry",
-            Self::Block(_) => "Block",
-            Self::BlockMeta(_) => "BlockMeta",
+            Self::Block(msg) => msg.meta.slot,
         }
     }
 }
