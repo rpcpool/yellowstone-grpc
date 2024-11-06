@@ -14,27 +14,29 @@ use {
         str::FromStr,
         sync::Arc,
     },
-    yellowstone_grpc_geyser_messages::{
-        filter::{
-            FilterName, FilterNames, Message as FilteredMessage,
-            MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
-            MessageWeakBlock as FilteredMessageWeakBlock,
+    yellowstone_grpc_proto::{
+        geyser_weak::{
+            filter::{
+                FilterName, FilterNames, Message as FilteredMessage,
+                MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+                MessageWeakBlock as FilteredMessageWeakBlock,
+            },
+            geyser::{
+                CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
+                MessageEntry, MessageSlot, MessageTransaction,
+            },
         },
-        geyser::{
-            CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction,
+        prelude::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions,
         },
-    },
-    yellowstone_grpc_proto::prelude::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions,
     },
 };
 
@@ -1008,14 +1010,17 @@ mod tests {
         },
         solana_transaction_status::TransactionStatusMeta,
         std::{collections::HashMap, sync::Arc, time::Duration},
-        yellowstone_grpc_geyser_messages::{
-            filter::{
-                MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+        yellowstone_grpc_proto::{
+            geyser::{
+                SubscribeRequest, SubscribeRequestFilterAccounts,
+                SubscribeRequestFilterTransactions,
             },
-            geyser::{Message, MessageTransaction, MessageTransactionInfo},
-        },
-        yellowstone_grpc_proto::geyser::{
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
+            geyser_weak::{
+                filter::{
+                    MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+                },
+                geyser::{Message, MessageTransaction, MessageTransactionInfo},
+            },
         },
     };
 

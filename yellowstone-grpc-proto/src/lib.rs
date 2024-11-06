@@ -5,34 +5,10 @@ pub mod geyser {
     #![allow(clippy::missing_const_for_fn)]
 
     tonic::include_proto!("geyser");
-
-    #[cfg(feature = "geyser_weak")]
-    use yellowstone_grpc_geyser_messages::geyser::CommitmentLevel as CommitmentLevelMessages;
-
-    #[cfg(feature = "geyser_weak")]
-    impl PartialEq<CommitmentLevel> for CommitmentLevelMessages {
-        fn eq(&self, other: &CommitmentLevel) -> bool {
-            matches!(
-                (self, other),
-                (Self::Processed, CommitmentLevel::Processed)
-                    | (Self::Confirmed, CommitmentLevel::Confirmed)
-                    | (Self::Finalized, CommitmentLevel::Finalized)
-            )
-        }
-    }
-
-    #[cfg(feature = "geyser_weak")]
-    impl From<CommitmentLevel> for CommitmentLevelMessages {
-        fn from(status: CommitmentLevel) -> Self {
-            match status {
-                CommitmentLevel::Processed => Self::Processed,
-                CommitmentLevel::Confirmed => Self::Confirmed,
-                CommitmentLevel::Finalized => Self::Finalized,
-            }
-        }
-    }
 }
 
+#[cfg(feature = "geyser_weak")]
+mod weak;
 #[cfg(feature = "geyser_weak")]
 pub mod geyser_weak {
     #![allow(clippy::clone_on_ref_ptr)]
@@ -40,80 +16,7 @@ pub mod geyser_weak {
 
     tonic::include_proto!("geyser.Geyser");
 
-    use {
-        prost::Message,
-        std::marker::PhantomData,
-        tonic::{
-            codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder},
-            Status,
-        },
-        yellowstone_grpc_geyser_messages::filter::Message as FilteredMessage,
-    };
-
-    pub struct SubscribeCodec<T, U> {
-        _pd: PhantomData<(T, U)>,
-    }
-
-    impl<T, U> Default for SubscribeCodec<T, U> {
-        fn default() -> Self {
-            Self { _pd: PhantomData }
-        }
-    }
-
-    impl<T, U> Codec for SubscribeCodec<T, U>
-    where
-        T: Send + 'static,
-        U: Message + Default + Send + 'static,
-    {
-        type Encode = FilteredMessage;
-        type Decode = U;
-
-        type Encoder = SubscribeEncoder<FilteredMessage>;
-        type Decoder = ProstDecoder<U>;
-
-        fn encoder(&mut self) -> Self::Encoder {
-            SubscribeEncoder(PhantomData)
-        }
-
-        fn decoder(&mut self) -> Self::Decoder {
-            ProstDecoder(PhantomData)
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct SubscribeEncoder<T>(PhantomData<T>);
-
-    impl<T> Encoder for SubscribeEncoder<T> {
-        type Item = FilteredMessage;
-        type Error = Status;
-
-        fn encode(&mut self, item: Self::Item, buf: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
-            item.encode(buf)
-        }
-    }
-
-    /// A [`Decoder`] that knows how to decode `U`.
-    #[derive(Debug)]
-    pub struct ProstDecoder<U>(PhantomData<U>);
-
-    impl<U: Message + Default> Decoder for ProstDecoder<U> {
-        type Item = U;
-        type Error = Status;
-
-        fn decode(&mut self, buf: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
-            let item = Message::decode(buf)
-                .map(Option::Some)
-                .map_err(from_decode_error)?;
-
-            Ok(item)
-        }
-    }
-
-    fn from_decode_error(error: prost::DecodeError) -> Status {
-        // Map Protobuf parse errors to an INTERNAL status code, as per
-        // https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
-        Status::internal(error.to_string())
-    }
+    pub use super::weak::*;
 }
 
 pub mod solana {

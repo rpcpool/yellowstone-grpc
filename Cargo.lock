@@ -4514,39 +4514,26 @@ dependencies = [
  "tonic",
  "tonic-health",
  "vergen",
- "yellowstone-grpc-geyser-messages",
  "yellowstone-grpc-proto",
-]
-
-[[package]]
-name = "yellowstone-grpc-geyser-messages"
-version = "2.0.0"
-dependencies = [
- "agave-geyser-plugin-interface",
- "bincode",
- "bytes",
- "prost",
- "smallvec",
- "solana-sdk",
- "solana-transaction-status",
- "thiserror",
- "tonic",
 ]
 
 [[package]]
 name = "yellowstone-grpc-proto"
 version = "2.0.0"
 dependencies = [
+ "agave-geyser-plugin-interface",
  "anyhow",
  "bincode",
+ "bytes",
  "prost",
  "protobuf-src",
+ "smallvec",
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",
+ "thiserror",
  "tonic",
  "tonic-build",
- "yellowstone-grpc-geyser-messages",
 ]
 
 [[package]]

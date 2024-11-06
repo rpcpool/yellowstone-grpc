@@ -11,13 +11,16 @@ keywords = { workspace = true }
 publish = true
 
 [dependencies]
-bincode = { workspace = true }
+agave-geyser-plugin-interface = { workspace = true, optional = true }
+bincode = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 prost = { workspace = true }
+smallvec = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
-yellowstone-grpc-geyser-messages = { workspace = true, optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -25,8 +28,8 @@ protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 
 [features]
-convert = ["dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
-geyser_weak = ["dep:yellowstone-grpc-geyser-messages"]
+convert = ["dep:bincode", "dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
+geyser_weak = ["dep:agave-geyser-plugin-interface", "dep:bytes", "dep:smallvec", "dep:solana-sdk", "dep:solana-transaction-status", "dep:thiserror"]
 tonic-compression = ["tonic/gzip", "tonic/zstd"]
 default = ["convert", "tonic-compression"]
 

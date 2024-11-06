@@ -17,8 +17,8 @@ fn main() -> anyhow::Result<()> {
                 .input_type("crate::geyser::SubscribeRequest")
                 // .output_type("crate::geyser::SubscribeUpdate")
                 // .codec_path("tonic::codec::ProstCodec")
-                .output_type("crate::geyser_weak::FilteredMessage")
-                .codec_path("crate::geyser_weak::SubscribeCodec")
+                .output_type("crate::geyser_weak::filter::Message")
+                .codec_path("crate::geyser_weak::codec::SubscribeCodec")
                 .client_streaming()
                 .server_streaming()
                 .build(),
@@ -87,8 +87,8 @@ fn main() -> anyhow::Result<()> {
     location.push("geyser.Geyser.rs");
     let geyser_rs = std::fs::read_to_string(location.clone())?;
     let geyser_rs = geyser_rs.replace(
-        "let codec = crate::geyser_weak::SubscribeCodec::default();",
-        "let codec = crate::geyser_weak::SubscribeCodec::<crate::geyser_weak::FilteredMessage, _>::default();",
+        "let codec = crate::geyser_weak::codec::SubscribeCodec::default();",
+        "let codec = crate::geyser_weak::codec::SubscribeCodec::<crate::geyser_weak::filter::Message, _>::default();",
     );
     std::fs::write(location, geyser_rs)?;
 

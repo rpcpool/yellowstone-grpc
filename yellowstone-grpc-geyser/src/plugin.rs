@@ -21,7 +21,7 @@ use {
         runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
     },
-    yellowstone_grpc_geyser_messages::geyser::Message,
+    yellowstone_grpc_proto::geyser_weak::geyser::Message,
 };
 
 #[derive(Debug)]

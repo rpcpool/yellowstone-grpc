@@ -35,15 +35,15 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
-    yellowstone_grpc_geyser_messages::{
-        filter::{FilterNames, Message as FilteredMessage},
-        geyser::{
-            CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
-            MessageTransactionInfo,
-        },
-    },
     yellowstone_grpc_proto::{
-        geyser_weak::geyser_server::{Geyser, GeyserServer},
+        geyser_weak::{
+            filter::{FilterNames, Message as FilteredMessage},
+            geyser::{
+                CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransactionInfo,
+            },
+            geyser_server::{Geyser, GeyserServer},
+        },
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,

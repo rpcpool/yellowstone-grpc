@@ -1,4 +1,5 @@
 use {
+    crate::geyser::CommitmentLevel as CommitmentLevelProto,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
@@ -24,6 +25,27 @@ impl From<SlotStatus> for CommitmentLevel {
             SlotStatus::Processed => Self::Processed,
             SlotStatus::Confirmed => Self::Confirmed,
             SlotStatus::Rooted => Self::Finalized,
+        }
+    }
+}
+
+impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
+    fn eq(&self, other: &CommitmentLevelProto) -> bool {
+        matches!(
+            (self, other),
+            (Self::Processed, CommitmentLevelProto::Processed)
+                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
+                | (Self::Finalized, CommitmentLevelProto::Finalized)
+        )
+    }
+}
+
+impl From<CommitmentLevelProto> for CommitmentLevel {
+    fn from(status: CommitmentLevelProto) -> Self {
+        match status {
+            CommitmentLevelProto::Processed => Self::Processed,
+            CommitmentLevelProto::Confirmed => Self::Confirmed,
+            CommitmentLevelProto::Finalized => Self::Finalized,
         }
     }
 }

@@ -45,7 +45,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots"] }
 tonic-health = { workspace = true }
-yellowstone-grpc-geyser-messages = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "geyser_weak"] }
 
 [build-dependencies]
