@@ -1019,7 +1019,9 @@ impl Geyser for GrpcService {
                             let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
-                            if let Err(error) = match Filter::new(&request, &config_filters, &mut filter_names) {
+                            let maybe_filter = Filter::new(&request, &config_filters, &mut filter_names);
+                            drop(filter_names);
+                            if let Err(error) = match maybe_filter {
                                 Ok(filter) => match incoming_client_tx.send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
