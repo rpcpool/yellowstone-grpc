@@ -5,6 +5,7 @@ use {
     },
     bytes::buf::BufMut,
     prost::encoding::{encode_key, encode_varint, message, WireType},
+    smallvec::SmallVec,
     std::{
         borrow::Borrow,
         collections::HashSet,
@@ -104,12 +105,12 @@ impl FilterNames {
 
 #[derive(Debug)]
 pub struct Message {
-    pub filters: Vec<FilterName>, // 1
-    pub message: MessageWeak,     // 2, 3, 4, 10, 5, 6, 9, 7, 8
+    pub filters: MessageFilters, // 1
+    pub message: MessageWeak,    // 2, 3, 4, 10, 5, 6, 9, 7, 8
 }
 
 impl Message {
-    pub fn new(filters: Vec<FilterName>, message: MessageWeak) -> Self {
+    pub fn new(filters: MessageFilters, message: MessageWeak) -> Self {
         Self { filters, message }
     }
 
@@ -122,6 +123,8 @@ impl Message {
         self.message.encode(buf)
     }
 }
+
+pub type MessageFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug)]
 pub enum MessageWeak {

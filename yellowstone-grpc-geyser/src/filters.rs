@@ -17,7 +17,8 @@ use {
     yellowstone_grpc_geyser_messages::{
         filter::{
             FilterName, FilterNames, Message as FilteredMessage,
-            MessageWeak as FilteredMessageWeak, MessageWeakBlock as FilteredMessageWeakBlock,
+            MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+            MessageWeakBlock as FilteredMessageWeakBlock,
         },
         geyser::{
             CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry,
@@ -53,7 +54,9 @@ macro_rules! filtered_messages_once_ref {
     ($filters:ident, $message:expr) => {{
         let mut messages = FilteredMessages::new();
         if !$filters.is_empty() {
-            messages.push(FilteredMessage::new($filters.to_vec(), $message));
+            let mut message_filters = FilteredMessageFilters::new();
+            message_filters.clone_from_slice($filters);
+            messages.push(FilteredMessage::new(message_filters, $message));
         }
         messages
     }};
@@ -210,14 +213,14 @@ impl Filter {
 
     pub fn get_pong_msg(&self) -> Option<FilteredMessage> {
         self.ping.map(|id| FilteredMessage {
-            filters: vec![],
+            filters: FilteredMessageFilters::new(),
             message: FilteredMessageWeak::pong(id),
         })
     }
 
-    pub const fn create_ping_message() -> FilteredMessage {
+    pub fn create_ping_message() -> FilteredMessage {
         FilteredMessage {
-            filters: vec![],
+            filters: FilteredMessageFilters::new(),
             message: FilteredMessageWeak::Ping,
         }
     }
@@ -505,7 +508,7 @@ impl<'a> FilterAccountsMatch<'a> {
         }
     }
 
-    pub fn get_filters(&self) -> Vec<FilterName> {
+    pub fn get_filters(&self) -> FilteredMessageFilters {
         self.filter
             .filters
             .iter()
@@ -588,7 +591,7 @@ impl FilterSlots {
                     None
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<FilteredMessageFilters>();
         filtered_messages_once_owned!(filters, FilteredMessageWeak::slot(*message))
     }
 }
@@ -755,7 +758,7 @@ impl FilterTransactions {
 
                 Some(name.clone())
             })
-            .collect::<Vec<_>>();
+            .collect::<FilteredMessageFilters>();
 
         filtered_messages_once_owned!(
             filters,
@@ -915,8 +918,10 @@ impl FilterBlocks {
                 vec![]
             };
 
+            let mut message_filters = FilteredMessageFilters::new();
+            message_filters.push(filter.clone());
             messages.push(FilteredMessage::new(
-                vec![filter.clone()],
+                message_filters,
                 FilteredMessageWeak::block(FilteredMessageWeakBlock {
                     meta: Arc::clone(&message.meta),
                     transactions,
@@ -1004,7 +1009,9 @@ mod tests {
         solana_transaction_status::TransactionStatusMeta,
         std::{collections::HashMap, sync::Arc, time::Duration},
         yellowstone_grpc_geyser_messages::{
-            filter::MessageWeak as FilteredMessageWeak,
+            filter::{
+                MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+            },
             geyser::{Message, MessageTransaction, MessageTransactionInfo},
         },
         yellowstone_grpc_proto::geyser::{
@@ -1222,12 +1229,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
+        assert_eq!(
+            updates[0].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[0].message,
             FilteredMessageWeak::Transaction
         ));
-        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
             FilteredMessageWeak::TransactionStatus
@@ -1275,12 +1285,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
+        assert_eq!(
+            updates[0].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[0].message,
             FilteredMessageWeak::Transaction
         ));
-        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
             FilteredMessageWeak::TransactionStatus
@@ -1380,12 +1393,15 @@ mod tests {
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
+        assert_eq!(
+            updates[0].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[0].message,
             FilteredMessageWeak::Transaction
         ));
-        assert_eq!(updates[1].filters, Vec::<FilterName>::new());
+        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
             FilteredMessageWeak::TransactionStatus

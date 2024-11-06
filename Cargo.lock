@@ -4526,6 +4526,7 @@ dependencies = [
  "bincode",
  "bytes",
  "prost",
+ "smallvec",
  "solana-sdk",
  "solana-transaction-status",
  "thiserror",

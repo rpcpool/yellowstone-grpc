@@ -17,6 +17,7 @@ bytes = { workspace = true }
 prost = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 
