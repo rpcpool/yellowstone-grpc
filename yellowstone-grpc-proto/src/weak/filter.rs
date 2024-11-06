@@ -4,10 +4,17 @@ use {
         MessageTransaction, MessageTransactionInfo,
     },
     crate::geyser::{
-        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdatePing, SubscribeUpdatePong,
+        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateEntry, SubscribeUpdatePing,
+        SubscribeUpdatePong,
     },
-    bytes::buf::BufMut,
-    prost::encoding::{encode_key, encode_varint, message, WireType},
+    bytes::buf::{Buf, BufMut},
+    prost::{
+        encoding::{
+            encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
+            WireType,
+        },
+        DecodeError,
+    },
     smallvec::SmallVec,
     std::{
         borrow::Borrow,
@@ -16,7 +23,6 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
-    tonic::{codec::EncodeBuf, Status},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -112,18 +118,59 @@ pub struct Message {
     pub message: MessageWeak,    // 2, 3, 4, 10, 5, 6, 9, 7, 8
 }
 
-impl Message {
-    pub fn new(filters: MessageFilters, message: MessageWeak) -> Self {
-        Self { filters, message }
+impl From<&Message> for SubscribeUpdate {
+    fn from(message: &Message) -> Self {
+        SubscribeUpdate {
+            filters: message
+                .filters
+                .iter()
+                .map(|f| f.as_ref().to_owned())
+                .collect(),
+            update_oneof: Some((&message.message).into()),
+        }
     }
+}
 
-    pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Status> {
+impl prost::Message for Message {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
         for name in self.filters.iter().map(|filter| filter.as_ref()) {
-            encode_key(1, WireType::LengthDelimited, buf);
+            encode_key(1u32, WireType::LengthDelimited, buf);
             encode_varint(name.len() as u64, buf);
             buf.put_slice(name.as_bytes());
         }
-        self.message.encode(buf)
+        self.message.encode_raw(buf)
+    }
+
+    fn encoded_len(&self) -> usize {
+        key_len(1u32) * self.filters.len()
+            + self
+                .filters
+                .iter()
+                .map(|filter| {
+                    encoded_len_varint(filter.as_ref().len() as u64) + filter.as_ref().len()
+                })
+                .sum::<usize>()
+            + self.message.encoded_len()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl Message {
+    pub fn new(filters: MessageFilters, message: MessageWeak) -> Self {
+        Self { filters, message }
     }
 }
 
@@ -140,6 +187,69 @@ pub enum MessageWeak {
     Pong(MessageWeakPong),   // 9
     BlockMeta,               // 7
     Entry(MessageWeakEntry), // 8
+}
+
+impl From<&MessageWeak> for UpdateOneof {
+    fn from(message: &MessageWeak) -> Self {
+        match message {
+            MessageWeak::Account => todo!(),
+            MessageWeak::Slot => todo!(),
+            MessageWeak::Transaction => todo!(),
+            MessageWeak::TransactionStatus => todo!(),
+            MessageWeak::Block => todo!(),
+            MessageWeak::Ping => Self::Ping(SubscribeUpdatePing {}),
+            MessageWeak::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
+            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::Entry(msg) => Self::Entry(msg.into()),
+        }
+    }
+}
+
+impl prost::Message for MessageWeak {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        match self {
+            MessageWeak::Account => todo!(),
+            MessageWeak::Slot => todo!(),
+            MessageWeak::Transaction => todo!(),
+            MessageWeak::TransactionStatus => todo!(),
+            MessageWeak::Block => todo!(),
+            MessageWeak::Ping => {
+                encode_key(6u32, WireType::LengthDelimited, buf);
+                encode_varint(0, buf);
+            }
+            MessageWeak::Pong(msg) => message::encode(9u32, msg, buf),
+            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::Entry(msg) => message::encode(8u32, msg, buf),
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        match self {
+            MessageWeak::Account => todo!(),
+            MessageWeak::Slot => todo!(),
+            MessageWeak::Transaction => todo!(),
+            MessageWeak::TransactionStatus => todo!(),
+            MessageWeak::Block => todo!(),
+            MessageWeak::Ping => 0,
+            MessageWeak::Pong(msg) => message::encoded_len(9u32, msg),
+            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::Entry(msg) => message::encoded_len(8u32, msg),
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
 }
 
 impl MessageWeak {
@@ -174,25 +284,6 @@ impl MessageWeak {
     pub fn entry(message: &Arc<MessageEntry>) -> Self {
         Self::Entry(MessageWeakEntry(Arc::clone(message)))
     }
-
-    pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Status> {
-        match self {
-            MessageWeak::Account => todo!(),
-            MessageWeak::Slot => todo!(),
-            MessageWeak::Transaction => todo!(),
-            MessageWeak::TransactionStatus => todo!(),
-            MessageWeak::Block => todo!(),
-            MessageWeak::Ping => {
-                encode_key(6, WireType::LengthDelimited, buf);
-                encode_varint(0, buf);
-            }
-            MessageWeak::Pong(msg) => message::encode(9, msg, buf),
-            MessageWeak::BlockMeta => todo!(),
-            MessageWeak::Entry(msg) => todo!(),
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -212,44 +303,109 @@ pub struct MessageWeakPong {
 }
 
 #[derive(Debug)]
-pub struct MessageWeakEntry(Arc<MessageEntry>);
+pub struct MessageWeakEntry(pub Arc<MessageEntry>);
 
-impl From<&Message> for SubscribeUpdate {
-    fn from(message: &Message) -> Self {
-        SubscribeUpdate {
-            filters: message
-                .filters
-                .iter()
-                .map(|f| f.as_ref().to_owned())
-                .collect(),
-            update_oneof: Some((&message.message).into()),
+impl From<&MessageWeakEntry> for SubscribeUpdateEntry {
+    fn from(MessageWeakEntry(msg): &MessageWeakEntry) -> Self {
+        Self {
+            slot: msg.slot,
+            index: msg.index as u64,
+            num_hashes: msg.num_hashes,
+            hash: msg.hash.into(),
+            executed_transaction_count: msg.executed_transaction_count,
+            starting_transaction_index: msg.starting_transaction_index,
         }
     }
 }
 
-impl From<&MessageWeak> for UpdateOneof {
-    fn from(message: &MessageWeak) -> Self {
-        match message {
-            MessageWeak::Account => todo!(),
-            MessageWeak::Slot => todo!(),
-            MessageWeak::Transaction => todo!(),
-            MessageWeak::TransactionStatus => todo!(),
-            MessageWeak::Block => todo!(),
-            MessageWeak::Ping => Self::Ping(SubscribeUpdatePing {}),
-            MessageWeak::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
-            MessageWeak::BlockMeta => todo!(),
-            MessageWeak::Entry(msg) => todo!(),
+impl prost::Message for MessageWeakEntry {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        let msg = &self.0;
+        let index = msg.index as u64;
+        if msg.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &msg.slot, buf);
+        }
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &index, buf);
+        }
+        if msg.num_hashes != 0u64 {
+            ::prost::encoding::uint64::encode(3u32, &msg.num_hashes, buf);
+        }
+        if !msg.hash.is_empty() {
+            prost_bytes_encode_raw(4u32, &msg.hash, buf);
+        }
+        if msg.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &msg.executed_transaction_count, buf);
+        }
+        if msg.starting_transaction_index != 0u64 {
+            ::prost::encoding::uint64::encode(6u32, &msg.starting_transaction_index, buf);
         }
     }
+
+    fn encoded_len(&self) -> usize {
+        let msg = &self.0;
+        let index = msg.index as u64;
+        (if msg.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &msg.slot)
+        } else {
+            0
+        }) + if index != 0u64 {
+            ::prost::encoding::uint64::encoded_len(2u32, &index)
+        } else {
+            0
+        } + if msg.num_hashes != 0u64 {
+            ::prost::encoding::uint64::encoded_len(3u32, &msg.num_hashes)
+        } else {
+            0
+        } + if !msg.hash.is_empty() {
+            prost_bytes_encoded_len(4u32, &msg.hash)
+        } else {
+            0
+        } + if msg.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encoded_len(5u32, &msg.executed_transaction_count)
+        } else {
+            0
+        } + if msg.starting_transaction_index != 0u64 {
+            ::prost::encoding::uint64::encoded_len(6u32, &msg.starting_transaction_index)
+        } else {
+            0
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+#[inline]
+fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(value.len() as u64, buf);
+    buf.put(value);
+}
+
+#[inline]
+pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
+    key_len(tag) + encoded_len_varint(value.len() as u64) + value.len()
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::{FilterName, Message, MessageFilters, MessageWeak},
-        crate::geyser::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdatePing},
-        bytes::BytesMut,
+        super::{FilterName, Message, MessageEntry, MessageFilters, MessageWeak},
+        crate::geyser::SubscribeUpdate,
         prost::Message as _,
+        std::sync::Arc,
     };
 
     fn create_message_filters(names: &[&str]) -> MessageFilters {
@@ -265,11 +421,9 @@ mod tests {
             filters: create_message_filters(filters),
             message,
         };
-
         // println!("{:?}", SubscribeUpdate::from(&msg));
-        let mut bytes = BytesMut::new();
-        msg.encode(&mut bytes).expect("failed to encode");
-        let update = SubscribeUpdate::decode(bytes).expect("failed to decode");
+        let bytes = msg.encode_to_vec();
+        let update = SubscribeUpdate::decode(bytes.as_slice()).expect("failed to decode");
         // println!("{update:?}");
         assert_eq!(update, SubscribeUpdate::from(&msg));
     }
@@ -283,6 +437,21 @@ mod tests {
     fn test_message_pong() {
         encode_decode_cmp(&["123"], MessageWeak::pong(0));
         encode_decode_cmp(&["123"], MessageWeak::pong(42));
+    }
+
+    #[test]
+    fn test_message_entry() {
+        encode_decode_cmp(
+            &["123"],
+            MessageWeak::entry(&Arc::new(MessageEntry {
+                slot: 299888121,
+                index: 42,
+                num_hashes: 128,
+                hash: [98; 32],
+                executed_transaction_count: 32,
+                starting_transaction_index: 1000,
+            })),
+        );
     }
 }
 

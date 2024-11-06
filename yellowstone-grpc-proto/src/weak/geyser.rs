@@ -151,7 +151,9 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
             slot: entry.slot,
             index: entry.index,
             num_hashes: entry.num_hashes,
-            hash: entry.hash[0..32].try_into().expect("failed to create hash"),
+            hash: entry.hash[0..HASH_BYTES]
+                .try_into()
+                .expect("failed to create hash"),
             executed_transaction_count: entry.executed_transaction_count,
             starting_transaction_index: entry
                 .starting_transaction_index
