@@ -4504,6 +4504,7 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
+ "smallvec",
  "solana-logger",
  "solana-sdk",
  "solana-transaction-status",

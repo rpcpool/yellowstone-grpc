@@ -5,10 +5,10 @@ use {
         ConfigGrpcFiltersTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
+    smallvec::SmallVec,
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
-        borrow::Cow,
         collections::{HashMap, HashSet},
         ops::Range,
         str::FromStr,
@@ -37,77 +37,26 @@ use {
     },
 };
 
-pub enum FilteredMessages<'a> {
-    Once(Option<FilteredMessage>),
-    Pair((Option<FilteredMessage>, Option<FilteredMessage>)),
-    Boxed(Box<dyn Iterator<Item = FilteredMessage> + Send + 'a>),
-}
+pub type FilteredMessages = SmallVec<[FilteredMessage; 8]>;
 
 macro_rules! filtered_messages_once_owned {
-    ($filters:ident, $message:expr) => {
-        FilteredMessages::Once(if $filters.is_empty() {
-            None
-        } else {
-            Some(FilteredMessage::new($filters, $message))
-        })
-    };
+    ($filters:ident, $message:expr) => {{
+        let mut messages = FilteredMessages::new();
+        if !$filters.is_empty() {
+            messages.push(FilteredMessage::new($filters, $message));
+        }
+        messages
+    }};
 }
 
 macro_rules! filtered_messages_once_ref {
-    ($filters:ident, $message:expr) => {
-        FilteredMessages::Once(if $filters.is_empty() {
-            None
-        } else {
-            Some(FilteredMessage::new($filters.to_vec(), $message))
-        })
-    };
-}
-
-impl FilteredMessages<'_> {
-    fn wrap(filters: Cow<'_, [FilterName]>, msg: FilteredMessageWeak) -> Option<FilteredMessage> {
-        if filters.is_empty() {
-            None
-        } else {
-            Some(FilteredMessage::new(filters.into_owned(), msg))
+    ($filters:ident, $message:expr) => {{
+        let mut messages = FilteredMessages::new();
+        if !$filters.is_empty() {
+            messages.push(FilteredMessage::new($filters.to_vec(), $message));
         }
-    }
-
-    pub fn pair(
-        item1: (Vec<FilterName>, FilteredMessageWeak),
-        item2: (Vec<FilterName>, FilteredMessageWeak),
-    ) -> Self {
-        Self::Pair((
-            Self::wrap(item1.0.into(), item1.1),
-            Self::wrap(item2.0.into(), item2.1),
-        ))
-    }
-}
-
-impl<'a> Iterator for FilteredMessages<'a> {
-    type Item = FilteredMessage;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Once(msg) => msg.take(),
-            Self::Pair((item1, item2)) => item1.take().or_else(|| item2.take()),
-            Self::Boxed(it) => it.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Once(msg) => {
-                let total = if msg.is_some() { 1 } else { 0 };
-                (total, Some(total))
-            }
-            Self::Pair((item1, item2)) => {
-                let total =
-                    if item1.is_some() { 1 } else { 0 } + if item2.is_some() { 1 } else { 0 };
-                (total, Some(total))
-            }
-            Self::Boxed(it) => it.size_hint(),
-        }
-    }
+        messages
+    }};
 }
 
 #[derive(Debug, Clone)]
@@ -238,20 +187,21 @@ impl Filter {
         self.commitment
     }
 
-    pub fn get_filters<'a>(
-        &'a self,
-        message: &'a Message,
+    pub fn get_filters(
+        &self,
+        message: &Message,
         commitment: Option<CommitmentLevel>,
-    ) -> FilteredMessages<'a> {
+    ) -> FilteredMessages {
         match message {
             Message::Account(message) => self
                 .accounts
                 .get_filters(message, &self.accounts_data_slice),
             Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => FilteredMessages::pair(
-                self.transactions.get_filters(message),
-                self.transactions_status.get_filters(message),
-            ),
+            Message::Transaction(message) => {
+                let mut messages = self.transactions.get_filters(message);
+                messages.append(&mut self.transactions_status.get_filters(message));
+                messages
+            }
             Message::Entry(message) => self.entries.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
@@ -732,10 +682,7 @@ impl FilterTransactions {
         })
     }
 
-    pub fn get_filters(
-        &self,
-        message: &MessageTransaction,
-    ) -> (Vec<FilterName>, FilteredMessageWeak) {
+    pub fn get_filters(&self, message: &MessageTransaction) -> FilteredMessages {
         let filters = self
             .filters
             .iter()
@@ -808,16 +755,17 @@ impl FilterTransactions {
 
                 Some(name.clone())
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        let message = match self.filter_type {
-            FilterTransactionsType::Transaction => FilteredMessageWeak::transaction(message),
-            FilterTransactionsType::TransactionStatus => {
-                FilteredMessageWeak::transaction_status(message)
+        filtered_messages_once_owned!(
+            filters,
+            match self.filter_type {
+                FilterTransactionsType::Transaction => FilteredMessageWeak::transaction(message),
+                FilterTransactionsType::TransactionStatus => {
+                    FilteredMessageWeak::transaction_status(message)
+                }
             }
-        };
-
-        (filters, message)
+        )
     }
 }
 
@@ -908,12 +856,13 @@ impl FilterBlocks {
         Ok(this)
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a Arc<MessageBlock>,
-        accounts_data_slice: &'a [Range<usize>],
-    ) -> FilteredMessages<'a> {
-        FilteredMessages::Boxed(Box::new(self.filters.iter().map(move |(filter, inner)| {
+    fn get_filters(
+        &self,
+        message: &Arc<MessageBlock>,
+        accounts_data_slice: &[Range<usize>],
+    ) -> FilteredMessages {
+        let mut messages = FilteredMessages::new();
+        for (filter, inner) in self.filters.iter() {
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
                 message
@@ -966,7 +915,7 @@ impl FilterBlocks {
                 vec![]
             };
 
-            FilteredMessage::new(
+            messages.push(FilteredMessage::new(
                 vec![filter.clone()],
                 FilteredMessageWeak::block(FilteredMessageWeakBlock {
                     meta: Arc::clone(&message.meta),
@@ -976,8 +925,9 @@ impl FilterBlocks {
                     accounts,
                     entries,
                 }),
-            )
-        })))
+            ));
+        }
+        messages
     }
 }
 
@@ -1270,7 +1220,7 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
@@ -1323,7 +1273,7 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
@@ -1428,7 +1378,7 @@ mod tests {
             vec![account_key_x, account_key_y, account_key_z],
         );
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
+        let updates = filter.get_filters(&message, None);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].filters, vec![FilterName::new("serum")]);
         assert!(matches!(
