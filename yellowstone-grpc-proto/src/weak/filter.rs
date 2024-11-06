@@ -3,6 +3,9 @@ use {
         MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
         MessageTransaction, MessageTransactionInfo,
     },
+    crate::geyser::{
+        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdatePing, SubscribeUpdatePong,
+    },
     bytes::buf::BufMut,
     prost::encoding::{encode_key, encode_varint, message, WireType},
     smallvec::SmallVec,
@@ -114,7 +117,7 @@ impl Message {
         Self { filters, message }
     }
 
-    pub fn encode(self, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
+    pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Status> {
         for name in self.filters.iter().map(|filter| filter.as_ref()) {
             encode_key(1, WireType::LengthDelimited, buf);
             encode_varint(name.len() as u64, buf);
@@ -172,15 +175,18 @@ impl MessageWeak {
         Self::Entry(MessageWeakEntry(Arc::clone(message)))
     }
 
-    pub fn encode(self, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
+    pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Status> {
         match self {
             MessageWeak::Account => todo!(),
             MessageWeak::Slot => todo!(),
             MessageWeak::Transaction => todo!(),
             MessageWeak::TransactionStatus => todo!(),
             MessageWeak::Block => todo!(),
-            MessageWeak::Ping => encode_key(6, WireType::LengthDelimited, buf),
-            MessageWeak::Pong(msg) => message::encode(9, &msg, buf),
+            MessageWeak::Ping => {
+                encode_key(6, WireType::LengthDelimited, buf);
+                encode_varint(0, buf);
+            }
+            MessageWeak::Pong(msg) => message::encode(9, msg, buf),
             MessageWeak::BlockMeta => todo!(),
             MessageWeak::Entry(msg) => todo!(),
         }
@@ -207,6 +213,78 @@ pub struct MessageWeakPong {
 
 #[derive(Debug)]
 pub struct MessageWeakEntry(Arc<MessageEntry>);
+
+impl From<&Message> for SubscribeUpdate {
+    fn from(message: &Message) -> Self {
+        SubscribeUpdate {
+            filters: message
+                .filters
+                .iter()
+                .map(|f| f.as_ref().to_owned())
+                .collect(),
+            update_oneof: Some((&message.message).into()),
+        }
+    }
+}
+
+impl From<&MessageWeak> for UpdateOneof {
+    fn from(message: &MessageWeak) -> Self {
+        match message {
+            MessageWeak::Account => todo!(),
+            MessageWeak::Slot => todo!(),
+            MessageWeak::Transaction => todo!(),
+            MessageWeak::TransactionStatus => todo!(),
+            MessageWeak::Block => todo!(),
+            MessageWeak::Ping => Self::Ping(SubscribeUpdatePing {}),
+            MessageWeak::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
+            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::Entry(msg) => todo!(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{FilterName, Message, MessageFilters, MessageWeak},
+        crate::geyser::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdatePing},
+        bytes::BytesMut,
+        prost::Message as _,
+    };
+
+    fn create_message_filters(names: &[&str]) -> MessageFilters {
+        let mut filters = MessageFilters::new();
+        for name in names {
+            filters.push(FilterName::new(*name));
+        }
+        filters
+    }
+
+    fn encode_decode_cmp(filters: &[&str], message: MessageWeak) {
+        let msg = Message {
+            filters: create_message_filters(filters),
+            message,
+        };
+
+        // println!("{:?}", SubscribeUpdate::from(&msg));
+        let mut bytes = BytesMut::new();
+        msg.encode(&mut bytes).expect("failed to encode");
+        let update = SubscribeUpdate::decode(bytes).expect("failed to decode");
+        // println!("{update:?}");
+        assert_eq!(update, SubscribeUpdate::from(&msg));
+    }
+
+    #[test]
+    fn test_message_ping() {
+        encode_decode_cmp(&["123"], MessageWeak::Ping)
+    }
+
+    #[test]
+    fn test_message_pong() {
+        encode_decode_cmp(&["123"], MessageWeak::pong(0));
+        encode_decode_cmp(&["123"], MessageWeak::pong(42));
+    }
+}
 
 // #[derive(Debug, Clone)]
 // pub enum FilteredMessage2<'a> {
