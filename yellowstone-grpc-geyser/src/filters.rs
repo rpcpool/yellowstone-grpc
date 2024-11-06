@@ -43,6 +43,26 @@ pub enum FilteredMessages<'a> {
     Boxed(Box<dyn Iterator<Item = FilteredMessage> + Send + 'a>),
 }
 
+macro_rules! filtered_messages_once_owned {
+    ($filters:ident, $message:expr) => {
+        FilteredMessages::Once(if $filters.is_empty() {
+            None
+        } else {
+            Some(FilteredMessage::new($filters, $message))
+        })
+    };
+}
+
+macro_rules! filtered_messages_once_ref {
+    ($filters:ident, $message:expr) => {
+        FilteredMessages::Once(if $filters.is_empty() {
+            None
+        } else {
+            Some(FilteredMessage::new($filters.to_vec(), $message))
+        })
+    };
+}
+
 impl FilteredMessages<'_> {
     fn wrap(filters: Cow<'_, [FilterName]>, msg: FilteredMessageWeak) -> Option<FilteredMessage> {
         if filters.is_empty() {
@@ -50,10 +70,6 @@ impl FilteredMessages<'_> {
         } else {
             Some(FilteredMessage::new(filters.into_owned(), msg))
         }
-    }
-
-    pub fn once(filters: Cow<'_, [FilterName]>, msg: FilteredMessageWeak) -> Self {
-        Self::Once(Self::wrap(filters, msg))
     }
 
     pub fn pair(
@@ -344,9 +360,10 @@ impl FilterAccounts {
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
-        FilteredMessages::once(
-            filter.get_filters().into(),
-            FilteredMessageWeak::account(message, accounts_data_slice.to_vec()),
+        let filters = filter.get_filters();
+        filtered_messages_once_owned!(
+            filters,
+            FilteredMessageWeak::account(message, accounts_data_slice.to_vec())
         )
     }
 }
@@ -622,8 +639,7 @@ impl FilterSlots {
                 }
             })
             .collect::<Vec<_>>();
-
-        FilteredMessages::once(filters.into(), FilteredMessageWeak::slot(*message))
+        filtered_messages_once_owned!(filters, FilteredMessageWeak::slot(*message))
     }
 }
 
@@ -827,10 +843,8 @@ impl FilterEntries {
     }
 
     fn get_filters(&self, message: &Arc<MessageEntry>) -> FilteredMessages {
-        FilteredMessages::once(
-            self.filters.as_slice().into(),
-            FilteredMessageWeak::entry(message),
-        )
+        let filters = self.filters.as_slice();
+        filtered_messages_once_ref!(filters, FilteredMessageWeak::entry(message))
     }
 }
 
@@ -989,10 +1003,8 @@ impl FilterBlocksMeta {
     }
 
     fn get_filters(&self, message: &Arc<MessageBlockMeta>) -> FilteredMessages {
-        FilteredMessages::once(
-            self.filters.as_slice().into(),
-            FilteredMessageWeak::block_meta(message),
-        )
+        let filters = self.filters.as_slice();
+        filtered_messages_once_ref!(filters, FilteredMessageWeak::block_meta(message))
     }
 }
 
