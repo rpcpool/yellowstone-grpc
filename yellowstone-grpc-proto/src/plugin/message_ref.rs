@@ -12,7 +12,8 @@ use {
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransactionStatus,
+            SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo, SubscribeUpdateTransactionStatus,
         },
         solana::storage::confirmed_block::RewardType as RewardTypeProto,
     },
@@ -98,7 +99,7 @@ pub type MessageFilters = SmallVec<[FilterName; 4]>;
 pub enum MessageRef {
     Account(MessageAccountRef),                     // 2
     Slot(MessageSlot),                              // 3
-    Transaction,                                    // 4
+    Transaction(MessageTransactionRef),             // 4
     TransactionStatus(MessageTransactionStatusRef), // 10
     Block,                                          // 5
     Ping,                                           // 6
@@ -112,7 +113,7 @@ impl From<&MessageRef> for UpdateOneof {
         match message {
             MessageRef::Account(msg) => Self::Account(msg.into()),
             MessageRef::Slot(msg) => Self::Slot(msg.into()),
-            MessageRef::Transaction => todo!(),
+            MessageRef::Transaction(msg) => Self::Transaction(msg.into()),
             MessageRef::TransactionStatus(msg) => Self::TransactionStatus(msg.into()),
             MessageRef::Block => todo!(),
             MessageRef::Ping => Self::Ping(SubscribeUpdatePing {}),
@@ -128,7 +129,7 @@ impl prost::Message for MessageRef {
         match self {
             MessageRef::Account(msg) => message::encode(2u32, msg, buf),
             MessageRef::Slot(msg) => message::encode(3u32, msg, buf),
-            MessageRef::Transaction => todo!(),
+            MessageRef::Transaction(msg) => message::encode(4u32, msg, buf),
             MessageRef::TransactionStatus(msg) => message::encode(10u32, msg, buf),
             MessageRef::Block => todo!(),
             MessageRef::Ping => {
@@ -145,7 +146,7 @@ impl prost::Message for MessageRef {
         match self {
             MessageRef::Account(msg) => message::encoded_len(2u32, msg),
             MessageRef::Slot(msg) => message::encoded_len(3u32, msg),
-            MessageRef::Transaction => todo!(),
+            MessageRef::Transaction(msg) => message::encoded_len(4u32, msg),
             MessageRef::TransactionStatus(msg) => message::encoded_len(10u32, msg),
             MessageRef::Block => todo!(),
             MessageRef::Ping => key_len(6u32) + encoded_len_varint(0),
@@ -171,10 +172,10 @@ impl prost::Message for MessageRef {
 }
 
 impl MessageRef {
-    pub fn account(message: MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
+    pub fn account(message: &MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
         Self::Account(MessageAccountRef {
             slot: message.slot,
-            account: message.account,
+            account: Arc::clone(&message.account),
             is_startup: message.is_startup,
             data_slice,
         })
@@ -185,12 +186,15 @@ impl MessageRef {
     }
 
     pub fn transaction(message: &MessageTransaction) -> Self {
-        todo!()
+        Self::Transaction(MessageTransactionRef {
+            transaction: Arc::clone(&message.transaction),
+            slot: message.slot,
+        })
     }
 
-    pub fn transaction_status(message: MessageTransaction) -> Self {
+    pub fn transaction_status(message: &MessageTransaction) -> Self {
         Self::TransactionStatus(MessageTransactionStatusRef {
-            transaction: message.transaction,
+            transaction: Arc::clone(&message.transaction),
             slot: message.slot,
         })
     }
@@ -442,6 +446,55 @@ impl prost::Message for MessageSlot {
 }
 
 #[derive(Debug)]
+pub struct MessageTransactionRef {
+    pub transaction: Arc<MessageTransactionInfo>,
+    pub slot: u64,
+}
+
+impl From<&MessageTransactionRef> for SubscribeUpdateTransaction {
+    fn from(msg: &MessageTransactionRef) -> Self {
+        Self {
+            transaction: Some(SubscribeUpdateTransactionInfo {
+                signature: msg.transaction.signature.as_ref().into(),
+                is_vote: msg.transaction.is_vote,
+                transaction: Some(convert_to::create_transaction(&msg.transaction.transaction)),
+                meta: Some(convert_to::create_transaction_meta(&msg.transaction.meta)),
+                index: msg.transaction.index as u64,
+            }),
+            slot: msg.slot,
+        }
+    }
+}
+
+impl prost::Message for MessageTransactionRef {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        todo!()
+    }
+
+    fn encoded_len(&self) -> usize {
+        todo!()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl MessageTransactionRef {
+    //
+}
+
+#[derive(Debug)]
 pub struct MessageTransactionStatusRef {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
@@ -449,7 +502,7 @@ pub struct MessageTransactionStatusRef {
 
 impl From<&MessageTransactionStatusRef> for SubscribeUpdateTransactionStatus {
     fn from(msg: &MessageTransactionStatusRef) -> Self {
-        SubscribeUpdateTransactionStatus {
+        Self {
             slot: msg.slot,
             signature: msg.transaction.signature.as_ref().to_vec(),
             is_vote: msg.transaction.is_vote,
@@ -971,7 +1024,7 @@ mod tests {
     #[test]
     fn test_message_account() {
         for (msg, data_slice) in create_accounts() {
-            encode_decode_cmp(&["123"], MessageRef::account(msg, data_slice));
+            encode_decode_cmp(&["123"], MessageRef::account(&msg, data_slice));
         }
     }
 
@@ -1080,7 +1133,7 @@ mod tests {
                     transaction: Arc::clone(tx),
                     slot: 42,
                 };
-                encode_decode_cmp(&["123"], MessageRef::transaction_status(msg));
+                encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
             }
         }
     }

@@ -321,7 +321,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_messages_once_owned!(
             filters,
-            FilteredMessageRef::account(message.clone(), accounts_data_slice.clone())
+            FilteredMessageRef::account(message, accounts_data_slice.clone())
         )
     }
 }
@@ -770,7 +770,7 @@ impl FilterTransactions {
             match self.filter_type {
                 FilterTransactionsType::Transaction => FilteredMessageRef::transaction(message),
                 FilterTransactionsType::TransactionStatus => {
-                    FilteredMessageRef::transaction_status(message.clone())
+                    FilteredMessageRef::transaction_status(message)
                 }
             }
         )
@@ -1245,7 +1245,7 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageRef::Transaction
+            FilteredMessageRef::Transaction(_)
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
@@ -1301,7 +1301,7 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageRef::Transaction
+            FilteredMessageRef::Transaction(_)
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
@@ -1409,7 +1409,7 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageRef::Transaction
+            FilteredMessageRef::Transaction(_)
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
