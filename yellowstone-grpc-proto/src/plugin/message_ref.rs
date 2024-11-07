@@ -10,7 +10,8 @@ use {
         convert_to,
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SubscribeUpdate, SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
+            SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
             SubscribeUpdatePong, SubscribeUpdateSlot,
         },
         solana::storage::confirmed_block::RewardType as RewardTypeProto,
@@ -94,7 +95,7 @@ pub type MessageFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug)]
 pub enum MessageRef {
-    Account,                          // 2
+    Account(MessageAccountRef),       // 2
     Slot(MessageSlot),                // 3
     Transaction,                      // 4
     TransactionStatus,                // 10
@@ -108,7 +109,7 @@ pub enum MessageRef {
 impl From<&MessageRef> for UpdateOneof {
     fn from(message: &MessageRef) -> Self {
         match message {
-            MessageRef::Account => todo!(),
+            MessageRef::Account(msg) => Self::Account(msg.into()),
             MessageRef::Slot(msg) => Self::Slot(msg.into()),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
@@ -124,7 +125,7 @@ impl From<&MessageRef> for UpdateOneof {
 impl prost::Message for MessageRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
-            MessageRef::Account => todo!(),
+            MessageRef::Account(msg) => message::encode(2u32, msg, buf),
             MessageRef::Slot(msg) => message::encode(3u32, msg, buf),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
@@ -141,7 +142,7 @@ impl prost::Message for MessageRef {
 
     fn encoded_len(&self) -> usize {
         match self {
-            MessageRef::Account => todo!(),
+            MessageRef::Account(msg) => message::encoded_len(2u32, msg),
             MessageRef::Slot(msg) => message::encoded_len(3u32, msg),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
@@ -169,8 +170,13 @@ impl prost::Message for MessageRef {
 }
 
 impl MessageRef {
-    pub fn account(message: MessageAccount, accounts_data_slice: FilterAccountsDataSlice) -> Self {
-        todo!()
+    pub fn account(message: MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
+        Self::Account(MessageAccountRef {
+            slot: message.slot,
+            account: message.account,
+            is_startup: message.is_startup,
+            data_slice,
+        })
     }
 
     pub const fn slot(message: MessageSlot) -> Self {
@@ -199,6 +205,91 @@ impl MessageRef {
 
     pub fn entry(message: Arc<MessageEntry>) -> Self {
         Self::Entry(message)
+    }
+}
+
+#[derive(Debug)]
+pub struct MessageAccountRef {
+    pub account: Arc<MessageAccountInfo>,
+    pub slot: u64,
+    pub is_startup: bool,
+    pub data_slice: FilterAccountsDataSlice,
+}
+
+impl From<&MessageAccountRef> for SubscribeUpdateAccount {
+    fn from(msg: &MessageAccountRef) -> Self {
+        let data = if msg.data_slice.is_empty() {
+            msg.account.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(msg.data_slice.iter().map(|s| s.end - s.start).sum());
+            for slice in msg.data_slice.iter() {
+                if msg.account.data.len() >= slice.end {
+                    data.extend_from_slice(&msg.account.data[slice.start..slice.end]);
+                }
+            }
+            data
+        };
+
+        SubscribeUpdateAccount {
+            account: Some(SubscribeUpdateAccountInfo {
+                pubkey: msg.account.pubkey.as_ref().into(),
+                lamports: msg.account.lamports,
+                owner: msg.account.owner.as_ref().into(),
+                executable: msg.account.executable,
+                rent_epoch: msg.account.rent_epoch,
+                data,
+                write_version: msg.account.write_version,
+                txn_signature: msg.account.txn_signature.map(|s| s.as_ref().into()),
+            }),
+            slot: msg.slot,
+            is_startup: msg.is_startup,
+        }
+    }
+}
+
+impl prost::Message for MessageAccountRef {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        // let status = CommitmentLevelProto::from(self.status) as i32;
+        // if self.slot != 0u64 {
+        //     ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        // }
+        // if let ::core::option::Option::Some(ref value) = self.parent {
+        //     ::prost::encoding::uint64::encode(2u32, value, buf);
+        // }
+        // if status != CommitmentLevelProto::default() as i32 {
+        //     ::prost::encoding::int32::encode(3u32, &status, buf);
+        // }
+        todo!()
+    }
+
+    fn encoded_len(&self) -> usize {
+        // let status = CommitmentLevelProto::from(self.status) as i32;
+        // (if self.slot != 0u64 {
+        //     ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
+        // } else {
+        //     0
+        // }) + self.parent.as_ref().map_or(0, |value| {
+        //     ::prost::encoding::uint64::encoded_len(2u32, value)
+        // }) + if status != CommitmentLevelProto::default() as i32 {
+        //     ::prost::encoding::int32::encoded_len(3u32, &status)
+        // } else {
+        //     0
+        // }
+        todo!()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
     }
 }
 
