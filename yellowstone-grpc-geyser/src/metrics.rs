@@ -24,7 +24,7 @@ use {
         sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
-    yellowstone_grpc_proto::plugin::geyser::CommitmentLevel,
+    yellowstone_grpc_proto::plugin::message::CommitmentLevel,
 };
 
 lazy_static::lazy_static! {

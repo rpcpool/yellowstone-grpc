@@ -37,11 +37,12 @@ use {
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         plugin::{
-            filter::{FilterNames, Message as FilteredMessage},
-            geyser::{
+            filter::FilterNames,
+            message::{
                 CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
                 MessageTransactionInfo,
             },
+            message_ref::Message as FilteredMessage,
             proto::geyser_server::{Geyser, GeyserServer},
         },
         prelude::{

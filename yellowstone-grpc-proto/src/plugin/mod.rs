@@ -1,5 +1,6 @@
 pub mod filter;
-pub mod geyser;
+pub mod message;
+pub mod message_ref;
 
 pub mod proto {
     #![allow(clippy::clone_on_ref_ptr)]

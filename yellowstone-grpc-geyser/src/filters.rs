@@ -16,14 +16,14 @@ use {
     },
     yellowstone_grpc_proto::{
         plugin::{
-            filter::{
-                FilterName, FilterNames, Message as FilteredMessage,
-                MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
-                MessageWeakBlock as FilteredMessageWeakBlock,
-            },
-            geyser::{
+            filter::{FilterName, FilterNames},
+            message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
                 MessageEntry, MessageSlot, MessageTransaction,
+            },
+            message_ref::{
+                Message as FilteredMessage, MessageFilters as FilteredMessageFilters,
+                MessageRef as FilteredMessageRef, MessageRefBlock as FilteredMessageRefBlock,
             },
         },
         prelude::{
@@ -216,14 +216,14 @@ impl Filter {
     pub fn get_pong_msg(&self) -> Option<FilteredMessage> {
         self.ping.map(|id| FilteredMessage {
             filters: FilteredMessageFilters::new(),
-            message: FilteredMessageWeak::pong(id),
+            message: FilteredMessageRef::pong(id),
         })
     }
 
     pub fn create_ping_message() -> FilteredMessage {
         FilteredMessage {
             filters: FilteredMessageFilters::new(),
-            message: FilteredMessageWeak::Ping,
+            message: FilteredMessageRef::Ping,
         }
     }
 }
@@ -318,7 +318,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_messages_once_owned!(
             filters,
-            FilteredMessageWeak::account(message, accounts_data_slice.to_vec())
+            FilteredMessageRef::account(message, accounts_data_slice.to_vec())
         )
     }
 }
@@ -594,7 +594,7 @@ impl FilterSlots {
                 }
             })
             .collect::<FilteredMessageFilters>();
-        filtered_messages_once_owned!(filters, FilteredMessageWeak::slot(*message))
+        filtered_messages_once_owned!(filters, FilteredMessageRef::slot(*message))
     }
 }
 
@@ -765,9 +765,9 @@ impl FilterTransactions {
         filtered_messages_once_owned!(
             filters,
             match self.filter_type {
-                FilterTransactionsType::Transaction => FilteredMessageWeak::transaction(message),
+                FilterTransactionsType::Transaction => FilteredMessageRef::transaction(message),
                 FilterTransactionsType::TransactionStatus => {
-                    FilteredMessageWeak::transaction_status(message)
+                    FilteredMessageRef::transaction_status(message)
                 }
             }
         )
@@ -797,7 +797,7 @@ impl FilterEntries {
 
     fn get_filters(&self, message: &Arc<MessageEntry>) -> FilteredMessages {
         let filters = self.filters.as_slice();
-        filtered_messages_once_ref!(filters, FilteredMessageWeak::entry(message))
+        filtered_messages_once_ref!(filters, FilteredMessageRef::entry(message))
     }
 }
 
@@ -924,7 +924,7 @@ impl FilterBlocks {
             message_filters.push(filter.clone());
             messages.push(FilteredMessage::new(
                 message_filters,
-                FilteredMessageWeak::block(FilteredMessageWeakBlock {
+                FilteredMessageRef::block(FilteredMessageRefBlock {
                     meta: Arc::clone(&message.meta),
                     transactions,
                     updated_account_count: message.updated_account_count,
@@ -961,7 +961,7 @@ impl FilterBlocksMeta {
 
     fn get_filters(&self, message: &Arc<MessageBlockMeta>) -> FilteredMessages {
         let filters = self.filters.as_slice();
-        filtered_messages_once_ref!(filters, FilteredMessageWeak::block_meta(message))
+        filtered_messages_once_ref!(filters, FilteredMessageRef::block_meta(message))
     }
 }
 
@@ -1016,10 +1016,10 @@ mod tests {
                 SubscribeRequestFilterTransactions,
             },
             plugin::{
-                filter::{
-                    MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
+                message::{Message, MessageTransaction, MessageTransactionInfo},
+                message_ref::{
+                    MessageFilters as FilteredMessageFilters, MessageRef as FilteredMessageRef,
                 },
-                geyser::{Message, MessageTransaction, MessageTransactionInfo},
             },
         },
     };
@@ -1240,12 +1240,12 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageWeak::Transaction
+            FilteredMessageRef::Transaction
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageWeak::TransactionStatus
+            FilteredMessageRef::TransactionStatus
         ));
     }
 
@@ -1296,12 +1296,12 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageWeak::Transaction
+            FilteredMessageRef::Transaction
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageWeak::TransactionStatus
+            FilteredMessageRef::TransactionStatus
         ));
     }
 
@@ -1404,12 +1404,12 @@ mod tests {
         );
         assert!(matches!(
             updates[0].message,
-            FilteredMessageWeak::Transaction
+            FilteredMessageRef::Transaction
         ));
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageWeak::TransactionStatus
+            FilteredMessageRef::TransactionStatus
         ));
     }
 

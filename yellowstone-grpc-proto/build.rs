@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
                 .input_type("crate::geyser::SubscribeRequest")
                 // .output_type("crate::geyser::SubscribeUpdate")
                 .codec_path("tonic::codec::ProstCodec")
-                .output_type("crate::plugin::filter::Message")
+                .output_type("crate::plugin::message_ref::Message")
                 // .codec_path("crate::plugin::codec::SubscribeCodec")
                 .client_streaming()
                 .server_streaming()
@@ -82,15 +82,15 @@ fn main() -> anyhow::Result<()> {
         .build_client(false)
         .compile(&[geyser_service]);
 
-    // patching generated custom struct
-    let mut location = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
-    location.push("geyser.Geyser.rs");
-    let geyser_rs = std::fs::read_to_string(location.clone())?;
-    let geyser_rs = geyser_rs.replace(
-        "let codec = crate::geyser_weak::codec::SubscribeCodec::default();",
-        "let codec = crate::geyser_weak::codec::SubscribeCodec::<crate::geyser_weak::filter::Message, _>::default();",
-    );
-    std::fs::write(location, geyser_rs)?;
+    // patching generated custom struct (if custom Codec is used)
+    // let mut location = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+    // location.push("geyser.Geyser.rs");
+    // let geyser_rs = std::fs::read_to_string(location.clone())?;
+    // let geyser_rs = geyser_rs.replace(
+    //     "let codec = crate::plugin::codec::SubscribeCodec::default();",
+    //     "let codec = crate::plugin::codec::SubscribeCodec::<crate::plugin::message_ref::Message, _>::default();",
+    // );
+    // std::fs::write(location, geyser_rs)?;
 
     Ok(())
 }
