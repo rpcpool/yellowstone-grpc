@@ -3,9 +3,12 @@ use {
         MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
         MessageTransaction, MessageTransactionInfo,
     },
-    crate::geyser::{
-        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateEntry, SubscribeUpdatePing,
-        SubscribeUpdatePong,
+    crate::{
+        convert_to,
+        geyser::{
+            subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateBlockMeta,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong,
+        },
     },
     bytes::buf::{Buf, BufMut},
     prost::{
@@ -178,15 +181,15 @@ pub type MessageFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug)]
 pub enum MessageWeak {
-    Account,                 // 2
-    Slot,                    // 3
-    Transaction,             // 4
-    TransactionStatus,       // 10
-    Block,                   // 5
-    Ping,                    // 6
-    Pong(MessageWeakPong),   // 9
-    BlockMeta,               // 7
-    Entry(MessageWeakEntry), // 8
+    Account,                         // 2
+    Slot,                            // 3
+    Transaction,                     // 4
+    TransactionStatus,               // 10
+    Block,                           // 5
+    Ping,                            // 6
+    Pong(MessageWeakPong),           // 9
+    BlockMeta(MessageWeakBlockMeta), // 7
+    Entry(MessageWeakEntry),         // 8
 }
 
 impl From<&MessageWeak> for UpdateOneof {
@@ -199,7 +202,7 @@ impl From<&MessageWeak> for UpdateOneof {
             MessageWeak::Block => todo!(),
             MessageWeak::Ping => Self::Ping(SubscribeUpdatePing {}),
             MessageWeak::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
-            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::BlockMeta(msg) => Self::BlockMeta(msg.into()),
             MessageWeak::Entry(msg) => Self::Entry(msg.into()),
         }
     }
@@ -218,7 +221,7 @@ impl prost::Message for MessageWeak {
                 encode_varint(0, buf);
             }
             MessageWeak::Pong(msg) => message::encode(9u32, msg, buf),
-            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::BlockMeta(msg) => message::encode(7u32, msg, buf),
             MessageWeak::Entry(msg) => message::encode(8u32, msg, buf),
         }
     }
@@ -232,7 +235,7 @@ impl prost::Message for MessageWeak {
             MessageWeak::Block => todo!(),
             MessageWeak::Ping => 0,
             MessageWeak::Pong(msg) => message::encoded_len(9u32, msg),
-            MessageWeak::BlockMeta => todo!(),
+            MessageWeak::BlockMeta(msg) => message::encoded_len(7u32, msg),
             MessageWeak::Entry(msg) => message::encoded_len(8u32, msg),
         }
     }
@@ -278,7 +281,7 @@ impl MessageWeak {
     }
 
     pub fn block_meta(message: &Arc<MessageBlockMeta>) -> Self {
-        todo!()
+        Self::BlockMeta(MessageWeakBlockMeta(Arc::clone(message)))
     }
 
     pub fn entry(message: &Arc<MessageEntry>) -> Self {
@@ -300,6 +303,125 @@ pub struct MessageWeakBlock {
 pub struct MessageWeakPong {
     #[prost(int32, tag = "1")]
     pub id: i32,
+}
+
+#[derive(Debug)]
+pub struct MessageWeakBlockMeta(pub Arc<MessageBlockMeta>);
+
+impl From<&MessageWeakBlockMeta> for SubscribeUpdateBlockMeta {
+    fn from(MessageWeakBlockMeta(msg): &MessageWeakBlockMeta) -> Self {
+        Self {
+            slot: msg.slot,
+            blockhash: msg.blockhash.clone(),
+            rewards: Some(convert_to::create_rewards_obj(
+                msg.rewards.as_slice(),
+                msg.num_partitions,
+            )),
+            block_time: msg.block_time.map(convert_to::create_timestamp),
+            block_height: msg.block_height.map(convert_to::create_block_height),
+            parent_slot: msg.parent_slot,
+            parent_blockhash: msg.parent_blockhash.clone(),
+            executed_transaction_count: msg.executed_transaction_count,
+            entries_count: msg.entries_count,
+        }
+    }
+}
+
+impl prost::Message for MessageWeakBlockMeta {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        // let msg = &self.0;
+        // if self.slot != 0u64 {
+        //     ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        // }
+        // if self.blockhash != "" {
+        //     ::prost::encoding::string::encode(2u32, &self.blockhash, buf);
+        // }
+        // if let Some(ref msg) = self.rewards {
+        //     ::prost::encoding::message::encode(3u32, msg, buf);
+        // }
+        // if let Some(ref msg) = self.block_time {
+        //     ::prost::encoding::message::encode(4u32, msg, buf);
+        // }
+        // if let Some(ref msg) = self.block_height {
+        //     ::prost::encoding::message::encode(5u32, msg, buf);
+        // }
+        // if self.parent_slot != 0u64 {
+        //     ::prost::encoding::uint64::encode(6u32, &self.parent_slot, buf);
+        // }
+        // if self.parent_blockhash != "" {
+        //     ::prost::encoding::string::encode(7u32, &self.parent_blockhash, buf);
+        // }
+        // if self.executed_transaction_count != 0u64 {
+        //     ::prost::encoding::uint64::encode(
+        //         8u32,
+        //         &self.executed_transaction_count,
+        //         buf,
+        //     );
+        // }
+        // if self.entries_count != 0u64 {
+        //     ::prost::encoding::uint64::encode(9u32, &self.entries_count, buf);
+        // }
+        todo!()
+    }
+
+    fn encoded_len(&self) -> usize {
+        // let msg = &self.0;
+        // (if msg.slot != 0u64 {
+        //     ::prost::encoding::uint64::encoded_len(1u32, &msg.slot)
+        // } else {
+        //     0
+        // }) + if msg.blockhash != "" {
+        //     ::prost::encoding::string::encoded_len(2u32, &msg.blockhash)
+        // } else {
+        //     0
+        // } + self
+        //     .rewards
+        //     .as_ref()
+        //     .map_or(0, |msg| ::prost::encoding::message::encoded_len(3u32, msg))
+        //     + self
+        //         .block_time
+        //         .as_ref()
+        //         .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, msg))
+        //     + self
+        //         .block_height
+        //         .as_ref()
+        //         .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, msg))
+        //     + if msg.parent_slot != 0u64 {
+        //         ::prost::encoding::uint64::encoded_len(6u32, &msg.parent_slot)
+        //     } else {
+        //         0
+        //     }
+        //     + if msg.parent_blockhash != "" {
+        //         ::prost::encoding::string::encoded_len(7u32, &msg.parent_blockhash)
+        //     } else {
+        //         0
+        //     }
+        //     + if msg.executed_transaction_count != 0u64 {
+        //         ::prost::encoding::uint64::encoded_len(8u32, &msg.executed_transaction_count)
+        //     } else {
+        //         0
+        //     }
+        //     + if msg.entries_count != 0u64 {
+        //         ::prost::encoding::uint64::encoded_len(9u32, &msg.entries_count)
+        //     } else {
+        //         0
+        //     }
+        todo!()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug)]
