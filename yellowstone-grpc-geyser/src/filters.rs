@@ -797,7 +797,7 @@ impl FilterEntries {
 
     fn get_filters(&self, message: &Arc<MessageEntry>) -> FilteredMessages {
         let filters = self.filters.as_slice();
-        filtered_messages_once_ref!(filters, FilteredMessageRef::entry(message))
+        filtered_messages_once_ref!(filters, FilteredMessageRef::entry(Arc::clone(message)))
     }
 }
 
@@ -961,7 +961,7 @@ impl FilterBlocksMeta {
 
     fn get_filters(&self, message: &Arc<MessageBlockMeta>) -> FilteredMessages {
         let filters = self.filters.as_slice();
-        filtered_messages_once_ref!(filters, FilteredMessageRef::block_meta(message))
+        filtered_messages_once_ref!(filters, FilteredMessageRef::block_meta(Arc::clone(message)))
     }
 }
 
