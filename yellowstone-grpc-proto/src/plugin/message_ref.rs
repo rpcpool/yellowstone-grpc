@@ -448,6 +448,30 @@ mod tests {
         filters
     }
 
+    fn create_entries() -> Vec<Arc<MessageEntry>> {
+        [
+            MessageEntry {
+                slot: 299888121,
+                index: 42,
+                num_hashes: 128,
+                hash: [98; 32],
+                executed_transaction_count: 32,
+                starting_transaction_index: 1000,
+            },
+            MessageEntry {
+                slot: 299888121,
+                index: 0,
+                num_hashes: 16,
+                hash: [42; 32],
+                executed_transaction_count: 32,
+                starting_transaction_index: 1000,
+            },
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect()
+    }
+
     fn encode_decode_cmp(filters: &[&str], message: MessageRef) {
         let msg = Message {
             filters: create_message_filters(filters),
@@ -473,17 +497,22 @@ mod tests {
 
     #[test]
     fn test_message_entry() {
-        encode_decode_cmp(
-            &["123"],
-            MessageRef::entry(&Arc::new(MessageEntry {
-                slot: 299888121,
-                index: 42,
-                num_hashes: 128,
-                hash: [98; 32],
-                executed_transaction_count: 32,
-                starting_transaction_index: 1000,
-            })),
-        );
+        for entry in create_entries() {
+            encode_decode_cmp(&["123"], MessageRef::entry(&entry));
+        }
+    }
+
+    #[test]
+    fn test_predefined() {
+        use {prost_011::Message as _, solana_storage_proto::convert::generated, std::fs};
+
+        let location = "./src/plugin/blocks";
+        for entry in fs::read_dir(location).expect("failed to read `blocks` dir") {
+            let path = entry.expect("failed to read `blocks` dir entry").path();
+            let data = fs::read(path).expect("failed to read block");
+            let block =
+                generated::ConfirmedBlock::decode(data.as_slice()).expect("failed to decode block");
+        }
     }
 }
 

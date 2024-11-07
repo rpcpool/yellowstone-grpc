@@ -22,6 +22,10 @@ solana-transaction-status = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
 
+[dev-dependencies]
+prost_011 = { workspace = true }
+solana-storage-proto = { workspace = true }
+
 [build-dependencies]
 anyhow = { workspace = true }
 protobuf-src = { workspace = true }

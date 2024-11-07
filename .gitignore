@@ -3,6 +3,7 @@ test-ledger
 
 # Rust
 target
+yellowstone-grpc-proto/src/bin/raw.rs
 
 # Node.js
 examples/typescript/dist
