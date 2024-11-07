@@ -39,7 +39,7 @@ pub mod convert_to {
             },
             pubkey::Pubkey,
             signature::Signature,
-            transaction::SanitizedTransaction,
+            transaction::{SanitizedTransaction, TransactionError},
             transaction_context::TransactionReturnData,
         },
         solana_transaction_status::{
@@ -140,12 +140,7 @@ pub mod convert_to {
             return_data,
             compute_units_consumed,
         } = meta;
-        let err = match status {
-            Ok(()) => None,
-            Err(err) => Some(proto::TransactionError {
-                err: bincode::serialize(&err).expect("transaction error to serialize to bytes"),
-            }),
-        };
+        let err = create_transaction_error(status);
         let inner_instructions_none = inner_instructions.is_none();
         let inner_instructions = inner_instructions
             .as_deref()
@@ -182,6 +177,17 @@ pub mod convert_to {
             return_data: return_data.as_ref().map(create_return_data),
             return_data_none: return_data.is_none(),
             compute_units_consumed: *compute_units_consumed,
+        }
+    }
+
+    pub fn create_transaction_error(
+        status: &Result<(), TransactionError>,
+    ) -> Option<proto::TransactionError> {
+        match status {
+            Ok(()) => None,
+            Err(err) => Some(proto::TransactionError {
+                err: bincode::serialize(&err).expect("transaction error to serialize to bytes"),
+            }),
         }
     }
 

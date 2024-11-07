@@ -12,7 +12,7 @@ use {
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransactionStatus,
         },
         solana::storage::confirmed_block::RewardType as RewardTypeProto,
     },
@@ -64,7 +64,8 @@ impl prost::Message for Message {
                 .filters
                 .iter()
                 .map(|filter| {
-                    encoded_len_varint(filter.as_ref().len() as u64) + filter.as_ref().len()
+                    let len = filter.as_ref().len();
+                    encoded_len_varint(len as u64) + len
                 })
                 .sum::<usize>()
             + self.message.encoded_len()
@@ -95,15 +96,15 @@ pub type MessageFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug)]
 pub enum MessageRef {
-    Account(MessageAccountRef),       // 2
-    Slot(MessageSlot),                // 3
-    Transaction,                      // 4
-    TransactionStatus,                // 10
-    Block,                            // 5
-    Ping,                             // 6
-    Pong(MessageRefPong),             // 9
-    BlockMeta(Arc<MessageBlockMeta>), // 7
-    Entry(Arc<MessageEntry>),         // 8
+    Account(MessageAccountRef),                     // 2
+    Slot(MessageSlot),                              // 3
+    Transaction,                                    // 4
+    TransactionStatus(MessageTransactionStatusRef), // 10
+    Block,                                          // 5
+    Ping,                                           // 6
+    Pong(MessageRefPong),                           // 9
+    BlockMeta(Arc<MessageBlockMeta>),               // 7
+    Entry(Arc<MessageEntry>),                       // 8
 }
 
 impl From<&MessageRef> for UpdateOneof {
@@ -112,7 +113,7 @@ impl From<&MessageRef> for UpdateOneof {
             MessageRef::Account(msg) => Self::Account(msg.into()),
             MessageRef::Slot(msg) => Self::Slot(msg.into()),
             MessageRef::Transaction => todo!(),
-            MessageRef::TransactionStatus => todo!(),
+            MessageRef::TransactionStatus(msg) => Self::TransactionStatus(msg.into()),
             MessageRef::Block => todo!(),
             MessageRef::Ping => Self::Ping(SubscribeUpdatePing {}),
             MessageRef::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
@@ -128,7 +129,7 @@ impl prost::Message for MessageRef {
             MessageRef::Account(msg) => message::encode(2u32, msg, buf),
             MessageRef::Slot(msg) => message::encode(3u32, msg, buf),
             MessageRef::Transaction => todo!(),
-            MessageRef::TransactionStatus => todo!(),
+            MessageRef::TransactionStatus(msg) => message::encode(10u32, msg, buf),
             MessageRef::Block => todo!(),
             MessageRef::Ping => {
                 encode_key(6u32, WireType::LengthDelimited, buf);
@@ -145,9 +146,9 @@ impl prost::Message for MessageRef {
             MessageRef::Account(msg) => message::encoded_len(2u32, msg),
             MessageRef::Slot(msg) => message::encoded_len(3u32, msg),
             MessageRef::Transaction => todo!(),
-            MessageRef::TransactionStatus => todo!(),
+            MessageRef::TransactionStatus(msg) => message::encoded_len(10u32, msg),
             MessageRef::Block => todo!(),
-            MessageRef::Ping => 0,
+            MessageRef::Ping => key_len(6u32) + encoded_len_varint(0),
             MessageRef::Pong(msg) => message::encoded_len(9u32, msg),
             MessageRef::BlockMeta(msg) => message::encoded_len(7u32, msg.as_ref()),
             MessageRef::Entry(msg) => message::encoded_len(8u32, msg.as_ref()),
@@ -187,8 +188,11 @@ impl MessageRef {
         todo!()
     }
 
-    pub fn transaction_status(message: &MessageTransaction) -> Self {
-        todo!()
+    pub fn transaction_status(message: MessageTransaction) -> Self {
+        Self::TransactionStatus(MessageTransactionStatusRef {
+            transaction: message.transaction,
+            slot: message.slot,
+        })
     }
 
     pub fn block(message: MessageRefBlock) -> Self {
@@ -420,6 +424,83 @@ impl prost::Message for MessageSlot {
         } else {
             0
         }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct MessageTransactionStatusRef {
+    pub transaction: Arc<MessageTransactionInfo>,
+    pub slot: u64,
+}
+
+impl From<&MessageTransactionStatusRef> for SubscribeUpdateTransactionStatus {
+    fn from(msg: &MessageTransactionStatusRef) -> Self {
+        SubscribeUpdateTransactionStatus {
+            slot: msg.slot,
+            signature: msg.transaction.signature.as_ref().to_vec(),
+            is_vote: msg.transaction.is_vote,
+            index: msg.transaction.index as u64,
+            err: convert_to::create_transaction_error(&msg.transaction.meta.status),
+        }
+    }
+}
+
+impl prost::Message for MessageTransactionStatusRef {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        let tx = &self.transaction;
+        let index = tx.index as u64;
+        let err = convert_to::create_transaction_error(&tx.meta.status);
+
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        }
+        prost_bytes_encode_raw(2u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(3u32, &tx.is_vote, buf);
+        }
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(4u32, &index, buf);
+        }
+        if let Some(msg) = err {
+            ::prost::encoding::message::encode(5u32, &msg, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        let tx = &self.transaction;
+        let index = tx.index as u64;
+        let err = convert_to::create_transaction_error(&tx.meta.status);
+
+        (if self.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
+        } else {
+            0
+        }) + prost_bytes_encoded_len(2u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(3u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + if index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(4u32, &index)
+            } else {
+                0
+            }
+            + err.map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
     }
 
     fn merge_field(
@@ -761,18 +842,19 @@ pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use {
-        super::{
-            FilterAccountsDataSlice, FilterName, Message, MessageAccount, MessageAccountInfo,
-            MessageBlockMeta, MessageEntry, MessageFilters, MessageRef, MessageSlot,
-            SubscribeUpdate,
-        },
+        super::*,
         crate::plugin::message::CommitmentLevel,
         prost::Message as _,
         prost_011::Message as _,
-        solana_sdk::{pubkey::Pubkey, signature::Signature},
+        solana_sdk::{
+            message::SimpleAddressLoader,
+            pubkey::Pubkey,
+            signature::Signature,
+            transaction::{MessageHash, SanitizedTransaction},
+        },
         solana_storage_proto::convert::generated,
-        solana_transaction_status::ConfirmedBlock,
-        std::{fs, ops::Range, str::FromStr, sync::Arc},
+        solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
+        std::{collections::HashSet, fs, str::FromStr},
     };
 
     fn create_message_filters(names: &[&str]) -> MessageFilters {
@@ -878,9 +960,12 @@ mod tests {
             filters: create_message_filters(filters),
             message,
         };
-        let bytes = msg.encode_to_vec();
-        let update = SubscribeUpdate::decode(bytes.as_slice()).expect("failed to decode");
-        assert_eq!(update, SubscribeUpdate::from(&msg));
+        let update = SubscribeUpdate::from(&msg);
+        assert_eq!(msg.encoded_len(), update.encoded_len());
+        assert_eq!(
+            SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
+            update
+        );
     }
 
     #[test]
@@ -962,6 +1047,41 @@ mod tests {
 
             block_meta.num_partitions = Some(42);
             encode_decode_cmp(&["123"], MessageRef::block_meta(Arc::new(block_meta)));
+
+            let transactions_info = block
+                .transactions
+                .iter()
+                .enumerate()
+                .map(|(index, tx)| {
+                    let TransactionWithStatusMeta::Complete(tx) = tx else {
+                        panic!("tx with missed meta");
+                    };
+                    let transaction = SanitizedTransaction::try_create(
+                        tx.transaction.clone(),
+                        MessageHash::Compute,
+                        None,
+                        SimpleAddressLoader::Disabled,
+                        &HashSet::new(),
+                    )
+                    .expect("failed to create tx");
+                    MessageTransactionInfo {
+                        signature: tx.transaction.signatures[0],
+                        is_vote: true,
+                        transaction,
+                        meta: tx.meta.clone(),
+                        index,
+                    }
+                })
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+
+            for tx in transactions_info.iter() {
+                let msg = MessageTransaction {
+                    transaction: Arc::clone(tx),
+                    slot: 42,
+                };
+                encode_decode_cmp(&["123"], MessageRef::transaction_status(msg));
+            }
         }
     }
 }

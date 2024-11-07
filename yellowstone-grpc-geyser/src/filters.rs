@@ -770,7 +770,7 @@ impl FilterTransactions {
             match self.filter_type {
                 FilterTransactionsType::Transaction => FilteredMessageRef::transaction(message),
                 FilterTransactionsType::TransactionStatus => {
-                    FilteredMessageRef::transaction_status(message)
+                    FilteredMessageRef::transaction_status(message.clone())
                 }
             }
         )
@@ -1250,7 +1250,7 @@ mod tests {
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageRef::TransactionStatus
+            FilteredMessageRef::TransactionStatus(_)
         ));
     }
 
@@ -1306,7 +1306,7 @@ mod tests {
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageRef::TransactionStatus
+            FilteredMessageRef::TransactionStatus(_)
         ));
     }
 
@@ -1414,7 +1414,7 @@ mod tests {
         assert_eq!(updates[1].filters, FilteredMessageFilters::new());
         assert!(matches!(
             updates[1].message,
-            FilteredMessageRef::TransactionStatus
+            FilteredMessageRef::TransactionStatus(_)
         ));
     }
 
