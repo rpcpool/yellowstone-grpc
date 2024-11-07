@@ -15,7 +15,7 @@ use {
         sync::Arc,
     },
     yellowstone_grpc_proto::{
-        geyser_weak::{
+        plugin::{
             filter::{
                 FilterName, FilterNames, Message as FilteredMessage,
                 MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
@@ -1015,7 +1015,7 @@ mod tests {
                 SubscribeRequest, SubscribeRequestFilterAccounts,
                 SubscribeRequestFilterTransactions,
             },
-            geyser_weak::{
+            plugin::{
                 filter::{
                     MessageFilters as FilteredMessageFilters, MessageWeak as FilteredMessageWeak,
                 },

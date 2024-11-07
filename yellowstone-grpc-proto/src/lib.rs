@@ -7,18 +7,6 @@ pub mod geyser {
     tonic::include_proto!("geyser");
 }
 
-#[cfg(feature = "geyser_weak")]
-mod weak;
-#[cfg(feature = "geyser_weak")]
-pub mod geyser_weak {
-    #![allow(clippy::clone_on_ref_ptr)]
-    #![allow(clippy::missing_const_for_fn)]
-
-    tonic::include_proto!("geyser.Geyser");
-
-    pub use super::weak::*;
-}
-
 pub mod solana {
     #![allow(clippy::missing_const_for_fn)]
 
@@ -34,6 +22,9 @@ pub mod prelude {
 }
 
 pub use {prost, tonic};
+
+#[cfg(feature = "plugin")]
+pub mod plugin;
 
 #[cfg(feature = "convert")]
 pub mod convert_to {

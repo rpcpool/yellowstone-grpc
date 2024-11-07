@@ -17,8 +17,8 @@ fn main() -> anyhow::Result<()> {
                 .input_type("crate::geyser::SubscribeRequest")
                 // .output_type("crate::geyser::SubscribeUpdate")
                 .codec_path("tonic::codec::ProstCodec")
-                .output_type("crate::geyser_weak::filter::Message")
-                // .codec_path("crate::geyser_weak::codec::SubscribeCodec")
+                .output_type("crate::plugin::filter::Message")
+                // .codec_path("crate::plugin::codec::SubscribeCodec")
                 .client_streaming()
                 .server_streaming()
                 .build(),
