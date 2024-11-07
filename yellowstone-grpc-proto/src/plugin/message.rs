@@ -29,14 +29,13 @@ impl From<SlotStatus> for CommitmentLevel {
     }
 }
 
-impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
-    fn eq(&self, other: &CommitmentLevelProto) -> bool {
-        matches!(
-            (self, other),
-            (Self::Processed, CommitmentLevelProto::Processed)
-                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
-                | (Self::Finalized, CommitmentLevelProto::Finalized)
-        )
+impl From<CommitmentLevel> for CommitmentLevelProto {
+    fn from(commitment: CommitmentLevel) -> Self {
+        match commitment {
+            CommitmentLevel::Processed => Self::Processed,
+            CommitmentLevel::Confirmed => Self::Confirmed,
+            CommitmentLevel::Finalized => Self::Finalized,
+        }
     }
 }
 
@@ -47,6 +46,17 @@ impl From<CommitmentLevelProto> for CommitmentLevel {
             CommitmentLevelProto::Confirmed => Self::Confirmed,
             CommitmentLevelProto::Finalized => Self::Finalized,
         }
+    }
+}
+
+impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
+    fn eq(&self, other: &CommitmentLevelProto) -> bool {
+        matches!(
+            (self, other),
+            (Self::Processed, CommitmentLevelProto::Processed)
+                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
+                | (Self::Finalized, CommitmentLevelProto::Finalized)
+        )
     }
 }
 

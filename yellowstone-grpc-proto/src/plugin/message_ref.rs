@@ -9,8 +9,9 @@ use {
     crate::{
         convert_to,
         geyser::{
-            subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong,
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeUpdate, SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
+            SubscribeUpdatePong, SubscribeUpdateSlot,
         },
     },
     bytes::buf::{Buf, BufMut},
@@ -92,7 +93,7 @@ pub type MessageFilters = SmallVec<[FilterName; 4]>;
 #[derive(Debug)]
 pub enum MessageRef {
     Account,                        // 2
-    Slot,                           // 3
+    Slot(MessageRefSlot),           // 3
     Transaction,                    // 4
     TransactionStatus,              // 10
     Block,                          // 5
@@ -106,7 +107,7 @@ impl From<&MessageRef> for UpdateOneof {
     fn from(message: &MessageRef) -> Self {
         match message {
             MessageRef::Account => todo!(),
-            MessageRef::Slot => todo!(),
+            MessageRef::Slot(msg) => Self::Slot(msg.into()),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
             MessageRef::Block => todo!(),
@@ -122,7 +123,7 @@ impl prost::Message for MessageRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
             MessageRef::Account => todo!(),
-            MessageRef::Slot => todo!(),
+            MessageRef::Slot(msg) => message::encode(3u32, msg, buf),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
             MessageRef::Block => todo!(),
@@ -139,7 +140,7 @@ impl prost::Message for MessageRef {
     fn encoded_len(&self) -> usize {
         match self {
             MessageRef::Account => todo!(),
-            MessageRef::Slot => todo!(),
+            MessageRef::Slot(msg) => message::encoded_len(3u32, msg),
             MessageRef::Transaction => todo!(),
             MessageRef::TransactionStatus => todo!(),
             MessageRef::Block => todo!(),
@@ -170,8 +171,8 @@ impl MessageRef {
         todo!()
     }
 
-    pub fn slot(message: MessageSlot) -> Self {
-        todo!()
+    pub const fn slot(message: MessageSlot) -> Self {
+        Self::Slot(MessageRefSlot(message))
     }
 
     pub fn transaction(message: &MessageTransaction) -> Self {
@@ -196,6 +197,65 @@ impl MessageRef {
 
     pub fn entry(message: &Arc<MessageEntry>) -> Self {
         Self::Entry(MessageRefEntry(Arc::clone(message)))
+    }
+}
+
+#[derive(Debug)]
+pub struct MessageRefSlot(pub MessageSlot);
+
+impl From<&MessageRefSlot> for SubscribeUpdateSlot {
+    fn from(MessageRefSlot(msg): &MessageRefSlot) -> Self {
+        Self {
+            slot: msg.slot,
+            parent: msg.parent,
+            status: CommitmentLevelProto::from(msg.status) as i32,
+        }
+    }
+}
+
+impl prost::Message for MessageRefSlot {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        let msg = self.0;
+        let status = CommitmentLevelProto::from(msg.status) as i32;
+        if msg.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &msg.slot, buf);
+        }
+        if let ::core::option::Option::Some(ref value) = msg.parent {
+            ::prost::encoding::uint64::encode(2u32, value, buf);
+        }
+        if status != CommitmentLevelProto::default() as i32 {
+            ::prost::encoding::int32::encode(3u32, &status, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        let msg = self.0;
+        let status = CommitmentLevelProto::from(msg.status) as i32;
+        (if msg.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &msg.slot)
+        } else {
+            0
+        }) + msg.parent.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(2u32, value)
+        }) + if status != CommitmentLevelProto::default() as i32 {
+            ::prost::encoding::int32::encoded_len(3u32, &status)
+        } else {
+            0
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
     }
 }
 
@@ -434,8 +494,8 @@ pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use {
-        super::{FilterName, Message, MessageEntry, MessageFilters, MessageRef},
-        crate::geyser::SubscribeUpdate,
+        super::{FilterName, Message, MessageEntry, MessageFilters, MessageRef, MessageSlot},
+        crate::{geyser::SubscribeUpdate, plugin::message::CommitmentLevel},
         prost::Message as _,
         std::sync::Arc,
     };
@@ -482,6 +542,28 @@ mod tests {
         let update = SubscribeUpdate::decode(bytes.as_slice()).expect("failed to decode");
         // println!("{update:?}");
         assert_eq!(update, SubscribeUpdate::from(&msg));
+    }
+
+    #[test]
+    fn test_message_slot() {
+        for slot in [0, 42] {
+            for parent in [None, Some(0), Some(42)] {
+                for status in [
+                    CommitmentLevel::Processed,
+                    CommitmentLevel::Confirmed,
+                    CommitmentLevel::Finalized,
+                ] {
+                    encode_decode_cmp(
+                        &["123"],
+                        MessageRef::slot(MessageSlot {
+                            slot,
+                            parent,
+                            status,
+                        }),
+                    )
+                }
+            }
+        }
     }
 
     #[test]
