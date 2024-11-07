@@ -26,7 +26,7 @@ use {
     },
     smallvec::SmallVec,
     solana_transaction_status::Reward,
-    std::{ops::Range, sync::Arc},
+    std::{borrow::Cow, ops::Range, sync::Arc},
 };
 
 #[derive(Debug)]
@@ -218,18 +218,6 @@ pub struct MessageAccountRef {
 
 impl From<&MessageAccountRef> for SubscribeUpdateAccount {
     fn from(msg: &MessageAccountRef) -> Self {
-        let data = if msg.data_slice.is_empty() {
-            msg.account.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(msg.data_slice.iter().map(|s| s.end - s.start).sum());
-            for slice in msg.data_slice.iter() {
-                if msg.account.data.len() >= slice.end {
-                    data.extend_from_slice(&msg.account.data[slice.start..slice.end]);
-                }
-            }
-            data
-        };
-
         SubscribeUpdateAccount {
             account: Some(SubscribeUpdateAccountInfo {
                 pubkey: msg.account.pubkey.as_ref().into(),
@@ -237,7 +225,8 @@ impl From<&MessageAccountRef> for SubscribeUpdateAccount {
                 owner: msg.account.owner.as_ref().into(),
                 executable: msg.account.executable,
                 rent_epoch: msg.account.rent_epoch,
-                data,
+                data: MessageAccountRef::accout_data_slice(&msg.account, &msg.data_slice)
+                    .into_owned(),
                 write_version: msg.account.write_version,
                 txn_signature: msg.account.txn_signature.map(|s| s.as_ref().into()),
             }),
@@ -249,33 +238,30 @@ impl From<&MessageAccountRef> for SubscribeUpdateAccount {
 
 impl prost::Message for MessageAccountRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        // let status = CommitmentLevelProto::from(self.status) as i32;
-        // if self.slot != 0u64 {
-        //     ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
-        // }
-        // if let ::core::option::Option::Some(ref value) = self.parent {
-        //     ::prost::encoding::uint64::encode(2u32, value, buf);
-        // }
-        // if status != CommitmentLevelProto::default() as i32 {
-        //     ::prost::encoding::int32::encode(3u32, &status, buf);
-        // }
-        todo!()
+        Self::account_encode(&self.account, &self.data_slice, 1u32, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
+        if self.is_startup {
+            ::prost::encoding::bool::encode(3u32, &self.is_startup, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
-        // let status = CommitmentLevelProto::from(self.status) as i32;
-        // (if self.slot != 0u64 {
-        //     ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
-        // } else {
-        //     0
-        // }) + self.parent.as_ref().map_or(0, |value| {
-        //     ::prost::encoding::uint64::encoded_len(2u32, value)
-        // }) + if status != CommitmentLevelProto::default() as i32 {
-        //     ::prost::encoding::int32::encoded_len(3u32, &status)
-        // } else {
-        //     0
-        // }
-        todo!()
+        let len = Self::account_encoded_len(self.account.as_ref(), &self.data_slice);
+        key_len(1u32)
+            + encoded_len_varint(len as u64)
+            + len
+            + if self.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+            + if self.is_startup {
+                ::prost::encoding::bool::encoded_len(3u32, &self.is_startup)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
@@ -290,6 +276,110 @@ impl prost::Message for MessageAccountRef {
 
     fn clear(&mut self) {
         unimplemented!()
+    }
+}
+
+impl MessageAccountRef {
+    fn accout_data_slice<'a>(
+        account: &'a MessageAccountInfo,
+        data_slice: &'a FilterAccountsDataSlice,
+    ) -> Cow<'a, Vec<u8>> {
+        if data_slice.is_empty() {
+            Cow::Borrowed(&account.data)
+        } else {
+            let mut data = Vec::with_capacity(data_slice.iter().map(|s| s.end - s.start).sum());
+            for slice in data_slice.iter() {
+                if account.data.len() >= slice.end {
+                    data.extend_from_slice(&account.data[slice.start..slice.end]);
+                }
+            }
+            Cow::Owned(data)
+        }
+    }
+
+    fn account_data_slice_len(
+        account: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+    ) -> usize {
+        if data_slice.is_empty() {
+            account.data.len()
+        } else {
+            let mut len = 0;
+            for slice in data_slice.iter() {
+                if account.data.len() >= slice.end {
+                    len += account.data[slice.start..slice.end].len();
+                }
+            }
+            len
+        }
+    }
+
+    fn account_encode(
+        account: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+        tag: u32,
+        buf: &mut impl BufMut,
+    ) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
+        prost_bytes_encode_raw(1u32, account.pubkey.as_ref(), buf);
+        if account.lamports != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &account.lamports, buf);
+        }
+        prost_bytes_encode_raw(3u32, account.owner.as_ref(), buf);
+        if account.executable {
+            ::prost::encoding::bool::encode(4u32, &account.executable, buf);
+        }
+        if account.rent_epoch != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &account.rent_epoch, buf);
+        }
+        let data = Self::accout_data_slice(account, data_slice);
+        if !data.is_empty() {
+            prost_bytes_encode_raw(6u32, data.as_ref(), buf);
+        }
+        if account.write_version != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &account.write_version, buf);
+        }
+        if let Some(value) = &account.txn_signature {
+            prost_bytes_encode_raw(8u32, value.as_ref(), buf);
+        }
+    }
+
+    fn account_encoded_len(
+        account: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+    ) -> usize {
+        let data_len = Self::account_data_slice_len(account, data_slice);
+        prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
+            + if account.lamports != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
+            } else {
+                0
+            }
+            + prost_bytes_encoded_len(3u32, account.owner.as_ref())
+            + if account.executable {
+                ::prost::encoding::bool::encoded_len(4u32, &account.executable)
+            } else {
+                0
+            }
+            + if account.rent_epoch != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &account.rent_epoch)
+            } else {
+                0
+            }
+            + if data_len > 0 {
+                key_len(6u32) + encoded_len_varint(data_len as u64) + data_len
+            } else {
+                0
+            }
+            + if account.write_version != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &account.write_version)
+            } else {
+                0
+            }
+            + account
+                .txn_signature
+                .map_or(0, |s| prost_bytes_encoded_len(8u32, s.as_ref()))
     }
 }
 
@@ -390,7 +480,7 @@ impl prost::Message for MessageBlockMeta {
         if !self.blockhash.is_empty() {
             ::prost::encoding::string::encode(2u32, &self.blockhash, buf);
         }
-        self.rewards_encode(buf);
+        self.rewards_encode(3u32, buf);
         if let Some(block_time) = self.block_time {
             let msg = convert_to::create_timestamp(block_time);
             ::prost::encoding::message::encode(4u32, &msg, buf);
@@ -471,8 +561,8 @@ impl prost::Message for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    fn rewards_encode(&self, buf: &mut impl BufMut) {
-        encode_key(3u32, WireType::LengthDelimited, buf);
+    fn rewards_encode(&self, tag: u32, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(self.rewards_encoded_len() as u64, buf);
         for reward in &self.rewards {
             Self::reward_encode(reward, buf);
@@ -487,9 +577,6 @@ impl MessageBlockMeta {
         encode_key(1u32, WireType::LengthDelimited, buf);
         encode_varint(Self::reward_encoded_len(reward) as u64, buf);
 
-        let reward_type = convert_to::create_reward_type(reward.reward_type) as i32;
-        let commission = Self::commission_to_str(reward.commission);
-
         if !reward.pubkey.is_empty() {
             ::prost::encoding::string::encode(1u32, &reward.pubkey, buf);
         }
@@ -499,9 +586,11 @@ impl MessageBlockMeta {
         if reward.post_balance != 0u64 {
             ::prost::encoding::uint64::encode(3u32, &reward.post_balance, buf);
         }
+        let reward_type = convert_to::create_reward_type(reward.reward_type) as i32;
         if reward_type != RewardTypeProto::default() as i32 {
             ::prost::encoding::int32::encode(4u32, &reward_type, buf);
         }
+        let commission = Self::commission_to_str(reward.commission);
         if commission != b"" {
             prost_bytes_encode_raw(5u32, commission, buf);
         }
@@ -606,9 +695,7 @@ impl prost::Message for MessageEntry {
         if self.num_hashes != 0u64 {
             ::prost::encoding::uint64::encode(3u32, &self.num_hashes, buf);
         }
-        if !self.hash.is_empty() {
-            prost_bytes_encode_raw(4u32, &self.hash, buf);
-        }
+        prost_bytes_encode_raw(4u32, &self.hash, buf);
         if self.executed_transaction_count != 0u64 {
             ::prost::encoding::uint64::encode(5u32, &self.executed_transaction_count, buf);
         }
@@ -631,19 +718,17 @@ impl prost::Message for MessageEntry {
             ::prost::encoding::uint64::encoded_len(3u32, &self.num_hashes)
         } else {
             0
-        } + if !self.hash.is_empty() {
-            prost_bytes_encoded_len(4u32, &self.hash)
-        } else {
-            0
-        } + if self.executed_transaction_count != 0u64 {
-            ::prost::encoding::uint64::encoded_len(5u32, &self.executed_transaction_count)
-        } else {
-            0
-        } + if self.starting_transaction_index != 0u64 {
-            ::prost::encoding::uint64::encoded_len(6u32, &self.starting_transaction_index)
-        } else {
-            0
-        }
+        } + prost_bytes_encoded_len(4u32, &self.hash)
+            + if self.executed_transaction_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &self.executed_transaction_count)
+            } else {
+                0
+            }
+            + if self.starting_transaction_index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(6u32, &self.starting_transaction_index)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
@@ -677,15 +762,17 @@ pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
 mod tests {
     use {
         super::{
-            FilterName, Message, MessageBlockMeta, MessageEntry, MessageFilters, MessageRef,
-            MessageSlot,
+            FilterAccountsDataSlice, FilterName, Message, MessageAccount, MessageAccountInfo,
+            MessageBlockMeta, MessageEntry, MessageFilters, MessageRef, MessageSlot,
+            SubscribeUpdate,
         },
-        crate::{geyser::SubscribeUpdate, plugin::message::CommitmentLevel},
+        crate::plugin::message::CommitmentLevel,
         prost::Message as _,
         prost_011::Message as _,
+        solana_sdk::{pubkey::Pubkey, signature::Signature},
         solana_storage_proto::convert::generated,
         solana_transaction_status::ConfirmedBlock,
-        std::{fs, sync::Arc},
+        std::{fs, ops::Range, str::FromStr, sync::Arc},
     };
 
     fn create_message_filters(names: &[&str]) -> MessageFilters {
@@ -694,6 +781,72 @@ mod tests {
             filters.push(FilterName::new(*name));
         }
         filters
+    }
+
+    fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
+        let pubkey = Pubkey::from_str("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu").unwrap();
+        let owner = Pubkey::from_str("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn").unwrap();
+        let txn_signature = Signature::from_str("4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5").unwrap();
+
+        let mut accounts = vec![];
+        for lamports in [0, 8123] {
+            for executable in [true, false] {
+                for rent_epoch in [0, 4242] {
+                    for data in [vec![], vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]] {
+                        for write_version in [0, 1] {
+                            for txn_signature in [None, Some(txn_signature)] {
+                                accounts.push(Arc::new(MessageAccountInfo {
+                                    pubkey,
+                                    lamports,
+                                    owner,
+                                    executable,
+                                    rent_epoch,
+                                    data: data.clone(),
+                                    write_version,
+                                    txn_signature,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // accounts
+
+        let mut vec = vec![];
+        for account in accounts {
+            for slot in [0, 42] {
+                for is_startup in [true, false] {
+                    for data_slice in create_account_data_slice() {
+                        let msg = MessageAccount {
+                            account: Arc::clone(&account),
+                            slot,
+                            is_startup,
+                        };
+                        vec.push((msg, data_slice));
+                    }
+                }
+            }
+        }
+        vec
+    }
+
+    fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
+        let mut data_slice1 = FilterAccountsDataSlice::new();
+        data_slice1.push(Range { start: 0, end: 0 });
+
+        let mut data_slice2 = FilterAccountsDataSlice::new();
+        data_slice2.push(Range { start: 2, end: 3 });
+
+        let mut data_slice3 = FilterAccountsDataSlice::new();
+        data_slice3.push(Range { start: 1, end: 3 });
+
+        vec![
+            FilterAccountsDataSlice::new(),
+            data_slice1,
+            data_slice2,
+            data_slice3,
+        ]
     }
 
     fn create_entries() -> Vec<Arc<MessageEntry>> {
@@ -725,11 +878,16 @@ mod tests {
             filters: create_message_filters(filters),
             message,
         };
-        // println!("{:?}", SubscribeUpdate::from(&msg));
         let bytes = msg.encode_to_vec();
         let update = SubscribeUpdate::decode(bytes.as_slice()).expect("failed to decode");
-        // println!("{update:?}");
         assert_eq!(update, SubscribeUpdate::from(&msg));
+    }
+
+    #[test]
+    fn test_message_account() {
+        for (msg, data_slice) in create_accounts() {
+            encode_decode_cmp(&["123"], MessageRef::account(msg, data_slice));
+        }
     }
 
     #[test]
@@ -783,9 +941,10 @@ mod tests {
                 .try_into()
                 .expect("failed to convert decoded block");
 
+            let slot = block.parent_slot + 1;
             let mut block_meta = MessageBlockMeta {
                 parent_slot: block.parent_slot,
-                slot: block.parent_slot + 1,
+                slot,
                 parent_blockhash: block.previous_blockhash,
                 blockhash: block.blockhash,
                 rewards: block.rewards,
