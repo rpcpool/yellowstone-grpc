@@ -13,6 +13,7 @@ use {
             SubscribeUpdate, SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
             SubscribeUpdatePong, SubscribeUpdateSlot,
         },
+        solana::storage::confirmed_block::RewardType as RewardTypeProto,
     },
     bytes::buf::{Buf, BufMut},
     prost::{
@@ -292,71 +293,61 @@ impl From<&MessageBlockMeta> for SubscribeUpdateBlockMeta {
 
 impl prost::Message for MessageBlockMeta {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        // if self.slot != 0u64 {
-        //     ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
-        // }
-        // if self.blockhash != "" {
-        //     ::prost::encoding::string::encode(2u32, &self.blockhash, buf);
-        // }
-        // if let Some(ref msg) = self.rewards {
-        //     ::prost::encoding::message::encode(3u32, msg, buf);
-        // }
-        // if let Some(ref msg) = self.block_time {
-        //     ::prost::encoding::message::encode(4u32, msg, buf);
-        // }
-        // if let Some(ref msg) = self.block_height {
-        //     ::prost::encoding::message::encode(5u32, msg, buf);
-        // }
-        // if self.parent_slot != 0u64 {
-        //     ::prost::encoding::uint64::encode(6u32, &self.parent_slot, buf);
-        // }
-        // if self.parent_blockhash != "" {
-        //     ::prost::encoding::string::encode(7u32, &self.parent_blockhash, buf);
-        // }
-        // if self.executed_transaction_count != 0u64 {
-        //     ::prost::encoding::uint64::encode(
-        //         8u32,
-        //         &self.executed_transaction_count,
-        //         buf,
-        //     );
-        // }
-        // if self.entries_count != 0u64 {
-        //     ::prost::encoding::uint64::encode(9u32, &self.entries_count, buf);
-        // }
-        todo!()
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        }
+        if !self.blockhash.is_empty() {
+            ::prost::encoding::string::encode(2u32, &self.blockhash, buf);
+        }
+        self.rewards_encode(buf);
+        if let Some(block_time) = self.block_time {
+            let msg = convert_to::create_timestamp(block_time);
+            ::prost::encoding::message::encode(4u32, &msg, buf);
+        }
+        if let Some(block_height) = self.block_height {
+            let msg = convert_to::create_block_height(block_height);
+            ::prost::encoding::message::encode(5u32, &msg, buf);
+        }
+        if self.parent_slot != 0u64 {
+            ::prost::encoding::uint64::encode(6u32, &self.parent_slot, buf);
+        }
+        if !self.parent_blockhash.is_empty() {
+            ::prost::encoding::string::encode(7u32, &self.parent_blockhash, buf);
+        }
+        if self.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encode(8u32, &self.executed_transaction_count, buf);
+        }
+        if self.entries_count != 0u64 {
+            ::prost::encoding::uint64::encode(9u32, &self.entries_count, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
-        let block_time = self.block_time.map(convert_to::create_timestamp);
-        let block_height = self.block_height.map(convert_to::create_block_height);
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
         } else {
             0
-        }) + if self.blockhash != "" {
+        }) + if !self.blockhash.is_empty() {
             ::prost::encoding::string::encoded_len(2u32, &self.blockhash)
         } else {
             0
         } + {
-            let len = key_len(1u32) * self.rewards.len()
-                + self.rewards.iter().map(|reward| 0).sum::<usize>()
-                + self
-                    .num_partitions
-                    .as_ref()
-                    .map_or(0, |msg| ::prost::encoding::message::encoded_len(2u32, msg));
+            let len = self.rewards_encoded_len();
             key_len(3u32) + encoded_len_varint(len as u64) + len
-        } + block_time
-            .as_ref()
-            .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, msg))
-            + block_height
-                .as_ref()
-                .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, msg))
+        } + self
+            .block_time
+            .map(convert_to::create_timestamp)
+            .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, &msg))
+            + self
+                .block_height
+                .map(convert_to::create_block_height)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
             + if self.parent_slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(6u32, &self.parent_slot)
             } else {
                 0
             }
-            + if self.parent_blockhash != "" {
+            + if !self.parent_blockhash.is_empty() {
                 ::prost::encoding::string::encoded_len(7u32, &self.parent_blockhash)
             } else {
                 0
@@ -385,6 +376,117 @@ impl prost::Message for MessageBlockMeta {
 
     fn clear(&mut self) {
         unimplemented!()
+    }
+}
+
+impl MessageBlockMeta {
+    fn rewards_encode(&self, buf: &mut impl BufMut) {
+        encode_key(3u32, WireType::LengthDelimited, buf);
+        encode_varint(self.rewards_encoded_len() as u64, buf);
+        for reward in &self.rewards {
+            Self::reward_encode(reward, buf);
+        }
+        if let Some(num_partitions) = self.num_partitions {
+            let msg = convert_to::create_num_partitions(num_partitions);
+            ::prost::encoding::message::encode(2u32, &msg, buf);
+        }
+    }
+
+    fn reward_encode(reward: &Reward, buf: &mut impl BufMut) {
+        encode_key(1u32, WireType::LengthDelimited, buf);
+        encode_varint(Self::reward_encoded_len(reward) as u64, buf);
+
+        let reward_type = convert_to::create_reward_type(reward.reward_type) as i32;
+        let commission = Self::commission_to_str(reward.commission);
+
+        if !reward.pubkey.is_empty() {
+            ::prost::encoding::string::encode(1u32, &reward.pubkey, buf);
+        }
+        if reward.lamports != 0i64 {
+            ::prost::encoding::int64::encode(2u32, &reward.lamports, buf);
+        }
+        if reward.post_balance != 0u64 {
+            ::prost::encoding::uint64::encode(3u32, &reward.post_balance, buf);
+        }
+        if reward_type != RewardTypeProto::default() as i32 {
+            ::prost::encoding::int32::encode(4u32, &reward_type, buf);
+        }
+        if commission != b"" {
+            prost_bytes_encode_raw(5u32, commission, buf);
+        }
+    }
+
+    fn rewards_encoded_len(&self) -> usize {
+        key_len(1u32) * self.rewards.len()
+            + self
+                .rewards
+                .iter()
+                .map(Self::reward_encoded_len)
+                .map(|len| len + encoded_len_varint(len as u64))
+                .sum::<usize>()
+            + self
+                .num_partitions
+                .map(convert_to::create_num_partitions)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(2u32, &msg))
+    }
+
+    fn reward_encoded_len(reward: &Reward) -> usize {
+        let reward_type = convert_to::create_reward_type(reward.reward_type) as i32;
+        let commission = Self::commission_to_str(reward.commission);
+        (if !reward.pubkey.is_empty() {
+            ::prost::encoding::string::encoded_len(1u32, &reward.pubkey)
+        } else {
+            0
+        }) + if reward.lamports != 0i64 {
+            ::prost::encoding::int64::encoded_len(2u32, &reward.lamports)
+        } else {
+            0
+        } + if reward.post_balance != 0u64 {
+            ::prost::encoding::uint64::encoded_len(3u32, &reward.post_balance)
+        } else {
+            0
+        } + if reward_type != RewardTypeProto::default() as i32 {
+            ::prost::encoding::int32::encoded_len(4u32, &reward_type)
+        } else {
+            0
+        } + if commission != b"" {
+            prost_bytes_encoded_len(5u32, commission)
+        } else {
+            0
+        }
+    }
+
+    const fn commission_to_str(commission: Option<u8>) -> &'static [u8] {
+        const TABLE: [&[u8]; 256] = [
+            b"0", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9", b"10", b"11", b"12", b"13",
+            b"14", b"15", b"16", b"17", b"18", b"19", b"20", b"21", b"22", b"23", b"24", b"25",
+            b"26", b"27", b"28", b"29", b"30", b"31", b"32", b"33", b"34", b"35", b"36", b"37",
+            b"38", b"39", b"40", b"41", b"42", b"43", b"44", b"45", b"46", b"47", b"48", b"49",
+            b"50", b"51", b"52", b"53", b"54", b"55", b"56", b"57", b"58", b"59", b"60", b"61",
+            b"62", b"63", b"64", b"65", b"66", b"67", b"68", b"69", b"70", b"71", b"72", b"73",
+            b"74", b"75", b"76", b"77", b"78", b"79", b"80", b"81", b"82", b"83", b"84", b"85",
+            b"86", b"87", b"88", b"89", b"90", b"91", b"92", b"93", b"94", b"95", b"96", b"97",
+            b"98", b"99", b"100", b"101", b"102", b"103", b"104", b"105", b"106", b"107", b"108",
+            b"109", b"110", b"111", b"112", b"113", b"114", b"115", b"116", b"117", b"118", b"119",
+            b"120", b"121", b"122", b"123", b"124", b"125", b"126", b"127", b"128", b"129", b"130",
+            b"131", b"132", b"133", b"134", b"135", b"136", b"137", b"138", b"139", b"140", b"141",
+            b"142", b"143", b"144", b"145", b"146", b"147", b"148", b"149", b"150", b"151", b"152",
+            b"153", b"154", b"155", b"156", b"157", b"158", b"159", b"160", b"161", b"162", b"163",
+            b"164", b"165", b"166", b"167", b"168", b"169", b"170", b"171", b"172", b"173", b"174",
+            b"175", b"176", b"177", b"178", b"179", b"180", b"181", b"182", b"183", b"184", b"185",
+            b"186", b"187", b"188", b"189", b"190", b"191", b"192", b"193", b"194", b"195", b"196",
+            b"197", b"198", b"199", b"200", b"201", b"202", b"203", b"204", b"205", b"206", b"207",
+            b"208", b"209", b"210", b"211", b"212", b"213", b"214", b"215", b"216", b"217", b"218",
+            b"219", b"220", b"221", b"222", b"223", b"224", b"225", b"226", b"227", b"228", b"229",
+            b"230", b"231", b"232", b"233", b"234", b"235", b"236", b"237", b"238", b"239", b"240",
+            b"241", b"242", b"243", b"244", b"245", b"246", b"247", b"248", b"249", b"250", b"251",
+            b"252", b"253", b"254", b"255",
+        ];
+        if let Some(index) = commission {
+            TABLE[index as usize]
+        } else {
+            &[]
+        }
     }
 }
 
@@ -590,7 +692,7 @@ mod tests {
                 .try_into()
                 .expect("failed to convert decoded block");
 
-            let block_meta = Arc::new(MessageBlockMeta {
+            let mut block_meta = MessageBlockMeta {
                 parent_slot: block.parent_slot,
                 slot: block.parent_slot + 1,
                 parent_blockhash: block.previous_blockhash,
@@ -601,32 +703,16 @@ mod tests {
                 block_height: block.block_height,
                 executed_transaction_count: block.transactions.len() as u64,
                 entries_count: create_entries().len() as u64,
-            });
-            // encode_decode_cmp(&["123"], MessageRef::block_meta(block_meta));
-            let msg = Message {
-                filters: create_message_filters(&["123"]),
-                message: MessageRef::block_meta(block_meta),
             };
-            println!(
-                "my {} vs proto {}",
-                msg.encoded_len(),
-                SubscribeUpdate::from(&msg).encoded_len()
-            );
-        }
 
-        // use prost::{
-        //     encoding::{encoded_len_varint, key_len},
-        //     Message as _,
-        // };
-        // let msg = crate::solana::storage::confirmed_block::BlockHeight { block_height: 42 };
-        // let s1 = ::prost::encoding::message::encoded_len(5u32, &msg);
-        // println!("{:?}", s1);
-        // println!(
-        //     "{} {} {}",
-        //     key_len(5u32),
-        //     encoded_len_varint(msg.encoded_len() as u64),
-        //     msg.encoded_len()
-        // );
+            encode_decode_cmp(
+                &["123"],
+                MessageRef::block_meta(Arc::new(block_meta.clone())),
+            );
+
+            block_meta.num_partitions = Some(42);
+            encode_decode_cmp(&["123"], MessageRef::block_meta(Arc::new(block_meta)));
+        }
     }
 }
 
