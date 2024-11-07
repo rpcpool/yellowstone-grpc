@@ -273,6 +273,7 @@ pub struct ConfigGrpcFiltersAccounts {
     pub owner_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
     pub owner_reject: HashSet<Pubkey>,
+    pub data_slice_max: usize,
 }
 
 impl Default for ConfigGrpcFiltersAccounts {
@@ -284,6 +285,7 @@ impl Default for ConfigGrpcFiltersAccounts {
             account_reject: HashSet::new(),
             owner_max: usize::MAX,
             owner_reject: HashSet::new(),
+            data_slice_max: usize::MAX,
         }
     }
 }

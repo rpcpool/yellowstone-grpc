@@ -1,8 +1,12 @@
-use std::{
-    borrow::Borrow,
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, Instant},
+use {
+    smallvec::SmallVec,
+    std::{
+        borrow::Borrow,
+        collections::HashSet,
+        ops::Range,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -91,3 +95,5 @@ impl FilterNames {
         }
     }
 }
+
+pub type FilterAccountsDataSlice = SmallVec<[Range<usize>; 4]>;

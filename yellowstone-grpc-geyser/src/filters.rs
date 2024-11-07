@@ -16,7 +16,7 @@ use {
     },
     yellowstone_grpc_proto::{
         plugin::{
-            filter::{FilterName, FilterNames},
+            filter::{FilterAccountsDataSlice, FilterName, FilterNames},
             message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
                 MessageEntry, MessageSlot, MessageTransaction,
@@ -74,7 +74,7 @@ pub struct Filter {
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
-    accounts_data_slice: Vec<Range<usize>>,
+    accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
 }
 
@@ -95,7 +95,7 @@ impl Default for Filter {
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
-            accounts_data_slice: vec![],
+            accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
         }
     }
@@ -126,7 +126,10 @@ impl Filter {
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
-            accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
+            accounts_data_slice: parse_accounts_data_slice_create(
+                &config.accounts_data_slice,
+                limit.accounts.data_slice_max,
+            )?,
             ping: config.ping.as_ref().map(|msg| msg.id),
         })
     }
@@ -308,7 +311,7 @@ impl FilterAccounts {
     fn get_filters(
         &self,
         message: &MessageAccount,
-        accounts_data_slice: &[Range<usize>],
+        accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredMessages {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
@@ -318,7 +321,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_messages_once_owned!(
             filters,
-            FilteredMessageRef::account(message, accounts_data_slice.to_vec())
+            FilteredMessageRef::account(message.clone(), accounts_data_slice.clone())
         )
     }
 }
@@ -965,35 +968,37 @@ impl FilterBlocksMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct FilterAccountsDataSlice;
+pub fn parse_accounts_data_slice_create(
+    slices: &[SubscribeRequestAccountsDataSlice],
+    limit: usize,
+) -> anyhow::Result<FilterAccountsDataSlice> {
+    anyhow::ensure!(
+        slices.len() <= limit,
+        "Max amount of data_slices reached, only {} allowed",
+        limit
+    );
 
-impl FilterAccountsDataSlice {
-    pub fn create(
-        slices: &[SubscribeRequestAccountsDataSlice],
-    ) -> anyhow::Result<Vec<Range<usize>>> {
-        let slices = slices
-            .iter()
-            .map(|s| Range {
-                start: s.offset as usize,
-                end: (s.offset + s.length) as usize,
-            })
-            .collect::<Vec<_>>();
+    let slices = slices
+        .iter()
+        .map(|s| Range {
+            start: s.offset as usize,
+            end: (s.offset + s.length) as usize,
+        })
+        .collect::<FilterAccountsDataSlice>();
 
-        for (i, slice_a) in slices.iter().enumerate() {
-            // check order
-            for slice_b in slices[i + 1..].iter() {
-                anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
-            }
-
-            // check overlap
-            for slice_b in slices[0..i].iter() {
-                anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
-            }
+    for (i, slice_a) in slices.iter().enumerate() {
+        // check order
+        for slice_b in slices[i + 1..].iter() {
+            anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
         }
 
-        Ok(slices)
+        // check overlap
+        for slice_b in slices[0..i].iter() {
+            anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
+        }
     }
+
+    Ok(slices)
 }
 
 #[cfg(test)]

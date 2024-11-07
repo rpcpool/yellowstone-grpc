@@ -1,6 +1,6 @@
 use {
     super::{
-        filter::FilterName,
+        filter::{FilterAccountsDataSlice, FilterName},
         message::{
             MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
             MessageTransaction, MessageTransactionInfo,
@@ -169,7 +169,7 @@ impl prost::Message for MessageRef {
 }
 
 impl MessageRef {
-    pub fn account(message: &MessageAccount, accounts_data_slice: Vec<Range<usize>>) -> Self {
+    pub fn account(message: MessageAccount, accounts_data_slice: FilterAccountsDataSlice) -> Self {
         todo!()
     }
 
