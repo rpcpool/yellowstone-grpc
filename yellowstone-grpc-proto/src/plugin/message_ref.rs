@@ -360,6 +360,7 @@ impl MessageAccountRef {
     ) {
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
+
         prost_bytes_encode_raw(1u32, account.pubkey.as_ref(), buf);
         if account.lamports != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &account.lamports, buf);
@@ -500,7 +501,10 @@ impl From<&MessageTransactionRef> for SubscribeUpdateTransaction {
 
 impl prost::Message for MessageTransactionRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        todo!()
+        Self::tx_meta_encode_raw(1u32, &self.transaction, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -528,6 +532,277 @@ impl prost::Message for MessageTransactionRef {
 }
 
 impl MessageTransactionRef {
+    fn tx_meta_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_meta_encoded_len(tx) as u64, buf);
+
+        let index = tx.index as u64;
+
+        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
+        }
+        Self::tx_encode_raw(3u32, &tx.transaction, buf);
+        Self::meta_encode_raw(4u32, &tx.meta, buf);
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &index, buf);
+        }
+    }
+
+    fn tx_encode_raw(tag: u32, tx: &SanitizedTransaction, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+
+        for sig in tx.signatures() {
+            prost_bytes_encode_raw(1u32, sig.as_ref(), buf);
+        }
+        Self::message_encode_raw(2u32, tx.message(), buf);
+    }
+
+    fn message_encode_raw(tag: u32, message: &SanitizedMessage, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::message_encoded_len(message) as u64, buf);
+
+        let (header, account_keys, recent_blockhash, cixs, versioned, atls) = match message {
+            SanitizedMessage::Legacy(LegacyMessage { message, .. }) => (
+                message.header,
+                &message.account_keys,
+                &message.recent_blockhash,
+                &message.instructions,
+                false,
+                None,
+            ),
+            SanitizedMessage::V0(LoadedMessage { message, .. }) => (
+                message.header,
+                &message.account_keys,
+                &message.recent_blockhash,
+                &message.instructions,
+                true,
+                Some(&message.address_table_lookups),
+            ),
+        };
+
+        Self::header_encode_raw(1u32, header, buf);
+        for pubkey in account_keys {
+            prost_bytes_encode_raw(2u32, pubkey.as_ref(), buf);
+        }
+        prost_bytes_encode_raw(3u32, recent_blockhash.as_ref(), buf);
+        for cix in cixs {
+            Self::cix_encode_raw(4u32, cix, buf);
+        }
+        if versioned {
+            ::prost::encoding::bool::encode(5u32, &versioned, buf);
+        }
+        if let Some(atls) = atls {
+            for atl in atls {
+                Self::atl_encode_raw(6u32, atl, buf);
+            }
+        }
+    }
+
+    fn header_encode_raw(tag: u32, header: MessageHeader, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::header_encoded_len(header) as u64, buf);
+
+        let num_required_signatures = header.num_required_signatures as u32;
+        let num_readonly_signed_accounts = header.num_readonly_signed_accounts as u32;
+        let num_readonly_unsigned_accounts = header.num_readonly_unsigned_accounts as u32;
+
+        if num_required_signatures != 0u32 {
+            ::prost::encoding::uint32::encode(1u32, &num_required_signatures, buf);
+        }
+        if num_readonly_signed_accounts != 0u32 {
+            ::prost::encoding::uint32::encode(2u32, &num_readonly_signed_accounts, buf);
+        }
+        if num_readonly_unsigned_accounts != 0u32 {
+            ::prost::encoding::uint32::encode(3u32, &num_readonly_unsigned_accounts, buf);
+        }
+    }
+
+    fn cix_encode_raw(tag: u32, cix: &CompiledInstruction, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::cix_encoded_len(cix) as u64, buf);
+
+        let program_id_index = cix.program_id_index as u32;
+
+        if program_id_index != 0u32 {
+            ::prost::encoding::uint32::encode(1u32, &program_id_index, buf);
+        }
+        if !cix.accounts.is_empty() {
+            ::prost::encoding::bytes::encode(2u32, &cix.accounts, buf);
+        }
+        if !cix.data.is_empty() {
+            ::prost::encoding::bytes::encode(3u32, &cix.data, buf);
+        }
+    }
+
+    fn atl_encode_raw(tag: u32, atl: &MessageAddressTableLookup, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::atl_encoded_len(atl) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, atl.account_key.as_ref(), buf);
+        if !atl.writable_indexes.is_empty() {
+            prost_bytes_encode_raw(2u32, atl.writable_indexes.as_ref(), buf);
+        }
+        if !atl.readonly_indexes.is_empty() {
+            prost_bytes_encode_raw(3u32, atl.readonly_indexes.as_ref(), buf);
+        }
+    }
+
+    fn meta_encode_raw(tag: u32, meta: &TransactionStatusMeta, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::meta_encoded_len(meta) as u64, buf);
+
+        let err = convert_to::create_transaction_error(&meta.status);
+
+        if let Some(msg) = err {
+            ::prost::encoding::message::encode(1u32, &msg, buf);
+        }
+        if meta.fee != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &meta.fee, buf);
+        }
+        ::prost::encoding::uint64::encode_packed(3u32, &meta.pre_balances, buf);
+        ::prost::encoding::uint64::encode_packed(4u32, &meta.post_balances, buf);
+        if let Some(vec) = &meta.inner_instructions {
+            for ixs in vec {
+                Self::ixs_encode_raw(5u32, ixs, buf);
+            }
+        }
+        if let Some(log_messages) = &meta.log_messages {
+            ::prost::encoding::string::encode_repeated(6u32, log_messages, buf);
+        }
+        if let Some(vec) = &meta.pre_token_balances {
+            for pre_token_balances in vec {
+                Self::token_balance_encode_raw(7u32, pre_token_balances, buf);
+            }
+        }
+        if let Some(vec) = &meta.post_token_balances {
+            for post_token_balances in vec {
+                Self::token_balance_encode_raw(8u32, post_token_balances, buf);
+            }
+        }
+        if let Some(vec) = &meta.rewards {
+            for reward in vec {
+                MessageBlockMeta::reward_encode_raw(9u32, reward, buf);
+            }
+        }
+        if meta.inner_instructions.is_none() {
+            ::prost::encoding::bool::encode(10u32, &true, buf);
+        }
+        if meta.log_messages.is_none() {
+            ::prost::encoding::bool::encode(11u32, &true, buf);
+        }
+        for pubkey in meta.loaded_addresses.writable.iter() {
+            prost_bytes_encode_raw(12u32, pubkey.as_ref(), buf);
+        }
+        for pubkey in meta.loaded_addresses.readonly.iter() {
+            prost_bytes_encode_raw(13u32, pubkey.as_ref(), buf);
+        }
+        if let Some(rd) = &meta.return_data {
+            Self::return_data_encode_raw(14u32, rd, buf);
+        }
+        if meta.return_data.is_none() {
+            ::prost::encoding::bool::encode(15u32, &true, buf);
+        }
+        if let Some(value) = &meta.compute_units_consumed {
+            ::prost::encoding::uint64::encode(16u32, value, buf);
+        }
+    }
+
+    fn ixs_encode_raw(tag: u32, ixs: &InnerInstructions, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::ixs_encoded_len(ixs) as u64, buf);
+
+        let index = ixs.index as u32;
+
+        if index != 0u32 {
+            ::prost::encoding::uint32::encode(1u32, &index, buf);
+        }
+        for ix in ixs.instructions.iter() {
+            Self::ix_encode_raw(2u32, ix, buf);
+        }
+    }
+
+    fn ix_encode_raw(tag: u32, ix: &InnerInstruction, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::ix_encoded_len(ix) as u64, buf);
+
+        let program_id_index = ix.instruction.program_id_index as u32;
+
+        if program_id_index != 0u32 {
+            ::prost::encoding::uint32::encode(1u32, &program_id_index, buf);
+        }
+        if !ix.instruction.accounts.is_empty() {
+            prost_bytes_encode_raw(2u32, &ix.instruction.accounts, buf);
+        }
+        if !ix.instruction.data.is_empty() {
+            prost_bytes_encode_raw(3u32, &ix.instruction.data, buf);
+        }
+        if let Some(value) = &ix.stack_height {
+            ::prost::encoding::uint32::encode(4u32, value, buf);
+        }
+    }
+
+    fn token_balance_encode_raw(
+        tag: u32,
+        balance: &TransactionTokenBalance,
+        buf: &mut impl BufMut,
+    ) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::token_balance_encoded_len(balance) as u64, buf);
+
+        let account_index = balance.account_index as u32;
+
+        if account_index != 0u32 {
+            ::prost::encoding::uint32::encode(1u32, &account_index, buf);
+        }
+        if !balance.mint.is_empty() {
+            ::prost::encoding::string::encode(2u32, &balance.mint, buf);
+        }
+        Self::ui_token_amount_encode_raw(3u32, &balance.ui_token_amount, buf);
+        if !balance.owner.is_empty() {
+            ::prost::encoding::string::encode(4u32, &balance.owner, buf);
+        }
+        if !balance.program_id.is_empty() {
+            ::prost::encoding::string::encode(5u32, &balance.program_id, buf);
+        }
+    }
+
+    fn ui_token_amount_encode_raw(tag: u32, amount: &UiTokenAmount, buf: &mut impl BufMut) {
+        let ui_amount = amount.ui_amount.unwrap_or_default();
+        let decimals = amount.decimals as u32;
+
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::ui_token_amount_encoded_len(amount) as u64, buf);
+
+        if ui_amount != 0f64 {
+            ::prost::encoding::double::encode(1u32, &ui_amount, buf);
+        }
+        if decimals != 0u32 {
+            ::prost::encoding::uint32::encode(2u32, &decimals, buf);
+        }
+        if !amount.amount.is_empty() {
+            ::prost::encoding::string::encode(3u32, &amount.amount, buf);
+        }
+        if !amount.ui_amount_string.is_empty() {
+            ::prost::encoding::string::encode(4u32, &amount.ui_amount_string, buf);
+        }
+    }
+
+    fn return_data_encode_raw(
+        tag: u32,
+        return_data: &TransactionReturnData,
+        buf: &mut impl BufMut,
+    ) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::return_data_encoded_len(return_data) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, return_data.program_id.as_ref(), buf);
+        if !return_data.data.is_empty() {
+            ::prost::encoding::bytes::encode(2u32, &return_data.data, buf);
+        }
+    }
+
     fn tx_meta_encoded_len(tx: &MessageTransactionInfo) -> usize {
         let index = tx.index as u64;
 
@@ -719,6 +994,7 @@ impl MessageTransactionRef {
 
     fn ixs_encoded_len(ixs: &InnerInstructions) -> usize {
         let index = ixs.index as u32;
+
         (if index != 0u32 {
             ::prost::encoding::uint32::encoded_len(1u32, &index)
         } else {
@@ -923,7 +1199,7 @@ impl prost::Message for MessageBlockMeta {
         if !self.blockhash.is_empty() {
             ::prost::encoding::string::encode(2u32, &self.blockhash, buf);
         }
-        self.rewards_encode(3u32, buf);
+        self.rewards_encode_raw(3u32, buf);
         if let Some(block_time) = self.block_time {
             let msg = convert_to::create_timestamp(block_time);
             ::prost::encoding::message::encode(4u32, &msg, buf);
@@ -1002,11 +1278,12 @@ impl prost::Message for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    fn rewards_encode(&self, tag: u32, buf: &mut impl BufMut) {
+    fn rewards_encode_raw(&self, tag: u32, buf: &mut impl BufMut) {
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(self.rewards_encoded_len() as u64, buf);
+
         for reward in &self.rewards {
-            Self::reward_encode(reward, buf);
+            Self::reward_encode_raw(1u32, reward, buf);
         }
         if let Some(num_partitions) = self.num_partitions {
             let msg = convert_to::create_num_partitions(num_partitions);
@@ -1014,8 +1291,8 @@ impl MessageBlockMeta {
         }
     }
 
-    fn reward_encode(reward: &Reward, buf: &mut impl BufMut) {
-        encode_key(1u32, WireType::LengthDelimited, buf);
+    fn reward_encode_raw(tag: u32, reward: &Reward, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::reward_encoded_len(reward) as u64, buf);
 
         if !reward.pubkey.is_empty() {
