@@ -45,6 +45,23 @@ fn bench_account(c: &mut Criterion) {
             })
         },
     );
+
+    let accounts = accounts
+        .iter()
+        .map(|(account, data_slice)| build_subscribe_update_account(account, data_slice))
+        .collect::<Vec<_>>();
+    c.bench_with_input(
+        BenchmarkId::new("accounts", "prost clone"),
+        &(&accounts, &filters),
+        |b, (accounts, filters)| {
+            b.iter(|| {
+                for account in accounts.iter() {
+                    let msg = build_subscribe_update(filters, account.clone());
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
 }
 
 criterion_group!(
