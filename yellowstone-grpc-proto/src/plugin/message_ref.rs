@@ -11,9 +11,10 @@ use {
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransaction,
-            SubscribeUpdateTransactionInfo, SubscribeUpdateTransactionStatus,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
+            SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
         },
         solana::storage::confirmed_block::RewardType as RewardTypeProto,
     },
@@ -133,7 +134,7 @@ pub enum MessageRef {
     Slot(MessageSlot),                              // 3
     Transaction(MessageTransactionRef),             // 4
     TransactionStatus(MessageTransactionStatusRef), // 10
-    Block,                                          // 5
+    Block(MessageRefBlock),                         // 5
     Ping,                                           // 6
     Pong(MessageRefPong),                           // 9
     BlockMeta(Arc<MessageBlockMeta>),               // 7
@@ -147,7 +148,7 @@ impl From<&MessageRef> for UpdateOneof {
             MessageRef::Slot(msg) => Self::Slot(msg.into()),
             MessageRef::Transaction(msg) => Self::Transaction(msg.into()),
             MessageRef::TransactionStatus(msg) => Self::TransactionStatus(msg.into()),
-            MessageRef::Block => todo!(),
+            MessageRef::Block(msg) => Self::Block(msg.into()),
             MessageRef::Ping => Self::Ping(SubscribeUpdatePing {}),
             MessageRef::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
             MessageRef::BlockMeta(msg) => Self::BlockMeta(msg.as_ref().into()),
@@ -163,7 +164,7 @@ impl prost::Message for MessageRef {
             MessageRef::Slot(msg) => message::encode(3u32, msg, buf),
             MessageRef::Transaction(msg) => message::encode(4u32, msg, buf),
             MessageRef::TransactionStatus(msg) => message::encode(10u32, msg, buf),
-            MessageRef::Block => todo!(),
+            MessageRef::Block(msg) => message::encode(5u32, msg, buf),
             MessageRef::Ping => {
                 encode_key(6u32, WireType::LengthDelimited, buf);
                 encode_varint(0, buf);
@@ -180,7 +181,7 @@ impl prost::Message for MessageRef {
             MessageRef::Slot(msg) => message::encoded_len(3u32, msg),
             MessageRef::Transaction(msg) => message::encoded_len(4u32, msg),
             MessageRef::TransactionStatus(msg) => message::encoded_len(10u32, msg),
-            MessageRef::Block => todo!(),
+            MessageRef::Block(msg) => message::encoded_len(5u32, msg),
             MessageRef::Ping => key_len(6u32) + encoded_len_varint(0),
             MessageRef::Pong(msg) => message::encoded_len(9u32, msg),
             MessageRef::BlockMeta(msg) => message::encoded_len(7u32, msg.as_ref()),
@@ -231,8 +232,8 @@ impl MessageRef {
         })
     }
 
-    pub fn block(message: MessageRefBlock) -> Self {
-        todo!()
+    pub const fn block(message: MessageRefBlock) -> Self {
+        Self::Block(message)
     }
 
     pub const fn pong(id: i32) -> Self {
@@ -259,19 +260,24 @@ pub struct MessageAccountRef {
 impl From<&MessageAccountRef> for SubscribeUpdateAccount {
     fn from(msg: &MessageAccountRef) -> Self {
         SubscribeUpdateAccount {
-            account: Some(SubscribeUpdateAccountInfo {
-                pubkey: msg.account.pubkey.as_ref().into(),
-                lamports: msg.account.lamports,
-                owner: msg.account.owner.as_ref().into(),
-                executable: msg.account.executable,
-                rent_epoch: msg.account.rent_epoch,
-                data: MessageAccountRef::accout_data_slice(&msg.account, &msg.data_slice)
-                    .into_owned(),
-                write_version: msg.account.write_version,
-                txn_signature: msg.account.txn_signature.map(|s| s.as_ref().into()),
-            }),
+            account: Some((msg.account.as_ref(), &msg.data_slice).into()),
             slot: msg.slot,
             is_startup: msg.is_startup,
+        }
+    }
+}
+
+impl From<(&MessageAccountInfo, &FilterAccountsDataSlice)> for SubscribeUpdateAccountInfo {
+    fn from((account, data_slice): (&MessageAccountInfo, &FilterAccountsDataSlice)) -> Self {
+        SubscribeUpdateAccountInfo {
+            pubkey: account.pubkey.as_ref().into(),
+            lamports: account.lamports,
+            owner: account.owner.as_ref().into(),
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: MessageAccountRef::accout_data_slice(account, data_slice).into_owned(),
+            write_version: account.write_version,
+            txn_signature: account.txn_signature.map(|s| s.as_ref().into()),
         }
     }
 }
@@ -487,14 +493,20 @@ pub struct MessageTransactionRef {
 impl From<&MessageTransactionRef> for SubscribeUpdateTransaction {
     fn from(msg: &MessageTransactionRef) -> Self {
         Self {
-            transaction: Some(SubscribeUpdateTransactionInfo {
-                signature: msg.transaction.signature.as_ref().into(),
-                is_vote: msg.transaction.is_vote,
-                transaction: Some(convert_to::create_transaction(&msg.transaction.transaction)),
-                meta: Some(convert_to::create_transaction_meta(&msg.transaction.meta)),
-                index: msg.transaction.index as u64,
-            }),
+            transaction: Some(msg.transaction.as_ref().into()),
             slot: msg.slot,
+        }
+    }
+}
+
+impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
+    fn from(tx: &MessageTransactionInfo) -> Self {
+        SubscribeUpdateTransactionInfo {
+            signature: tx.signature.as_ref().into(),
+            is_vote: tx.is_vote,
+            transaction: Some(convert_to::create_transaction(&tx.transaction)),
+            meta: Some(convert_to::create_transaction_meta(&tx.meta)),
+            index: tx.index as u64,
         }
     }
 }
@@ -1162,8 +1174,67 @@ pub struct MessageRefBlock {
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccountInfo>>,
-    pub accounts_data_slice: Vec<Range<usize>>,
+    pub accounts_data_slice: FilterAccountsDataSlice,
     pub entries: Vec<Arc<MessageEntry>>,
+}
+
+impl From<&MessageRefBlock> for SubscribeUpdateBlock {
+    fn from(msg: &MessageRefBlock) -> Self {
+        Self {
+            slot: msg.meta.slot,
+            blockhash: msg.meta.blockhash.clone(),
+            rewards: Some(convert_to::create_rewards_obj(
+                msg.meta.rewards.as_slice(),
+                msg.meta.num_partitions,
+            )),
+            block_time: msg.meta.block_time.map(convert_to::create_timestamp),
+            block_height: msg.meta.block_height.map(convert_to::create_block_height),
+            parent_slot: msg.meta.parent_slot,
+            parent_blockhash: msg.meta.parent_blockhash.clone(),
+            executed_transaction_count: msg.meta.executed_transaction_count,
+            transactions: msg
+                .transactions
+                .iter()
+                .map(|tx| tx.as_ref().into())
+                .collect(),
+            updated_account_count: msg.updated_account_count,
+            accounts: msg
+                .accounts
+                .iter()
+                .map(|account| (account.as_ref(), &msg.accounts_data_slice).into())
+                .collect(),
+            entries_count: msg.meta.entries_count,
+            entries: msg
+                .entries
+                .iter()
+                .map(|entry| entry.as_ref().into())
+                .collect(),
+        }
+    }
+}
+
+impl prost::Message for MessageRefBlock {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        todo!()
+    }
+
+    fn encoded_len(&self) -> usize {
+        todo!()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
 }
 
 #[derive(prost::Message)]
@@ -1719,203 +1790,4 @@ pub mod tests {
             }
         }
     }
-
-    // benches
-    pub fn build_subscribe_update(
-        filters: &MessageFilters,
-        update: UpdateOneof,
-    ) -> SubscribeUpdate {
-        SubscribeUpdate {
-            filters: filters.iter().map(|f| f.as_ref().to_owned()).collect(),
-            update_oneof: Some(update),
-        }
-    }
-
-    pub fn build_subscribe_update_account_proto(
-        message: &MessageAccountInfo,
-        data_slice: &FilterAccountsDataSlice,
-    ) -> SubscribeUpdateAccountInfo {
-        let data = if data_slice.is_empty() {
-            message.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(data_slice.iter().map(|s| s.end - s.start).sum());
-            for slice in data_slice {
-                if message.data.len() >= slice.end {
-                    data.extend_from_slice(&message.data[slice.start..slice.end]);
-                }
-            }
-            data
-        };
-        SubscribeUpdateAccountInfo {
-            pubkey: message.pubkey.as_ref().into(),
-            lamports: message.lamports,
-            owner: message.owner.as_ref().into(),
-            executable: message.executable,
-            rent_epoch: message.rent_epoch,
-            data,
-            write_version: message.write_version,
-            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
-        }
-    }
-
-    pub fn build_subscribe_update_account(
-        message: &MessageAccount,
-        data_slice: &FilterAccountsDataSlice,
-    ) -> UpdateOneof {
-        UpdateOneof::Account(SubscribeUpdateAccount {
-            account: Some(build_subscribe_update_account_proto(
-                &message.account,
-                data_slice,
-            )),
-            slot: message.slot,
-            is_startup: message.is_startup,
-        })
-    }
 }
-
-// #[derive(Debug, Clone)]
-// pub enum FilteredMessage2<'a> {
-//     Slot(&'a MessageSlot),
-//     Account(&'a MessageAccount),
-//     Transaction(&'a MessageTransaction),
-//     TransactionStatus(&'a MessageTransaction),
-//     Entry(&'a MessageEntry),
-//     Block(MessageBlock),
-//     BlockMeta(&'a MessageBlockMeta),
-// }
-
-// impl<'a> FilteredMessage2<'a> {
-//     fn as_proto_account(
-//         message: &MessageAccountInfo,
-//         accounts_data_slice: &[Range<usize>],
-//     ) -> SubscribeUpdateAccountInfo {
-//         let data = if accounts_data_slice.is_empty() {
-//             message.data.clone()
-//         } else {
-//             let mut data =
-//                 Vec::with_capacity(accounts_data_slice.iter().map(|s| s.end - s.start).sum());
-//             for slice in accounts_data_slice {
-//                 if message.data.len() >= slice.end {
-//                     data.extend_from_slice(&message.data[slice.start..slice.end]);
-//                 }
-//             }
-//             data
-//         };
-//         SubscribeUpdateAccountInfo {
-//             pubkey: message.pubkey.as_ref().into(),
-//             lamports: message.lamports,
-//             owner: message.owner.as_ref().into(),
-//             executable: message.executable,
-//             rent_epoch: message.rent_epoch,
-//             data,
-//             write_version: message.write_version,
-//             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
-//         }
-//     }
-
-//     fn as_proto_transaction(message: &MessageTransactionInfo) -> SubscribeUpdateTransactionInfo {
-//         SubscribeUpdateTransactionInfo {
-//             signature: message.signature.as_ref().into(),
-//             is_vote: message.is_vote,
-//             transaction: Some(convert_to::create_transaction(&message.transaction)),
-//             meta: Some(convert_to::create_transaction_meta(&message.meta)),
-//             index: message.index as u64,
-//         }
-//     }
-
-//     fn as_proto_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
-//         SubscribeUpdateEntry {
-//             slot: message.slot,
-//             index: message.index as u64,
-//             num_hashes: message.num_hashes,
-//             hash: message.hash.into(),
-//             executed_transaction_count: message.executed_transaction_count,
-//             starting_transaction_index: message.starting_transaction_index,
-//         }
-//     }
-
-//     pub fn as_proto(&self, accounts_data_slice: &[Range<usize>]) -> UpdateOneof {
-//         match self {
-//             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
-//                 slot: message.slot,
-//                 parent: message.parent,
-//                 status: message.status as i32,
-//             }),
-//             Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-//                 account: Some(Self::as_proto_account(
-//                     message.account.as_ref(),
-//                     accounts_data_slice,
-//                 )),
-//                 slot: message.slot,
-//                 is_startup: message.is_startup,
-//             }),
-//             Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-//                 transaction: Some(Self::as_proto_transaction(message.transaction.as_ref())),
-//                 slot: message.slot,
-//             }),
-//             Self::TransactionStatus(message) => {
-//                 UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-//                     slot: message.slot,
-//                     signature: message.transaction.signature.as_ref().into(),
-//                     is_vote: message.transaction.is_vote,
-//                     index: message.transaction.index as u64,
-//                     err: match &message.transaction.meta.status {
-//                         Ok(()) => None,
-//                         Err(err) => Some(SubscribeUpdateTransactionError {
-//                             err: bincode::serialize(&err)
-//                                 .expect("transaction error to serialize to bytes"),
-//                         }),
-//                     },
-//                 })
-//             }
-//             Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
-//             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-//                 slot: message.meta.slot,
-//                 blockhash: message.meta.blockhash.clone(),
-//                 rewards: Some(convert_to::create_rewards_obj(
-//                     message.meta.rewards.as_slice(),
-//                     message.meta.num_partitions,
-//                 )),
-//                 block_time: message.meta.block_time.map(convert_to::create_timestamp),
-//                 block_height: message
-//                     .meta
-//                     .block_height
-//                     .map(convert_to::create_block_height),
-//                 parent_slot: message.meta.parent_slot,
-//                 parent_blockhash: message.meta.parent_blockhash.clone(),
-//                 executed_transaction_count: message.meta.executed_transaction_count,
-//                 transactions: message
-//                     .transactions
-//                     .iter()
-//                     .map(|tx| Self::as_proto_transaction(tx.as_ref()))
-//                     .collect(),
-//                 updated_account_count: message.updated_account_count,
-//                 accounts: message
-//                     .accounts
-//                     .iter()
-//                     .map(|acc| Self::as_proto_account(acc.as_ref(), accounts_data_slice))
-//                     .collect(),
-//                 entries_count: message.meta.entries_count,
-//                 entries: message
-//                     .entries
-//                     .iter()
-//                     .map(|entry| Self::as_proto_entry(entry.as_ref()))
-//                     .collect(),
-//             }),
-//             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-//                 slot: message.slot,
-//                 blockhash: message.blockhash.clone(),
-//                 rewards: Some(convert_to::create_rewards_obj(
-//                     message.rewards.as_slice(),
-//                     message.num_partitions,
-//                 )),
-//                 block_time: message.block_time.map(convert_to::create_timestamp),
-//                 block_height: message.block_height.map(convert_to::create_block_height),
-//                 parent_slot: message.parent_slot,
-//                 parent_blockhash: message.parent_blockhash.clone(),
-//                 executed_transaction_count: message.executed_transaction_count,
-//                 entries_count: message.entries_count,
-//             }),
-//         }
-//     }
-// }

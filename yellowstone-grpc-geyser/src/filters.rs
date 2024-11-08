@@ -867,7 +867,7 @@ impl FilterBlocks {
     fn get_filters(
         &self,
         message: &Arc<MessageBlock>,
-        accounts_data_slice: &[Range<usize>],
+        accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredMessages {
         let mut messages = FilteredMessages::new();
         for (filter, inner) in self.filters.iter() {
@@ -931,7 +931,7 @@ impl FilterBlocks {
                     meta: Arc::clone(&message.meta),
                     transactions,
                     updated_account_count: message.updated_account_count,
-                    accounts_data_slice: accounts_data_slice.to_vec(),
+                    accounts_data_slice: accounts_data_slice.clone(),
                     accounts,
                     entries,
                 }),

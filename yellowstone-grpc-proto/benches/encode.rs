@@ -2,14 +2,36 @@ use {
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
     prost::Message as _,
     std::time::Duration,
-    yellowstone_grpc_proto::plugin::message_ref::{
-        tests::{
-            build_subscribe_update, build_subscribe_update_account, create_accounts,
-            create_message_filters,
+    yellowstone_grpc_proto::{
+        geyser::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
+        plugin::{
+            filter::FilterAccountsDataSlice,
+            message::MessageAccount,
+            message_ref::{
+                tests::{create_accounts, create_message_filters},
+                Message, MessageFilters, MessageRef,
+            },
         },
-        Message, MessageRef,
     },
 };
+
+fn build_subscribe_update(filters: &MessageFilters, update: UpdateOneof) -> SubscribeUpdate {
+    SubscribeUpdate {
+        filters: filters.iter().map(|f| f.as_ref().to_owned()).collect(),
+        update_oneof: Some(update),
+    }
+}
+
+fn build_subscribe_update_account(
+    message: &MessageAccount,
+    data_slice: &FilterAccountsDataSlice,
+) -> UpdateOneof {
+    UpdateOneof::Account(SubscribeUpdateAccount {
+        account: Some((message.account.as_ref(), data_slice).into()),
+        slot: message.slot,
+        is_startup: message.is_startup,
+    })
+}
 
 fn bench_account(c: &mut Criterion) {
     let accounts = create_accounts();
