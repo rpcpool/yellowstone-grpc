@@ -629,10 +629,10 @@ impl MessageTransactionRef {
             ::prost::encoding::uint32::encode(1u32, &program_id_index, buf);
         }
         if !cix.accounts.is_empty() {
-            ::prost::encoding::bytes::encode(2u32, &cix.accounts, buf);
+            prost_bytes_encode_raw(2u32, cix.accounts.as_ref(), buf);
         }
         if !cix.data.is_empty() {
-            ::prost::encoding::bytes::encode(3u32, &cix.data, buf);
+            prost_bytes_encode_raw(3u32, cix.data.as_ref(), buf);
         }
     }
 
@@ -799,7 +799,7 @@ impl MessageTransactionRef {
 
         prost_bytes_encode_raw(1u32, return_data.program_id.as_ref(), buf);
         if !return_data.data.is_empty() {
-            ::prost::encoding::bytes::encode(2u32, &return_data.data, buf);
+            prost_bytes_encode_raw(2u32, return_data.data.as_ref(), buf);
         }
     }
 
@@ -1073,7 +1073,7 @@ impl MessageTransactionRef {
     fn return_data_encoded_len(return_data: &TransactionReturnData) -> usize {
         prost_bytes_encoded_len(1u32, return_data.program_id.as_ref())
             + if !return_data.data.is_empty() {
-                ::prost::encoding::bytes::encoded_len(2u32, &return_data.data)
+                prost_bytes_encoded_len(2u32, return_data.data.as_ref())
             } else {
                 0
             }
