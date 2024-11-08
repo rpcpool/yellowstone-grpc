@@ -558,7 +558,7 @@ impl MessageTransactionRef {
                 &message.account_keys,
                 &message.recent_blockhash,
                 &message.instructions,
-                true,
+                false,
                 None,
             ),
             SanitizedMessage::V0(LoadedMessage { message, .. }) => (
@@ -566,7 +566,7 @@ impl MessageTransactionRef {
                 &message.account_keys,
                 &message.recent_blockhash,
                 &message.instructions,
-                false,
+                true,
                 Some(&message.address_table_lookups),
             ),
         };
@@ -1437,7 +1437,7 @@ pub mod tests {
                     transaction: Arc::clone(tx),
                     slot: 42,
                 };
-                // encode_decode_cmp(&["123"], MessageRef::transaction(&msg));
+                encode_decode_cmp(&["123"], MessageRef::transaction(&msg));
                 encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
             }
         }
