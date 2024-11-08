@@ -1559,7 +1559,7 @@ pub mod tests {
         filters
     }
 
-    fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
+    pub fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
         let mut data_slice1 = FilterAccountsDataSlice::new();
         data_slice1.push(Range { start: 0, end: 0 });
 
@@ -1630,7 +1630,7 @@ pub mod tests {
         vec
     }
 
-    fn create_entries() -> Vec<Arc<MessageEntry>> {
+    pub fn create_entries() -> Vec<Arc<MessageEntry>> {
         [
             MessageEntry {
                 slot: 299888121,
@@ -1652,6 +1652,80 @@ pub mod tests {
         .into_iter()
         .map(Arc::new)
         .collect()
+    }
+
+    pub fn load_predefined() -> Vec<ConfirmedBlock> {
+        fs::read_dir("./src/plugin/blocks")
+            .expect("failed to read `blocks` dir")
+            .map(|entry| {
+                let path = entry.expect("failed to read `blocks` dir entry").path();
+                let data = fs::read(path).expect("failed to read block");
+                generated::ConfirmedBlock::decode(data.as_slice())
+                    .expect("failed to decode block")
+                    .try_into()
+                    .expect("failed to convert decoded block")
+            })
+            .collect()
+    }
+
+    pub fn load_predefined_blockmeta() -> Vec<Arc<MessageBlockMeta>> {
+        load_predefined()
+            .into_iter()
+            .flat_map(|block| {
+                let slot = block.parent_slot + 1;
+                let block_meta1 = MessageBlockMeta {
+                    parent_slot: block.parent_slot,
+                    slot,
+                    parent_blockhash: block.previous_blockhash,
+                    blockhash: block.blockhash,
+                    rewards: block.rewards,
+                    num_partitions: block.num_partitions,
+                    block_time: block.block_time,
+                    block_height: block.block_height,
+                    executed_transaction_count: block.transactions.len() as u64,
+                    entries_count: create_entries().len() as u64,
+                };
+
+                let mut block_meta2 = block_meta1.clone();
+                block_meta2.num_partitions = Some(42);
+
+                vec![block_meta1, block_meta2]
+            })
+            .map(Arc::new)
+            .collect()
+    }
+
+    pub fn load_predefined_transactions() -> Vec<Arc<MessageTransactionInfo>> {
+        load_predefined()
+            .into_iter()
+            .flat_map(|block| {
+                block
+                    .transactions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, tx)| {
+                        let TransactionWithStatusMeta::Complete(tx) = tx else {
+                            panic!("tx with missed meta");
+                        };
+                        let transaction = SanitizedTransaction::try_create(
+                            tx.transaction.clone(),
+                            MessageHash::Compute,
+                            None,
+                            SimpleAddressLoader::Disabled,
+                            &HashSet::new(),
+                        )
+                        .expect("failed to create tx");
+                        MessageTransactionInfo {
+                            signature: tx.transaction.signatures[0],
+                            is_vote: true,
+                            transaction,
+                            meta: tx.meta.clone(),
+                            index,
+                        }
+                    })
+            })
+            .map(Arc::new)
+            .collect()
     }
 
     fn encode_decode_cmp(filters: &[&str], message: MessageRef) {
@@ -1703,6 +1777,23 @@ pub mod tests {
     }
 
     #[test]
+    fn test_message_transaction() {
+        for transaction in load_predefined_transactions() {
+            let msg = MessageTransaction {
+                transaction,
+                slot: 42,
+            };
+            encode_decode_cmp(&["123"], MessageRef::transaction(&msg));
+            encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
+        }
+    }
+
+    #[test]
+    const fn test_message_block() {
+        // TODO
+    }
+
+    #[test]
     fn test_message_ping() {
         encode_decode_cmp(&["123"], MessageRef::Ping)
     }
@@ -1714,80 +1805,16 @@ pub mod tests {
     }
 
     #[test]
-    fn test_message_entry() {
-        for entry in create_entries() {
-            encode_decode_cmp(&["123"], MessageRef::entry(entry));
+    fn test_message_blockmeta() {
+        for block_meta in load_predefined_blockmeta() {
+            encode_decode_cmp(&["123"], MessageRef::block_meta(block_meta));
         }
     }
 
     #[test]
-    fn test_predefined() {
-        let location = "./src/plugin/blocks";
-        for entry in fs::read_dir(location).expect("failed to read `blocks` dir") {
-            let path = entry.expect("failed to read `blocks` dir entry").path();
-            let data = fs::read(path).expect("failed to read block");
-            let block: ConfirmedBlock = generated::ConfirmedBlock::decode(data.as_slice())
-                .expect("failed to decode block")
-                .try_into()
-                .expect("failed to convert decoded block");
-
-            let slot = block.parent_slot + 1;
-            let mut block_meta = MessageBlockMeta {
-                parent_slot: block.parent_slot,
-                slot,
-                parent_blockhash: block.previous_blockhash,
-                blockhash: block.blockhash,
-                rewards: block.rewards,
-                num_partitions: block.num_partitions,
-                block_time: block.block_time,
-                block_height: block.block_height,
-                executed_transaction_count: block.transactions.len() as u64,
-                entries_count: create_entries().len() as u64,
-            };
-
-            encode_decode_cmp(
-                &["123"],
-                MessageRef::block_meta(Arc::new(block_meta.clone())),
-            );
-
-            block_meta.num_partitions = Some(42);
-            encode_decode_cmp(&["123"], MessageRef::block_meta(Arc::new(block_meta)));
-
-            let transactions_info = block
-                .transactions
-                .iter()
-                .enumerate()
-                .map(|(index, tx)| {
-                    let TransactionWithStatusMeta::Complete(tx) = tx else {
-                        panic!("tx with missed meta");
-                    };
-                    let transaction = SanitizedTransaction::try_create(
-                        tx.transaction.clone(),
-                        MessageHash::Compute,
-                        None,
-                        SimpleAddressLoader::Disabled,
-                        &HashSet::new(),
-                    )
-                    .expect("failed to create tx");
-                    MessageTransactionInfo {
-                        signature: tx.transaction.signatures[0],
-                        is_vote: true,
-                        transaction,
-                        meta: tx.meta.clone(),
-                        index,
-                    }
-                })
-                .map(Arc::new)
-                .collect::<Vec<_>>();
-
-            for tx in transactions_info.iter() {
-                let msg = MessageTransaction {
-                    transaction: Arc::clone(tx),
-                    slot: 42,
-                };
-                encode_decode_cmp(&["123"], MessageRef::transaction(&msg));
-                encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
-            }
+    fn test_message_entry() {
+        for entry in create_entries() {
+            encode_decode_cmp(&["123"], MessageRef::entry(entry));
         }
     }
 }

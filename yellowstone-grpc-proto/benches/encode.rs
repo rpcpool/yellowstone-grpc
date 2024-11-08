@@ -1,14 +1,17 @@
 use {
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
     prost::Message as _,
-    std::time::Duration,
+    std::{sync::Arc, time::Duration},
     yellowstone_grpc_proto::{
-        geyser::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
+        geyser::{
+            subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateTransaction,
+        },
         plugin::{
             filter::FilterAccountsDataSlice,
-            message::MessageAccount,
+            message::{MessageAccount, MessageTransaction, MessageTransactionInfo},
             message_ref::{
-                tests::{create_accounts, create_message_filters},
+                tests::{create_accounts, create_message_filters, load_predefined_transactions},
                 Message, MessageFilters, MessageRef,
             },
         },
@@ -33,10 +36,17 @@ fn build_subscribe_update_account(
     })
 }
 
+fn build_subscribe_transaction(transaction: &MessageTransactionInfo, slot: u64) -> UpdateOneof {
+    UpdateOneof::Transaction(SubscribeUpdateTransaction {
+        transaction: Some(transaction.into()),
+        slot,
+    })
+}
+
 fn bench_account(c: &mut Criterion) {
-    let accounts = create_accounts();
     let filters = create_message_filters(&["my special filter"]);
 
+    let accounts = create_accounts();
     c.bench_with_input(
         BenchmarkId::new("accounts", "ref"),
         &(&accounts, &filters),
@@ -79,6 +89,58 @@ fn bench_account(c: &mut Criterion) {
             b.iter(|| {
                 for account in accounts.iter() {
                     let msg = build_subscribe_update(filters, account.clone());
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+
+    let transactions = load_predefined_transactions();
+    c.bench_with_input(
+        BenchmarkId::new("transactions", "ref"),
+        &(&transactions, &filters),
+        |b, (transactions, filters)| {
+            b.iter(|| {
+                for transaction in transactions.iter() {
+                    let msg = Message {
+                        filters: (*filters).clone(),
+                        message: MessageRef::transaction(&MessageTransaction {
+                            transaction: Arc::clone(transaction),
+                            slot: 42,
+                        }),
+                    };
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+    c.bench_with_input(
+        BenchmarkId::new("transactions", "prost"),
+        &(&transactions, &filters),
+        |b, (transactions, filters)| {
+            b.iter(|| {
+                for transaction in transactions.iter() {
+                    let msg = build_subscribe_update(
+                        filters,
+                        build_subscribe_transaction(transaction, 42),
+                    );
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+
+    let transactions = transactions
+        .into_iter()
+        .map(|transaction| build_subscribe_transaction(transaction.as_ref(), 42))
+        .collect::<Vec<_>>();
+    c.bench_with_input(
+        BenchmarkId::new("transactions", "prost clone"),
+        &(&transactions, &filters),
+        |b, (transactions, filters)| {
+            b.iter(|| {
+                for transaction in transactions.iter() {
+                    let msg = build_subscribe_update(filters, transaction.clone());
                     msg.encode_to_vec().len();
                 }
             })
