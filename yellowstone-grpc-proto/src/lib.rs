@@ -65,11 +65,7 @@ pub mod convert_to {
                 header: Some(create_header(&message.header)),
                 account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
-                instructions: message
-                    .instructions
-                    .iter()
-                    .map(create_instruction)
-                    .collect(),
+                instructions: create_instructions(&message.instructions),
                 versioned: false,
                 address_table_lookups: vec![],
             },

@@ -16,7 +16,7 @@ fn bench_account(c: &mut Criterion) {
     let filters = create_message_filters(&["my special filter"]);
 
     c.bench_with_input(
-        BenchmarkId::new("accounts", "weak"),
+        BenchmarkId::new("accounts", "ref"),
         &(&accounts, &filters),
         |b, (accounts, filters)| {
             b.iter(|| {
