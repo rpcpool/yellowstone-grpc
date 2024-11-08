@@ -10,19 +10,27 @@ license = "Apache-2.0"
 keywords = { workspace = true }
 publish = true
 
+[[bench]]
+name = "encode"
+harness = false
+required-features = ["plugin-bench"]
+
 [dependencies]
 agave-geyser-plugin-interface = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 prost = { workspace = true }
+prost_011 = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
+solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 prost_011 = { workspace = true }
 solana-storage-proto = { workspace = true }
 
@@ -41,6 +49,7 @@ plugin = [
     "dep:smallvec",
     "dep:thiserror"
 ]
+plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
 tonic-compression = ["tonic/gzip", "tonic/zstd"]
 
 [lints]

@@ -523,11 +523,11 @@ impl MessageTransactionRef {
             }
     }
 
-    fn tx_encoded_len(tx: &SanitizedTransaction) -> usize {
+    const fn tx_encoded_len(tx: &SanitizedTransaction) -> usize {
         0
     }
 
-    fn meta_encoded_len(meta: &TransactionStatusMeta) -> usize {
+    const fn meta_encoded_len(meta: &TransactionStatusMeta) -> usize {
         0
     }
 }
@@ -930,8 +930,10 @@ pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
     key_len(tag) + encoded_len_varint(value.len() as u64) + value.len()
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "plugin-bench"))]
+pub mod tests {
+    #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
+    #![cfg_attr(feature = "plugin-bench", allow(unused_imports))]
     use {
         super::*,
         crate::plugin::message::CommitmentLevel,
@@ -948,7 +950,7 @@ mod tests {
         std::{collections::HashSet, fs, str::FromStr},
     };
 
-    fn create_message_filters(names: &[&str]) -> MessageFilters {
+    pub fn create_message_filters(names: &[&str]) -> MessageFilters {
         let mut filters = MessageFilters::new();
         for name in names {
             filters.push(FilterName::new(*name));
@@ -956,7 +958,26 @@ mod tests {
         filters
     }
 
-    fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
+    fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
+        let mut data_slice1 = FilterAccountsDataSlice::new();
+        data_slice1.push(Range { start: 0, end: 0 });
+
+        let mut data_slice2 = FilterAccountsDataSlice::new();
+        data_slice2.push(Range { start: 2, end: 3 });
+
+        let mut data_slice3 = FilterAccountsDataSlice::new();
+        data_slice3.push(Range { start: 1, end: 3 });
+        data_slice3.push(Range { start: 5, end: 10 });
+
+        vec![
+            FilterAccountsDataSlice::new(),
+            data_slice1,
+            data_slice2,
+            data_slice3,
+        ]
+    }
+
+    pub fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
         let pubkey = Pubkey::from_str("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu").unwrap();
         let owner = Pubkey::from_str("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn").unwrap();
         let txn_signature = Signature::from_str("4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5").unwrap();
@@ -965,7 +986,12 @@ mod tests {
         for lamports in [0, 8123] {
             for executable in [true, false] {
                 for rent_epoch in [0, 4242] {
-                    for data in [vec![], vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]] {
+                    for data in [
+                        vec![],
+                        [42; 165].to_vec(),
+                        [42; 1024].to_vec(),
+                        [42; 2 * 1024 * 1024].to_vec(),
+                    ] {
                         for write_version in [0, 1] {
                             for txn_signature in [None, Some(txn_signature)] {
                                 accounts.push(Arc::new(MessageAccountInfo {
@@ -1001,24 +1027,6 @@ mod tests {
             }
         }
         vec
-    }
-
-    fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
-        let mut data_slice1 = FilterAccountsDataSlice::new();
-        data_slice1.push(Range { start: 0, end: 0 });
-
-        let mut data_slice2 = FilterAccountsDataSlice::new();
-        data_slice2.push(Range { start: 2, end: 3 });
-
-        let mut data_slice3 = FilterAccountsDataSlice::new();
-        data_slice3.push(Range { start: 1, end: 3 });
-
-        vec![
-            FilterAccountsDataSlice::new(),
-            data_slice1,
-            data_slice2,
-            data_slice3,
-        ]
     }
 
     fn create_entries() -> Vec<Arc<MessageEntry>> {
@@ -1174,6 +1182,58 @@ mod tests {
                 encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
             }
         }
+    }
+
+    // benches
+    pub fn build_subscribe_update(
+        filters: &MessageFilters,
+        update: UpdateOneof,
+    ) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: filters.iter().map(|f| f.as_ref().to_owned()).collect(),
+            update_oneof: Some(update),
+        }
+    }
+
+    pub fn build_subscribe_update_account_proto(
+        message: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+    ) -> SubscribeUpdateAccountInfo {
+        let data = if data_slice.is_empty() {
+            message.data.clone()
+        } else {
+            let mut data = Vec::with_capacity(data_slice.iter().map(|s| s.end - s.start).sum());
+            for slice in data_slice {
+                if message.data.len() >= slice.end {
+                    data.extend_from_slice(&message.data[slice.start..slice.end]);
+                }
+            }
+            data
+        };
+        SubscribeUpdateAccountInfo {
+            pubkey: message.pubkey.as_ref().into(),
+            lamports: message.lamports,
+            owner: message.owner.as_ref().into(),
+            executable: message.executable,
+            rent_epoch: message.rent_epoch,
+            data,
+            write_version: message.write_version,
+            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+
+    pub fn build_subscribe_update_account(
+        message: &MessageAccount,
+        data_slice: &FilterAccountsDataSlice,
+    ) -> UpdateOneof {
+        UpdateOneof::Account(SubscribeUpdateAccount {
+            account: Some(build_subscribe_update_account_proto(
+                &message.account,
+                data_slice,
+            )),
+            slot: message.slot,
+            is_startup: message.is_startup,
+        })
     }
 }
 
