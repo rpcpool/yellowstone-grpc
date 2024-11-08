@@ -26,7 +26,8 @@ use {
         DecodeError,
     },
     smallvec::SmallVec,
-    solana_transaction_status::Reward,
+    solana_sdk::transaction::SanitizedTransaction,
+    solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{borrow::Cow, ops::Range, sync::Arc},
 };
 
@@ -472,7 +473,15 @@ impl prost::Message for MessageTransactionRef {
     }
 
     fn encoded_len(&self) -> usize {
-        todo!()
+        let len = Self::tx_meta_encoded_len(&self.transaction);
+        key_len(1u32)
+            + encoded_len_varint(len as u64)
+            + len
+            + if self.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
@@ -491,7 +500,36 @@ impl prost::Message for MessageTransactionRef {
 }
 
 impl MessageTransactionRef {
-    //
+    fn tx_meta_encoded_len(tx: &MessageTransactionInfo) -> usize {
+        let index = tx.index as u64;
+        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + {
+                let len = Self::tx_encoded_len(&tx.transaction);
+                key_len(3u32) + encoded_len_varint(len as u64) + len
+            }
+            + {
+                let len = Self::meta_encoded_len(&tx.meta);
+                key_len(4u32) + encoded_len_varint(len as u64) + len
+            }
+            + if index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &index)
+            } else {
+                0
+            }
+    }
+
+    fn tx_encoded_len(tx: &SanitizedTransaction) -> usize {
+        0
+    }
+
+    fn meta_encoded_len(meta: &TransactionStatusMeta) -> usize {
+        0
+    }
 }
 
 #[derive(Debug)]
@@ -514,20 +552,19 @@ impl From<&MessageTransactionStatusRef> for SubscribeUpdateTransactionStatus {
 
 impl prost::Message for MessageTransactionStatusRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        let tx = &self.transaction;
-        let index = tx.index as u64;
-        let err = convert_to::create_transaction_error(&tx.meta.status);
-
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
         }
+        let tx = &self.transaction;
         prost_bytes_encode_raw(2u32, tx.signature.as_ref(), buf);
         if tx.is_vote {
             ::prost::encoding::bool::encode(3u32, &tx.is_vote, buf);
         }
+        let index = tx.index as u64;
         if index != 0u64 {
             ::prost::encoding::uint64::encode(4u32, &index, buf);
         }
+        let err = convert_to::create_transaction_error(&tx.meta.status);
         if let Some(msg) = err {
             ::prost::encoding::message::encode(5u32, &msg, buf);
         }
@@ -535,9 +572,6 @@ impl prost::Message for MessageTransactionStatusRef {
 
     fn encoded_len(&self) -> usize {
         let tx = &self.transaction;
-        let index = tx.index as u64;
-        let err = convert_to::create_transaction_error(&tx.meta.status);
-
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
         } else {
@@ -548,12 +582,16 @@ impl prost::Message for MessageTransactionStatusRef {
             } else {
                 0
             }
-            + if index != 0u64 {
-                ::prost::encoding::uint64::encoded_len(4u32, &index)
-            } else {
-                0
+            + {
+                let index = tx.index as u64;
+                if index != 0u64 {
+                    ::prost::encoding::uint64::encoded_len(4u32, &index)
+                } else {
+                    0
+                }
             }
-            + err.map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
+            + convert_to::create_transaction_error(&tx.meta.status)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
     }
 
     fn merge_field(
@@ -946,7 +984,6 @@ mod tests {
                 }
             }
         }
-        // accounts
 
         let mut vec = vec![];
         for account in accounts {
@@ -1133,6 +1170,7 @@ mod tests {
                     transaction: Arc::clone(tx),
                     slot: 42,
                 };
+                encode_decode_cmp(&["123"], MessageRef::transaction(&msg));
                 encode_decode_cmp(&["123"], MessageRef::transaction_status(&msg));
             }
         }
