@@ -50,8 +50,13 @@ fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
 }
 
 #[inline]
+pub fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
+    key_len(tag) + encoded_len_varint(len as u64) + len
+}
+
+#[inline]
 pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
-    key_len(tag) + encoded_len_varint(value.len() as u64) + value.len()
+    prost_field_encoded_len(tag, value.len())
 }
 
 macro_rules! prost_message_repeated_encoded_len {
@@ -95,13 +100,7 @@ impl prost::Message for Message {
     }
 
     fn encoded_len(&self) -> usize {
-        key_len(1u32) * self.filters.len()
-            + self
-                .filters
-                .iter()
-                .map(|filter| filter.as_ref().len())
-                .map(|len| encoded_len_varint(len as u64) + len)
-                .sum::<usize>()
+        prost_message_repeated_encoded_len!(1u32, self.filters, |filter| filter.as_ref().len())
             + self.message.encoded_len()
     }
 
@@ -289,20 +288,18 @@ impl prost::Message for MessageAccountRef {
     }
 
     fn encoded_len(&self) -> usize {
-        let len = Self::account_encoded_len(self.account.as_ref(), &self.data_slice);
-        key_len(1u32)
-            + encoded_len_varint(len as u64)
-            + len
-            + if self.slot != 0u64 {
-                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
-            } else {
-                0
-            }
-            + if self.is_startup {
-                ::prost::encoding::bool::encoded_len(3u32, &self.is_startup)
-            } else {
-                0
-            }
+        prost_field_encoded_len(
+            1u32,
+            Self::account_encoded_len(self.account.as_ref(), &self.data_slice),
+        ) + if self.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+        } else {
+            0
+        } + if self.is_startup {
+            ::prost::encoding::bool::encoded_len(3u32, &self.is_startup)
+        } else {
+            0
+        }
     }
 
     fn merge_field(
@@ -391,6 +388,7 @@ impl MessageAccountRef {
         data_slice: &FilterAccountsDataSlice,
     ) -> usize {
         let data_len = Self::account_data_slice_len(account, data_slice);
+
         prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
             + if account.lamports != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
@@ -408,8 +406,8 @@ impl MessageAccountRef {
             } else {
                 0
             }
-            + if data_len > 0 {
-                key_len(6u32) + encoded_len_varint(data_len as u64) + data_len
+            + if data_len != 0 {
+                prost_field_encoded_len(6u32, data_len)
             } else {
                 0
             }
@@ -420,7 +418,7 @@ impl MessageAccountRef {
             }
             + account
                 .txn_signature
-                .map_or(0, |s| prost_bytes_encoded_len(8u32, s.as_ref()))
+                .map_or(0, |sig| prost_bytes_encoded_len(8u32, sig.as_ref()))
     }
 }
 
@@ -450,6 +448,7 @@ impl prost::Message for MessageSlot {
 
     fn encoded_len(&self) -> usize {
         let status = CommitmentLevelProto::from(self.status) as i32;
+
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
         } else {
@@ -505,10 +504,7 @@ impl prost::Message for MessageTransactionRef {
     }
 
     fn encoded_len(&self) -> usize {
-        let len = Self::tx_meta_encoded_len(&self.transaction);
-        key_len(1u32)
-            + encoded_len_varint(len as u64)
-            + len
+        prost_field_encoded_len(1u32, Self::tx_meta_encoded_len(&self.transaction))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
             } else {
@@ -534,20 +530,15 @@ impl prost::Message for MessageTransactionRef {
 impl MessageTransactionRef {
     fn tx_meta_encoded_len(tx: &MessageTransactionInfo) -> usize {
         let index = tx.index as u64;
+
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
             + if tx.is_vote {
                 ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
             } else {
                 0
             }
-            + {
-                let len = Self::tx_encoded_len(&tx.transaction);
-                key_len(3u32) + encoded_len_varint(len as u64) + len
-            }
-            + {
-                let len = Self::meta_encoded_len(&tx.meta);
-                key_len(4u32) + encoded_len_varint(len as u64) + len
-            }
+            + prost_field_encoded_len(3u32, Self::tx_encoded_len(&tx.transaction))
+            + prost_field_encoded_len(4u32, Self::meta_encoded_len(&tx.meta))
             + if index != 0u64 {
                 ::prost::encoding::uint64::encoded_len(5u32, &index)
             } else {
@@ -556,12 +547,8 @@ impl MessageTransactionRef {
     }
 
     fn tx_encoded_len(tx: &SanitizedTransaction) -> usize {
-        let message_len = Self::message_encoded_len(tx.message());
-        let signatures = tx.signatures();
-        prost_message_repeated_encoded_len!(1u32, signatures, |sig| sig.as_ref().len())
-            + key_len(2u32)
-            + encoded_len_varint(message_len as u64)
-            + message_len
+        prost_message_repeated_encoded_len!(1u32, tx.signatures(), |sig| sig.as_ref().len())
+            + prost_field_encoded_len(2u32, Self::message_encoded_len(tx.message()))
     }
 
     fn message_encoded_len(message: &SanitizedMessage) -> usize {
@@ -584,35 +571,17 @@ impl MessageTransactionRef {
             ),
         };
 
-        let header_len = Self::header_encoded_len(header);
-        key_len(1u32)
-            + encoded_len_varint(header_len as u64)
-            + header_len
-            + key_len(2u32) * account_keys.len()
-            + account_keys
-                .iter()
-                .map(|account_key| account_key.as_ref().len())
-                .map(|len| encoded_len_varint(len as u64) + len)
-                .sum::<usize>()
+        prost_field_encoded_len(1u32, Self::header_encoded_len(header))
+            + prost_message_repeated_encoded_len!(2u32, account_keys, |key| key.as_ref().len())
             + prost_bytes_encoded_len(3u32, recent_blockhash.as_ref())
-            + key_len(4u32) * cixs.len()
-            + cixs
-                .iter()
-                .map(Self::cix_encoded_len)
-                .map(|len| encoded_len_varint(len as u64) + len)
-                .sum::<usize>()
+            + prost_message_repeated_encoded_len!(4u32, cixs, Self::cix_encoded_len)
             + if versioned {
                 ::prost::encoding::bool::encoded_len(5u32, &versioned)
             } else {
                 0
             }
             + if let Some(atls) = atls {
-                key_len(6u32) * atls.len()
-                    + atls
-                        .iter()
-                        .map(Self::atl_encoded_len)
-                        .map(|len| encoded_len_varint(len as u64) + len)
-                        .sum::<usize>()
+                prost_message_repeated_encoded_len!(6u32, atls, Self::atl_encoded_len)
             } else {
                 0
             }
@@ -622,6 +591,7 @@ impl MessageTransactionRef {
         let num_required_signatures = header.num_required_signatures as u32;
         let num_readonly_signed_accounts = header.num_readonly_signed_accounts as u32;
         let num_readonly_unsigned_accounts = header.num_readonly_unsigned_accounts as u32;
+
         (if num_required_signatures != 0u32 {
             ::prost::encoding::uint32::encoded_len(1u32, &num_required_signatures)
         } else {
@@ -639,6 +609,7 @@ impl MessageTransactionRef {
 
     fn cix_encoded_len(cix: &CompiledInstruction) -> usize {
         let program_id_index = cix.program_id_index as u32;
+
         (if program_id_index != 0u32 {
             ::prost::encoding::uint32::encoded_len(1u32, &program_id_index)
         } else {
@@ -669,9 +640,8 @@ impl MessageTransactionRef {
     }
 
     fn meta_encoded_len(meta: &TransactionStatusMeta) -> usize {
-        let err = convert_to::create_transaction_error(&meta.status);
-
-        err.map_or(0, |msg| ::prost::encoding::message::encoded_len(1u32, &msg))
+        convert_to::create_transaction_error(&meta.status)
+            .map_or(0, |msg| ::prost::encoding::message::encoded_len(1u32, &msg))
             + if meta.fee != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &meta.fee)
             } else {
@@ -680,12 +650,7 @@ impl MessageTransactionRef {
             + ::prost::encoding::uint64::encoded_len_packed(3u32, &meta.pre_balances)
             + ::prost::encoding::uint64::encoded_len_packed(4u32, &meta.post_balances)
             + if let Some(ixs) = &meta.inner_instructions {
-                key_len(5u32) * ixs.len()
-                    + ixs
-                        .iter()
-                        .map(Self::ixs_encoded_len)
-                        .map(|len| encoded_len_varint(len as u64) + len)
-                        .sum::<usize>()
+                prost_message_repeated_encoded_len!(5u32, ixs, Self::ixs_encoded_len)
             } else {
                 0
             }
@@ -738,8 +703,7 @@ impl MessageTransactionRef {
                 .as_ref()
                 .len())
             + if let Some(rd) = &meta.return_data {
-                let len = Self::return_data_encoded_len(rd);
-                key_len(14u32) + encoded_len_varint(len as u64) + len
+                prost_field_encoded_len(14u32, Self::return_data_encoded_len(rd))
             } else {
                 0
             }
@@ -764,6 +728,7 @@ impl MessageTransactionRef {
 
     fn ix_encoded_len(ix: &InnerInstruction) -> usize {
         let program_id_index = ix.instruction.program_id_index as u32;
+
         (if program_id_index != 0u32 {
             ::prost::encoding::uint32::encoded_len(1u32, &program_id_index)
         } else {
@@ -783,7 +748,6 @@ impl MessageTransactionRef {
 
     fn token_balance_encoded_len(balance: &TransactionTokenBalance) -> usize {
         let account_index = balance.account_index as u32;
-        let ui_token_amount_len = Self::ui_token_amount_encoded_len(&balance.ui_token_amount);
 
         (if account_index != 0u32 {
             ::prost::encoding::uint32::encoded_len(1u32, &account_index)
@@ -793,19 +757,18 @@ impl MessageTransactionRef {
             ::prost::encoding::string::encoded_len(2u32, &balance.mint)
         } else {
             0
-        } + key_len(3u32)
-            + encoded_len_varint(ui_token_amount_len as u64)
-            + ui_token_amount_len
-            + if !balance.owner.is_empty() {
-                ::prost::encoding::string::encoded_len(4u32, &balance.owner)
-            } else {
-                0
-            }
-            + if !balance.program_id.is_empty() {
-                ::prost::encoding::string::encoded_len(5u32, &balance.program_id)
-            } else {
-                0
-            }
+        } + prost_field_encoded_len(
+            3u32,
+            Self::ui_token_amount_encoded_len(&balance.ui_token_amount),
+        ) + if !balance.owner.is_empty() {
+            ::prost::encoding::string::encoded_len(4u32, &balance.owner)
+        } else {
+            0
+        } + if !balance.program_id.is_empty() {
+            ::prost::encoding::string::encoded_len(5u32, &balance.program_id)
+        } else {
+            0
+        }
     }
 
     fn ui_token_amount_encoded_len(amount: &UiTokenAmount) -> usize {
@@ -881,6 +844,8 @@ impl prost::Message for MessageTransactionStatusRef {
 
     fn encoded_len(&self) -> usize {
         let tx = &self.transaction;
+        let index = tx.index as u64;
+
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
         } else {
@@ -891,13 +856,10 @@ impl prost::Message for MessageTransactionStatusRef {
             } else {
                 0
             }
-            + {
-                let index = tx.index as u64;
-                if index != 0u64 {
-                    ::prost::encoding::uint64::encoded_len(4u32, &index)
-                } else {
-                    0
-                }
+            + if index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(4u32, &index)
+            } else {
+                0
             }
             + convert_to::create_transaction_error(&tx.meta.status)
                 .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
@@ -993,13 +955,11 @@ impl prost::Message for MessageBlockMeta {
             ::prost::encoding::string::encoded_len(2u32, &self.blockhash)
         } else {
             0
-        } + {
-            let len = self.rewards_encoded_len();
-            key_len(3u32) + encoded_len_varint(len as u64) + len
-        } + self
-            .block_time
-            .map(convert_to::create_timestamp)
-            .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, &msg))
+        } + prost_field_encoded_len(3u32, self.rewards_encoded_len())
+            + self
+                .block_time
+                .map(convert_to::create_timestamp)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, &msg))
             + self
                 .block_height
                 .map(convert_to::create_block_height)
@@ -1078,13 +1038,7 @@ impl MessageBlockMeta {
     }
 
     fn rewards_encoded_len(&self) -> usize {
-        key_len(1u32) * self.rewards.len()
-            + self
-                .rewards
-                .iter()
-                .map(Self::reward_encoded_len)
-                .map(|len| len + encoded_len_varint(len as u64))
-                .sum::<usize>()
+        prost_message_repeated_encoded_len!(1u32, self.rewards, Self::reward_encoded_len)
             + self
                 .num_partitions
                 .map(convert_to::create_num_partitions)
@@ -1094,6 +1048,7 @@ impl MessageBlockMeta {
     fn reward_encoded_len(reward: &Reward) -> usize {
         let reward_type = convert_to::create_reward_type(reward.reward_type) as i32;
         let commission = Self::commission_to_str(reward.commission);
+
         (if !reward.pubkey.is_empty() {
             ::prost::encoding::string::encoded_len(1u32, &reward.pubkey)
         } else {
@@ -1187,6 +1142,7 @@ impl prost::Message for MessageEntry {
 
     fn encoded_len(&self) -> usize {
         let index = self.index as u64;
+
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
         } else {
