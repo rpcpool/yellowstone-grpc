@@ -40,7 +40,7 @@ use {
     solana_transaction_status::{
         InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
     },
-    std::{borrow::Cow, ops::Range, sync::Arc},
+    std::{borrow::Cow, sync::Arc},
 };
 
 #[inline]
@@ -284,7 +284,7 @@ impl From<(&MessageAccountInfo, &FilterAccountsDataSlice)> for SubscribeUpdateAc
 
 impl prost::Message for MessageAccountRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::account_encode(&self.account, &self.data_slice, 1u32, buf);
+        Self::account_encode_raw(1u32, &self.account, &self.data_slice, buf);
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
@@ -358,10 +358,10 @@ impl MessageAccountRef {
         }
     }
 
-    fn account_encode(
+    fn account_encode_raw(
+        tag: u32,
         account: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
-        tag: u32,
         buf: &mut impl BufMut,
     ) {
         encode_key(tag, WireType::LengthDelimited, buf);
@@ -1168,7 +1168,7 @@ impl prost::Message for MessageTransactionStatusRef {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageRefBlock {
     pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
@@ -1215,11 +1215,106 @@ impl From<&MessageRefBlock> for SubscribeUpdateBlock {
 
 impl prost::Message for MessageRefBlock {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        todo!()
+        if self.meta.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.meta.slot, buf);
+        }
+        if !self.meta.blockhash.is_empty() {
+            ::prost::encoding::string::encode(2u32, &self.meta.blockhash, buf);
+        }
+        self.meta.rewards_encode_raw(3u32, buf);
+        if let Some(block_time) = self.meta.block_time {
+            let msg = convert_to::create_timestamp(block_time);
+            ::prost::encoding::message::encode(4u32, &msg, buf);
+        }
+        if let Some(block_height) = self.meta.block_height {
+            let msg = convert_to::create_block_height(block_height);
+            ::prost::encoding::message::encode(5u32, &msg, buf);
+        }
+        for tx in &self.transactions {
+            MessageTransactionRef::tx_meta_encode_raw(6u32, tx.as_ref(), buf);
+        }
+        if self.meta.parent_slot != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &self.meta.parent_slot, buf);
+        }
+        if !self.meta.parent_blockhash.is_empty() {
+            ::prost::encoding::string::encode(8u32, &self.meta.parent_blockhash, buf);
+        }
+        if self.meta.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encode(9u32, &self.meta.executed_transaction_count, buf);
+        }
+        if self.updated_account_count != 0u64 {
+            ::prost::encoding::uint64::encode(10u32, &self.updated_account_count, buf);
+        }
+        for account in &self.accounts {
+            MessageAccountRef::account_encode_raw(
+                11u32,
+                account.as_ref(),
+                &self.accounts_data_slice,
+                buf,
+            );
+        }
+        if self.meta.entries_count != 0u64 {
+            ::prost::encoding::uint64::encode(12u32, &self.meta.entries_count, buf);
+        }
+        for entry in &self.entries {
+            encode_key(13u32, WireType::LengthDelimited, buf);
+            encode_varint(entry.encoded_len() as u64, buf);
+            entry.encode_raw(buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
-        todo!()
+        (if self.meta.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.meta.slot)
+        } else {
+            0
+        }) + if !self.meta.blockhash.is_empty() {
+            ::prost::encoding::string::encoded_len(2u32, &self.meta.blockhash)
+        } else {
+            0
+        } + prost_field_encoded_len(3u32, self.meta.rewards_encoded_len())
+            + self
+                .meta
+                .block_time
+                .map(convert_to::create_timestamp)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(4u32, &msg))
+            + self
+                .meta
+                .block_height
+                .map(convert_to::create_block_height)
+                .map_or(0, |msg| ::prost::encoding::message::encoded_len(5u32, &msg))
+            + prost_message_repeated_encoded_len!(6u32, self.transactions, |tx| {
+                MessageTransactionRef::tx_meta_encoded_len(tx.as_ref())
+            })
+            + if self.meta.parent_slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &self.meta.parent_slot)
+            } else {
+                0
+            }
+            + if !self.meta.parent_blockhash.is_empty() {
+                ::prost::encoding::string::encoded_len(8u32, &self.meta.parent_blockhash)
+            } else {
+                0
+            }
+            + if self.meta.executed_transaction_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(9u32, &self.meta.executed_transaction_count)
+            } else {
+                0
+            }
+            + if self.updated_account_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(10u32, &self.updated_account_count)
+            } else {
+                0
+            }
+            + prost_message_repeated_encoded_len!(11u32, self.accounts, |account| {
+                MessageAccountRef::account_encoded_len(account.as_ref(), &self.accounts_data_slice)
+            })
+            + if self.meta.entries_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(12u32, &self.meta.entries_count)
+            } else {
+                0
+            }
+            + prost_message_repeated_encoded_len!(13u32, self.entries, |entry| entry.encoded_len())
     }
 
     fn merge_field(
@@ -1548,7 +1643,12 @@ pub mod tests {
         },
         solana_storage_proto::convert::generated,
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
-        std::{collections::HashSet, fs, str::FromStr},
+        std::{
+            collections::{HashMap, HashSet},
+            fs,
+            ops::Range,
+            str::FromStr,
+        },
     };
 
     pub fn create_message_filters(names: &[&str]) -> MessageFilters {
@@ -1578,7 +1678,7 @@ pub mod tests {
         ]
     }
 
-    pub fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
+    pub fn create_accounts_raw() -> Vec<Arc<MessageAccountInfo>> {
         let pubkey = Pubkey::from_str("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu").unwrap();
         let owner = Pubkey::from_str("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn").unwrap();
         let txn_signature = Signature::from_str("4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5").unwrap();
@@ -1611,9 +1711,12 @@ pub mod tests {
                 }
             }
         }
+        accounts
+    }
 
+    pub fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
         let mut vec = vec![];
-        for account in accounts {
+        for account in create_accounts_raw() {
             for slot in [0, 42] {
                 for is_startup in [true, false] {
                     for data_slice in create_account_data_slice() {
@@ -1669,37 +1772,28 @@ pub mod tests {
     }
 
     pub fn load_predefined_blockmeta() -> Vec<Arc<MessageBlockMeta>> {
-        load_predefined()
+        load_predefined_blocks()
             .into_iter()
-            .flat_map(|block| {
-                let slot = block.parent_slot + 1;
-                let block_meta1 = MessageBlockMeta {
-                    parent_slot: block.parent_slot,
-                    slot,
-                    parent_blockhash: block.previous_blockhash,
-                    blockhash: block.blockhash,
-                    rewards: block.rewards,
-                    num_partitions: block.num_partitions,
-                    block_time: block.block_time,
-                    block_height: block.block_height,
-                    executed_transaction_count: block.transactions.len() as u64,
-                    entries_count: create_entries().len() as u64,
-                };
-
-                let mut block_meta2 = block_meta1.clone();
-                block_meta2.num_partitions = Some(42);
-
-                vec![block_meta1, block_meta2]
-            })
-            .map(Arc::new)
+            .map(|block| (block.meta.blockhash.clone(), block.meta))
+            .collect::<HashMap<_, _>>()
+            .into_values()
             .collect()
     }
 
     pub fn load_predefined_transactions() -> Vec<Arc<MessageTransactionInfo>> {
+        load_predefined_blocks()
+            .into_iter()
+            .flat_map(|block| block.transactions.into_iter().map(|tx| (tx.signature, tx)))
+            .collect::<HashMap<_, _>>()
+            .into_values()
+            .collect()
+    }
+
+    pub fn load_predefined_blocks() -> Vec<MessageRefBlock> {
         load_predefined()
             .into_iter()
             .flat_map(|block| {
-                block
+                let transactions = block
                     .transactions
                     .into_iter()
                     .enumerate()
@@ -1723,8 +1817,54 @@ pub mod tests {
                             index,
                         }
                     })
+                    .map(Arc::new)
+                    .collect::<Vec<_>>();
+
+                let entries = create_entries();
+
+                let slot = block.parent_slot + 1;
+                let block_meta1 = MessageBlockMeta {
+                    parent_slot: block.parent_slot,
+                    slot,
+                    parent_blockhash: block.previous_blockhash,
+                    blockhash: block.blockhash,
+                    rewards: block.rewards,
+                    num_partitions: block.num_partitions,
+                    block_time: block.block_time,
+                    block_height: block.block_height,
+                    executed_transaction_count: transactions.len() as u64,
+                    entries_count: entries.len() as u64,
+                };
+                let mut block_meta2 = block_meta1.clone();
+                block_meta2.num_partitions = Some(42);
+
+                let block_meta1 = Arc::new(block_meta1);
+                let block_meta2 = Arc::new(block_meta2);
+
+                let accounts = create_accounts_raw();
+                create_account_data_slice()
+                    .into_iter()
+                    .flat_map(move |data_slice| {
+                        vec![
+                            MessageRefBlock {
+                                meta: Arc::clone(&block_meta1),
+                                transactions: transactions.clone(),
+                                updated_account_count: accounts.len() as u64,
+                                accounts: accounts.clone(),
+                                accounts_data_slice: data_slice.clone(),
+                                entries: entries.clone(),
+                            },
+                            MessageRefBlock {
+                                meta: Arc::clone(&block_meta2),
+                                transactions: transactions.clone(),
+                                updated_account_count: accounts.len() as u64,
+                                accounts: accounts.clone(),
+                                accounts_data_slice: data_slice,
+                                entries: entries.clone(),
+                            },
+                        ]
+                    })
             })
-            .map(Arc::new)
             .collect()
     }
 
@@ -1734,12 +1874,6 @@ pub mod tests {
             message,
         };
         let update = SubscribeUpdate::from(&msg);
-        //
-        // let len1 = msg.encoded_len();
-        // let len2 = update.encoded_len();
-        // if len1 != len2 {
-        //     println!("my {len1} vs proto {len2}");
-        // }
         assert_eq!(msg.encoded_len(), update.encoded_len());
         assert_eq!(
             SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
@@ -1789,8 +1923,10 @@ pub mod tests {
     }
 
     #[test]
-    const fn test_message_block() {
-        // TODO
+    fn test_message_block() {
+        for block in load_predefined_blocks() {
+            encode_decode_cmp(&["123"], MessageRef::block(block));
+        }
     }
 
     #[test]

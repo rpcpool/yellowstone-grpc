@@ -11,8 +11,11 @@ use {
             filter::FilterAccountsDataSlice,
             message::{MessageAccount, MessageTransaction, MessageTransactionInfo},
             message_ref::{
-                tests::{create_accounts, create_message_filters, load_predefined_transactions},
-                Message, MessageFilters, MessageRef,
+                tests::{
+                    create_accounts, create_message_filters, load_predefined_blocks,
+                    load_predefined_transactions,
+                },
+                Message, MessageFilters, MessageRef, MessageRefBlock,
             },
         },
     },
@@ -41,6 +44,10 @@ fn build_subscribe_transaction(transaction: &MessageTransactionInfo, slot: u64) 
         transaction: Some(transaction.into()),
         slot,
     })
+}
+
+fn build_subscribe_block(block: &MessageRefBlock) -> UpdateOneof {
+    UpdateOneof::Block(block.into())
 }
 
 fn bench_account(c: &mut Criterion) {
@@ -141,6 +148,49 @@ fn bench_account(c: &mut Criterion) {
             b.iter(|| {
                 for transaction in transactions.iter() {
                     let msg = build_subscribe_update(filters, transaction.clone());
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+
+    let blocks = load_predefined_blocks();
+    c.bench_with_input(
+        BenchmarkId::new("blocks", "ref"),
+        &(blocks.as_slice(), &filters),
+        |b, (blocks, filters)| {
+            b.iter(|| {
+                for block in blocks.iter() {
+                    let msg = Message {
+                        filters: (*filters).clone(),
+                        message: MessageRef::block(block.clone()),
+                    };
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+    c.bench_with_input(
+        BenchmarkId::new("blocks", "prost"),
+        &(blocks.as_slice(), &filters),
+        |b, (blocks, filters)| {
+            b.iter(|| {
+                for block in blocks.iter() {
+                    let msg = build_subscribe_update(filters, build_subscribe_block(block));
+                    msg.encode_to_vec().len();
+                }
+            })
+        },
+    );
+
+    let blocks = blocks.iter().map(build_subscribe_block).collect::<Vec<_>>();
+    c.bench_with_input(
+        BenchmarkId::new("blocks", "prost clone"),
+        &(blocks.as_slice(), &filters),
+        |b, (blocks, filters)| {
+            b.iter(|| {
+                for block in blocks.iter() {
+                    let msg = build_subscribe_update(filters, block.clone());
                     msg.encode_to_vec().len();
                 }
             })
