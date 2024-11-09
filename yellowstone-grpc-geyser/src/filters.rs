@@ -1219,10 +1219,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1238,7 +1238,7 @@ mod tests {
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
-        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.len(), 1);
         assert_eq!(
             updates[0].filters,
             FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
@@ -1247,7 +1247,15 @@ mod tests {
             updates[0].message,
             FilteredMessageRef::Transaction(_)
         ));
-        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_filters(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[1].message,
             FilteredMessageRef::TransactionStatus(_)
@@ -1275,10 +1283,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1294,7 +1302,7 @@ mod tests {
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
-        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.len(), 1);
         assert_eq!(
             updates[0].filters,
             FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
@@ -1303,7 +1311,15 @@ mod tests {
             updates[0].message,
             FilteredMessageRef::Transaction(_)
         ));
-        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_filters(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[1].message,
             FilteredMessageRef::TransactionStatus(_)
@@ -1381,10 +1397,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1402,7 +1418,7 @@ mod tests {
         );
         let message = Message::Transaction(message_transaction);
         let updates = filter.get_filters(&message, None);
-        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.len(), 1);
         assert_eq!(
             updates[0].filters,
             FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
@@ -1411,7 +1427,15 @@ mod tests {
             updates[0].message,
             FilteredMessageRef::Transaction(_)
         ));
-        assert_eq!(updates[1].filters, FilteredMessageFilters::new());
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_filters(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredMessageFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
             updates[1].message,
             FilteredMessageRef::TransactionStatus(_)
