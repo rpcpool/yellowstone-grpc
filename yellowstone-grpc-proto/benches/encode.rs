@@ -163,7 +163,7 @@ fn bench_account(c: &mut Criterion) {
                 for block in blocks.iter() {
                     let msg = Message {
                         filters: (*filters).clone(),
-                        message: MessageRef::block(block.clone()),
+                        message: MessageRef::block(Box::new(block.clone())),
                     };
                     msg.encode_to_vec().len();
                 }

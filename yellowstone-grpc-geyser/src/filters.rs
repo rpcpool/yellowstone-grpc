@@ -927,14 +927,14 @@ impl FilterBlocks {
             message_filters.push(filter.clone());
             messages.push(FilteredMessage::new(
                 message_filters,
-                FilteredMessageRef::block(FilteredMessageRefBlock {
+                FilteredMessageRef::block(Box::new(FilteredMessageRefBlock {
                     meta: Arc::clone(&message.meta),
                     transactions,
                     updated_account_count: message.updated_account_count,
                     accounts_data_slice: accounts_data_slice.clone(),
                     accounts,
                     entries,
-                }),
+                })),
             ));
         }
         messages

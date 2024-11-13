@@ -134,7 +134,7 @@ pub enum MessageRef {
     Slot(MessageSlot),                              // 3
     Transaction(MessageTransactionRef),             // 4
     TransactionStatus(MessageTransactionStatusRef), // 10
-    Block(MessageRefBlock),                         // 5
+    Block(Box<MessageRefBlock>),                    // 5
     Ping,                                           // 6
     Pong(MessageRefPong),                           // 9
     BlockMeta(Arc<MessageBlockMeta>),               // 7
@@ -148,7 +148,7 @@ impl From<&MessageRef> for UpdateOneof {
             MessageRef::Slot(msg) => Self::Slot(msg.into()),
             MessageRef::Transaction(msg) => Self::Transaction(msg.into()),
             MessageRef::TransactionStatus(msg) => Self::TransactionStatus(msg.into()),
-            MessageRef::Block(msg) => Self::Block(msg.into()),
+            MessageRef::Block(msg) => Self::Block(msg.as_ref().into()),
             MessageRef::Ping => Self::Ping(SubscribeUpdatePing {}),
             MessageRef::Pong(msg) => Self::Pong(SubscribeUpdatePong { id: msg.id }),
             MessageRef::BlockMeta(msg) => Self::BlockMeta(msg.as_ref().into()),
@@ -232,7 +232,7 @@ impl MessageRef {
         })
     }
 
-    pub const fn block(message: MessageRefBlock) -> Self {
+    pub const fn block(message: Box<MessageRefBlock>) -> Self {
         Self::Block(message)
     }
 
@@ -1925,7 +1925,7 @@ pub mod tests {
     #[test]
     fn test_message_block() {
         for block in load_predefined_blocks() {
-            encode_decode_cmp(&["123"], MessageRef::block(block));
+            encode_decode_cmp(&["123"], MessageRef::block(Box::new(block)));
         }
     }
 
