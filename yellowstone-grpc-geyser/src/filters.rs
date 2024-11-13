@@ -40,7 +40,7 @@ use {
     },
 };
 
-pub type FilteredMessages = SmallVec<[FilteredMessage; 8]>;
+pub type FilteredMessages = SmallVec<[FilteredMessage; 2]>;
 
 macro_rules! filtered_messages_once_owned {
     ($filters:ident, $message:expr) => {{
