@@ -57,7 +57,9 @@ macro_rules! filtered_messages_once_ref {
         let mut messages = FilteredMessages::new();
         if !$filters.is_empty() {
             let mut message_filters = FilteredMessageFilters::new();
-            message_filters.clone_from_slice($filters);
+            for filter in $filters {
+                message_filters.push(filter.clone());
+            }
             messages.push(FilteredMessage::new(message_filters, $message));
         }
         messages
