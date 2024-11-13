@@ -175,7 +175,7 @@ impl Filter {
                 "transactions_status",
                 self.transactions_status.filters.len(),
             ),
-            ("entry", self.entries.filters.len()),
+            ("entries", self.entries.filters.len()),
             ("blocks", self.blocks.filters.len()),
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
