@@ -1,25 +1,31 @@
 use {
+    anyhow::Context,
     backoff::{future::retry, ExponentialBackoff},
     clap::{Parser, Subcommand, ValueEnum},
     futures::{future::TryFutureExt, sink::SinkExt, stream::StreamExt},
     log::{error, info},
-    solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::TransactionError},
-    solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding},
-    std::{collections::HashMap, env, fmt, fs::File, sync::Arc, time::Duration},
+    serde_json::{json, Value},
+    solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature},
+    solana_transaction_status::UiTransactionEncoding,
+    std::{collections::HashMap, env, fs::File, sync::Arc, time::Duration},
     tokio::sync::Mutex,
     tonic::transport::channel::ClientTlsConfig,
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
-    yellowstone_grpc_proto::prelude::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
-        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-        SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccount,
-        SubscribeUpdateTransaction, SubscribeUpdateTransactionStatus,
+    yellowstone_grpc_proto::{
+        convert_from,
+        prelude::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
+            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+            SubscribeUpdate, SubscribeUpdateAccountInfo, SubscribeUpdateEntry,
+            SubscribeUpdateTransactionInfo,
+        },
     },
 };
 
@@ -239,7 +245,7 @@ struct ActionSubscribe {
     #[clap(long)]
     ping: Option<i32>,
 
-    // Resubscribe (only to slots) after
+    /// Resubscribe (only to slots) after
     #[clap(long)]
     resub: Option<usize>,
 }
@@ -429,110 +435,6 @@ impl Action {
     }
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct AccountPretty {
-    is_startup: bool,
-    slot: u64,
-    pubkey: Pubkey,
-    lamports: u64,
-    owner: Pubkey,
-    executable: bool,
-    rent_epoch: u64,
-    data: String,
-    write_version: u64,
-    txn_signature: String,
-}
-
-impl From<SubscribeUpdateAccount> for AccountPretty {
-    fn from(
-        SubscribeUpdateAccount {
-            is_startup,
-            slot,
-            account,
-        }: SubscribeUpdateAccount,
-    ) -> Self {
-        let account = account.expect("should be defined");
-        Self {
-            is_startup,
-            slot,
-            pubkey: Pubkey::try_from(account.pubkey).expect("valid pubkey"),
-            lamports: account.lamports,
-            owner: Pubkey::try_from(account.owner).expect("valid pubkey"),
-            executable: account.executable,
-            rent_epoch: account.rent_epoch,
-            data: hex::encode(account.data),
-            write_version: account.write_version,
-            txn_signature: bs58::encode(account.txn_signature.unwrap_or_default()).into_string(),
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub struct TransactionPretty {
-    slot: u64,
-    signature: Signature,
-    is_vote: bool,
-    tx: EncodedTransactionWithStatusMeta,
-}
-
-impl fmt::Debug for TransactionPretty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct TxWrap<'a>(&'a EncodedTransactionWithStatusMeta);
-        impl<'a> fmt::Debug for TxWrap<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let serialized = serde_json::to_string(self.0).expect("failed to serialize");
-                fmt::Display::fmt(&serialized, f)
-            }
-        }
-
-        f.debug_struct("TransactionPretty")
-            .field("slot", &self.slot)
-            .field("signature", &self.signature)
-            .field("is_vote", &self.is_vote)
-            .field("tx", &TxWrap(&self.tx))
-            .finish()
-    }
-}
-
-impl From<SubscribeUpdateTransaction> for TransactionPretty {
-    fn from(SubscribeUpdateTransaction { transaction, slot }: SubscribeUpdateTransaction) -> Self {
-        let tx = transaction.expect("should be defined");
-        Self {
-            slot,
-            signature: Signature::try_from(tx.signature.as_slice()).expect("valid signature"),
-            is_vote: tx.is_vote,
-            tx: yellowstone_grpc_proto::convert_from::create_tx_with_meta(tx)
-                .expect("valid tx with meta")
-                .encode(UiTransactionEncoding::Base64, Some(u8::MAX), true)
-                .expect("failed to encode"),
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct TransactionStatusPretty {
-    slot: u64,
-    signature: Signature,
-    is_vote: bool,
-    index: u64,
-    err: Option<TransactionError>,
-}
-
-impl From<SubscribeUpdateTransactionStatus> for TransactionStatusPretty {
-    fn from(status: SubscribeUpdateTransactionStatus) -> Self {
-        Self {
-            slot: status.slot,
-            signature: Signature::try_from(status.signature.as_slice()).expect("valid signature"),
-            is_vote: status.is_vote,
-            index: status.index,
-            err: yellowstone_grpc_proto::convert_from::create_tx_error(status.err.as_ref())
-                .expect("valid tx err"),
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env::set_var(
@@ -577,7 +479,9 @@ async fn main() -> anyhow::Result<()> {
                         .get_subscribe_request(commitment)
                         .await
                         .map_err(backoff::Error::Permanent)?
-                        .expect("expect subscribe action");
+                        .ok_or(backoff::Error::Permanent(anyhow::anyhow!(
+                            "expect subscribe action"
+                        )))?;
 
                     geyser_subscribe(client, request, resub).await
                 }
@@ -643,31 +547,104 @@ async fn geyser_subscribe(
     let mut counter = 0;
     while let Some(message) = stream.next().await {
         match message {
-            Ok(msg) => {
-                match msg.update_oneof {
-                    Some(UpdateOneof::Account(account)) => {
-                        let account: AccountPretty = account.into();
-                        info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
-                        );
-                        continue;
+            Ok(SubscribeUpdate {
+                filters,
+                update_oneof,
+            }) => {
+                match update_oneof {
+                    Some(UpdateOneof::Account(msg)) => {
+                        let account = msg
+                            .account
+                            .ok_or(anyhow::anyhow!("no account in the message"))?;
+                        let mut value = create_pretty_account(account)?;
+                        value["isStartup"] = json!(msg.is_startup);
+                        value["slot"] = json!(msg.slot);
+                        print_update("account", &filters, value);
                     }
-                    Some(UpdateOneof::Transaction(tx)) => {
-                        let tx: TransactionPretty = tx.into();
-                        info!(
-                            "new transaction update: filters {:?}, transaction: {:#?}",
-                            msg.filters, tx
+                    Some(UpdateOneof::Slot(msg)) => {
+                        let status = CommitmentLevel::try_from(msg.status)
+                            .context("failed to decode commitment")?;
+                        print_update(
+                            "slot",
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "parent": msg.parent,
+                                "status": status.as_str_name()
+                            }),
                         );
-                        continue;
                     }
-                    Some(UpdateOneof::TransactionStatus(status)) => {
-                        let status: TransactionStatusPretty = status.into();
-                        info!(
-                            "new transaction update: filters {:?}, transaction status: {:?}",
-                            msg.filters, status
+                    Some(UpdateOneof::Transaction(msg)) => {
+                        let tx = msg
+                            .transaction
+                            .ok_or(anyhow::anyhow!("no transaction in the message"))?;
+                        let mut value = create_pretty_transaction(tx)?;
+                        value["slot"] = json!(msg.slot);
+                        print_update("transaction", &filters, value);
+                    }
+                    Some(UpdateOneof::TransactionStatus(msg)) => {
+                        print_update(
+                            "transactionStatus",
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "signature": Signature::try_from(msg.signature.as_slice()).context("invalid signature")?.to_string(),
+                                "isVote": msg.is_vote,
+                                "index": msg.index,
+                                "err": convert_from::create_tx_error(msg.err.as_ref())
+                                    .map_err(|error| anyhow::anyhow!(error))
+                                    .context("invalid error")?,
+                            }),
                         );
-                        continue;
+                    }
+                    Some(UpdateOneof::Entry(msg)) => {
+                        print_update("entry", &filters, create_pretty_entry(msg)?);
+                    }
+                    Some(UpdateOneof::BlockMeta(msg)) => {
+                        print_update(
+                            "blockmeta",
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "blockhash": msg.blockhash,
+                                "rewards": if let Some(rewards) = msg.rewards {
+                                    Some(convert_from::create_rewards_obj(rewards).map_err(|error| anyhow::anyhow!(error))?)
+                                } else {
+                                    None
+                                },
+                                "blockTime": msg.block_time.map(|obj| obj.timestamp),
+                                "blockHeight": msg.block_height.map(|obj| obj.block_height),
+                                "parentSlot": msg.parent_slot,
+                                "parentBlockhash": msg.parent_blockhash,
+                                "executedTransactionCount": msg.executed_transaction_count,
+                                "entriesCount": msg.entries_count,
+                            }),
+                        );
+                    }
+                    Some(UpdateOneof::Block(msg)) => {
+                        print_update(
+                            "block",
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "blockhash": msg.blockhash,
+                                "rewards": if let Some(rewards) = msg.rewards {
+                                    Some(convert_from::create_rewards_obj(rewards).map_err(|error| anyhow::anyhow!(error))?)
+                                } else {
+                                    None
+                                },
+                                "blockTime": msg.block_time.map(|obj| obj.timestamp),
+                                "blockHeight": msg.block_height.map(|obj| obj.block_height),
+                                "parentSlot": msg.parent_slot,
+                                "parentBlockhash": msg.parent_blockhash,
+                                "executedTransactionCount": msg.executed_transaction_count,
+                                "transactions": msg.transactions.into_iter().map(create_pretty_transaction).collect::<Result<Value, _>>()?,
+                                "updatedAccountCount": msg.updated_account_count,
+                                "accounts": msg.accounts.into_iter().map(create_pretty_account).collect::<Result<Value, _>>()?,
+                                "entriesCount": msg.entries_count,
+                                "entries": msg.entries.into_iter().map(create_pretty_entry).collect::<Result<Value, _>>()?,
+                            }),
+                        );
                     }
                     Some(UpdateOneof::Ping(_)) => {
                         // This is necessary to keep load balancers that expect client pings alive. If your load balancer doesn't
@@ -679,9 +656,12 @@ async fn geyser_subscribe(
                             })
                             .await?;
                     }
-                    _ => {}
+                    Some(UpdateOneof::Pong(_)) => {}
+                    None => {
+                        error!("update not found in the message");
+                        break;
+                    }
                 }
-                info!("new message: {msg:?}")
             }
             Err(error) => {
                 error!("error: {error:?}");
@@ -714,4 +694,48 @@ async fn geyser_subscribe(
     }
     info!("stream closed");
     Ok(())
+}
+
+fn create_pretty_account(account: SubscribeUpdateAccountInfo) -> anyhow::Result<Value> {
+    Ok(json!({
+        "pubkey": Pubkey::try_from(account.pubkey).map_err(|_| anyhow::anyhow!("invalid account pubkey"))?.to_string(),
+        "lamports": account.lamports,
+        "owner": Pubkey::try_from(account.owner).map_err(|_| anyhow::anyhow!("invalid account owner"))?.to_string(),
+        "executable": account.executable,
+        "rentEpoch": account.rent_epoch,
+        "data": hex::encode(account.data),
+        "writeVersion": account.write_version,
+        "txnSignature": account.txn_signature.map(|sig| bs58::encode(sig).into_string()),
+    }))
+}
+
+fn create_pretty_transaction(tx: SubscribeUpdateTransactionInfo) -> anyhow::Result<Value> {
+    Ok(json!({
+        "signature": Signature::try_from(tx.signature.as_slice()).context("invalid signature")?.to_string(),
+        "isVote": tx.is_vote,
+        "tx": convert_from::create_tx_with_meta(tx)
+            .map_err(|error| anyhow::anyhow!(error))
+            .context("invalid tx with meta")?
+            .encode(UiTransactionEncoding::Base64, Some(u8::MAX), true)
+            .context("failed to encode transaction")?,
+    }))
+}
+
+fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
+    Ok(json!({
+        "slot": msg.slot,
+        "index": msg.index,
+        "numHashes": msg.num_hashes,
+        "hash": Hash::new_from_array(<[u8; 32]>::try_from(msg.hash.as_slice()).context("invalid entry hash")?).to_string(),
+        "executedTransactionCount": msg.executed_transaction_count,
+        "startingTransactionIndex": msg.starting_transaction_index,
+    }))
+}
+
+fn print_update(kind: &str, filters: &[String], value: Value) {
+    info!(
+        "{kind} ({}): {}",
+        filters.join(","),
+        serde_json::to_string(&value).expect("json serialization failed")
+    );
 }

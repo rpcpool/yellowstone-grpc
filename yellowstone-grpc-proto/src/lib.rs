@@ -291,8 +291,8 @@ pub mod convert_from {
         },
         solana_transaction_status::{
             ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
-            TransactionStatusMeta, TransactionTokenBalance, TransactionWithStatusMeta,
-            VersionedTransactionWithStatusMeta,
+            RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
+            TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
         },
     };
 
@@ -515,6 +515,17 @@ pub mod convert_from {
                 "failed to decode InnerInstructions.index",
             )?,
             instructions,
+        })
+    }
+
+    pub fn create_rewards_obj(rewards: proto::Rewards) -> Result<RewardsAndNumPartitions, String> {
+        Ok(RewardsAndNumPartitions {
+            rewards: rewards
+                .rewards
+                .into_iter()
+                .map(create_reward)
+                .collect::<Result<_, _>>()?,
+            num_partitions: rewards.num_partitions.map(|wrapper| wrapper.num_partitions),
         })
     }
 
