@@ -984,7 +984,7 @@ pub fn parse_accounts_data_slice_create(
             start: s.offset as usize,
             end: (s.offset + s.length) as usize,
         })
-        .collect::<FilterAccountsDataSlice>();
+        .collect::<Vec<_>>();
 
     for (i, slice_a) in slices.iter().enumerate() {
         // check order
@@ -998,7 +998,7 @@ pub fn parse_accounts_data_slice_create(
         }
     }
 
-    Ok(slices)
+    Ok(FilterAccountsDataSlice::new(slices))
 }
 
 #[cfg(test)]

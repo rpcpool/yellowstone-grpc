@@ -328,6 +328,7 @@ impl MessageAccountRef {
         account: &'a MessageAccountInfo,
         data_slice: &'a FilterAccountsDataSlice,
     ) -> Cow<'a, Vec<u8>> {
+        let data_slice = data_slice.as_ref();
         if data_slice.is_empty() {
             Cow::Borrowed(&account.data)
         } else {
@@ -345,6 +346,7 @@ impl MessageAccountRef {
         account: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> usize {
+        let data_slice = data_slice.as_ref();
         if data_slice.is_empty() {
             account.data.len()
         } else {
@@ -1660,22 +1662,15 @@ pub mod tests {
     }
 
     pub fn create_account_data_slice() -> Vec<FilterAccountsDataSlice> {
-        let mut data_slice1 = FilterAccountsDataSlice::new();
-        data_slice1.push(Range { start: 0, end: 0 });
-
-        let mut data_slice2 = FilterAccountsDataSlice::new();
-        data_slice2.push(Range { start: 2, end: 3 });
-
-        let mut data_slice3 = FilterAccountsDataSlice::new();
-        data_slice3.push(Range { start: 1, end: 3 });
-        data_slice3.push(Range { start: 5, end: 10 });
-
-        vec![
-            FilterAccountsDataSlice::new(),
-            data_slice1,
-            data_slice2,
-            data_slice3,
+        [
+            vec![],
+            vec![Range { start: 0, end: 0 }],
+            vec![Range { start: 2, end: 3 }],
+            vec![Range { start: 1, end: 3 }, Range { start: 5, end: 10 }],
         ]
+        .into_iter()
+        .map(FilterAccountsDataSlice::new)
+        .collect()
     }
 
     pub fn create_accounts_raw() -> Vec<Arc<MessageAccountInfo>> {
