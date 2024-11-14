@@ -11,11 +11,12 @@ keywords = { workspace = true }
 publish = true
 
 [dependencies]
-bincode = { workspace = true }
+bincode = { workspace = true, optional = true }
 prost = { workspace = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
 
 [build-dependencies]
@@ -24,9 +25,10 @@ protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 
 [features]
-convert = ["dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
-tonic-compression = ["tonic/gzip", "tonic/zstd"]
 default = ["convert", "tonic-compression"]
+convert = ["dep:bincode", "dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
+plugin = ["dep:thiserror"]
+tonic-compression = ["tonic/gzip", "tonic/zstd"]
 
 [lints]
 workspace = true
