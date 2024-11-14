@@ -1,7 +1,7 @@
 use {
     crate::config::{
         ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
+        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntries, ConfigGrpcFiltersSlots,
         ConfigGrpcFiltersTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -194,7 +194,7 @@ pub struct Filter {
     slots: FilterSlots,
     transactions: FilterTransactions,
     transactions_status: FilterTransactions,
-    entry: FilterEntry,
+    entries: FilterEntries,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
@@ -215,7 +215,7 @@ impl Default for Filter {
                 filter_type: FilterTransactionsType::TransactionStatus,
                 filters: HashMap::new(),
             },
-            entry: FilterEntry::default(),
+            entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
@@ -246,7 +246,7 @@ impl Filter {
                 FilterTransactionsType::TransactionStatus,
                 names,
             )?,
-            entry: FilterEntry::new(&config.entry, &limit.entry, names)?,
+            entries: FilterEntries::new(&config.entry, &limit.entries, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
@@ -299,7 +299,7 @@ impl Filter {
                 "transactions_status",
                 self.transactions_status.filters.len(),
             ),
-            ("entry", self.entry.filters.len()),
+            ("entries", self.entries.filters.len()),
             ("blocks", self.blocks.filters.len()),
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
@@ -308,7 +308,7 @@ impl Filter {
                     + self.slots.filters.len()
                     + self.transactions.filters.len()
                     + self.transactions_status.filters.len()
-                    + self.entry.filters.len()
+                    + self.entries.filters.len()
                     + self.blocks.filters.len()
                     + self.blocks_meta.filters.len(),
             ),
@@ -332,7 +332,7 @@ impl Filter {
                     .get_filters(message)
                     .chain(self.transactions_status.get_filters(message)),
             ),
-            Message::Entry(message) => self.entry.get_filters(message),
+            Message::Entry(message) => self.entries.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
@@ -915,14 +915,14 @@ impl FilterTransactions {
 }
 
 #[derive(Debug, Default, Clone)]
-struct FilterEntry {
+struct FilterEntries {
     filters: Vec<FilterName>,
 }
 
-impl FilterEntry {
+impl FilterEntries {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterEntry>,
-        limit: &ConfigGrpcFiltersEntry,
+        limit: &ConfigGrpcFiltersEntries,
         names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
