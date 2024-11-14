@@ -14,14 +14,14 @@ use {
     solana_sdk::{pubkey::Pubkey, signature::Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
-        borrow::Borrow,
         collections::{HashMap, HashSet},
+        ops::Range,
         str::FromStr,
         sync::Arc,
-        time::{Duration, Instant},
     },
     yellowstone_grpc_proto::{
         convert_to,
+        plugin::filter::{FilterAccountsDataSlice, FilterName, FilterNames},
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
@@ -40,93 +40,6 @@ use {
     },
 };
 
-#[derive(Debug, thiserror::Error)]
-pub enum FilterError {
-    #[error("invalid filter name (max allowed size {limit}), found {size}")]
-    OversizedFilterName { limit: usize, size: usize },
-}
-
-pub type FilterResult<T> = Result<T, FilterError>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FilterName(Arc<String>);
-
-impl AsRef<str> for FilterName {
-    #[inline]
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Borrow<str> for FilterName {
-    #[inline]
-    fn borrow(&self) -> &str {
-        &self.0[..]
-    }
-}
-
-impl FilterName {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(Arc::new(name.into()))
-    }
-
-    pub fn is_uniq(&self) -> bool {
-        Arc::strong_count(&self.0) == 1
-    }
-}
-
-#[derive(Debug)]
-pub struct FilterNames {
-    name_size_limit: usize,
-    names: HashSet<FilterName>,
-    names_size_limit: usize,
-    cleanup_ts: Instant,
-    cleanup_interval: Duration,
-}
-
-impl FilterNames {
-    pub fn new(
-        name_size_limit: usize,
-        names_size_limit: usize,
-        cleanup_interval: Duration,
-    ) -> Self {
-        Self {
-            name_size_limit,
-            names: HashSet::with_capacity(names_size_limit),
-            names_size_limit,
-            cleanup_ts: Instant::now(),
-            cleanup_interval,
-        }
-    }
-
-    pub fn try_clean(&mut self) {
-        if self.names.len() > self.names_size_limit
-            && self.cleanup_ts.elapsed() > self.cleanup_interval
-        {
-            self.names.retain(|name| !name.is_uniq());
-            self.cleanup_ts = Instant::now();
-        }
-    }
-
-    pub fn get(&mut self, name: &str) -> FilterResult<FilterName> {
-        match self.names.get(name) {
-            Some(name) => Ok(name.clone()),
-            None => {
-                if name.len() > self.name_size_limit {
-                    Err(FilterError::OversizedFilterName {
-                        limit: self.name_size_limit,
-                        size: name.len(),
-                    })
-                } else {
-                    let name = FilterName::new(name);
-                    self.names.insert(name.clone());
-                    Ok(name)
-                }
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum FilteredMessage<'a> {
     Slot(&'a MessageSlot),
@@ -141,13 +54,14 @@ pub enum FilteredMessage<'a> {
 impl<'a> FilteredMessage<'a> {
     fn as_proto_account(
         message: &MessageAccountInfo,
-        accounts_data_slice: &[FilterAccountsDataSlice],
+        data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
+        let data_slice = data_slice.as_ref();
+        let data = if data_slice.is_empty() {
             message.data.clone()
         } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
+            let mut data = Vec::with_capacity(data_slice.iter().map(|ds| ds.end - ds.start).sum());
+            for data_slice in data_slice {
                 if message.data.len() >= data_slice.end {
                     data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
                 }
@@ -187,7 +101,7 @@ impl<'a> FilteredMessage<'a> {
         }
     }
 
-    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+    pub fn as_proto(&self, accounts_data_slice: &FilterAccountsDataSlice) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
@@ -283,7 +197,7 @@ pub struct Filter {
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
-    accounts_data_slice: Vec<FilterAccountsDataSlice>,
+    accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
 }
 
@@ -304,7 +218,7 @@ impl Default for Filter {
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
-            accounts_data_slice: vec![],
+            accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
         }
     }
@@ -335,7 +249,10 @@ impl Filter {
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
-            accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
+            accounts_data_slice: parse_accounts_data_slice_create(
+                &config.accounts_data_slice,
+                limit.accounts.data_slice_max,
+            )?,
             ping: config.ping.as_ref().map(|msg| msg.id),
         })
     }
@@ -1189,41 +1106,37 @@ impl FilterBlocksMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct FilterAccountsDataSlice {
-    pub start: usize,
-    pub end: usize,
-    pub length: usize,
-}
+pub fn parse_accounts_data_slice_create(
+    slices: &[SubscribeRequestAccountsDataSlice],
+    limit: usize,
+) -> anyhow::Result<FilterAccountsDataSlice> {
+    anyhow::ensure!(
+        slices.len() <= limit,
+        "Max amount of data_slices reached, only {} allowed",
+        limit
+    );
 
-impl From<&SubscribeRequestAccountsDataSlice> for FilterAccountsDataSlice {
-    fn from(data_slice: &SubscribeRequestAccountsDataSlice) -> Self {
-        Self {
-            start: data_slice.offset as usize,
-            end: (data_slice.offset + data_slice.length) as usize,
-            length: data_slice.length as usize,
-        }
-    }
-}
+    let slices = slices
+        .iter()
+        .map(|s| Range {
+            start: s.offset as usize,
+            end: (s.offset + s.length) as usize,
+        })
+        .collect::<Vec<_>>();
 
-impl FilterAccountsDataSlice {
-    pub fn create(slices: &[SubscribeRequestAccountsDataSlice]) -> anyhow::Result<Vec<Self>> {
-        let slices = slices.iter().map(Into::into).collect::<Vec<Self>>();
-
-        for (i, slice_a) in slices.iter().enumerate() {
-            // check order
-            for slice_b in slices[i + 1..].iter() {
-                anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
-            }
-
-            // check overlap
-            for slice_b in slices[0..i].iter() {
-                anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
-            }
+    for (i, slice_a) in slices.iter().enumerate() {
+        // check order
+        for slice_b in slices[i + 1..].iter() {
+            anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
         }
 
-        Ok(slices)
+        // check overlap
+        for slice_b in slices[0..i].iter() {
+            anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
+        }
     }
+
+    Ok(FilterAccountsDataSlice::new(slices))
 }
 
 #[cfg(test)]

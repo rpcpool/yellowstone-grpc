@@ -23,6 +23,9 @@ pub mod prelude {
 
 pub use {prost, tonic};
 
+#[cfg(feature = "plugin")]
+pub mod plugin;
+
 #[cfg(feature = "convert")]
 pub mod convert_to {
     use {

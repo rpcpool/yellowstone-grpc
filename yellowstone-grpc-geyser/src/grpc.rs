@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
-        filters::{Filter, FilterNames},
+        filters::Filter,
         message::{Message, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransactionInfo},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
@@ -36,13 +36,17 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
-    yellowstone_grpc_proto::prelude::{
-        geyser_server::{Geyser, GeyserServer},
-        subscribe_update::UpdateOneof,
-        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
-        GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest,
-        GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest,
-        PongResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdatePing,
+    yellowstone_grpc_proto::{
+        plugin::filter::FilterNames,
+        prelude::{
+            geyser_server::{Geyser, GeyserServer},
+            subscribe_update::UpdateOneof,
+            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
+            SubscribeUpdatePing,
+        },
     },
 };
 

@@ -4595,6 +4595,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",
+ "thiserror",
  "tonic",
  "tonic-build",
 ]

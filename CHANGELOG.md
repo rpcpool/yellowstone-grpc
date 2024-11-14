@@ -26,6 +26,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: limit length of filter name ([#448](https://github.com/rpcpool/yellowstone-grpc/pull/448))
 - examples: add progress bar to client tool ([#456](https://github.com/rpcpool/yellowstone-grpc/pull/456))
 - proto: change error type in mod `convert_from` ([#457](https://github.com/rpcpool/yellowstone-grpc/pull/457))
+- proto: add mod `plugin` with `FilterNames` cache ([#458](https://github.com/rpcpool/yellowstone-grpc/pull/458))
 
 ### Breaking
 
