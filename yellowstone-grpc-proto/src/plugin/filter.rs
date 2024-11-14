@@ -1,6 +1,7 @@
 use std::{
     borrow::Borrow,
     collections::HashSet,
+    ops::Range,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -89,5 +90,21 @@ impl FilterNames {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FilterAccountsDataSlice(Arc<Vec<Range<usize>>>);
+
+impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {
+    #[inline]
+    fn as_ref(&self) -> &[Range<usize>] {
+        &self.0
+    }
+}
+
+impl FilterAccountsDataSlice {
+    pub fn new(slices: Vec<Range<usize>>) -> Self {
+        Self(Arc::new(slices))
     }
 }

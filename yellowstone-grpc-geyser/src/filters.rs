@@ -15,12 +15,13 @@ use {
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
+        ops::Range,
         str::FromStr,
         sync::Arc,
     },
     yellowstone_grpc_proto::{
         convert_to,
-        plugin::filter::{FilterName, FilterNames},
+        plugin::filter::{FilterAccountsDataSlice, FilterName, FilterNames},
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
@@ -53,13 +54,14 @@ pub enum FilteredMessage<'a> {
 impl<'a> FilteredMessage<'a> {
     fn as_proto_account(
         message: &MessageAccountInfo,
-        accounts_data_slice: &[FilterAccountsDataSlice],
+        data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
+        let data_slice = data_slice.as_ref();
+        let data = if data_slice.is_empty() {
             message.data.clone()
         } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
+            let mut data = Vec::with_capacity(data_slice.iter().map(|ds| ds.end - ds.start).sum());
+            for data_slice in data_slice {
                 if message.data.len() >= data_slice.end {
                     data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
                 }
@@ -99,7 +101,7 @@ impl<'a> FilteredMessage<'a> {
         }
     }
 
-    pub fn as_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
+    pub fn as_proto(&self, accounts_data_slice: &FilterAccountsDataSlice) -> UpdateOneof {
         match self {
             Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: message.slot,
@@ -195,7 +197,7 @@ pub struct Filter {
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
-    accounts_data_slice: Vec<FilterAccountsDataSlice>,
+    accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
 }
 
@@ -216,7 +218,7 @@ impl Default for Filter {
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
-            accounts_data_slice: vec![],
+            accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
         }
     }
@@ -247,7 +249,10 @@ impl Filter {
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
-            accounts_data_slice: FilterAccountsDataSlice::create(&config.accounts_data_slice)?,
+            accounts_data_slice: parse_accounts_data_slice_create(
+                &config.accounts_data_slice,
+                limit.accounts.data_slice_max,
+            )?,
             ping: config.ping.as_ref().map(|msg| msg.id),
         })
     }
@@ -1101,41 +1106,37 @@ impl FilterBlocksMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct FilterAccountsDataSlice {
-    pub start: usize,
-    pub end: usize,
-    pub length: usize,
-}
+pub fn parse_accounts_data_slice_create(
+    slices: &[SubscribeRequestAccountsDataSlice],
+    limit: usize,
+) -> anyhow::Result<FilterAccountsDataSlice> {
+    anyhow::ensure!(
+        slices.len() <= limit,
+        "Max amount of data_slices reached, only {} allowed",
+        limit
+    );
 
-impl From<&SubscribeRequestAccountsDataSlice> for FilterAccountsDataSlice {
-    fn from(data_slice: &SubscribeRequestAccountsDataSlice) -> Self {
-        Self {
-            start: data_slice.offset as usize,
-            end: (data_slice.offset + data_slice.length) as usize,
-            length: data_slice.length as usize,
-        }
-    }
-}
+    let slices = slices
+        .iter()
+        .map(|s| Range {
+            start: s.offset as usize,
+            end: (s.offset + s.length) as usize,
+        })
+        .collect::<Vec<_>>();
 
-impl FilterAccountsDataSlice {
-    pub fn create(slices: &[SubscribeRequestAccountsDataSlice]) -> anyhow::Result<Vec<Self>> {
-        let slices = slices.iter().map(Into::into).collect::<Vec<Self>>();
-
-        for (i, slice_a) in slices.iter().enumerate() {
-            // check order
-            for slice_b in slices[i + 1..].iter() {
-                anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
-            }
-
-            // check overlap
-            for slice_b in slices[0..i].iter() {
-                anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
-            }
+    for (i, slice_a) in slices.iter().enumerate() {
+        // check order
+        for slice_b in slices[i + 1..].iter() {
+            anyhow::ensure!(slice_a.start <= slice_b.start, "data slices out of order");
         }
 
-        Ok(slices)
+        // check overlap
+        for slice_b in slices[0..i].iter() {
+            anyhow::ensure!(slice_a.start >= slice_b.end, "data slices overlap");
+        }
     }
+
+    Ok(FilterAccountsDataSlice::new(slices))
 }
 
 #[cfg(test)]

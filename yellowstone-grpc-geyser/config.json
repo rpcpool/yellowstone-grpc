@@ -30,7 +30,8 @@
         "account_max": 10,
         "account_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
         "owner_max": 10,
-        "owner_reject": ["11111111111111111111111111111111"]
+        "owner_reject": ["11111111111111111111111111111111"],
+        "data_slice_max": 2
       },
       "slots": {
         "max": 1
