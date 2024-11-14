@@ -1,7 +1,6 @@
 pub mod config;
 pub mod filters;
 pub mod grpc;
-pub mod message;
 pub mod metrics;
 pub mod plugin;
 pub mod version;

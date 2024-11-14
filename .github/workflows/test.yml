@@ -96,6 +96,8 @@ jobs:
         run: cargo check -p yellowstone-grpc-geyser --all-targets --tests
       - name: check features in `proto`
         run: cargo check -p yellowstone-grpc-proto --all-targets --tests
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets --tests --all-features
 
       - name: Build
         run: ./ci/cargo-build-test.sh

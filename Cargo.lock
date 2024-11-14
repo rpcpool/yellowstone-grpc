@@ -4588,6 +4588,7 @@ dependencies = [
 name = "yellowstone-grpc-proto"
 version = "2.0.0"
 dependencies = [
+ "agave-geyser-plugin-interface",
  "anyhow",
  "bincode",
  "prost",
