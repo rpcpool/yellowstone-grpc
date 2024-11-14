@@ -1,14 +1,8 @@
 use {
-    crate::{
-        config::{
-            ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-            ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
-            ConfigGrpcFiltersTransactions,
-        },
-        message::{
-            Message, MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
-            MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo,
-        },
+    crate::config::{
+        ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
+        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntries, ConfigGrpcFiltersSlots,
+        ConfigGrpcFiltersTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{pubkey::Pubkey, signature::Signature},
@@ -21,13 +15,20 @@ use {
     },
     yellowstone_grpc_proto::{
         convert_to,
-        plugin::filter::{FilterAccountsDataSlice, FilterName, FilterNames},
+        plugin::{
+            filter::{FilterAccountsDataSlice, FilterName, FilterNames},
+            message::{
+                CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
+                MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+                MessageTransactionInfo,
+            },
+        },
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
@@ -193,7 +194,7 @@ pub struct Filter {
     slots: FilterSlots,
     transactions: FilterTransactions,
     transactions_status: FilterTransactions,
-    entry: FilterEntry,
+    entries: FilterEntries,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
     commitment: CommitmentLevel,
@@ -214,7 +215,7 @@ impl Default for Filter {
                 filter_type: FilterTransactionsType::TransactionStatus,
                 filters: HashMap::new(),
             },
-            entry: FilterEntry::default(),
+            entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
             commitment: CommitmentLevel::Processed,
@@ -245,7 +246,7 @@ impl Filter {
                 FilterTransactionsType::TransactionStatus,
                 names,
             )?,
-            entry: FilterEntry::new(&config.entry, &limit.entry, names)?,
+            entries: FilterEntries::new(&config.entry, &limit.entries, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
@@ -258,10 +259,12 @@ impl Filter {
     }
 
     fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::try_from(commitment).map_err(|_error| {
-            anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}")
-        })
+        let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
+        CommitmentLevelProto::try_from(commitment)
+            .map(Into::into)
+            .map_err(|_error| {
+                anyhow::anyhow!("failed to create CommitmentLevel from {commitment:?}")
+            })
     }
 
     fn decode_pubkeys<'a>(
@@ -296,7 +299,7 @@ impl Filter {
                 "transactions_status",
                 self.transactions_status.filters.len(),
             ),
-            ("entry", self.entry.filters.len()),
+            ("entries", self.entries.filters.len()),
             ("blocks", self.blocks.filters.len()),
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
@@ -305,7 +308,7 @@ impl Filter {
                     + self.slots.filters.len()
                     + self.transactions.filters.len()
                     + self.transactions_status.filters.len()
-                    + self.entry.filters.len()
+                    + self.entries.filters.len()
                     + self.blocks.filters.len()
                     + self.blocks_meta.filters.len(),
             ),
@@ -329,7 +332,7 @@ impl Filter {
                     .get_filters(message)
                     .chain(self.transactions_status.get_filters(message)),
             ),
-            Message::Entry(message) => self.entry.get_filters(message),
+            Message::Entry(message) => self.entries.get_filters(message),
             Message::Block(message) => self.blocks.get_filters(message),
             Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
         }
@@ -912,14 +915,14 @@ impl FilterTransactions {
 }
 
 #[derive(Debug, Default, Clone)]
-struct FilterEntry {
+struct FilterEntries {
     filters: Vec<FilterName>,
 }
 
-impl FilterEntry {
+impl FilterEntries {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterEntry>,
-        limit: &ConfigGrpcFiltersEntry,
+        limit: &ConfigGrpcFiltersEntries,
         names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
@@ -1143,11 +1146,7 @@ pub fn parse_accounts_data_slice_create(
 mod tests {
     use {
         super::{FilterName, FilterNames, FilteredMessage},
-        crate::{
-            config::ConfigGrpcFilters,
-            filters::Filter,
-            message::{Message, MessageTransaction, MessageTransactionInfo},
-        },
+        crate::{config::ConfigGrpcFilters, filters::Filter},
         solana_sdk::{
             hash::Hash,
             message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
@@ -1157,8 +1156,12 @@ mod tests {
         },
         solana_transaction_status::TransactionStatusMeta,
         std::{collections::HashMap, sync::Arc, time::Duration},
-        yellowstone_grpc_proto::geyser::{
-            SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
+        yellowstone_grpc_proto::{
+            geyser::{
+                SubscribeRequest, SubscribeRequestFilterAccounts,
+                SubscribeRequestFilterTransactions,
+            },
+            plugin::message::{Message, MessageTransaction, MessageTransactionInfo},
         },
     };
 
