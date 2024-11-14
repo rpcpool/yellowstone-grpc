@@ -52,6 +52,10 @@ struct Args {
     #[clap(long)]
     commitment: Option<ArgsCommitment>,
 
+    /// Max message size before decoding, full blocks can be super large, default is 1GiB
+    #[clap(long, default_value_t = 1024 * 1024 * 1024)]
+    max_decoding_message_size: usize,
+
     #[command(subcommand)]
     action: Action,
 }
@@ -67,6 +71,7 @@ impl Args {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(10))
             .tls_config(ClientTlsConfig::new().with_native_roots())?
+            .max_decoding_message_size(self.max_decoding_message_size)
             .connect()
             .await
             .map_err(Into::into)

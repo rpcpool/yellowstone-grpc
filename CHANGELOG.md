@@ -25,6 +25,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: add txn_signature filter ([#445](https://github.com/rpcpool/yellowstone-grpc/pull/445))
 - geyser: limit length of filter name ([#448](https://github.com/rpcpool/yellowstone-grpc/pull/448))
 - geyser: wrap messages in Arc ([#449](https://github.com/rpcpool/yellowstone-grpc/pull/449))
+- examples: add progress bar to client tool ([#456](https://github.com/rpcpool/yellowstone-grpc/pull/456))
 
 ### Breaking
 
