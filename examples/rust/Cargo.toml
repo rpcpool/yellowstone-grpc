@@ -22,6 +22,7 @@ clap = { workspace = true, features = ["derive"] }
 env_logger = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+indicatif = { workspace = true }
 log = { workspace = true }
 maplit = { workspace = true }
 serde_json = { workspace = true }
