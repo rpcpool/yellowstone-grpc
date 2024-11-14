@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 2.0.0
-    "yellowstone-grpc-client", # 2.0.0
-    "yellowstone-grpc-geyser", # 2.0.0
-    "yellowstone-grpc-proto", # 2.0.0
+  "examples/rust",           # 2.0.0
+  "yellowstone-grpc-client", # 2.0.0
+  "yellowstone-grpc-geyser", # 2.0.0
+  "yellowstone-grpc-proto",  # 2.0.0
 ]
 
 [workspace.package]

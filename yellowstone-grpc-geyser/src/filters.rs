@@ -1,7 +1,7 @@
 use {
     crate::config::{
         ConfigGrpcFilters, ConfigGrpcFiltersAccounts, ConfigGrpcFiltersBlocks,
-        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntry, ConfigGrpcFiltersSlots,
+        ConfigGrpcFiltersBlocksMeta, ConfigGrpcFiltersEntries, ConfigGrpcFiltersSlots,
         ConfigGrpcFiltersTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -124,7 +124,7 @@ impl Filter {
                 FilterTransactionsType::TransactionStatus,
                 names,
             )?,
-            entries: FilterEntries::new(&config.entry, &limit.entry, names)?,
+            entries: FilterEntries::new(&config.entry, &limit.entries, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limit.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limit.blocks_meta, names)?,
             commitment: Self::decode_commitment(config.commitment)?,
@@ -137,7 +137,7 @@ impl Filter {
     }
 
     fn decode_commitment(commitment: Option<i32>) -> anyhow::Result<CommitmentLevel> {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
+        let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
         CommitmentLevelProto::try_from(commitment)
             .map(Into::into)
             .map_err(|_error| {
@@ -787,7 +787,7 @@ struct FilterEntries {
 impl FilterEntries {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterEntry>,
-        limit: &ConfigGrpcFiltersEntry,
+        limit: &ConfigGrpcFiltersEntries,
         names: &mut FilterNames,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
@@ -1006,7 +1006,6 @@ pub fn parse_accounts_data_slice_create(
 #[cfg(test)]
 mod tests {
     use {
-        super::{FilterName, FilterNames},
         crate::{config::ConfigGrpcFilters, filters::Filter},
         solana_sdk::{
             hash::Hash,
@@ -1023,6 +1022,7 @@ mod tests {
                 SubscribeRequestFilterTransactions,
             },
             plugin::{
+                filter::{FilterName, FilterNames},
                 message::{Message, MessageTransaction, MessageTransactionInfo},
                 message_ref::{
                     MessageFilters as FilteredMessageFilters, MessageRef as FilteredMessageRef,

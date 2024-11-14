@@ -41,13 +41,18 @@ tonic-build = { workspace = true }
 
 [features]
 default = ["convert", "tonic-compression"]
-convert = ["dep:bincode", "dep:solana-account-decoder", "dep:solana-sdk", "dep:solana-transaction-status"]
+convert = [
+  "dep:bincode",
+  "dep:solana-account-decoder",
+  "dep:solana-sdk",
+  "dep:solana-transaction-status",
+]
 plugin = [
-    "convert",
-    "dep:agave-geyser-plugin-interface",
-    "dep:bytes",
-    "dep:smallvec",
-    "dep:thiserror"
+  "convert",
+  "dep:agave-geyser-plugin-interface",
+  "dep:bytes",
+  "dep:smallvec",
+  "dep:thiserror",
 ]
 plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
 tonic-compression = ["tonic/gzip", "tonic/zstd"]

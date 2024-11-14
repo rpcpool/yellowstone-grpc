@@ -222,7 +222,7 @@ pub struct ConfigGrpcFilters {
     pub transactions_status: ConfigGrpcFiltersTransactions,
     pub blocks: ConfigGrpcFiltersBlocks,
     pub blocks_meta: ConfigGrpcFiltersBlocksMeta,
-    pub entry: ConfigGrpcFiltersEntry,
+    pub entries: ConfigGrpcFiltersEntries,
 }
 
 impl ConfigGrpcFilters {
@@ -376,12 +376,12 @@ impl Default for ConfigGrpcFiltersBlocksMeta {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ConfigGrpcFiltersEntry {
+pub struct ConfigGrpcFiltersEntries {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub max: usize,
 }
 
-impl Default for ConfigGrpcFiltersEntry {
+impl Default for ConfigGrpcFiltersEntries {
     fn default() -> Self {
         Self { max: usize::MAX }
     }

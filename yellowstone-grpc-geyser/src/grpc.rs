@@ -160,7 +160,7 @@ impl BlockMetaStorage {
     }
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
+        let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
         CommitmentLevelProto::try_from(commitment)
             .map(Into::into)
             .map_err(|_error| {
@@ -547,13 +547,13 @@ impl GrpcService {
                                 Message::BlockMeta(_) => "BlockMeta",
                                 Message::Block(_) => "Block",
                             };
-                            metrics::update_invalid_blocks(format!("unexpected message {}", kind));
+                            metrics::update_invalid_blocks(format!("unexpected message {kind}"));
                             match block_fail_action {
                                 ConfigBlockFailAction::Log => {
-                                    error!("unexpected message #{} -- {} (invalid order)", message.get_slot(), kind);
+                                    error!("unexpected message #{} -- {kind} (invalid order)", message.get_slot());
                                 }
                                 ConfigBlockFailAction::Panic => {
-                                    panic!("unexpected message #{} -- {} (invalid order)", message.get_slot(), kind);
+                                    panic!("unexpected message #{} -- {kind} (invalid order)", message.get_slot());
                                 }
                             }
                         }
