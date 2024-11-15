@@ -5,33 +5,29 @@ on:
   schedule:
     - cron: "00 19 * * 1-5"
   workflow_dispatch:
+  pull_request:
 jobs:
   git-sync-branches:
     runs-on: ubuntu-latest
     steps:
-      - name: git-sync
-        uses: wei/git-sync@v3
+      - uses: actions/checkout@v4
         with:
-          source_repo: "rpcpool/yellowstone-grpc"
-          destination_repo: "helius-labs/yellowstone-grpc"
-          source_branch: "refs/remotes/source/*"
-          destination_branch: "refs/heads/*"
-  git-sync-tags:
-    runs-on: ubuntu-latest
-    steps:
-      - name: git-sync
-        uses: wei/git-sync@v3
-        with:
-          source_repo: "rpcpool/yellowstone-grpc"
-          destination_repo: "helius-labs/yellowstone-grpc"
-          source_branch: "refs/remotes/source/*"
-          destination_branch: "refs/heads/*"
-  git-rebase:
-    runs-on: ubuntu-latest
-    steps:
-      - name: git-rebase
-        uses: tiacsys/git-rebase@v3
-        with:
-          repo: "rpcpool/yellowstone-grpc"
-          source_branch: "master"
-          destination_branch: "master"
+          ref: master
+          submodules: recursive
+          fetch-depth: 0
+      - name: Setup email
+        run: |
+          git config --global user.email "liam@helius.xyz"
+          git config --global user.name "Helius Infrastructure"
+      - name: Add upstream
+        run: git remote add upstream https://github.com/rpcpool/yellowstone-grpc
+      - name: Fetch upstream
+        run: git fetch --all --tags
+      - name: rebase master
+        run: git pull upstream master --rebase
+      - name: pull origin
+        run: git pull origin master
+      - name: push all
+        run: git push origin --all
+      - name: push tags
+        run: git push origin --tags
