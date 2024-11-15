@@ -7,7 +7,7 @@ use {
         },
     },
     crate::{
-        convert_to,
+        convert_from, convert_to,
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
@@ -29,18 +29,21 @@ use {
     smallvec::SmallVec,
     solana_account_decoder::parse_token::UiTokenAmount,
     solana_sdk::{
+        hash::{Hash, HASH_BYTES},
         instruction::CompiledInstruction,
         message::{
-            v0::{LoadedMessage, MessageAddressTableLookup},
-            LegacyMessage, MessageHeader, SanitizedMessage,
+            v0::{LoadedAddresses, LoadedMessage, MessageAddressTableLookup},
+            AddressLoader, AddressLoaderError, LegacyMessage, MessageHeader, SanitizedMessage,
         },
-        transaction::SanitizedTransaction,
+        pubkey::Pubkey,
+        signature::{Keypair, Signature, Signer},
+        transaction::{MessageHash, SanitizedTransaction, Transaction},
         transaction_context::TransactionReturnData,
     },
     solana_transaction_status::{
         InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
     },
-    std::{borrow::Cow, sync::Arc},
+    std::{borrow::Cow, collections::HashSet, sync::Arc},
 };
 
 #[inline]
@@ -157,6 +160,22 @@ impl From<&MessageRef> for UpdateOneof {
     }
 }
 
+impl From<UpdateOneof> for MessageRef {
+    fn from(message: UpdateOneof) -> Self {
+        match message {
+            UpdateOneof::Account(msg) => Self::Account(msg.into()),
+            UpdateOneof::Slot(msg) => Self::Slot(msg.into()),
+            UpdateOneof::Transaction(msg) => Self::Transaction(msg.into()),
+            UpdateOneof::TransactionStatus(msg) => Self::TransactionStatus(msg.into()),
+            UpdateOneof::Entry(msg) => Self::Entry(Arc::new(msg.into())),
+            UpdateOneof::BlockMeta(msg) => Self::BlockMeta(Arc::new(msg.into())),
+            UpdateOneof::Block(msg) => Self::Block(Box::new(msg.into())),
+            UpdateOneof::Ping(SubscribeUpdatePing {}) => Self::Ping,
+            UpdateOneof::Pong(SubscribeUpdatePong { id }) => Self::pong(id),
+        }
+    }
+}
+
 impl prost::Message for MessageRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
@@ -259,10 +278,21 @@ pub struct MessageAccountRef {
 
 impl From<&MessageAccountRef> for SubscribeUpdateAccount {
     fn from(msg: &MessageAccountRef) -> Self {
-        SubscribeUpdateAccount {
+        Self {
             account: Some((msg.account.as_ref(), &msg.data_slice).into()),
             slot: msg.slot,
             is_startup: msg.is_startup,
+        }
+    }
+}
+
+impl From<SubscribeUpdateAccount> for MessageAccountRef {
+    fn from(msg: SubscribeUpdateAccount) -> Self {
+        Self {
+            account: Arc::new(msg.account.expect("no account message").into()),
+            slot: msg.slot,
+            is_startup: msg.is_startup,
+            data_slice: FilterAccountsDataSlice::default(),
         }
     }
 }
@@ -278,6 +308,23 @@ impl From<(&MessageAccountInfo, &FilterAccountsDataSlice)> for SubscribeUpdateAc
             data: MessageAccountRef::accout_data_slice(account, data_slice).into_owned(),
             write_version: account.write_version,
             txn_signature: account.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+}
+
+impl From<SubscribeUpdateAccountInfo> for MessageAccountInfo {
+    fn from(account: SubscribeUpdateAccountInfo) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(account.pubkey).expect("invalid pubkey"),
+            lamports: account.lamports,
+            owner: Pubkey::try_from(account.owner).expect("invalid owner"),
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: account.data,
+            write_version: account.write_version,
+            txn_signature: account
+                .txn_signature
+                .map(|sig| Signature::try_from(sig).expect("invalid signature")),
         }
     }
 }
@@ -441,6 +488,18 @@ impl From<&MessageSlot> for SubscribeUpdateSlot {
     }
 }
 
+impl From<SubscribeUpdateSlot> for MessageSlot {
+    fn from(msg: SubscribeUpdateSlot) -> Self {
+        Self {
+            slot: msg.slot,
+            parent: msg.parent,
+            status: CommitmentLevelProto::try_from(msg.status)
+                .expect("valid commitment")
+                .into(),
+        }
+    }
+}
+
 impl prost::Message for MessageSlot {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         let status = CommitmentLevelProto::from(self.status) as i32;
@@ -501,6 +560,15 @@ impl From<&MessageTransactionRef> for SubscribeUpdateTransaction {
     }
 }
 
+impl From<SubscribeUpdateTransaction> for MessageTransactionRef {
+    fn from(msg: SubscribeUpdateTransaction) -> Self {
+        Self {
+            transaction: Arc::new(msg.transaction.expect("no transaction message").into()),
+            slot: msg.slot,
+        }
+    }
+}
+
 impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
     fn from(tx: &MessageTransactionInfo) -> Self {
         SubscribeUpdateTransactionInfo {
@@ -509,6 +577,43 @@ impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
             transaction: Some(convert_to::create_transaction(&tx.transaction)),
             meta: Some(convert_to::create_transaction_meta(&tx.meta)),
             index: tx.index as u64,
+        }
+    }
+}
+
+impl From<SubscribeUpdateTransactionInfo> for MessageTransactionInfo {
+    fn from(msg: SubscribeUpdateTransactionInfo) -> Self {
+        #[derive(Debug, Clone)]
+        struct SimpleAddressLoader;
+
+        impl AddressLoader for SimpleAddressLoader {
+            fn load_addresses(
+                self,
+                _lookups: &[MessageAddressTableLookup],
+            ) -> Result<LoadedAddresses, AddressLoaderError> {
+                Ok(LoadedAddresses::default())
+            }
+        }
+
+        let versioned_tx =
+            convert_from::create_tx_versioned(msg.transaction.expect("no transaction message"))
+                .expect("invalid transaction message");
+        let transaction = SanitizedTransaction::try_create(
+            versioned_tx,
+            MessageHash::Compute,
+            None,
+            SimpleAddressLoader,
+            &HashSet::new(),
+        )
+        .expect("failed to create tx");
+
+        Self {
+            signature: Signature::try_from(msg.signature).expect("invalid signature"),
+            is_vote: msg.is_vote,
+            transaction,
+            meta: convert_from::create_tx_meta(msg.meta.expect("no meta message"))
+                .expect("invalid meta message"),
+            index: msg.index as usize,
         }
     }
 }
@@ -1112,6 +1217,45 @@ impl From<&MessageTransactionStatusRef> for SubscribeUpdateTransactionStatus {
     }
 }
 
+impl From<SubscribeUpdateTransactionStatus> for MessageTransactionStatusRef {
+    fn from(msg: SubscribeUpdateTransactionStatus) -> Self {
+        let keypair = Keypair::new();
+        let message = solana_sdk::message::Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                ..MessageHeader::default()
+            },
+            account_keys: vec![keypair.pubkey()],
+            ..solana_sdk::message::Message::default()
+        };
+
+        let transaction = SanitizedTransaction::from_transaction_for_tests(Transaction::new(
+            &[&keypair],
+            message,
+            Hash::default(),
+        ));
+
+        Self {
+            slot: msg.slot,
+            transaction: Arc::new(MessageTransactionInfo {
+                signature: Signature::try_from(msg.signature).expect("invalid signature"),
+                is_vote: msg.is_vote,
+                transaction,
+                meta: TransactionStatusMeta {
+                    status: match convert_from::create_tx_error(msg.err.as_ref())
+                        .expect("invalid meta err")
+                    {
+                        Some(err) => Err(err),
+                        None => Ok(()),
+                    },
+                    ..Default::default()
+                },
+                index: msg.index as usize,
+            }),
+        }
+    }
+}
+
 impl prost::Message for MessageTransactionStatusRef {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         if self.slot != 0u64 {
@@ -1210,6 +1354,54 @@ impl From<&MessageRefBlock> for SubscribeUpdateBlock {
                 .entries
                 .iter()
                 .map(|entry| entry.as_ref().into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SubscribeUpdateBlock> for MessageRefBlock {
+    fn from(msg: SubscribeUpdateBlock) -> Self {
+        let mut rewards = msg
+            .rewards
+            .map(|rewards| convert_from::create_rewards_obj(rewards).expect("invalid rewards"));
+
+        let meta = Arc::new(MessageBlockMeta {
+            parent_slot: msg.parent_slot,
+            slot: msg.slot,
+            parent_blockhash: msg.parent_blockhash,
+            blockhash: msg.blockhash,
+            rewards: rewards
+                .as_mut()
+                .map(|rewards| std::mem::take(&mut rewards.rewards))
+                .unwrap_or_default(),
+            num_partitions: rewards.and_then(|obj| obj.num_partitions),
+            block_time: msg.block_time.map(|wrapper| wrapper.timestamp),
+            block_height: msg.block_height.map(|wrapper| wrapper.block_height),
+            executed_transaction_count: msg.executed_transaction_count,
+            entries_count: msg.entries_count,
+        });
+
+        Self {
+            meta,
+            transactions: msg
+                .transactions
+                .into_iter()
+                .map(Into::into)
+                .map(Arc::new)
+                .collect(),
+            updated_account_count: msg.updated_account_count,
+            accounts: msg
+                .accounts
+                .into_iter()
+                .map(Into::into)
+                .map(Arc::new)
+                .collect(),
+            accounts_data_slice: FilterAccountsDataSlice::default(),
+            entries: msg
+                .entries
+                .into_iter()
+                .map(Into::into)
+                .map(Arc::new)
                 .collect(),
         }
     }
@@ -1353,6 +1545,30 @@ impl From<&MessageBlockMeta> for SubscribeUpdateBlockMeta {
             block_height: msg.block_height.map(convert_to::create_block_height),
             parent_slot: msg.parent_slot,
             parent_blockhash: msg.parent_blockhash.clone(),
+            executed_transaction_count: msg.executed_transaction_count,
+            entries_count: msg.entries_count,
+        }
+    }
+}
+
+impl From<SubscribeUpdateBlockMeta> for MessageBlockMeta {
+    fn from(msg: SubscribeUpdateBlockMeta) -> Self {
+        let mut rewards = msg
+            .rewards
+            .map(|rewards| convert_from::create_rewards_obj(rewards).expect("invalid rewards"));
+
+        Self {
+            parent_slot: msg.parent_slot,
+            slot: msg.slot,
+            parent_blockhash: msg.parent_blockhash,
+            blockhash: msg.blockhash,
+            rewards: rewards
+                .as_mut()
+                .map(|rewards| std::mem::take(&mut rewards.rewards))
+                .unwrap_or_default(),
+            num_partitions: rewards.and_then(|obj| obj.num_partitions),
+            block_time: msg.block_time.map(|wrapper| wrapper.timestamp),
+            block_height: msg.block_height.map(|wrapper| wrapper.block_height),
             executed_transaction_count: msg.executed_transaction_count,
             entries_count: msg.entries_count,
         }
@@ -1558,6 +1774,19 @@ impl From<&MessageEntry> for SubscribeUpdateEntry {
             index: msg.index as u64,
             num_hashes: msg.num_hashes,
             hash: msg.hash.into(),
+            executed_transaction_count: msg.executed_transaction_count,
+            starting_transaction_index: msg.starting_transaction_index,
+        }
+    }
+}
+
+impl From<SubscribeUpdateEntry> for MessageEntry {
+    fn from(msg: SubscribeUpdateEntry) -> Self {
+        Self {
+            slot: msg.slot,
+            index: msg.index as usize,
+            num_hashes: msg.num_hashes,
+            hash: <[u8; HASH_BYTES]>::try_from(msg.hash).expect("invalid entry hash"),
             executed_transaction_count: msg.executed_transaction_count,
             starting_transaction_index: msg.starting_transaction_index,
         }
