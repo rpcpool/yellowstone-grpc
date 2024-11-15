@@ -12,8 +12,8 @@ jobs:
       - name: git-sync
         uses: wei/git-sync@v3
         with:
-          source_repo: "rpcpool/yellowstone-grpc"
-          destination_repo: "helius-labs/yellowstone-grpc"
+          source_repo: "https://github.com/rpcpool/yellowstone-grpc"
+          destination_repo: "https://github.com/helius-labs/yellowstone-grpc"
           source_branch: "refs/remotes/source/*"
           destination_branch: "refs/heads/*"
   git-sync-tags:
@@ -22,8 +22,8 @@ jobs:
       - name: git-sync
         uses: wei/git-sync@v3
         with:
-          source_repo: "rpcpool/yellowstone-grpc"
-          destination_repo: "helius-labs/yellowstone-grpc"
+          source_repo: "https://github.com/rpcpool/yellowstone-grpc"
+          destination_repo: "https://github.com/helius-labs/yellowstone-grpc"
           source_branch: "refs/remotes/source/*"
           destination_branch: "refs/heads/*"
   git-rebase:
@@ -32,6 +32,6 @@ jobs:
       - name: git-rebase
         uses: tiacsys/git-rebase@v3
         with:
-          repo: "rpcpool/yellowstone-grpc"
+          repo: "https://github.com/rpcpool/yellowstone-grpc"
           source_branch: "master"
           destination_branch: "master"
