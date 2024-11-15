@@ -31,7 +31,7 @@ solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
 tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
-yellowstone-grpc-proto = { workspace = true, default-features = true }
+yellowstone-grpc-proto = { workspace = true, default-features = true, features = ["plugin"] }
 
 [lints]
 workspace = true
