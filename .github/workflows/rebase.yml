@@ -1,0 +1,37 @@
+name: "Sync helius from upstream rpcpool"
+
+on:
+  #  push:
+  schedule:
+    - cron: "00 19 * * 1-5"
+  workflow_dispatch:
+jobs:
+  git-sync-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: git-sync
+        uses: wei/git-sync@v3
+        with:
+          source_repo: "rpcpool/yellowstone-grpc"
+          destination_repo: "helius-labs/yellowstone-grpc"
+          source_branch: "refs/remotes/source/*"
+          destination_branch: "refs/heads/*"
+  git-sync-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: git-sync
+        uses: wei/git-sync@v3
+        with:
+          source_repo: "rpcpool/yellowstone-grpc"
+          destination_repo: "helius-labs/yellowstone-grpc"
+          source_branch: "refs/remotes/source/*"
+          destination_branch: "refs/heads/*"
+  git-rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: git-rebase
+        uses: tiacsys/git-rebase@v3
+        with:
+          repo: "rpcpool/yellowstone-grpc"
+          source_branch: "master"
+          destination_branch: "master"
