@@ -1,6 +1,21 @@
 use {
     crate::{
         convert_to,
+        geyser::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdateEntry, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
+        },
         plugin::{
             filter::{
                 limits::{
@@ -16,21 +31,7 @@ use {
                 MessageTransactionInfo,
             },
         },
-        prelude::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
-        },
+        solana::storage::confirmed_block::TransactionError as SubscribeUpdateTransactionError,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{
@@ -1196,16 +1197,16 @@ mod tests {
     use {
         super::{Filter, FilteredMessage},
         crate::{
+            geyser::{
+                SubscribeRequest, SubscribeRequestFilterAccounts,
+                SubscribeRequestFilterTransactions,
+            },
             plugin::{
                 filter::{
                     limits::FilterLimits,
                     name::{FilterName, FilterNames},
                 },
                 message::{Message, MessageTransaction, MessageTransactionInfo},
-            },
-            prelude::{
-                SubscribeRequest, SubscribeRequestFilterAccounts,
-                SubscribeRequestFilterTransactions,
             },
         },
         solana_sdk::{

@@ -235,8 +235,7 @@ pub mod convert_to {
     pub fn create_rewards_obj(rewards: &[Reward], num_partitions: Option<u64>) -> proto::Rewards {
         proto::Rewards {
             rewards: create_rewards(rewards),
-            num_partitions: num_partitions
-                .map(|num_partitions| proto::NumPartitions { num_partitions }),
+            num_partitions: num_partitions.map(create_num_partitions),
         }
     }
 
@@ -249,15 +248,23 @@ pub mod convert_to {
             pubkey: reward.pubkey.clone(),
             lamports: reward.lamports,
             post_balance: reward.post_balance,
-            reward_type: match reward.reward_type {
-                None => proto::RewardType::Unspecified,
-                Some(RewardType::Fee) => proto::RewardType::Fee,
-                Some(RewardType::Rent) => proto::RewardType::Rent,
-                Some(RewardType::Staking) => proto::RewardType::Staking,
-                Some(RewardType::Voting) => proto::RewardType::Voting,
-            } as i32,
+            reward_type: create_reward_type(reward.reward_type) as i32,
             commission: reward.commission.map(|c| c.to_string()).unwrap_or_default(),
         }
+    }
+
+    pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::RewardType {
+        match reward_type {
+            None => proto::RewardType::Unspecified,
+            Some(RewardType::Fee) => proto::RewardType::Fee,
+            Some(RewardType::Rent) => proto::RewardType::Rent,
+            Some(RewardType::Staking) => proto::RewardType::Staking,
+            Some(RewardType::Voting) => proto::RewardType::Voting,
+        }
+    }
+
+    pub const fn create_num_partitions(num_partitions: u64) -> proto::NumPartitions {
+        proto::NumPartitions { num_partitions }
     }
 
     pub fn create_return_data(return_data: &TransactionReturnData) -> proto::ReturnData {
