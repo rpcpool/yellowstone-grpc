@@ -18,9 +18,6 @@ pub struct Config {
     pub grpc: ConfigGrpc,
     #[serde(default)]
     pub prometheus: Option<ConfigPrometheus>,
-    /// Action on block re-construction error
-    #[serde(default)]
-    pub block_fail_action: ConfigBlockFailAction,
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
     pub debug_clients_http: bool,
@@ -392,19 +389,6 @@ impl Default for ConfigGrpcFiltersEntries {
 pub struct ConfigPrometheus {
     /// Address of Prometheus service.
     pub address: SocketAddr,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ConfigBlockFailAction {
-    Log,
-    Panic,
-}
-
-impl Default for ConfigBlockFailAction {
-    fn default() -> Self {
-        Self::Log
-    }
 }
 
 fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>

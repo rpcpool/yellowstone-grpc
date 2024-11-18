@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
+        config::{ConfigGrpc, ConfigGrpcFilters},
         filters::Filter,
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
@@ -305,7 +305,6 @@ impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
         config: ConfigGrpc,
-        block_fail_action: ConfigBlockFailAction,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
     ) -> anyhow::Result<(
@@ -391,12 +390,7 @@ impl GrpcService {
                 .enable_all()
                 .build()
                 .expect("Failed to create a new runtime for geyser loop")
-                .block_on(Self::geyser_loop(
-                    messages_rx,
-                    blocks_meta_tx,
-                    broadcast_tx,
-                    block_fail_action,
-                ));
+                .block_on(Self::geyser_loop(messages_rx, blocks_meta_tx, broadcast_tx));
         });
 
         // Run Server
@@ -432,7 +426,6 @@ impl GrpcService {
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Message>>)>,
-        block_fail_action: ConfigBlockFailAction,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
@@ -462,7 +455,7 @@ impl GrpcService {
 
                     // Remove outdated block reconstruction info
                     match &message {
-                        // On startup we can receive few Confirmed/Finalized slots without BlockMeta message
+                        // On startup we can receive multiple Confirmed/Finalized slots without BlockMeta message
                         // With saved first Processed slot we can ignore errors caused by startup process
                         Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
                             processed_first_slot = Some(msg.slot);
@@ -501,14 +494,6 @@ impl GrpcService {
                                                     let reason = reasons.join(",");
 
                                                     metrics::update_invalid_blocks(format!("failed reconstruct {reason}"));
-                                                    match block_fail_action {
-                                                        ConfigBlockFailAction::Log => {
-                                                            error!("failed reconstruct #{slot} {reason}");
-                                                        }
-                                                        ConfigBlockFailAction::Panic => {
-                                                            panic!("failed reconstruct #{slot} {reason}");
-                                                        }
-                                                    }
                                                 }
                                             }
                                         }
@@ -549,14 +534,6 @@ impl GrpcService {
                                 Message::Block(_) => "Block",
                             };
                             metrics::update_invalid_blocks(format!("unexpected message {kind}"));
-                            match block_fail_action {
-                                ConfigBlockFailAction::Log => {
-                                    error!("unexpected message #{} -- {kind} (invalid order)", message.get_slot());
-                                }
-                                ConfigBlockFailAction::Panic => {
-                                    panic!("unexpected message #{} -- {kind} (invalid order)", message.get_slot());
-                                }
-                            }
                         }
                     }
                     let mut sealed_block_msg = None;
@@ -564,14 +541,6 @@ impl GrpcService {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
                                 metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
-                                match block_fail_action {
-                                    ConfigBlockFailAction::Log => {
-                                        error!("unexpected message #{} -- BlockMeta (duplicate)", message.get_slot());
-                                    }
-                                    ConfigBlockFailAction::Panic => {
-                                        panic!("unexpected message #{} -- BlockMeta (duplicate)", message.get_slot());
-                                    }
-                                }
                             }
                             slot_messages.block_meta = Some(Arc::clone(msg));
                             sealed_block_msg = slot_messages.try_seal();
