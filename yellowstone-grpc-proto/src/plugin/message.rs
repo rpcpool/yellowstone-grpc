@@ -1,15 +1,14 @@
 use {
-    crate::geyser::CommitmentLevel as CommitmentLevelProto,
+    crate::{
+        convert_to, geyser::CommitmentLevel as CommitmentLevelProto,
+        solana::storage::confirmed_block,
+    },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
-    solana_sdk::{
-        clock::UnixTimestamp, hash::HASH_BYTES, pubkey::Pubkey, signature::Signature,
-        transaction::SanitizedTransaction,
-    },
-    solana_transaction_status::{Reward, TransactionStatusMeta},
-    std::sync::Arc,
+    solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature},
+    std::{collections::HashSet, sync::Arc},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,9 +118,10 @@ impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
 pub struct MessageTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
-    pub transaction: SanitizedTransaction,
-    pub meta: TransactionStatusMeta,
+    pub transaction: confirmed_block::Transaction,
+    pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
+    pub account_keys: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,13 +132,22 @@ pub struct MessageTransaction {
 
 impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
     fn from((transaction, slot): (&'a ReplicaTransactionInfoV2<'a>, u64)) -> Self {
+        let account_keys = transaction
+            .transaction
+            .message()
+            .account_keys()
+            .iter()
+            .copied()
+            .collect();
+
         Self {
             transaction: Arc::new(MessageTransactionInfo {
                 signature: *transaction.signature,
                 is_vote: transaction.is_vote,
-                transaction: transaction.transaction.clone(),
-                meta: transaction.transaction_status_meta.clone(),
+                transaction: convert_to::create_transaction(transaction.transaction),
+                meta: convert_to::create_transaction_meta(transaction.transaction_status_meta),
                 index: transaction.index,
+                account_keys,
             }),
             slot,
         }
@@ -150,7 +159,7 @@ pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
     pub num_hashes: u64,
-    pub hash: [u8; HASH_BYTES],
+    pub hash: Hash,
     pub executed_transaction_count: u64,
     pub starting_transaction_index: u64,
 }
@@ -161,9 +170,7 @@ impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
             slot: entry.slot,
             index: entry.index,
             num_hashes: entry.num_hashes,
-            hash: entry.hash[0..HASH_BYTES]
-                .try_into()
-                .expect("failed to create hash"),
+            hash: Hash::new(entry.hash),
             executed_transaction_count: entry.executed_transaction_count,
             starting_transaction_index: entry
                 .starting_transaction_index
@@ -179,10 +186,9 @@ pub struct MessageBlockMeta {
     pub slot: u64,
     pub parent_blockhash: String,
     pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub num_partitions: Option<u64>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
+    pub rewards: confirmed_block::Rewards,
+    pub block_time: Option<confirmed_block::UnixTimestamp>,
+    pub block_height: Option<confirmed_block::BlockHeight>,
     pub executed_transaction_count: u64,
     pub entries_count: u64,
 }
@@ -194,10 +200,12 @@ impl<'a> From<&'a ReplicaBlockInfoV4<'a>> for MessageBlockMeta {
             slot: blockinfo.slot,
             parent_blockhash: blockinfo.parent_blockhash.to_string(),
             blockhash: blockinfo.blockhash.to_string(),
-            rewards: blockinfo.rewards.rewards.clone(),
-            num_partitions: blockinfo.rewards.num_partitions,
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
+            rewards: convert_to::create_rewards_obj(
+                &blockinfo.rewards.rewards,
+                blockinfo.rewards.num_partitions,
+            ),
+            block_time: blockinfo.block_time.map(convert_to::create_timestamp),
+            block_height: blockinfo.block_height.map(convert_to::create_block_height),
             executed_transaction_count: blockinfo.executed_transaction_count,
             entries_count: blockinfo.entry_count,
         }

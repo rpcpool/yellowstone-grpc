@@ -1,6 +1,5 @@
 use {
     crate::{
-        convert_to,
         geyser::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
@@ -31,7 +30,6 @@ use {
                 MessageTransactionInfo,
             },
         },
-        solana::storage::confirmed_block::TransactionError as SubscribeUpdateTransactionError,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     solana_sdk::{
@@ -91,8 +89,8 @@ impl<'a> FilteredMessage<'a> {
         SubscribeUpdateTransactionInfo {
             signature: message.signature.as_ref().into(),
             is_vote: message.is_vote,
-            transaction: Some(convert_to::create_transaction(&message.transaction)),
-            meta: Some(convert_to::create_transaction_meta(&message.meta)),
+            transaction: Some(message.transaction.clone()),
+            meta: Some(message.meta.clone()),
             index: message.index as u64,
         }
     }
@@ -102,7 +100,7 @@ impl<'a> FilteredMessage<'a> {
             slot: message.slot,
             index: message.index as u64,
             num_hashes: message.num_hashes,
-            hash: message.hash.into(),
+            hash: message.hash.to_bytes().to_vec(),
             executed_transaction_count: message.executed_transaction_count,
             starting_transaction_index: message.starting_transaction_index,
         }
@@ -133,28 +131,16 @@ impl<'a> FilteredMessage<'a> {
                     signature: message.transaction.signature.as_ref().into(),
                     is_vote: message.transaction.is_vote,
                     index: message.transaction.index as u64,
-                    err: match &message.transaction.meta.status {
-                        Ok(()) => None,
-                        Err(err) => Some(SubscribeUpdateTransactionError {
-                            err: bincode::serialize(&err)
-                                .expect("transaction error to serialize to bytes"),
-                        }),
-                    },
+                    err: message.transaction.meta.err.clone(),
                 })
             }
             Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
             Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: message.meta.slot,
                 blockhash: message.meta.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.meta.rewards.as_slice(),
-                    message.meta.num_partitions,
-                )),
-                block_time: message.meta.block_time.map(convert_to::create_timestamp),
-                block_height: message
-                    .meta
-                    .block_height
-                    .map(convert_to::create_block_height),
+                rewards: Some(message.meta.rewards.clone()),
+                block_time: message.meta.block_time,
+                block_height: message.meta.block_height,
                 parent_slot: message.meta.parent_slot,
                 parent_blockhash: message.meta.parent_blockhash.clone(),
                 executed_transaction_count: message.meta.executed_transaction_count,
@@ -179,12 +165,9 @@ impl<'a> FilteredMessage<'a> {
             Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                 slot: message.slot,
                 blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    message.rewards.as_slice(),
-                    message.num_partitions,
-                )),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
+                rewards: Some(message.rewards.clone()),
+                block_time: message.block_time,
+                block_height: message.block_height,
                 parent_slot: message.parent_slot,
                 parent_blockhash: message.parent_blockhash.clone(),
                 executed_transaction_count: message.executed_transaction_count,
@@ -310,14 +293,11 @@ impl Filter {
         })
     }
 
-    fn decode_pubkeys_into_vec(
+    fn decode_pubkeys_into_set(
         pubkeys: &[String],
         limit: &HashSet<Pubkey>,
-    ) -> FilterResult<Vec<Pubkey>> {
-        let mut vec =
-            Self::decode_pubkeys(pubkeys, limit).collect::<FilterResult<Vec<Pubkey>>>()?;
-        vec.sort();
-        Ok(vec)
+    ) -> FilterResult<HashSet<Pubkey>> {
+        Self::decode_pubkeys(pubkeys, limit).collect::<FilterResult<_>>()
     }
 
     pub fn get_metrics(&self) -> [(&'static str, usize); 8] {
@@ -795,9 +775,9 @@ struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
-    account_include: Vec<Pubkey>,
-    account_exclude: Vec<Pubkey>,
-    account_required: Vec<Pubkey>,
+    account_include: HashSet<Pubkey>,
+    account_exclude: HashSet<Pubkey>,
+    account_required: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Clone)]
@@ -850,15 +830,15 @@ impl FilterTransactions {
                             signature_str.parse().map_err(FilterError::InvalidSignature)
                         })
                         .transpose()?,
-                    account_include: Filter::decode_pubkeys_into_vec(
+                    account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
                     )?,
-                    account_exclude: Filter::decode_pubkeys_into_vec(
+                    account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
                         &HashSet::new(),
                     )?,
-                    account_required: Filter::decode_pubkeys_into_vec(
+                    account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &HashSet::new(),
                     )?,
@@ -886,63 +866,44 @@ impl FilterTransactions {
                 }
 
                 if let Some(is_failed) = inner.failed {
-                    if is_failed != message.transaction.meta.status.is_err() {
+                    if is_failed != message.transaction.meta.err.is_some() {
                         return None;
                     }
                 }
 
                 if let Some(signature) = &inner.signature {
-                    if signature != message.transaction.transaction.signature() {
+                    let tx_sig = message.transaction.transaction.signatures.first();
+                    if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
                         return None;
                     }
                 }
 
                 if !inner.account_include.is_empty()
-                    && message
-                        .transaction
-                        .transaction
-                        .message()
-                        .account_keys()
-                        .iter()
-                        .all(|pubkey| inner.account_include.binary_search(pubkey).is_err())
+                    && inner
+                        .account_include
+                        .intersection(&message.transaction.account_keys)
+                        .next()
+                        .is_none()
                 {
                     return None;
                 }
 
                 if !inner.account_exclude.is_empty()
-                    && message
-                        .transaction
-                        .transaction
-                        .message()
-                        .account_keys()
-                        .iter()
-                        .any(|pubkey| inner.account_exclude.binary_search(pubkey).is_ok())
+                    && inner
+                        .account_exclude
+                        .intersection(&message.transaction.account_keys)
+                        .next()
+                        .is_some()
                 {
                     return None;
                 }
 
-                if !inner.account_required.is_empty() {
-                    let mut other: Vec<&Pubkey> = message
-                        .transaction
-                        .transaction
-                        .message()
-                        .account_keys()
-                        .iter()
-                        .collect();
-
-                    let is_subset = if inner.account_required.len() <= other.len() {
-                        other.sort();
-                        inner
-                            .account_required
-                            .iter()
-                            .all(|pubkey| other.binary_search(&pubkey).is_ok())
-                    } else {
-                        false
-                    };
-
-                    if !is_subset {
-                        return None;
-                    }
+                if !inner.account_required.is_empty()
+                    && !inner
+                        .account_required
+                        .is_subset(&message.transaction.account_keys)
+                {
+                    return None;
                 }
 
                 Some(name.clone())
@@ -992,7 +953,7 @@ impl FilterEntries {
 
 #[derive(Debug, Clone)]
 struct FilterBlocksInner {
-    account_include: Vec<Pubkey>,
+    account_include: HashSet<Pubkey>,
     include_transactions: Option<bool>,
     include_accounts: Option<bool>,
     include_entries: Option<bool>,
@@ -1034,7 +995,7 @@ impl FilterBlocks {
             this.filters.insert(
                 names.get(name)?,
                 FilterBlocksInner {
-                    account_include: Filter::decode_pubkeys_into_vec(
+                    account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
                     )?,
@@ -1059,17 +1020,16 @@ impl FilterBlocks {
                     .iter()
                     .filter_map(|tx| {
                         if !inner.account_include.is_empty()
-                            && tx
-                                .transaction
-                                .message()
-                                .account_keys()
-                                .iter()
-                                .all(|pubkey| inner.account_include.binary_search(pubkey).is_err())
+                            && inner
+                                .account_include
+                                .intersection(&tx.account_keys)
+                                .next()
+                                .is_none()
                         {
-                            return None;
+                            None
+                        } else {
+                            Some(Arc::clone(tx))
                         }
-
-                        Some(Arc::clone(tx))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -1083,15 +1043,12 @@ impl FilterBlocks {
                     .iter()
                     .filter_map(|account| {
                         if !inner.account_include.is_empty()
-                            && inner
-                                .account_include
-                                .binary_search(&account.pubkey)
-                                .is_err()
+                            && !inner.account_include.contains(&account.pubkey)
                         {
-                            return None;
+                            None
+                        } else {
+                            Some(Arc::clone(account))
                         }
-
-                        Some(Arc::clone(account))
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -1197,6 +1154,7 @@ mod tests {
     use {
         super::{Filter, FilteredMessage},
         crate::{
+            convert_to,
             geyser::{
                 SubscribeRequest, SubscribeRequestFilterAccounts,
                 SubscribeRequestFilterTransactions,
@@ -1240,7 +1198,7 @@ mod tests {
         let sanitized_transaction = SanitizedTransaction::from_transaction_for_tests(
             Transaction::new(&[keypair], message, recent_blockhash),
         );
-        let meta = TransactionStatusMeta {
+        let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
             status: Ok(()),
             fee: 0,
             pre_balances: vec![],
@@ -1253,15 +1211,22 @@ mod tests {
             loaded_addresses: LoadedAddresses::default(),
             return_data: None,
             compute_units_consumed: None,
-        };
+        });
         let sig = sanitized_transaction.signature();
+        let account_keys = sanitized_transaction
+            .message()
+            .account_keys()
+            .iter()
+            .copied()
+            .collect();
         MessageTransaction {
             transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
-                transaction: sanitized_transaction,
+                transaction: convert_to::create_transaction(&sanitized_transaction),
                 meta,
                 index: 1,
+                account_keys,
             }),
             slot: 100,
         }

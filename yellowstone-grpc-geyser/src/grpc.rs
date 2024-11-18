@@ -1051,14 +1051,12 @@ impl Geyser for GrpcService {
             blocks_meta
                 .get_block(
                     |block| {
-                        block
-                            .block_height
-                            .map(|block_height| GetLatestBlockhashResponse {
-                                slot: block.slot,
-                                blockhash: block.blockhash.clone(),
-                                last_valid_block_height: block_height
-                                    + MAX_RECENT_BLOCKHASHES as u64,
-                            })
+                        block.block_height.map(|value| GetLatestBlockhashResponse {
+                            slot: block.slot,
+                            blockhash: block.blockhash.clone(),
+                            last_valid_block_height: value.block_height
+                                + MAX_RECENT_BLOCKHASHES as u64,
+                        })
                     },
                     request.get_ref().commitment,
                 )
@@ -1076,9 +1074,9 @@ impl Geyser for GrpcService {
             blocks_meta
                 .get_block(
                     |block| {
-                        block
-                            .block_height
-                            .map(|block_height| GetBlockHeightResponse { block_height })
+                        block.block_height.map(|value| GetBlockHeightResponse {
+                            block_height: value.block_height,
+                        })
                     },
                     request.get_ref().commitment,
                 )
