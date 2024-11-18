@@ -1,5 +1,5 @@
 use {
-    crate::{config::ConfigPrometheus, filters::Filter, version::VERSION as VERSION_INFO},
+    crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
@@ -24,7 +24,7 @@ use {
         sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
-    yellowstone_grpc_proto::plugin::message::CommitmentLevel,
+    yellowstone_grpc_proto::plugin::{filter::Filter, message::CommitmentLevel},
 };
 
 lazy_static::lazy_static! {

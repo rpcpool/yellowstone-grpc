@@ -1,7 +1,6 @@
 use {
     crate::{
-        config::{ConfigGrpc, ConfigGrpcFilters},
-        filters::Filter,
+        config::ConfigGrpc,
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
@@ -37,7 +36,7 @@ use {
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         plugin::{
-            filter::FilterNames,
+            filter::{Filter, FilterLimits, FilterNames},
             message::{
                 CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
                 MessageTransactionInfo,
@@ -292,7 +291,7 @@ impl SlotMessages {
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
-    config_filters: Arc<ConfigGrpcFilters>,
+    config_filter_limits: Arc<FilterLimits>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -365,7 +364,7 @@ impl GrpcService {
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
-            config_filters: Arc::new(config.filters),
+            config_filter_limits: Arc::new(config.limits),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -975,7 +974,7 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
-        let config_filters = Arc::clone(&self.config_filters);
+        let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
@@ -994,7 +993,7 @@ impl Geyser for GrpcService {
                             let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
-                            if let Err(error) = match Filter::new(&request, &config_filters, &mut filter_names) {
+                            if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
                                 Ok(filter) => match incoming_client_tx.send(Some(filter)) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
