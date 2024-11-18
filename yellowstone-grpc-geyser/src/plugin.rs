@@ -80,7 +80,6 @@ impl GeyserPlugin for Plugin {
                 let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
                 let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
                     config.grpc,
-                    config.block_fail_action,
                     config.debug_clients_http.then_some(debug_client_tx),
                     is_reload,
                 )

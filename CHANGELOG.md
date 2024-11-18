@@ -23,13 +23,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: use Arc wrapped messages in block message ([#446](https://github.com/rpcpool/yellowstone-grpc/pull/446))
 - node: remove generated grpc files ([#447](https://github.com/rpcpool/yellowstone-grpc/pull/447))
 - proto: add txn_signature filter ([#445](https://github.com/rpcpool/yellowstone-grpc/pull/445))
-- geyser: limit length of filter name ([#448](https://github.com/rpcpool/yellowstone-grpc/pull/448))
 - examples: add progress bar to client tool ([#456](https://github.com/rpcpool/yellowstone-grpc/pull/456))
-- proto: change error type in mod `convert_from` ([#457](https://github.com/rpcpool/yellowstone-grpc/pull/457))
 - proto: add mod `plugin` with `FilterNames` cache ([#458](https://github.com/rpcpool/yellowstone-grpc/pull/458))
 - proto: move enum Message from geyser crate ([#459](https://github.com/rpcpool/yellowstone-grpc/pull/459))
 
 ### Breaking
+
+- geyser: limit length of filter name ([#448](https://github.com/rpcpool/yellowstone-grpc/pull/448))
+- proto: change error type in mod `convert_from` ([#457](https://github.com/rpcpool/yellowstone-grpc/pull/457))
+- geyser: remove option `block_fail_action` ([#463](https://github.com/rpcpool/yellowstone-grpc/pull/463))
 
 ## 2024-10-04
 
