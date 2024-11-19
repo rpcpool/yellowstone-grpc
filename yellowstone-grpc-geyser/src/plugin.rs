@@ -21,7 +21,9 @@ use {
         runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
     },
-    yellowstone_grpc_proto::plugin::message::Message,
+    yellowstone_grpc_proto::plugin::message::{
+        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+    },
 };
 
 #[derive(Debug)]
@@ -139,7 +141,8 @@ impl GeyserPlugin for Plugin {
 
             if is_startup {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message = Message::Account((account, slot, is_startup).into());
+                    let message =
+                        Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
                     match channel.send(Box::new(message)) {
                         Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
@@ -152,7 +155,8 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
-                let message = Message::Account((account, slot, is_startup).into());
+                let message =
+                    Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
                 inner.send_message(message);
             }
 
@@ -174,7 +178,7 @@ impl GeyserPlugin for Plugin {
         status: SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot((slot, parent, status).into());
+            let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
             metrics::update_slot_status(status, slot);
             Ok(())
@@ -194,7 +198,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_2(info) => info,
             };
 
-            let message = Message::Transaction((transaction, slot).into());
+            let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
             inner.send_message(message);
 
             Ok(())
@@ -211,7 +215,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaEntryInfoVersions::V0_0_2(entry) => entry,
             };
 
-            let message = Message::Entry(Arc::new(entry.into()));
+            let message = Message::Entry(Arc::new(MessageEntry::from_geyser(entry)));
             inner.send_message(message);
 
             Ok(())
@@ -233,7 +237,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
 
-            let message = Message::BlockMeta(Arc::new(blockinfo.into()));
+            let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
             inner.send_message(message);
 
             Ok(())

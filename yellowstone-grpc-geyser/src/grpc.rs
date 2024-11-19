@@ -38,8 +38,8 @@ use {
         plugin::{
             filter::{Filter, FilterLimits, FilterNames},
             message::{
-                CommitmentLevel, Message, MessageBlockMeta, MessageEntry, MessageSlot,
-                MessageTransactionInfo,
+                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransactionInfo,
             },
         },
         prelude::{
@@ -271,9 +271,12 @@ impl SlotMessages {
                         }
                     }
 
-                    let message = Message::Block(Arc::new(
-                        (Arc::clone(block_meta), transactions, accounts, entries).into(),
-                    ));
+                    let message = Message::Block(Arc::new(MessageBlock::new(
+                        Arc::clone(block_meta),
+                        transactions,
+                        accounts,
+                        entries,
+                    )));
                     self.messages.push(Some(message.clone()));
 
                     self.sealed = true;
