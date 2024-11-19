@@ -4596,6 +4596,7 @@ dependencies = [
  "prost",
  "protobuf-src",
  "serde",
+ "smallvec",
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",

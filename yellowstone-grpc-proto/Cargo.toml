@@ -20,6 +20,7 @@ serde = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
 spl-token-2022 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
@@ -43,6 +44,7 @@ plugin = [
     "dep:base64",
     "dep:bs58",
     "dep:serde",
+    "dep:smallvec",
     "dep:spl-token-2022",
     "dep:thiserror"
 ]

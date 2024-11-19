@@ -776,7 +776,7 @@ impl GrpcService {
                         match message {
                             Some(Some(filter_new)) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
-                                    if stream_tx.send(Ok(msg)).await.is_err() {
+                                    if stream_tx.send(Ok(msg.as_subscribe_update())).await.is_err() {
                                         error!("client #{id}: stream closed");
                                         break 'outer;
                                     }
@@ -813,8 +813,8 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for message in messages.iter() {
-                                for message in filter.get_update(message, Some(commitment)) {
-                                    match stream_tx.try_send(Ok(message)) {
+                                for message in filter.get_updates(message, Some(commitment)) {
+                                    match stream_tx.try_send(Ok(message.as_subscribe_update())) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send update");
@@ -867,7 +867,7 @@ impl GrpcService {
             match client_rx.recv().await {
                 Some(Some(filter_new)) => {
                     if let Some(msg) = filter_new.get_pong_msg() {
-                        if stream_tx.send(Ok(msg)).await.is_err() {
+                        if stream_tx.send(Ok(msg.as_subscribe_update())).await.is_err() {
                             error!("client #{id}: stream closed");
                             *is_alive = false;
                         }
@@ -904,8 +904,12 @@ impl GrpcService {
                 }
             };
 
-            for message in filter.get_update(&message, None) {
-                if stream_tx.send(Ok(message)).await.is_err() {
+            for message in filter.get_updates(&message, None) {
+                if stream_tx
+                    .send(Ok(message.as_subscribe_update()))
+                    .await
+                    .is_err()
+                {
                     error!("client #{id}: stream closed");
                     *is_alive = false;
                     break;

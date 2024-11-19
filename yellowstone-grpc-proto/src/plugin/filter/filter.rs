@@ -4,12 +4,12 @@ use {
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeUpdate, SubscribeUpdatePong,
+            SubscribeRequestFilterTransactions,
         },
         plugin::{
             filter::{
@@ -18,7 +18,10 @@ use {
                     FilterLimitsCheckError, FilterLimitsEntries, FilterLimitsSlots,
                     FilterLimitsTransactions,
                 },
-                message::FilteredMessage,
+                message::{
+                    FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters,
+                    FilteredUpdateOneof, FilteredUpdates,
+                },
                 name::{FilterName, FilterNameError, FilterNames},
             },
             message::{
@@ -68,6 +71,30 @@ pub enum FilterError {
 }
 
 pub type FilterResult<T> = Result<T, FilterError>;
+
+macro_rules! filtered_updates_once_owned {
+    ($filters:ident, $message:expr) => {{
+        let mut messages = FilteredUpdates::new();
+        if !$filters.is_empty() {
+            messages.push(FilteredUpdate::new($filters, $message));
+        }
+        messages
+    }};
+}
+
+macro_rules! filtered_updates_once_ref {
+    ($filters:ident, $message:expr) => {{
+        let mut messages = FilteredUpdates::new();
+        if !$filters.is_empty() {
+            let mut message_filters = FilteredUpdateFilters::new();
+            for filter in $filters {
+                message_filters.push(filter.clone());
+            }
+            messages.push(FilteredUpdate::new(message_filters, $message));
+        }
+        messages
+    }};
+}
 
 #[derive(Debug, Clone)]
 pub struct Filter {
@@ -193,52 +220,31 @@ impl Filter {
         self.commitment
     }
 
-    pub fn get_filters<'a>(
-        &'a self,
-        message: &'a Message,
+    pub fn get_updates(
+        &self,
+        message: &Message,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    ) -> FilteredUpdates {
         match message {
-            Message::Account(message) => self.accounts.get_filters(message),
-            Message::Slot(message) => self.slots.get_filters(message, commitment),
-            Message::Transaction(message) => Box::new(
-                self.transactions
-                    .get_filters(message)
-                    .chain(self.transactions_status.get_filters(message)),
-            ),
-            Message::Entry(message) => self.entries.get_filters(message),
-            Message::Block(message) => self.blocks.get_filters(message),
-            Message::BlockMeta(message) => self.blocks_meta.get_filters(message),
+            Message::Account(message) => self
+                .accounts
+                .get_updates(message, &self.accounts_data_slice),
+            Message::Slot(message) => self.slots.get_updates(message, commitment),
+            Message::Transaction(message) => {
+                let mut updates = self.transactions.get_updates(message);
+                updates.append(&mut self.transactions_status.get_updates(message));
+                updates
+            }
+            Message::Entry(message) => self.entries.get_updates(message),
+            Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
+            Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
         }
     }
 
-    pub fn get_update<'a>(
-        &'a self,
-        message: &'a Message,
-        commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = SubscribeUpdate> + Send + 'a> {
-        Box::new(
-            self.get_filters(message, commitment)
-                .filter_map(|(filters, message)| {
-                    if filters.is_empty() {
-                        None
-                    } else {
-                        Some(SubscribeUpdate {
-                            filters: filters
-                                .iter()
-                                .map(|name| name.as_ref().to_string())
-                                .collect(),
-                            update_oneof: Some(message.as_proto(&self.accounts_data_slice)),
-                        })
-                    }
-                }),
-        )
-    }
-
-    pub fn get_pong_msg(&self) -> Option<SubscribeUpdate> {
-        self.ping.map(|id| SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Pong(SubscribeUpdatePong { id })),
+    pub fn get_pong_msg(&self) -> Option<FilteredUpdate> {
+        self.ping.map(|id| FilteredUpdate {
+            filters: FilteredUpdateFilters::new(),
+            message: FilteredUpdateOneof::pong(id),
         })
     }
 }
@@ -320,19 +326,21 @@ impl FilterAccounts {
         Ok(required)
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageAccount,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    fn get_updates(
+        &self,
+        message: &MessageAccount,
+        accounts_data_slice: &FilterAccountsDataSlice,
+    ) -> FilteredUpdates {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
-        Box::new(std::iter::once((
-            filter.get_filters(),
-            FilteredMessage::Account(message),
-        )))
+        let filters = filter.get_filters();
+        filtered_updates_once_owned!(
+            filters,
+            FilteredUpdateOneof::account(message, accounts_data_slice.clone())
+        )
     }
 }
 
@@ -539,7 +547,7 @@ impl<'a> FilterAccountsMatch<'a> {
         }
     }
 
-    fn get_filters(&self) -> Vec<FilterName> {
+    fn get_filters(&self) -> FilteredUpdateFilters {
         self.filter
             .filters
             .iter()
@@ -607,24 +615,23 @@ impl FilterSlots {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageSlot,
+    fn get_updates(
+        &self,
+        message: &MessageSlot,
         commitment: Option<CommitmentLevel>,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters
-                .iter()
-                .filter_map(|(name, inner)| {
-                    if !inner.filter_by_commitment || commitment == Some(message.status) {
-                        Some(name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            FilteredMessage::Slot(message),
-        )))
+    ) -> FilteredUpdates {
+        let filters = self
+            .filters
+            .iter()
+            .filter_map(|(name, inner)| {
+                if !inner.filter_by_commitment || commitment == Some(message.status) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<FilteredUpdateFilters>();
+        filtered_updates_once_owned!(filters, FilteredUpdateOneof::slot(*message))
     }
 }
 
@@ -715,10 +722,7 @@ impl FilterTransactions {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageTransaction,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
+    pub fn get_updates(&self, message: &MessageTransaction) -> FilteredUpdates {
         let filters = self
             .filters
             .iter()
@@ -772,14 +776,17 @@ impl FilterTransactions {
 
                 Some(name.clone())
             })
-            .collect();
-        let message = match self.filter_type {
-            FilterTransactionsType::Transaction => FilteredMessage::Transaction(message),
-            FilterTransactionsType::TransactionStatus => {
-                FilteredMessage::TransactionStatus(message)
+            .collect::<FilteredUpdateFilters>();
+
+        filtered_updates_once_owned!(
+            filters,
+            match self.filter_type {
+                FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
+                FilterTransactionsType::TransactionStatus => {
+                    FilteredUpdateOneof::transaction_status(message)
+                }
             }
-        };
-        Box::new(std::iter::once((filters, message)))
+        )
     }
 }
 
@@ -804,14 +811,9 @@ impl FilterEntries {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageEntry,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters.clone(),
-            FilteredMessage::Entry(message),
-        )))
+    fn get_updates(&self, message: &Arc<MessageEntry>) -> FilteredUpdates {
+        let filters = self.filters.as_slice();
+        filtered_updates_once_ref!(filters, FilteredUpdateOneof::entry(Arc::clone(message)))
     }
 }
 
@@ -872,11 +874,13 @@ impl FilterBlocks {
         Ok(this)
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageBlock,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(self.filters.iter().map(move |(filter, inner)| {
+    fn get_updates(
+        &self,
+        message: &Arc<MessageBlock>,
+        accounts_data_slice: &FilterAccountsDataSlice,
+    ) -> FilteredUpdates {
+        let mut updates = FilteredUpdates::new();
+        for (filter, inner) in self.filters.iter() {
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
                 message
@@ -925,17 +929,21 @@ impl FilterBlocks {
                 vec![]
             };
 
-            (
-                vec![filter.clone()],
-                FilteredMessage::Block(MessageBlock {
+            let mut filters = FilteredUpdateFilters::new();
+            filters.push(filter.clone());
+            updates.push(FilteredUpdate::new(
+                filters,
+                FilteredUpdateOneof::block(Box::new(FilteredUpdateBlock {
                     meta: Arc::clone(&message.meta),
                     transactions,
                     updated_account_count: message.updated_account_count,
+                    accounts_data_slice: accounts_data_slice.clone(),
                     accounts,
                     entries,
-                }),
-            )
-        }))
+                })),
+            ));
+        }
+        updates
     }
 }
 
@@ -960,14 +968,12 @@ impl FilterBlocksMeta {
         })
     }
 
-    fn get_filters<'a>(
-        &'a self,
-        message: &'a MessageBlockMeta,
-    ) -> Box<dyn Iterator<Item = (Vec<FilterName>, FilteredMessage<'a>)> + Send + 'a> {
-        Box::new(std::iter::once((
-            self.filters.clone(),
-            FilteredMessage::BlockMeta(message),
-        )))
+    fn get_updates(&self, message: &Arc<MessageBlockMeta>) -> FilteredUpdates {
+        let filters = self.filters.as_slice();
+        filtered_updates_once_ref!(
+            filters,
+            FilteredUpdateOneof::block_meta(Arc::clone(message))
+        )
     }
 }
 
@@ -1011,12 +1017,26 @@ impl FilterAccountsDataSlice {
 
         Ok(Self(Arc::new(slices)))
     }
+
+    pub fn apply(&self, source: &[u8]) -> Vec<u8> {
+        if self.0.is_empty() {
+            source.to_vec()
+        } else {
+            let mut data = Vec::with_capacity(self.0.iter().map(|ds| ds.end - ds.start).sum());
+            for data_slice in self.0.iter() {
+                if source.len() >= data_slice.end {
+                    data.extend_from_slice(&source[data_slice.start..data_slice.end]);
+                }
+            }
+            data
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::{Filter, FilteredMessage},
+        super::Filter,
         crate::{
             convert_to,
             geyser::{
@@ -1026,6 +1046,7 @@ mod tests {
             plugin::{
                 filter::{
                     limits::FilterLimits,
+                    message::{FilteredUpdateFilters, FilteredUpdateOneof},
                     name::{FilterName, FilterNames},
                 },
                 message::{Message, MessageTransaction, MessageTransactionInfo},
@@ -1239,10 +1260,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1257,14 +1278,28 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredUpdateOneof::Transaction(_)
+        ));
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
+        assert!(matches!(
+            updates[1].message,
+            FilteredUpdateOneof::TransactionStatus(_)
         ));
     }
 
@@ -1289,10 +1324,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1307,14 +1342,28 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredUpdateOneof::Transaction(_)
+        ));
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
+        assert!(matches!(
+            updates[1].message,
+            FilteredUpdateOneof::TransactionStatus(_)
         ));
     }
 
@@ -1357,8 +1406,8 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(filters.is_empty());
+        for message in filter.get_updates(&message, None) {
+            assert!(message.filters.is_empty());
         }
     }
 
@@ -1389,10 +1438,10 @@ mod tests {
             },
         );
 
-        let config = SubscribeRequest {
+        let mut config = SubscribeRequest {
             accounts: HashMap::new(),
             slots: HashMap::new(),
-            transactions,
+            transactions: transactions.clone(),
             transactions_status: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
@@ -1409,14 +1458,28 @@ mod tests {
             vec![account_key_x, account_key_y, account_key_z],
         );
         let message = Message::Transaction(message_transaction);
-        let updates = filter.get_filters(&message, None).collect::<Vec<_>>();
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].0, vec![FilterName::new("serum")]);
-        assert!(matches!(updates[0].1, FilteredMessage::Transaction(_)));
-        assert_eq!(updates[1].0, Vec::<FilterName>::new());
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
         assert!(matches!(
-            updates[1].1,
-            FilteredMessage::TransactionStatus(_)
+            updates[0].message,
+            FilteredUpdateOneof::Transaction(_)
+        ));
+
+        config.transactions_status = transactions;
+        let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
+        let updates = filter.get_updates(&message, None);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("serum")])
+        );
+        assert!(matches!(
+            updates[1].message,
+            FilteredUpdateOneof::TransactionStatus(_)
         ));
     }
 
@@ -1465,8 +1528,8 @@ mod tests {
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);
         let message = Message::Transaction(message_transaction);
-        for (filters, _message) in filter.get_filters(&message, None) {
-            assert!(filters.is_empty());
+        for message in filter.get_updates(&message, None) {
+            assert!(message.filters.is_empty());
         }
     }
 }

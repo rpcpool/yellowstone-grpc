@@ -1,60 +1,56 @@
-use crate::{
-    geyser::{
-        subscribe_update::UpdateOneof, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-        SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateSlot,
-        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-        SubscribeUpdateTransactionStatus,
-    },
-    plugin::{
-        filter::FilterAccountsDataSlice,
-        message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo,
+use {
+    crate::{
+        geyser::{
+            subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
+        },
+        plugin::{
+            filter::{name::FilterName, FilterAccountsDataSlice},
+            message::{
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransaction, MessageTransactionInfo,
+            },
         },
     },
+    smallvec::SmallVec,
+    std::sync::Arc,
 };
 
+pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
+
 #[derive(Debug, Clone)]
-pub enum FilteredMessage<'a> {
-    Slot(&'a MessageSlot),
-    Account(&'a MessageAccount),
-    Transaction(&'a MessageTransaction),
-    TransactionStatus(&'a MessageTransaction),
-    Entry(&'a MessageEntry),
-    Block(MessageBlock),
-    BlockMeta(&'a MessageBlockMeta),
+pub struct FilteredUpdate {
+    pub filters: FilteredUpdateFilters,
+    pub message: FilteredUpdateOneof,
 }
 
-impl<'a> FilteredMessage<'a> {
-    fn as_proto_account(
+impl FilteredUpdate {
+    pub fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
+        Self { filters, message }
+    }
+
+    fn as_subscribe_update_account(
         message: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
-        let data_slice = data_slice.as_ref();
-        let data = if data_slice.is_empty() {
-            message.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(data_slice.iter().map(|ds| ds.end - ds.start).sum());
-            for data_slice in data_slice {
-                if message.data.len() >= data_slice.end {
-                    data.extend_from_slice(&message.data[data_slice.start..data_slice.end]);
-                }
-            }
-            data
-        };
         SubscribeUpdateAccountInfo {
             pubkey: message.pubkey.as_ref().into(),
             lamports: message.lamports,
             owner: message.owner.as_ref().into(),
             executable: message.executable,
             rent_epoch: message.rent_epoch,
-            data,
+            data: data_slice.apply(&message.data),
             write_version: message.write_version,
             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
         }
     }
 
-    fn as_proto_transaction(message: &MessageTransactionInfo) -> SubscribeUpdateTransactionInfo {
+    fn as_subscribe_update_transaction(
+        message: &MessageTransactionInfo,
+    ) -> SubscribeUpdateTransactionInfo {
         SubscribeUpdateTransactionInfo {
             signature: message.signature.as_ref().into(),
             is_vote: message.is_vote,
@@ -64,7 +60,7 @@ impl<'a> FilteredMessage<'a> {
         }
     }
 
-    fn as_proto_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
+    fn as_subscribe_update_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
         SubscribeUpdateEntry {
             slot: message.slot,
             index: message.index as u64,
@@ -75,73 +71,184 @@ impl<'a> FilteredMessage<'a> {
         }
     }
 
-    pub fn as_proto(&self, accounts_data_slice: &FilterAccountsDataSlice) -> UpdateOneof {
-        match self {
-            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: message.slot,
-                parent: message.parent,
-                status: message.status as i32,
-            }),
-            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(Self::as_proto_account(
-                    message.account.as_ref(),
-                    accounts_data_slice,
+    pub fn as_subscribe_update(&self) -> SubscribeUpdate {
+        let message = match &self.message {
+            FilteredUpdateOneof::Account(msg) => UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(Self::as_subscribe_update_account(
+                    msg.account.as_ref(),
+                    &msg.data_slice,
                 )),
-                slot: message.slot,
-                is_startup: message.is_startup,
+                slot: msg.slot,
+                is_startup: msg.is_startup,
             }),
-            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(Self::as_proto_transaction(message.transaction.as_ref())),
-                slot: message.slot,
+            FilteredUpdateOneof::Slot(msg) => UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: msg.slot,
+                parent: msg.parent,
+                status: msg.status as i32,
             }),
-            Self::TransactionStatus(message) => {
-                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-                    slot: message.slot,
-                    signature: message.transaction.signature.as_ref().into(),
-                    is_vote: message.transaction.is_vote,
-                    index: message.transaction.index as u64,
-                    err: message.transaction.meta.err.clone(),
+            FilteredUpdateOneof::Transaction(msg) => {
+                UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                    transaction: Some(Self::as_subscribe_update_transaction(
+                        msg.transaction.as_ref(),
+                    )),
+                    slot: msg.slot,
                 })
             }
-            Self::Entry(message) => UpdateOneof::Entry(Self::as_proto_entry(message)),
-            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-                slot: message.meta.slot,
-                blockhash: message.meta.blockhash.clone(),
-                rewards: Some(message.meta.rewards.clone()),
-                block_time: message.meta.block_time,
-                block_height: message.meta.block_height,
-                parent_slot: message.meta.parent_slot,
-                parent_blockhash: message.meta.parent_blockhash.clone(),
-                executed_transaction_count: message.meta.executed_transaction_count,
-                transactions: message
+            FilteredUpdateOneof::TransactionStatus(msg) => {
+                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
+                    slot: msg.slot,
+                    signature: msg.transaction.signature.as_ref().into(),
+                    is_vote: msg.transaction.is_vote,
+                    index: msg.transaction.index as u64,
+                    err: msg.transaction.meta.err.clone(),
+                })
+            }
+            FilteredUpdateOneof::Block(msg) => UpdateOneof::Block(SubscribeUpdateBlock {
+                slot: msg.meta.slot,
+                blockhash: msg.meta.blockhash.clone(),
+                rewards: Some(msg.meta.rewards.clone()),
+                block_time: msg.meta.block_time,
+                block_height: msg.meta.block_height,
+                parent_slot: msg.meta.parent_slot,
+                parent_blockhash: msg.meta.parent_blockhash.clone(),
+                executed_transaction_count: msg.meta.executed_transaction_count,
+                transactions: msg
                     .transactions
                     .iter()
-                    .map(|tx| Self::as_proto_transaction(tx.as_ref()))
+                    .map(|tx| Self::as_subscribe_update_transaction(tx.as_ref()))
                     .collect(),
-                updated_account_count: message.updated_account_count,
-                accounts: message
+                updated_account_count: msg.updated_account_count,
+                accounts: msg
                     .accounts
                     .iter()
-                    .map(|acc| Self::as_proto_account(acc.as_ref(), accounts_data_slice))
+                    .map(|acc| {
+                        Self::as_subscribe_update_account(acc.as_ref(), &msg.accounts_data_slice)
+                    })
                     .collect(),
-                entries_count: message.meta.entries_count,
-                entries: message
+                entries_count: msg.meta.entries_count,
+                entries: msg
                     .entries
                     .iter()
-                    .map(|entry| Self::as_proto_entry(entry.as_ref()))
+                    .map(|entry| Self::as_subscribe_update_entry(entry.as_ref()))
                     .collect(),
             }),
-            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
-                rewards: Some(message.rewards.clone()),
-                block_time: message.block_time,
-                block_height: message.block_height,
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-                entries_count: message.entries_count,
-            }),
+            FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
+            FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
+            FilteredUpdateOneof::BlockMeta(msg) => {
+                UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                    slot: msg.slot,
+                    blockhash: msg.blockhash.clone(),
+                    rewards: Some(msg.rewards.clone()),
+                    block_time: msg.block_time,
+                    block_height: msg.block_height,
+                    parent_slot: msg.parent_slot,
+                    parent_blockhash: msg.parent_blockhash.clone(),
+                    executed_transaction_count: msg.executed_transaction_count,
+                    entries_count: msg.entries_count,
+                })
+            }
+            FilteredUpdateOneof::Entry(msg) => {
+                UpdateOneof::Entry(Self::as_subscribe_update_entry(msg))
+            }
+        };
+
+        SubscribeUpdate {
+            filters: self
+                .filters
+                .iter()
+                .map(|name| name.as_ref().to_string())
+                .collect(),
+            update_oneof: Some(message),
         }
     }
+}
+
+pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
+
+#[derive(Debug, Clone)]
+pub enum FilteredUpdateOneof {
+    Account(FilteredUpdateAccount),                     // 2
+    Slot(MessageSlot),                                  // 3
+    Transaction(FilteredUpdateTransaction),             // 4
+    TransactionStatus(FilteredUpdateTransactionStatus), // 10
+    Block(Box<FilteredUpdateBlock>),                    // 5
+    Ping,                                               // 6
+    Pong(SubscribeUpdatePong),                          // 9
+    BlockMeta(Arc<MessageBlockMeta>),                   // 7
+    Entry(Arc<MessageEntry>),                           // 8
+}
+
+impl FilteredUpdateOneof {
+    pub fn account(message: &MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
+        Self::Account(FilteredUpdateAccount {
+            slot: message.slot,
+            account: Arc::clone(&message.account),
+            is_startup: message.is_startup,
+            data_slice,
+        })
+    }
+
+    pub const fn slot(message: MessageSlot) -> Self {
+        Self::Slot(message)
+    }
+
+    pub fn transaction(message: &MessageTransaction) -> Self {
+        Self::Transaction(FilteredUpdateTransaction {
+            transaction: Arc::clone(&message.transaction),
+            slot: message.slot,
+        })
+    }
+
+    pub fn transaction_status(message: &MessageTransaction) -> Self {
+        Self::TransactionStatus(FilteredUpdateTransactionStatus {
+            transaction: Arc::clone(&message.transaction),
+            slot: message.slot,
+        })
+    }
+
+    pub const fn block(message: Box<FilteredUpdateBlock>) -> Self {
+        Self::Block(message)
+    }
+
+    pub const fn pong(id: i32) -> Self {
+        Self::Pong(SubscribeUpdatePong { id })
+    }
+
+    pub const fn block_meta(message: Arc<MessageBlockMeta>) -> Self {
+        Self::BlockMeta(message)
+    }
+
+    pub const fn entry(message: Arc<MessageEntry>) -> Self {
+        Self::Entry(message)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateAccount {
+    pub account: Arc<MessageAccountInfo>,
+    pub slot: u64,
+    pub is_startup: bool,
+    pub data_slice: FilterAccountsDataSlice,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateTransaction {
+    pub transaction: Arc<MessageTransactionInfo>,
+    pub slot: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateTransactionStatus {
+    pub transaction: Arc<MessageTransactionInfo>,
+    pub slot: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateBlock {
+    pub meta: Arc<MessageBlockMeta>,
+    pub transactions: Vec<Arc<MessageTransactionInfo>>,
+    pub updated_account_count: u64,
+    pub accounts: Vec<Arc<MessageAccountInfo>>,
+    pub accounts_data_slice: FilterAccountsDataSlice,
+    pub entries: Vec<Arc<MessageEntry>>,
 }
