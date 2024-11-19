@@ -36,7 +36,7 @@ use {
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         plugin::{
-            filter::{Filter, FilterLimits, FilterNames},
+            filter::{limits::FilterLimits, name::FilterNames, Filter},
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo,
