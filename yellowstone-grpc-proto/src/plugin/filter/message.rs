@@ -2,8 +2,8 @@ use {
     crate::{
         geyser::{
             subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateEntry,
+            SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
             SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus,
         },
@@ -139,7 +139,7 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Block(msg) => UpdateOneof::Block(SubscribeUpdateBlock {
                 slot: msg.meta.slot,
                 blockhash: msg.meta.blockhash.clone(),
-                rewards: Some(msg.meta.rewards.clone()),
+                rewards: msg.meta.rewards.clone(),
                 block_time: msg.meta.block_time,
                 block_height: msg.meta.block_height,
                 parent_slot: msg.meta.parent_slot,
@@ -167,20 +167,7 @@ impl FilteredUpdate {
             }),
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
-            FilteredUpdateOneof::BlockMeta(msg) => {
-                let msg = &msg.0;
-                UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                    slot: msg.slot,
-                    blockhash: msg.blockhash.clone(),
-                    rewards: Some(msg.rewards.clone()),
-                    block_time: msg.block_time,
-                    block_height: msg.block_height,
-                    parent_slot: msg.parent_slot,
-                    parent_blockhash: msg.parent_blockhash.clone(),
-                    executed_transaction_count: msg.executed_transaction_count,
-                    entries_count: msg.entries_count,
-                })
-            }
+            FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.0.as_ref().0.clone()),
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
@@ -306,7 +293,7 @@ pub mod tests {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
         crate::{
             convert_to,
-            geyser::SubscribeUpdate,
+            geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
             plugin::{
                 filter::{name::FilterName, FilterAccountsDataSlice},
                 message::{
@@ -502,19 +489,23 @@ pub mod tests {
                 let entries = create_entries();
 
                 let slot = block.parent_slot + 1;
-                let block_meta1 = MessageBlockMeta {
+                let block_meta1 = MessageBlockMeta(SubscribeUpdateBlockMeta {
                     parent_slot: block.parent_slot,
                     slot,
                     parent_blockhash: block.previous_blockhash,
                     blockhash: block.blockhash,
-                    rewards: convert_to::create_rewards_obj(&block.rewards, block.num_partitions),
+                    rewards: Some(convert_to::create_rewards_obj(
+                        &block.rewards,
+                        block.num_partitions,
+                    )),
                     block_time: block.block_time.map(convert_to::create_timestamp),
                     block_height: block.block_height.map(convert_to::create_block_height),
                     executed_transaction_count: transactions.len() as u64,
                     entries_count: entries.len() as u64,
-                };
+                });
                 let mut block_meta2 = block_meta1.clone();
-                block_meta2.rewards.num_partitions = Some(convert_to::create_num_partitions(42));
+                block_meta2.rewards =
+                    Some(convert_to::create_rewards_obj(&block.rewards, Some(42)));
 
                 let block_meta1 = Arc::new(block_meta1);
                 let block_meta2 = Arc::new(block_meta2);

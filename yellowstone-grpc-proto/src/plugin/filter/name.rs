@@ -1,6 +1,7 @@
 use std::{
     borrow::Borrow,
     collections::HashSet,
+    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -19,6 +20,14 @@ pub struct FilterName(Arc<String>);
 impl AsRef<str> for FilterName {
     #[inline]
     fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Deref for FilterName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
