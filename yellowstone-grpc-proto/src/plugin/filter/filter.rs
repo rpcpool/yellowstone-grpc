@@ -986,7 +986,7 @@ impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {
 }
 
 impl FilterAccountsDataSlice {
-    fn new(slices: &[SubscribeRequestAccountsDataSlice], limits: usize) -> FilterResult<Self> {
+    pub fn new(slices: &[SubscribeRequestAccountsDataSlice], limits: usize) -> FilterResult<Self> {
         FilterLimits::check_max(slices.len(), limits)?;
 
         let slices = slices
@@ -1013,7 +1013,11 @@ impl FilterAccountsDataSlice {
             }
         }
 
-        Ok(Self(Arc::new(slices)))
+        Ok(Self::new_unchecked(Arc::new(slices)))
+    }
+
+    pub fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
+        Self(slices)
     }
 
     pub fn apply(&self, source: &[u8]) -> Vec<u8> {
