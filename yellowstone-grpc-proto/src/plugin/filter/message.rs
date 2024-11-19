@@ -115,9 +115,9 @@ impl FilteredUpdate {
                 is_startup: msg.is_startup,
             }),
             FilteredUpdateOneof::Slot(msg) => UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: msg.slot,
-                parent: msg.parent,
-                status: msg.status as i32,
+                slot: msg.0.slot,
+                parent: msg.0.parent,
+                status: msg.0.status as i32,
             }),
             FilteredUpdateOneof::Transaction(msg) => {
                 UpdateOneof::Transaction(SubscribeUpdateTransaction {
@@ -168,6 +168,7 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
             FilteredUpdateOneof::BlockMeta(msg) => {
+                let msg = &msg.0;
                 UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                     slot: msg.slot,
                     blockhash: msg.blockhash.clone(),
@@ -181,7 +182,7 @@ impl FilteredUpdate {
                 })
             }
             FilteredUpdateOneof::Entry(msg) => {
-                UpdateOneof::Entry(Self::as_subscribe_update_entry(msg))
+                UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
         };
 
@@ -201,14 +202,14 @@ pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 #[derive(Debug, Clone)]
 pub enum FilteredUpdateOneof {
     Account(FilteredUpdateAccount),                     // 2
-    Slot(MessageSlot),                                  // 3
+    Slot(FilteredUpdateSlot),                           // 3
     Transaction(FilteredUpdateTransaction),             // 4
     TransactionStatus(FilteredUpdateTransactionStatus), // 10
     Block(Box<FilteredUpdateBlock>),                    // 5
     Ping,                                               // 6
     Pong(SubscribeUpdatePong),                          // 9
-    BlockMeta(Arc<MessageBlockMeta>),                   // 7
-    Entry(Arc<MessageEntry>),                           // 8
+    BlockMeta(FilteredUpdateBlockMeta),                 // 7
+    Entry(FilteredUpdateEntry),                         // 8
 }
 
 impl FilteredUpdateOneof {
@@ -222,7 +223,7 @@ impl FilteredUpdateOneof {
     }
 
     pub const fn slot(message: MessageSlot) -> Self {
-        Self::Slot(message)
+        Self::Slot(FilteredUpdateSlot(message))
     }
 
     pub fn transaction(message: &MessageTransaction) -> Self {
@@ -252,11 +253,11 @@ impl FilteredUpdateOneof {
     }
 
     pub const fn block_meta(message: Arc<MessageBlockMeta>) -> Self {
-        Self::BlockMeta(message)
+        Self::BlockMeta(FilteredUpdateBlockMeta(message))
     }
 
     pub const fn entry(message: Arc<MessageEntry>) -> Self {
-        Self::Entry(message)
+        Self::Entry(FilteredUpdateEntry(message))
     }
 }
 
@@ -267,6 +268,9 @@ pub struct FilteredUpdateAccount {
     pub is_startup: bool,
     pub data_slice: FilterAccountsDataSlice,
 }
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateSlot(MessageSlot);
 
 #[derive(Debug, Clone)]
 pub struct FilteredUpdateTransaction {
@@ -289,3 +293,9 @@ pub struct FilteredUpdateBlock {
     pub accounts_data_slice: FilterAccountsDataSlice,
     pub entries: Vec<Arc<MessageEntry>>,
 }
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateBlockMeta(Arc<MessageBlockMeta>);
+
+#[derive(Debug, Clone)]
+pub struct FilteredUpdateEntry(Arc<MessageEntry>);
