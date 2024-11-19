@@ -242,10 +242,8 @@ impl Filter {
     }
 
     pub fn get_pong_msg(&self) -> Option<FilteredUpdate> {
-        self.ping.map(|id| FilteredUpdate {
-            filters: FilteredUpdateFilters::new(),
-            message: FilteredUpdateOneof::pong(id),
-        })
+        self.ping
+            .map(|id| FilteredUpdate::new_empty(FilteredUpdateOneof::pong(id)))
     }
 }
 

@@ -15,6 +15,11 @@ use {
             },
         },
     },
+    bytes::buf::{Buf, BufMut},
+    prost::{
+        encoding::{DecodeContext, WireType},
+        DecodeError,
+    },
     smallvec::SmallVec,
     std::sync::Arc,
 };
@@ -27,9 +32,37 @@ pub struct FilteredUpdate {
     pub message: FilteredUpdateOneof,
 }
 
+impl prost::Message for FilteredUpdate {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        self.as_subscribe_update().encode_raw(buf)
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.as_subscribe_update().encoded_len()
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
 impl FilteredUpdate {
     pub fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
         Self { filters, message }
+    }
+
+    pub fn new_empty(message: FilteredUpdateOneof) -> Self {
+        Self::new(FilteredUpdateFilters::new(), message)
     }
 
     fn as_subscribe_update_account(
@@ -208,6 +241,10 @@ impl FilteredUpdateOneof {
 
     pub const fn block(message: Box<FilteredUpdateBlock>) -> Self {
         Self::Block(message)
+    }
+
+    pub const fn ping() -> Self {
+        Self::Ping
     }
 
     pub const fn pong(id: i32) -> Self {

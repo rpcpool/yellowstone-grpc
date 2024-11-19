@@ -36,20 +36,23 @@ use {
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         plugin::{
-            filter::{limits::FilterLimits, name::FilterNames, Filter},
+            filter::{
+                limits::FilterLimits,
+                message::{FilteredUpdate, FilteredUpdateOneof},
+                name::FilterNames,
+                Filter,
+            },
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo,
             },
+            proto::geyser_server::{Geyser, GeyserServer},
         },
         prelude::{
-            geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdatePing,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
         },
     },
 };
@@ -724,7 +727,7 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        stream_tx: mpsc::Sender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Message>>)>,
@@ -776,7 +779,7 @@ impl GrpcService {
                         match message {
                             Some(Some(filter_new)) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
-                                    if stream_tx.send(Ok(msg.as_subscribe_update())).await.is_err() {
+                                    if stream_tx.send(Ok(msg)).await.is_err() {
                                         error!("client #{id}: stream closed");
                                         break 'outer;
                                     }
@@ -814,7 +817,7 @@ impl GrpcService {
                         if commitment == filter.get_commitment_level() {
                             for message in messages.iter() {
                                 for message in filter.get_updates(message, Some(commitment)) {
-                                    match stream_tx.try_send(Ok(message.as_subscribe_update())) {
+                                    match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send update");
@@ -854,7 +857,7 @@ impl GrpcService {
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
-        stream_tx: &mpsc::Sender<TonicResult<SubscribeUpdate>>,
+        stream_tx: &mpsc::Sender<TonicResult<FilteredUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<Filter>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         is_alive: &mut bool,
@@ -867,7 +870,7 @@ impl GrpcService {
             match client_rx.recv().await {
                 Some(Some(filter_new)) => {
                     if let Some(msg) = filter_new.get_pong_msg() {
-                        if stream_tx.send(Ok(msg.as_subscribe_update())).await.is_err() {
+                        if stream_tx.send(Ok(msg)).await.is_err() {
                             error!("client #{id}: stream closed");
                             *is_alive = false;
                         }
@@ -905,11 +908,7 @@ impl GrpcService {
             };
 
             for message in filter.get_updates(&message, None) {
-                if stream_tx
-                    .send(Ok(message.as_subscribe_update()))
-                    .await
-                    .is_err()
-                {
+                if stream_tx.send(Ok(message)).await.is_err() {
                     error!("client #{id}: stream closed");
                     *is_alive = false;
                     break;
@@ -921,7 +920,7 @@ impl GrpcService {
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+    type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
 
     async fn subscribe(
         &self,
@@ -951,18 +950,14 @@ impl Geyser for GrpcService {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
 
-            let ping_msg = SubscribeUpdate {
-                filters: vec![],
-                update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-            };
-
             loop {
                 tokio::select! {
                     _ = &mut exit => {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
+                        let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
+                        match ping_stream_tx.try_send(Ok(msg)) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {
