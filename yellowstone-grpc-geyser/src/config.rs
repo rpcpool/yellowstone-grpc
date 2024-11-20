@@ -104,7 +104,7 @@ pub struct ConfigGrpc {
     pub unary_disabled: bool,
     /// Limits for possible filters
     #[serde(default, alias = "filters")]
-    pub limits: FilterLimits,
+    pub filter_limits: FilterLimits,
     /// x_token to enforce on connections
     pub x_token: Option<String>,
     /// Filter name size limit

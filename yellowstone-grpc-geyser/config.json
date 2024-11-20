@@ -23,7 +23,7 @@
     "filter_name_size_limit": 32,
     "filter_names_size_limit": 1024,
     "filter_names_cleanup_interval": "1s",
-    "filters": {
+    "filter_limits": {
       "accounts": {
         "max": 1,
         "any": false,

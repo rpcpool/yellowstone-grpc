@@ -367,7 +367,7 @@ impl GrpcService {
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
-            config_filter_limits: Arc::new(config.limits),
+            config_filter_limits: Arc::new(config.filter_limits),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
