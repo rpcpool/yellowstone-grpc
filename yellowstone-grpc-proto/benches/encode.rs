@@ -19,28 +19,20 @@ fn bench_account(c: &mut Criterion) {
 
     macro_rules! bench {
         ($updates:expr, $kind:expr) => {
-            c.bench_with_input(
-                BenchmarkId::new($kind, "ref"),
-                $updates,
-                |b, updates| {
-                    b.iter(|| {
-                        for update in updates.iter() {
-                            update.encode_to_vec().len();
-                        }
-                    })
-                },
-            );
-            c.bench_with_input(
-                BenchmarkId::new($kind, "prost"),
-                $updates,
-                |b, updates| {
-                    b.iter(|| {
-                        for update in updates.iter() {
-                            update.as_subscribe_update().encode_to_vec().len();
-                        }
-                    })
-                },
-            );
+            c.bench_with_input(BenchmarkId::new($kind, "ref"), $updates, |b, updates| {
+                b.iter(|| {
+                    for update in updates.iter() {
+                        update.encode_to_vec().len();
+                    }
+                })
+            });
+            c.bench_with_input(BenchmarkId::new($kind, "prost"), $updates, |b, updates| {
+                b.iter(|| {
+                    for update in updates.iter() {
+                        update.as_subscribe_update().encode_to_vec().len();
+                    }
+                })
+            });
         };
     }
 

@@ -28,6 +28,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: move enum Message from geyser crate ([#459](https://github.com/rpcpool/yellowstone-grpc/pull/459))
 - proto: move `Filter` from geyser crate ([#466](https://github.com/rpcpool/yellowstone-grpc/pull/466))
 - geyser: serialize from custom message istead of generated ([#467](https://github.com/rpcpool/yellowstone-grpc/pull/467))
+- proto: implement encoding instead of clone to generated ([#465](https://github.com/rpcpool/yellowstone-grpc/pull/465))
 
 ### Breaking
 
