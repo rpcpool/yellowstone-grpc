@@ -975,7 +975,7 @@ impl FilterBlocksMeta {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FilterAccountsDataSlice(Arc<Vec<Range<usize>>>);
 
 impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {

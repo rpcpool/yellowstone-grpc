@@ -10,10 +10,11 @@ use {
         plugin::{
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
-                MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransaction, MessageTransactionInfo,
             },
         },
+        solana::storage::confirmed_block,
     },
     bytes::buf::{Buf, BufMut},
     prost::{
@@ -24,7 +25,8 @@ use {
         DecodeError,
     },
     smallvec::SmallVec,
-    std::sync::Arc,
+    solana_sdk::signature::Signature,
+    std::{collections::HashSet, sync::Arc},
 };
 
 #[inline]
@@ -57,7 +59,7 @@ macro_rules! prost_repeated_encoded_len_map {
 
 pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdate {
     pub filters: FilteredUpdateFilters,
     pub message: FilteredUpdateOneof,
@@ -219,11 +221,79 @@ impl FilteredUpdate {
             update_oneof: Some(message),
         }
     }
+
+    pub fn from_subscribe_update(update: SubscribeUpdate) -> Result<Self, &'static str> {
+        let message = match update.update_oneof.ok_or("")? {
+            UpdateOneof::Account(msg) => {
+                let account = MessageAccount::from_update_oneof(msg)?;
+                FilteredUpdateOneof::Account(FilteredUpdateAccount {
+                    account: account.account,
+                    slot: account.slot,
+                    is_startup: account.is_startup,
+                    data_slice: FilterAccountsDataSlice::default(),
+                })
+            }
+            UpdateOneof::Slot(msg) => {
+                let slot = MessageSlot::from_update_oneof(&msg)?;
+                FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
+            }
+            UpdateOneof::Transaction(msg) => {
+                let tx = MessageTransaction::from_update_oneof(msg)?;
+                FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
+                    transaction: tx.transaction,
+                    slot: tx.slot,
+                })
+            }
+            UpdateOneof::TransactionStatus(msg) => {
+                FilteredUpdateOneof::TransactionStatus(FilteredUpdateTransactionStatus {
+                    transaction: Arc::new(MessageTransactionInfo {
+                        signature: Signature::try_from(msg.signature.as_slice())
+                            .map_err(|_| "invalid signature length")?,
+                        is_vote: msg.is_vote,
+                        transaction: confirmed_block::Transaction::default(),
+                        meta: confirmed_block::TransactionStatusMeta {
+                            err: msg.err,
+                            ..confirmed_block::TransactionStatusMeta::default()
+                        },
+                        index: msg.index as usize,
+                        account_keys: HashSet::new(),
+                    }),
+                    slot: msg.slot,
+                })
+            }
+            UpdateOneof::Block(msg) => {
+                let block = MessageBlock::from_update_oneof(msg)?;
+                FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
+                    meta: block.meta,
+                    transactions: block.transactions,
+                    updated_account_count: block.updated_account_count,
+                    accounts: block.accounts,
+                    accounts_data_slice: FilterAccountsDataSlice::default(),
+                    entries: block.entries,
+                }))
+            }
+            UpdateOneof::Ping(_) => FilteredUpdateOneof::Ping,
+            UpdateOneof::Pong(msg) => FilteredUpdateOneof::Pong(msg),
+            UpdateOneof::BlockMeta(msg) => {
+                let block_meta = MessageBlockMeta(msg);
+                FilteredUpdateOneof::BlockMeta(Arc::new(block_meta))
+            }
+            UpdateOneof::Entry(msg) => {
+                let entry = MessageEntry::from_update_oneof(&msg)?;
+                FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
+            }
+        };
+
+        Ok(Self {
+            filters: update.filters.into_iter().map(FilterName::new).collect(),
+            message,
+        })
+    }
 }
 
 pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateOneof {
     Account(FilteredUpdateAccount),                     // 2
     Slot(FilteredUpdateSlot),                           // 3
@@ -332,7 +402,7 @@ impl prost::Message for FilteredUpdateOneof {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateAccount {
     pub account: Arc<MessageAccountInfo>,
     pub slot: u64,
@@ -453,7 +523,7 @@ impl FilteredUpdateAccount {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateSlot(MessageSlot);
 
 impl prost::Message for FilteredUpdateSlot {
@@ -501,7 +571,7 @@ impl prost::Message for FilteredUpdateSlot {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateTransaction {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
@@ -576,7 +646,7 @@ impl FilteredUpdateTransaction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateTransactionStatus {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
@@ -641,7 +711,7 @@ impl prost::Message for FilteredUpdateTransactionStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateBlock {
     pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
@@ -782,7 +852,7 @@ impl prost::Message for FilteredUpdateBlock {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateEntry(Arc<MessageEntry>);
 
 impl prost::Message for FilteredUpdateEntry {
@@ -1120,6 +1190,11 @@ pub mod tests {
         assert_eq!(
             SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
             update
+        );
+        assert_eq!(
+            FilteredUpdate::from_subscribe_update(update.clone())
+                .map(|msg| msg.as_subscribe_update()),
+            Ok(update)
         );
     }
 
