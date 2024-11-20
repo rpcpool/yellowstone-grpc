@@ -927,8 +927,10 @@ impl FilteredUpdateEntry {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "plugin-bench"))]
 pub mod tests {
+    #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
+    #![cfg_attr(feature = "plugin-bench", allow(unused_imports))]
     use {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
         crate::{
