@@ -1,5 +1,4 @@
 pub mod config;
-pub mod filters;
 pub mod grpc;
 pub mod metrics;
 pub mod plugin;

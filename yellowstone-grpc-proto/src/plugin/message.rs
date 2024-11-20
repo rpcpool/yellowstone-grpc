@@ -1,18 +1,17 @@
 use {
-    crate::geyser::CommitmentLevel as CommitmentLevelProto,
+    crate::{
+        convert_to, geyser::CommitmentLevel as CommitmentLevelProto,
+        solana::storage::confirmed_block,
+    },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
-    solana_sdk::{
-        clock::UnixTimestamp, hash::HASH_BYTES, pubkey::Pubkey, signature::Signature,
-        transaction::SanitizedTransaction,
-    },
-    solana_transaction_status::{Reward, TransactionStatusMeta},
-    std::sync::Arc,
+    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signature},
+    std::{collections::HashSet, sync::Arc},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CommitmentLevel {
     Processed,
     Confirmed,
@@ -49,26 +48,15 @@ impl From<CommitmentLevelProto> for CommitmentLevel {
     }
 }
 
-impl PartialEq<CommitmentLevelProto> for CommitmentLevel {
-    fn eq(&self, other: &CommitmentLevelProto) -> bool {
-        matches!(
-            (self, other),
-            (Self::Processed, CommitmentLevelProto::Processed)
-                | (Self::Confirmed, CommitmentLevelProto::Confirmed)
-                | (Self::Finalized, CommitmentLevelProto::Finalized)
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct MessageSlot {
-    pub slot: u64,
-    pub parent: Option<u64>,
+    pub slot: Slot,
+    pub parent: Option<Slot>,
     pub status: CommitmentLevel,
 }
 
-impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
-    fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
+impl MessageSlot {
+    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: SlotStatus) -> Self {
         Self {
             slot,
             parent,
@@ -89,26 +77,32 @@ pub struct MessageAccountInfo {
     pub txn_signature: Option<Signature>,
 }
 
+impl MessageAccountInfo {
+    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
+            lamports: info.lamports,
+            owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
+            executable: info.executable,
+            rent_epoch: info.rent_epoch,
+            data: info.data.into(),
+            write_version: info.write_version,
+            txn_signature: info.txn.map(|txn| *txn.signature()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageAccount {
     pub account: Arc<MessageAccountInfo>,
-    pub slot: u64,
+    pub slot: Slot,
     pub is_startup: bool,
 }
 
-impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
-    fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV3<'a>, u64, bool)) -> Self {
+impl MessageAccount {
+    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool) -> Self {
         Self {
-            account: Arc::new(MessageAccountInfo {
-                pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
-                lamports: account.lamports,
-                owner: Pubkey::try_from(account.owner).expect("valid Pubkey"),
-                executable: account.executable,
-                rent_epoch: account.rent_epoch,
-                data: account.data.into(),
-                write_version: account.write_version,
-                txn_signature: account.txn.map(|txn| *txn.signature()),
-            }),
+            account: Arc::new(MessageAccountInfo::from_geyser(info)),
             slot,
             is_startup,
         }
@@ -119,9 +113,31 @@ impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
 pub struct MessageTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
-    pub transaction: SanitizedTransaction,
-    pub meta: TransactionStatusMeta,
+    pub transaction: confirmed_block::Transaction,
+    pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
+    pub account_keys: HashSet<Pubkey>,
+}
+
+impl MessageTransactionInfo {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>) -> Self {
+        let account_keys = info
+            .transaction
+            .message()
+            .account_keys()
+            .iter()
+            .copied()
+            .collect();
+
+        Self {
+            signature: *info.signature,
+            is_vote: info.is_vote,
+            transaction: convert_to::create_transaction(info.transaction),
+            meta: convert_to::create_transaction_meta(info.transaction_status_meta),
+            index: info.index,
+            account_keys,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,16 +146,10 @@ pub struct MessageTransaction {
     pub slot: u64,
 }
 
-impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
-    fn from((transaction, slot): (&'a ReplicaTransactionInfoV2<'a>, u64)) -> Self {
+impl MessageTransaction {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>, slot: Slot) -> Self {
         Self {
-            transaction: Arc::new(MessageTransactionInfo {
-                signature: *transaction.signature,
-                is_vote: transaction.is_vote,
-                transaction: transaction.transaction.clone(),
-                meta: transaction.transaction_status_meta.clone(),
-                index: transaction.index,
-            }),
+            transaction: Arc::new(MessageTransactionInfo::from_geyser(info)),
             slot,
         }
     }
@@ -150,22 +160,20 @@ pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
     pub num_hashes: u64,
-    pub hash: [u8; HASH_BYTES],
+    pub hash: Hash,
     pub executed_transaction_count: u64,
     pub starting_transaction_index: u64,
 }
 
-impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
-    fn from(entry: &ReplicaEntryInfoV2) -> Self {
+impl MessageEntry {
+    pub fn from_geyser(info: &ReplicaEntryInfoV2) -> Self {
         Self {
-            slot: entry.slot,
-            index: entry.index,
-            num_hashes: entry.num_hashes,
-            hash: entry.hash[0..HASH_BYTES]
-                .try_into()
-                .expect("failed to create hash"),
-            executed_transaction_count: entry.executed_transaction_count,
-            starting_transaction_index: entry
+            slot: info.slot,
+            index: info.index,
+            num_hashes: info.num_hashes,
+            hash: Hash::new(info.hash),
+            executed_transaction_count: info.executed_transaction_count,
+            starting_transaction_index: info
                 .starting_transaction_index
                 .try_into()
                 .expect("failed convert usize to u64"),
@@ -179,27 +187,28 @@ pub struct MessageBlockMeta {
     pub slot: u64,
     pub parent_blockhash: String,
     pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub num_partitions: Option<u64>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
+    pub rewards: confirmed_block::Rewards,
+    pub block_time: Option<confirmed_block::UnixTimestamp>,
+    pub block_height: Option<confirmed_block::BlockHeight>,
     pub executed_transaction_count: u64,
     pub entries_count: u64,
 }
 
-impl<'a> From<&'a ReplicaBlockInfoV4<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV4<'a>) -> Self {
+impl MessageBlockMeta {
+    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>) -> Self {
         Self {
-            parent_slot: blockinfo.parent_slot,
-            slot: blockinfo.slot,
-            parent_blockhash: blockinfo.parent_blockhash.to_string(),
-            blockhash: blockinfo.blockhash.to_string(),
-            rewards: blockinfo.rewards.rewards.clone(),
-            num_partitions: blockinfo.rewards.num_partitions,
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
-            executed_transaction_count: blockinfo.executed_transaction_count,
-            entries_count: blockinfo.entry_count,
+            parent_slot: info.parent_slot,
+            slot: info.slot,
+            parent_blockhash: info.parent_blockhash.to_string(),
+            blockhash: info.blockhash.to_string(),
+            rewards: convert_to::create_rewards_obj(
+                &info.rewards.rewards,
+                info.rewards.num_partitions,
+            ),
+            block_time: info.block_time.map(convert_to::create_timestamp),
+            block_height: info.block_height.map(convert_to::create_block_height),
+            executed_transaction_count: info.executed_transaction_count,
+            entries_count: info.entry_count,
         }
     }
 }
@@ -213,21 +222,12 @@ pub struct MessageBlock {
     pub entries: Vec<Arc<MessageEntry>>,
 }
 
-impl
-    From<(
-        Arc<MessageBlockMeta>,
-        Vec<Arc<MessageTransactionInfo>>,
-        Vec<Arc<MessageAccountInfo>>,
-        Vec<Arc<MessageEntry>>,
-    )> for MessageBlock
-{
-    fn from(
-        (meta, transactions, accounts, entries): (
-            Arc<MessageBlockMeta>,
-            Vec<Arc<MessageTransactionInfo>>,
-            Vec<Arc<MessageAccountInfo>>,
-            Vec<Arc<MessageEntry>>,
-        ),
+impl MessageBlock {
+    pub fn new(
+        meta: Arc<MessageBlockMeta>,
+        transactions: Vec<Arc<MessageTransactionInfo>>,
+        accounts: Vec<Arc<MessageAccountInfo>>,
+        entries: Vec<Arc<MessageEntry>>,
     ) -> Self {
         Self {
             meta,
