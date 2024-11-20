@@ -17,6 +17,33 @@ use {
 fn bench_account(c: &mut Criterion) {
     let filters = create_message_filters(&["my special filter"]);
 
+    macro_rules! bench {
+        ($updates:expr, $kind:expr) => {
+            c.bench_with_input(
+                BenchmarkId::new($kind, "ref"),
+                $updates,
+                |b, updates| {
+                    b.iter(|| {
+                        for update in updates.iter() {
+                            update.encode_to_vec().len();
+                        }
+                    })
+                },
+            );
+            c.bench_with_input(
+                BenchmarkId::new($kind, "prost"),
+                $updates,
+                |b, updates| {
+                    b.iter(|| {
+                        for update in updates.iter() {
+                            update.as_subscribe_update().encode_to_vec().len();
+                        }
+                    })
+                },
+            );
+        };
+    }
+
     let updates = create_accounts()
         .into_iter()
         .map(|(msg, data_slice)| FilteredUpdate {
@@ -24,28 +51,7 @@ fn bench_account(c: &mut Criterion) {
             message: FilteredUpdateOneof::account(&msg, data_slice),
         })
         .collect::<Vec<_>>();
-    c.bench_with_input(
-        BenchmarkId::new("accounts", "ref"),
-        &updates,
-        |b, updates| {
-            b.iter(|| {
-                for update in updates.iter() {
-                    update.encode_to_vec().len();
-                }
-            })
-        },
-    );
-    c.bench_with_input(
-        BenchmarkId::new("accounts", "prost"),
-        &updates,
-        |b, updates| {
-            b.iter(|| {
-                for update in updates.iter() {
-                    update.as_subscribe_update().encode_to_vec().len();
-                }
-            })
-        },
-    );
+    bench!(&updates, "accounts");
 
     let updates = load_predefined_transactions()
         .into_iter()
@@ -57,28 +63,7 @@ fn bench_account(c: &mut Criterion) {
             }),
         })
         .collect::<Vec<_>>();
-    c.bench_with_input(
-        BenchmarkId::new("transactions", "ref"),
-        &updates,
-        |b, updates| {
-            b.iter(|| {
-                for update in updates.iter() {
-                    update.encode_to_vec().len();
-                }
-            })
-        },
-    );
-    c.bench_with_input(
-        BenchmarkId::new("transactions", "prost"),
-        &updates,
-        |b, updates| {
-            b.iter(|| {
-                for update in updates.iter() {
-                    update.as_subscribe_update().encode_to_vec().len();
-                }
-            })
-        },
-    );
+    bench!(&updates, "transactions");
 
     let updates = load_predefined_blocks()
         .into_iter()
@@ -87,24 +72,7 @@ fn bench_account(c: &mut Criterion) {
             message: FilteredUpdateOneof::block(Box::new(block)),
         })
         .collect::<Vec<_>>();
-    c.bench_with_input(BenchmarkId::new("blocks", "ref"), &updates, |b, updates| {
-        b.iter(|| {
-            for update in updates.iter() {
-                update.encode_to_vec().len();
-            }
-        })
-    });
-    c.bench_with_input(
-        BenchmarkId::new("blocks", "prost"),
-        &updates,
-        |b, updates| {
-            b.iter(|| {
-                for update in updates.iter() {
-                    update.as_subscribe_update().encode_to_vec().len();
-                }
-            })
-        },
-    );
+    bench!(&updates, "blocks");
 }
 
 criterion_group!(
