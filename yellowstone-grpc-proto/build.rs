@@ -2,9 +2,8 @@ use tonic_build::manual::{Builder, Method, Service};
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("PROTOC", protobuf_src::protoc());
-
     // build protos
-    tonic_build::compile_protos("proto/geyser.proto")?;
+    tonic_build::compile_protos("proto/fumarole.proto")?;
 
     // build with accepting our custom struct
     let geyser_service = Service::builder()
@@ -78,6 +77,7 @@ fn main() -> anyhow::Result<()> {
                 .build(),
         )
         .build();
+
     Builder::new()
         .build_client(false)
         .compile(&[geyser_service]);

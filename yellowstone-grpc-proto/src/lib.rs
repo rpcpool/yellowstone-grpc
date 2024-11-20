@@ -17,6 +17,10 @@ pub mod solana {
     }
 }
 
+pub mod fumarole {
+    tonic::include_proto!("fumarole");
+}
+
 pub mod prelude {
     pub use super::{geyser::*, solana::storage::confirmed_block::*};
 }

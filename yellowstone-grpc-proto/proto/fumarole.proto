@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+
+import public "geyser.proto";
+
+package fumarole;
+
+service Fumarole {
+  rpc CreateStaticConsumerGroup(CreateStaticConsumerGroupRequest) returns (CreateStaticConsumerGroupResponse) {}
+  rpc Subscribe(stream SubscribeRequest) returns (stream geyser.SubscribeUpdate) {}
+  rpc GetSlotLagInfo(GetSlotLagInfoRequest) returns (GetSlotLagInfoResponse) {}
+}
+
+message GetSlotLagInfoRequest {
+  string consumer_group_label = 1;
+}
+
+message GetSlotLagInfoResponse {
+  uint64 max_slot_seen = 1;
+  uint64 global_max_slot = 2;
+}
+
+message SubscribeRequest {
+  string consumer_group_label = 1;
+  optional uint32 consumer_id = 2;
+  optional AccountUpdateFilter accounts = 3;
+  optional TransactionFilter transactions = 4;
+}
+
+message CreateStaticConsumerGroupResponse {
+  string group_id = 1;
+}
+
+enum InitialOffsetPolicy {
+  EARLIEST = 0;
+  LATEST = 1;
+  SLOT = 2;
+}
+
+enum EventSubscriptionPolicy {
+  ACCOUNT_UPDATE_ONLY = 0;
+  TRANSACTION_ONLY = 1;
+  BOTH = 2;
+}
+
+message CreateStaticConsumerGroupRequest {
+  string consumer_group_label = 1;
+  optional uint32 member_count = 2;
+  InitialOffsetPolicy initial_offset_policy = 3;
+  geyser.CommitmentLevel commitment_level = 4;
+  EventSubscriptionPolicy event_subscription_policy = 5;
+  optional int64 at_slot = 6;
+}
+
+
+/// The AccountUpdateFilter message defines filters for account update events. It includes the following fields:
+/// 
+/// pubkeys (1)
+/// A repeated field of bytes representing public keys. Events matching any of these public keys will be included in the filtered results.
+/// 
+/// owners (2)
+/// A repeated field of bytes representing account owners. Events matching any of these account owners will be included in the filtered results.
+message AccountUpdateFilter {
+  repeated string account = 1;
+  repeated string owner = 2;
+}
+
+/// The TransactionFilter message specifies filters for transaction events. It contains the following field:
+
+/// account_keys (1)
+/// A repeated field of bytes representing account keys. Events associated with any of these account keys will be included in the filtered results.
+message TransactionFilter {
+  repeated string account_keys = 1;
+}
