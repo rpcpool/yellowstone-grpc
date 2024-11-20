@@ -1020,7 +1020,7 @@ impl FilterAccountsDataSlice {
         Self(slices)
     }
 
-    pub fn apply(&self, source: &[u8]) -> Vec<u8> {
+    pub fn get_slice(&self, source: &[u8]) -> Vec<u8> {
         if self.0.is_empty() {
             source.to_vec()
         } else {
@@ -1031,6 +1031,20 @@ impl FilterAccountsDataSlice {
                 }
             }
             data
+        }
+    }
+
+    pub fn get_slice_len(&self, source: &[u8]) -> usize {
+        if self.0.is_empty() {
+            source.len()
+        } else {
+            let mut len = 0;
+            for slice in self.0.iter() {
+                if source.len() >= slice.end {
+                    len += source[slice.start..slice.end].len();
+                }
+            }
+            len
         }
     }
 }

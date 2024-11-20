@@ -1,10 +1,10 @@
 use {
     crate::{
         geyser::{
-            subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateEntry,
-            SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus,
         },
         plugin::{
@@ -17,12 +17,43 @@ use {
     },
     bytes::buf::{Buf, BufMut},
     prost::{
-        encoding::{DecodeContext, WireType},
+        encoding::{
+            encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
+            WireType,
+        },
         DecodeError,
     },
     smallvec::SmallVec,
     std::sync::Arc,
 };
+
+#[inline]
+pub fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
+    key_len(tag) + encoded_len_varint(len as u64) + len
+}
+
+#[inline]
+fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(value.len() as u64, buf);
+    buf.put(value);
+}
+
+#[inline]
+pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
+    prost_field_encoded_len(tag, value.len())
+}
+
+macro_rules! prost_repeated_encoded_len_map {
+    ($tag:expr, $values:expr, $get_len:expr) => {{
+        key_len($tag) * $values.len()
+            + $values
+                .iter()
+                .map($get_len)
+                .map(|len| encoded_len_varint(len as u64) + len)
+                .sum::<usize>()
+    }};
+}
 
 pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
 
@@ -34,11 +65,17 @@ pub struct FilteredUpdate {
 
 impl prost::Message for FilteredUpdate {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        self.as_subscribe_update().encode_raw(buf)
+        for name in self.filters.iter().map(|filter| filter.as_ref()) {
+            encode_key(1u32, WireType::LengthDelimited, buf);
+            encode_varint(name.len() as u64, buf);
+            buf.put_slice(name.as_bytes());
+        }
+        self.message.encode_raw(buf)
     }
 
     fn encoded_len(&self) -> usize {
-        self.as_subscribe_update().encoded_len()
+        prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
+            + self.message.encoded_len()
     }
 
     fn merge_field(
@@ -75,7 +112,7 @@ impl FilteredUpdate {
             owner: message.owner.as_ref().into(),
             executable: message.executable,
             rent_epoch: message.rent_epoch,
-            data: data_slice.apply(&message.data),
+            data: data_slice.get_slice(&message.data),
             write_version: message.write_version,
             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
         }
@@ -167,7 +204,7 @@ impl FilteredUpdate {
             }),
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
-            FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.0.as_ref().0.clone()),
+            FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.0.clone()),
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
@@ -195,7 +232,7 @@ pub enum FilteredUpdateOneof {
     Block(Box<FilteredUpdateBlock>),                    // 5
     Ping,                                               // 6
     Pong(SubscribeUpdatePong),                          // 9
-    BlockMeta(FilteredUpdateBlockMeta),                 // 7
+    BlockMeta(Arc<MessageBlockMeta>),                   // 7
     Entry(FilteredUpdateEntry),                         // 8
 }
 
@@ -240,11 +277,58 @@ impl FilteredUpdateOneof {
     }
 
     pub const fn block_meta(message: Arc<MessageBlockMeta>) -> Self {
-        Self::BlockMeta(FilteredUpdateBlockMeta(message))
+        Self::BlockMeta(message)
     }
 
     pub const fn entry(message: Arc<MessageEntry>) -> Self {
         Self::Entry(FilteredUpdateEntry(message))
+    }
+}
+
+impl prost::Message for FilteredUpdateOneof {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        match self {
+            Self::Account(msg) => message::encode(2u32, msg, buf),
+            Self::Slot(msg) => message::encode(3u32, msg, buf),
+            Self::Transaction(msg) => message::encode(4u32, msg, buf),
+            Self::TransactionStatus(msg) => message::encode(10u32, msg, buf),
+            Self::Block(msg) => message::encode(5u32, msg, buf),
+            Self::Ping => {
+                encode_key(6u32, WireType::LengthDelimited, buf);
+                encode_varint(0, buf);
+            }
+            Self::Pong(msg) => message::encode(9u32, msg, buf),
+            Self::BlockMeta(msg) => message::encode(7u32, &msg.0, buf),
+            Self::Entry(msg) => message::encode(8u32, msg, buf),
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        match self {
+            Self::Account(msg) => message::encoded_len(2u32, msg),
+            Self::Slot(msg) => message::encoded_len(3u32, msg),
+            Self::Transaction(msg) => message::encoded_len(4u32, msg),
+            Self::TransactionStatus(msg) => message::encoded_len(10u32, msg),
+            Self::Block(msg) => message::encoded_len(5u32, msg),
+            Self::Ping => key_len(6u32) + encoded_len_varint(0),
+            Self::Pong(msg) => message::encoded_len(9u32, msg),
+            Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.0),
+            Self::Entry(msg) => message::encoded_len(8u32, msg),
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
     }
 }
 
@@ -256,8 +340,166 @@ pub struct FilteredUpdateAccount {
     pub data_slice: FilterAccountsDataSlice,
 }
 
+impl prost::Message for FilteredUpdateAccount {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::account_encode_raw(1u32, &self.account, &self.data_slice, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
+        if self.is_startup {
+            ::prost::encoding::bool::encode(3u32, &self.is_startup, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_field_encoded_len(
+            1u32,
+            Self::account_encoded_len(&self.account, &self.data_slice),
+        ) + if self.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+        } else {
+            0
+        } + if self.is_startup {
+            ::prost::encoding::bool::encoded_len(3u32, &self.is_startup)
+        } else {
+            0
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateAccount {
+    fn account_encode_raw(
+        tag: u32,
+        account: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+        buf: &mut impl BufMut,
+    ) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, account.pubkey.as_ref(), buf);
+        if account.lamports != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &account.lamports, buf);
+        }
+        prost_bytes_encode_raw(3u32, account.owner.as_ref(), buf);
+        if account.executable {
+            ::prost::encoding::bool::encode(4u32, &account.executable, buf);
+        }
+        if account.rent_epoch != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &account.rent_epoch, buf);
+        }
+        let data = data_slice.get_slice(&account.data);
+        if !data.is_empty() {
+            prost_bytes_encode_raw(6u32, data.as_ref(), buf);
+        }
+        if account.write_version != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &account.write_version, buf);
+        }
+        if let Some(value) = &account.txn_signature {
+            prost_bytes_encode_raw(8u32, value.as_ref(), buf);
+        }
+    }
+
+    fn account_encoded_len(
+        account: &MessageAccountInfo,
+        data_slice: &FilterAccountsDataSlice,
+    ) -> usize {
+        let data_len = data_slice.get_slice_len(&account.data);
+
+        prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
+            + if account.lamports != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
+            } else {
+                0
+            }
+            + prost_bytes_encoded_len(3u32, account.owner.as_ref())
+            + if account.executable {
+                ::prost::encoding::bool::encoded_len(4u32, &account.executable)
+            } else {
+                0
+            }
+            + if account.rent_epoch != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &account.rent_epoch)
+            } else {
+                0
+            }
+            + if data_len != 0 {
+                prost_field_encoded_len(6u32, data_len)
+            } else {
+                0
+            }
+            + if account.write_version != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &account.write_version)
+            } else {
+                0
+            }
+            + account
+                .txn_signature
+                .map_or(0, |sig| prost_bytes_encoded_len(8u32, sig.as_ref()))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FilteredUpdateSlot(MessageSlot);
+
+impl prost::Message for FilteredUpdateSlot {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        let status = CommitmentLevelProto::from(self.0.status) as i32;
+        if self.0.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.0.slot, buf);
+        }
+        if let ::core::option::Option::Some(ref value) = self.0.parent {
+            ::prost::encoding::uint64::encode(2u32, value, buf);
+        }
+        if status != CommitmentLevelProto::default() as i32 {
+            ::prost::encoding::int32::encode(3u32, &status, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        let status = CommitmentLevelProto::from(self.0.status) as i32;
+
+        (if self.0.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.0.slot)
+        } else {
+            0
+        }) + self.0.parent.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(2u32, value)
+        }) + if status != CommitmentLevelProto::default() as i32 {
+            ::prost::encoding::int32::encoded_len(3u32, &status)
+        } else {
+            0
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FilteredUpdateTransaction {
@@ -265,10 +507,138 @@ pub struct FilteredUpdateTransaction {
     pub slot: u64,
 }
 
+impl prost::Message for FilteredUpdateTransaction {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::tx_encode_raw(1u32, &self.transaction, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction))
+            + if self.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateTransaction {
+    fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+
+        let index = tx.index as u64;
+
+        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
+        }
+        message::encode(3u32, &tx.transaction, buf);
+        message::encode(4u32, &tx.meta, buf);
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &index, buf);
+        }
+    }
+
+    fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
+        let index = tx.index as u64;
+
+        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + message::encoded_len(3u32, &tx.transaction)
+            + message::encoded_len(4u32, &tx.meta)
+            + if index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &index)
+            } else {
+                0
+            }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FilteredUpdateTransactionStatus {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
+}
+
+impl prost::Message for FilteredUpdateTransactionStatus {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        }
+        let tx = &self.transaction;
+        prost_bytes_encode_raw(2u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(3u32, &tx.is_vote, buf);
+        }
+        let index = tx.index as u64;
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(4u32, &index, buf);
+        }
+        if let Some(msg) = &tx.meta.err {
+            message::encode(5u32, msg, buf)
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        let tx = &self.transaction;
+        let index = tx.index as u64;
+
+        (if self.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
+        } else {
+            0
+        }) + prost_bytes_encoded_len(2u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(3u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + if index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(4u32, &index)
+            } else {
+                0
+            }
+            + tx.meta
+                .err
+                .as_ref()
+                .map_or(0, |msg| message::encoded_len(5u32, msg))
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -281,11 +651,214 @@ pub struct FilteredUpdateBlock {
     pub entries: Vec<Arc<MessageEntry>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FilteredUpdateBlockMeta(Arc<MessageBlockMeta>);
+impl prost::Message for FilteredUpdateBlock {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        if self.meta.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.meta.slot, buf);
+        }
+        if !self.meta.blockhash.is_empty() {
+            ::prost::encoding::string::encode(2u32, &self.meta.blockhash, buf);
+        }
+        if let Some(msg) = &self.meta.rewards {
+            message::encode(3u32, msg, buf);
+        }
+        if let Some(msg) = &self.meta.block_time {
+            message::encode(4u32, msg, buf);
+        }
+        if let Some(msg) = &self.meta.block_height {
+            message::encode(5u32, msg, buf);
+        }
+        for tx in &self.transactions {
+            FilteredUpdateTransaction::tx_encode_raw(6u32, tx.as_ref(), buf);
+        }
+        if self.meta.parent_slot != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &self.meta.parent_slot, buf);
+        }
+        if !self.meta.parent_blockhash.is_empty() {
+            ::prost::encoding::string::encode(8u32, &self.meta.parent_blockhash, buf);
+        }
+        if self.meta.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encode(9u32, &self.meta.executed_transaction_count, buf);
+        }
+        if self.updated_account_count != 0u64 {
+            ::prost::encoding::uint64::encode(10u32, &self.updated_account_count, buf);
+        }
+        for account in &self.accounts {
+            FilteredUpdateAccount::account_encode_raw(
+                11u32,
+                account.as_ref(),
+                &self.accounts_data_slice,
+                buf,
+            );
+        }
+        if self.meta.entries_count != 0u64 {
+            ::prost::encoding::uint64::encode(12u32, &self.meta.entries_count, buf);
+        }
+        for entry in &self.entries {
+            encode_key(13u32, WireType::LengthDelimited, buf);
+            encode_varint(
+                FilteredUpdateEntry::entry_encoded_len(entry.as_ref()) as u64,
+                buf,
+            );
+            FilteredUpdateEntry::entry_encode_raw(entry, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        (if self.meta.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.meta.slot)
+        } else {
+            0
+        }) + if !self.meta.blockhash.is_empty() {
+            ::prost::encoding::string::encoded_len(2u32, &self.meta.blockhash)
+        } else {
+            0
+        } + self
+            .meta
+            .rewards
+            .as_ref()
+            .map_or(0, |msg| message::encoded_len(3u32, msg))
+            + self
+                .meta
+                .block_time
+                .as_ref()
+                .map_or(0, |msg| message::encoded_len(4u32, msg))
+            + self
+                .meta
+                .block_height
+                .as_ref()
+                .map_or(0, |msg| message::encoded_len(5u32, msg))
+            + prost_repeated_encoded_len_map!(6u32, self.transactions, |tx| {
+                FilteredUpdateTransaction::tx_encoded_len(tx.as_ref())
+            })
+            + if self.meta.parent_slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &self.meta.parent_slot)
+            } else {
+                0
+            }
+            + if !self.meta.parent_blockhash.is_empty() {
+                ::prost::encoding::string::encoded_len(8u32, &self.meta.parent_blockhash)
+            } else {
+                0
+            }
+            + if self.meta.executed_transaction_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(9u32, &self.meta.executed_transaction_count)
+            } else {
+                0
+            }
+            + if self.updated_account_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(10u32, &self.updated_account_count)
+            } else {
+                0
+            }
+            + prost_repeated_encoded_len_map!(11u32, self.accounts, |account| {
+                FilteredUpdateAccount::account_encoded_len(
+                    account.as_ref(),
+                    &self.accounts_data_slice,
+                )
+            })
+            + if self.meta.entries_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(12u32, &self.meta.entries_count)
+            } else {
+                0
+            }
+            + prost_repeated_encoded_len_map!(13u32, self.entries, |entry| {
+                FilteredUpdateEntry::entry_encoded_len(entry)
+            })
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FilteredUpdateEntry(Arc<MessageEntry>);
+
+impl prost::Message for FilteredUpdateEntry {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::entry_encode_raw(&self.0, buf)
+    }
+
+    fn encoded_len(&self) -> usize {
+        Self::entry_encoded_len(&self.0)
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateEntry {
+    fn entry_encode_raw(entry: &MessageEntry, buf: &mut impl BufMut) {
+        let index = entry.index as u64;
+
+        if entry.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &entry.slot, buf);
+        }
+        if index != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &index, buf);
+        }
+        if entry.num_hashes != 0u64 {
+            ::prost::encoding::uint64::encode(3u32, &entry.num_hashes, buf);
+        }
+        prost_bytes_encode_raw(4u32, entry.hash.as_ref(), buf);
+        if entry.executed_transaction_count != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &entry.executed_transaction_count, buf);
+        }
+        if entry.starting_transaction_index != 0u64 {
+            ::prost::encoding::uint64::encode(6u32, &entry.starting_transaction_index, buf);
+        }
+    }
+
+    fn entry_encoded_len(entry: &MessageEntry) -> usize {
+        let index = entry.index as u64;
+
+        (if entry.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &entry.slot)
+        } else {
+            0
+        }) + if index != 0u64 {
+            ::prost::encoding::uint64::encoded_len(2u32, &index)
+        } else {
+            0
+        } + if entry.num_hashes != 0u64 {
+            ::prost::encoding::uint64::encoded_len(3u32, &entry.num_hashes)
+        } else {
+            0
+        } + prost_bytes_encoded_len(4u32, entry.hash.as_ref())
+            + if entry.executed_transaction_count != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &entry.executed_transaction_count)
+            } else {
+                0
+            }
+            + if entry.starting_transaction_index != 0u64 {
+                ::prost::encoding::uint64::encoded_len(6u32, &entry.starting_transaction_index)
+            } else {
+                0
+            }
+    }
+}
 
 #[cfg(test)]
 pub mod tests {
