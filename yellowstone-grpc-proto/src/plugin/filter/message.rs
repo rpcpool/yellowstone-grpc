@@ -472,10 +472,7 @@ impl FilteredUpdateAccount {
         if account.rent_epoch != 0u64 {
             ::prost::encoding::uint64::encode(5u32, &account.rent_epoch, buf);
         }
-        let data = data_slice.get_slice(&account.data);
-        if !data.is_empty() {
-            prost_bytes_encode_raw(6u32, data.as_ref(), buf);
-        }
+        data_slice.slice_encode_raw(6u32, &account.data, buf);
         if account.write_version != 0u64 {
             ::prost::encoding::uint64::encode(7u32, &account.write_version, buf);
         }

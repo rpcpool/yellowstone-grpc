@@ -31,6 +31,8 @@ use {
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
+    bytes::buf::BufMut,
+    prost::encoding::{encode_key, encode_varint, WireType},
     solana_sdk::{
         pubkey::{ParsePubkeyError, Pubkey},
         signature::{ParseSignatureError, Signature},
@@ -1045,6 +1047,24 @@ impl FilterAccountsDataSlice {
                 }
             }
             len
+        }
+    }
+
+    pub fn slice_encode_raw(&self, tag: u32, source: &[u8], buf: &mut impl BufMut) {
+        let len = self.get_slice_len(source) as u64;
+        if len > 0 {
+            encode_key(tag, WireType::LengthDelimited, buf);
+            encode_varint(len, buf);
+
+            if self.0.is_empty() {
+                buf.put_slice(source);
+            } else {
+                for data_slice in self.0.iter() {
+                    if source.len() >= data_slice.end {
+                        buf.put_slice(&source[data_slice.start..data_slice.end]);
+                    }
+                }
+            }
         }
     }
 }
