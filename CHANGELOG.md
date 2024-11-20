@@ -12,6 +12,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## 2024-11-20
+
+- yellowstone-grpc-client-simple-3.0.0
+- yellowstone-grpc-client-3.0.0
+- yellowstone-grpc-geyser-3.0.0
+- yellowstone-grpc-proto-3.0.0
+
+### Fixes
+
 - examples: fix commitment in TypeScript example ([#440](https://github.com/rpcpool/yellowstone-grpc/pull/440))
 - geyser: fix missed status messages ([#444](https://github.com/rpcpool/yellowstone-grpc/pull/444))
 
@@ -28,6 +41,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: move enum Message from geyser crate ([#459](https://github.com/rpcpool/yellowstone-grpc/pull/459))
 - proto: move `Filter` from geyser crate ([#466](https://github.com/rpcpool/yellowstone-grpc/pull/466))
 - geyser: serialize from custom message istead of generated ([#467](https://github.com/rpcpool/yellowstone-grpc/pull/467))
+- proto: implement encoding instead of clone to generated ([#465](https://github.com/rpcpool/yellowstone-grpc/pull/465))
 
 ### Breaking
 

@@ -1,20 +1,32 @@
 use {
     crate::{
         convert_to,
-        geyser::{CommitmentLevel as CommitmentLevelProto, SubscribeUpdateBlockMeta},
+        geyser::{
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus,
     },
-    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signature},
+    solana_sdk::{
+        clock::Slot,
+        hash::{Hash, HASH_BYTES},
+        pubkey::Pubkey,
+        signature::Signature,
+    },
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
         sync::Arc,
     },
 };
+
+type FromUpdateOneofResult<T> = Result<T, &'static str>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CommitmentLevel {
@@ -53,7 +65,7 @@ impl From<CommitmentLevelProto> for CommitmentLevel {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageSlot {
     pub slot: Slot,
     pub parent: Option<Slot>,
@@ -68,9 +80,19 @@ impl MessageSlot {
             status: status.into(),
         }
     }
+
+    pub fn from_update_oneof(msg: &SubscribeUpdateSlot) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            slot: msg.slot,
+            parent: msg.parent,
+            status: CommitmentLevelProto::try_from(msg.status)
+                .map_err(|_| "failed to parse commitment level")?
+                .into(),
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
@@ -95,9 +117,27 @@ impl MessageAccountInfo {
             txn_signature: info.txn.map(|txn| *txn.signature()),
         }
     }
+
+    pub fn from_update_oneof(msg: SubscribeUpdateAccountInfo) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            pubkey: Pubkey::try_from(msg.pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
+            lamports: msg.lamports,
+            owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
+            executable: msg.executable,
+            rent_epoch: msg.rent_epoch,
+            data: msg.data,
+            write_version: msg.write_version,
+            txn_signature: msg
+                .txn_signature
+                .map(|sig| {
+                    Signature::try_from(sig.as_slice()).map_err(|_| "invalid signature length")
+                })
+                .transpose()?,
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageAccount {
     pub account: Arc<MessageAccountInfo>,
     pub slot: Slot,
@@ -112,9 +152,19 @@ impl MessageAccount {
             is_startup,
         }
     }
+
+    pub fn from_update_oneof(msg: SubscribeUpdateAccount) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            account: Arc::new(MessageAccountInfo::from_update_oneof(
+                msg.account.ok_or("account message should be defined")?,
+            )?),
+            slot: msg.slot,
+            is_startup: msg.is_startup,
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
@@ -143,9 +193,54 @@ impl MessageTransactionInfo {
             account_keys,
         }
     }
+
+    pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            signature: Signature::try_from(msg.signature.as_slice())
+                .map_err(|_| "invalid signature length")?,
+            is_vote: msg.is_vote,
+            transaction: msg
+                .transaction
+                .ok_or("transaction message should be defined")?,
+            meta: msg.meta.ok_or("meta message should be defined")?,
+            index: msg.index as usize,
+            account_keys: HashSet::new(),
+        })
+    }
+
+    pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
+        let mut account_keys = HashSet::new();
+
+        // static
+        if let Some(pubkeys) = self
+            .transaction
+            .message
+            .as_ref()
+            .map(|msg| msg.account_keys.as_slice())
+        {
+            for pubkey in pubkeys {
+                account_keys.insert(
+                    Pubkey::try_from(pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
+                );
+            }
+        }
+
+        // dynamic
+        for pubkey in self.meta.loaded_writable_addresses.iter() {
+            account_keys
+                .insert(Pubkey::try_from(pubkey.as_slice()).map_err(|_| "invalid pubkey length")?);
+        }
+        for pubkey in self.meta.loaded_readonly_addresses.iter() {
+            account_keys
+                .insert(Pubkey::try_from(pubkey.as_slice()).map_err(|_| "invalid pubkey length")?);
+        }
+
+        self.account_keys = account_keys;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageTransaction {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
@@ -158,9 +253,19 @@ impl MessageTransaction {
             slot,
         }
     }
+
+    pub fn from_update_oneof(msg: SubscribeUpdateTransaction) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            transaction: Arc::new(MessageTransactionInfo::from_update_oneof(
+                msg.transaction
+                    .ok_or("transaction message should be defined")?,
+            )?),
+            slot: msg.slot,
+        })
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
@@ -184,9 +289,23 @@ impl MessageEntry {
                 .expect("failed convert usize to u64"),
         }
     }
+
+    pub fn from_update_oneof(msg: &SubscribeUpdateEntry) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            slot: msg.slot,
+            index: msg.index as usize,
+            num_hashes: msg.num_hashes,
+            hash: Hash::new_from_array(
+                <[u8; HASH_BYTES]>::try_from(msg.hash.as_slice())
+                    .map_err(|_| "invalid hash length")?,
+            ),
+            executed_transaction_count: msg.executed_transaction_count,
+            starting_transaction_index: msg.starting_transaction_index,
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlockMeta(pub SubscribeUpdateBlockMeta);
 
 impl Deref for MessageBlockMeta {
@@ -222,7 +341,7 @@ impl MessageBlockMeta {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlock {
     pub meta: Arc<MessageBlockMeta>,
     pub transactions: Vec<Arc<MessageTransactionInfo>>,
@@ -246,9 +365,41 @@ impl MessageBlock {
             entries,
         }
     }
+
+    pub fn from_update_oneof(msg: SubscribeUpdateBlock) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            meta: Arc::new(MessageBlockMeta(SubscribeUpdateBlockMeta {
+                slot: msg.slot,
+                blockhash: msg.blockhash,
+                rewards: msg.rewards,
+                block_time: msg.block_time,
+                block_height: msg.block_height,
+                parent_slot: msg.parent_slot,
+                parent_blockhash: msg.parent_blockhash,
+                executed_transaction_count: msg.executed_transaction_count,
+                entries_count: msg.entries_count,
+            })),
+            transactions: msg
+                .transactions
+                .into_iter()
+                .map(|tx| MessageTransactionInfo::from_update_oneof(tx).map(Arc::new))
+                .collect::<Result<Vec<_>, _>>()?,
+            updated_account_count: msg.updated_account_count,
+            accounts: msg
+                .accounts
+                .into_iter()
+                .map(|account| MessageAccountInfo::from_update_oneof(account).map(Arc::new))
+                .collect::<Result<Vec<_>, _>>()?,
+            entries: msg
+                .entries
+                .iter()
+                .map(|entry| MessageEntry::from_update_oneof(entry).map(Arc::new))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
@@ -268,5 +419,25 @@ impl Message {
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
         }
+    }
+
+    pub fn from_update_oneof(oneof: UpdateOneof) -> FromUpdateOneofResult<Self> {
+        Ok(match oneof {
+            UpdateOneof::Account(msg) => Self::Account(MessageAccount::from_update_oneof(msg)?),
+            UpdateOneof::Slot(msg) => Self::Slot(MessageSlot::from_update_oneof(&msg)?),
+            UpdateOneof::Transaction(msg) => {
+                Self::Transaction(MessageTransaction::from_update_oneof(msg)?)
+            }
+            UpdateOneof::TransactionStatus(_) => {
+                return Err("TransactionStatus message is not supported")
+            }
+            UpdateOneof::Block(msg) => Self::Block(Arc::new(MessageBlock::from_update_oneof(msg)?)),
+            UpdateOneof::Ping(_) => return Err("Ping message is not supported"),
+            UpdateOneof::Pong(_) => return Err("Pong message is not supported"),
+            UpdateOneof::BlockMeta(msg) => Self::BlockMeta(Arc::new(MessageBlockMeta(msg))),
+            UpdateOneof::Entry(msg) => {
+                Self::Entry(Arc::new(MessageEntry::from_update_oneof(&msg)?))
+            }
+        })
     }
 }
