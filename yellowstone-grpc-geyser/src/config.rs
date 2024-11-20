@@ -6,7 +6,7 @@ use {
     std::{fs::read_to_string, net::SocketAddr, path::Path, time::Duration},
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
-    yellowstone_grpc_proto::plugin::filter::FilterLimits,
+    yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
 };
 
 #[derive(Debug, Clone, Deserialize)]

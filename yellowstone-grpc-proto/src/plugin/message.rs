@@ -1,6 +1,7 @@
 use {
     crate::{
-        convert_to, geyser::CommitmentLevel as CommitmentLevelProto,
+        convert_to,
+        geyser::{CommitmentLevel as CommitmentLevelProto, SubscribeUpdateBlockMeta},
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -8,7 +9,11 @@ use {
         SlotStatus,
     },
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signature},
-    std::{collections::HashSet, sync::Arc},
+    std::{
+        collections::HashSet,
+        ops::{Deref, DerefMut},
+        sync::Arc,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -182,34 +187,38 @@ impl MessageEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct MessageBlockMeta {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: String,
-    pub blockhash: String,
-    pub rewards: confirmed_block::Rewards,
-    pub block_time: Option<confirmed_block::UnixTimestamp>,
-    pub block_height: Option<confirmed_block::BlockHeight>,
-    pub executed_transaction_count: u64,
-    pub entries_count: u64,
+pub struct MessageBlockMeta(pub SubscribeUpdateBlockMeta);
+
+impl Deref for MessageBlockMeta {
+    type Target = SubscribeUpdateBlockMeta;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for MessageBlockMeta {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl MessageBlockMeta {
     pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>) -> Self {
-        Self {
+        Self(SubscribeUpdateBlockMeta {
             parent_slot: info.parent_slot,
             slot: info.slot,
             parent_blockhash: info.parent_blockhash.to_string(),
             blockhash: info.blockhash.to_string(),
-            rewards: convert_to::create_rewards_obj(
+            rewards: Some(convert_to::create_rewards_obj(
                 &info.rewards.rewards,
                 info.rewards.num_partitions,
-            ),
+            )),
             block_time: info.block_time.map(convert_to::create_timestamp),
             block_height: info.block_height.map(convert_to::create_block_height),
             executed_transaction_count: info.executed_transaction_count,
             entries_count: info.entry_count,
-        }
+        })
     }
 }
 

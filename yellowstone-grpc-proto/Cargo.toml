@@ -13,16 +13,22 @@ publish = true
 [dependencies]
 agave-geyser-plugin-interface = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
-bs58 = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+bs58 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
 spl-token-2022 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true }
+
+[dev-dependencies]
+prost_011 = { workspace = true }
+solana-storage-proto = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -42,7 +48,9 @@ plugin = [
     "dep:agave-geyser-plugin-interface",
     "dep:base64",
     "dep:bs58",
+    "dep:bytes",
     "dep:serde",
+    "dep:smallvec",
     "dep:spl-token-2022",
     "dep:thiserror"
 ]
