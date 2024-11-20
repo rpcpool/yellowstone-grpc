@@ -217,20 +217,20 @@ pub struct ConfigPrometheus {
     pub address: SocketAddr,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ValueIntStr<'a> {
+    Int(usize),
+    Str(&'a str),
+}
+
 fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        Integer(usize),
-        String(String),
-    }
-
-    match Value::deserialize(deserializer)? {
-        Value::Integer(value) => Ok(value),
-        Value::String(value) => value
+    match ValueIntStr::deserialize(deserializer)? {
+        ValueIntStr::Int(value) => Ok(value),
+        ValueIntStr::Str(value) => value
             .replace('_', "")
             .parse::<usize>()
             .map_err(de::Error::custom),
@@ -241,16 +241,9 @@ fn deserialize_usize_str_maybe<'de, D>(deserializer: D) -> Result<Option<usize>,
 where
     D: Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        Integer(usize),
-        String(String),
-    }
-
-    match Option::<Value>::deserialize(deserializer)? {
-        Some(Value::Integer(value)) => Ok(Some(value)),
-        Some(Value::String(value)) => value
+    match Option::<ValueIntStr>::deserialize(deserializer)? {
+        Some(ValueIntStr::Int(value)) => Ok(Some(value)),
+        Some(ValueIntStr::Str(value)) => value
             .replace('_', "")
             .parse::<usize>()
             .map(Some)
