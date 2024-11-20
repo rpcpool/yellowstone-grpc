@@ -11,6 +11,7 @@ on:
       - 'v1.17'
       - 'v1.18'
       - 'v2.0'
+      - 'v2.1'
   workflow_dispatch:
 
 env:
@@ -86,18 +87,21 @@ jobs:
           command: check advisories
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --tests #-- --deny=warnings
+        run: cargo clippy --workspace --all-targets
 
       - name: check features in `client`
-        run: cargo check -p yellowstone-grpc-client --all-targets --tests
+        run: cargo check -p yellowstone-grpc-client --all-targets
       - name: check features in `client-simple`
-        run: cargo check -p yellowstone-grpc-client-simple --all-targets --tests
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets
       - name: check features in `geyser`
-        run: cargo check -p yellowstone-grpc-geyser --all-targets --tests
+        run: cargo check -p yellowstone-grpc-geyser --all-targets
       - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets --tests
+        run: cargo check -p yellowstone-grpc-proto --all-targets
       - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets --tests --all-features
+        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
+
+      - name: cargo test
+        run: cargo test --all-features
 
       - name: Build
         run: ./ci/cargo-build-test.sh
