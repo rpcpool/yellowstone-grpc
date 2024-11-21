@@ -627,6 +627,7 @@ impl GrpcService {
                                     slot: parent,
                                     parent: entry.parent_slot,
                                     status,
+                                    dead_error: None,
                                 }));
                                 metrics::missed_status_message_inc(status);
                             }

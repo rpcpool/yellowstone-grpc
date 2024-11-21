@@ -631,7 +631,7 @@ impl FilterSlots {
                 }
             })
             .collect::<FilteredUpdateFilters>();
-        filtered_updates_once_owned!(filters, FilteredUpdateOneof::slot(*message))
+        filtered_updates_once_owned!(filters, FilteredUpdateOneof::slot(message.clone()))
     }
 }
 

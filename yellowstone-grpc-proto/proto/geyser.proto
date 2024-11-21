@@ -142,6 +142,7 @@ message SubscribeUpdateSlot {
   uint64 slot = 1;
   optional uint64 parent = 2;
   CommitmentLevel status = 3;
+  optional string dead_error = 4;
 }
 
 message SubscribeUpdateTransaction {

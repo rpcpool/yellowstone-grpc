@@ -95,11 +95,12 @@ impl CommitmentLevel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageSlot {
     pub slot: Slot,
     pub parent: Option<Slot>,
     pub status: CommitmentLevel,
+    pub dead_error: Option<String>,
 }
 
 impl MessageSlot {
@@ -108,6 +109,11 @@ impl MessageSlot {
             slot,
             parent,
             status: status.into(),
+            dead_error: if let SlotStatus::Dead(error) = status {
+                Some(error.to_owned())
+            } else {
+                None
+            },
         }
     }
 
@@ -118,6 +124,7 @@ impl MessageSlot {
             status: CommitmentLevelProto::try_from(msg.status)
                 .map_err(|_| "failed to parse commitment level")?
                 .into(),
+            dead_error: msg.dead_error.clone(),
         })
     }
 }
