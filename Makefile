@@ -4,3 +4,21 @@ clean-nodejs:
 	rm -rf yellowstone-grpc-client-nodejs/dist
 	rm -rf yellowstone-grpc-client-nodejs/node_modules
 	rm -rf yellowstone-grpc-client-nodejs/src/grpc
+
+solana-encoding-wasm-clippy:
+	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
+		cargo clippy --target wasm32-unknown-unknown --all-targets
+
+solana-encoding-wasm-build:
+	# RUSTFLAGS to disable `mold`
+	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
+		RUSTFLAGS="" cargo build \
+			--target wasm32-unknown-unknown \
+			--release
+
+	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
+		rm -rf ../src/encoding/ && \
+		wasm-bindgen \
+			--target nodejs \
+			--out-dir ../dist/encoding/ \
+			target/wasm32-unknown-unknown/release/yellowstone_grpc_solana_encoding_wasm.wasm

@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- nodejs: add parse tx function ([#471](https://github.com/rpcpool/yellowstone-grpc/pull/471))
+
 ### Breaking
 
 ## 2024-11-21

@@ -54,6 +54,13 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
+// Reexport Transaction encoding
+export {
+  encode,
+  WasmUiTransactionEncoding,
+  // @ts-ignore
+} from "./encoding/yellowstone_grpc_solana_encoding_wasm";
+
 export default class Client {
   _client: GeyserClient;
   _insecureXToken: string | undefined;
