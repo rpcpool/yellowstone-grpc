@@ -316,15 +316,7 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
 
 pub fn update_slot_status(status: &SlotStatus, slot: u64) {
     SLOT_STATUS
-        .with_label_values(&[match status {
-            SlotStatus::Processed => "processed",
-            SlotStatus::Confirmed => "confirmed",
-            SlotStatus::Rooted => "finalized",
-            SlotStatus::FirstShredReceived => "first_shread_received",
-            SlotStatus::Completed => "completed",
-            SlotStatus::CreatedBank => "created_bank",
-            SlotStatus::Dead(_error) => "dead",
-        }])
+        .with_label_values(&[status.as_str()])
         .set(slot as i64);
 }
 
