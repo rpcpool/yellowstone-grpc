@@ -96,7 +96,7 @@ impl prost::Message for FilteredUpdate {
 }
 
 impl FilteredUpdate {
-    pub fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
+    pub const fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
         Self { filters, message }
     }
 
@@ -1212,6 +1212,10 @@ pub mod tests {
                     CommitmentLevel::Processed,
                     CommitmentLevel::Confirmed,
                     CommitmentLevel::Finalized,
+                    CommitmentLevel::FirstShredReceived,
+                    CommitmentLevel::Completed,
+                    CommitmentLevel::CreatedBank,
+                    CommitmentLevel::Dead,
                 ] {
                     encode_decode_cmp(
                         &["123"],

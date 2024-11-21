@@ -16,6 +16,8 @@ on:
       - 'v1.17'
       - 'v1.18'
       - 'v2.0'
+      - 'v3.0'
+      - 'v4.0'
     tags:
       - 'v*'
   workflow_dispatch:

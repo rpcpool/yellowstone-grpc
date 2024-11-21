@@ -1018,7 +1018,7 @@ impl FilterAccountsDataSlice {
         Ok(Self::new_unchecked(Arc::new(slices)))
     }
 
-    pub fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
+    pub const fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
         Self(slices)
     }
 

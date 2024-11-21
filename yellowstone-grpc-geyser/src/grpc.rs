@@ -105,11 +105,17 @@ impl BlockMetaStorage {
                 match message {
                     Message::Slot(msg) => {
                         match msg.status {
-                            CommitmentLevel::Processed => &mut storage.processed,
-                            CommitmentLevel::Confirmed => &mut storage.confirmed,
-                            CommitmentLevel::Finalized => &mut storage.finalized,
+                            CommitmentLevel::Processed => {
+                                storage.processed.replace(msg.slot);
+                            }
+                            CommitmentLevel::Confirmed => {
+                                storage.confirmed.replace(msg.slot);
+                            }
+                            CommitmentLevel::Finalized => {
+                                storage.finalized.replace(msg.slot);
+                            }
+                            _ => {}
                         }
-                        .replace(msg.slot);
 
                         if let Some(blockhash) = storage
                             .blocks
@@ -121,12 +127,18 @@ impl BlockMetaStorage {
                                 .entry(blockhash)
                                 .or_insert_with(|| BlockhashStatus::new(msg.slot));
 
-                            let status = match msg.status {
-                                CommitmentLevel::Processed => &mut entry.processed,
-                                CommitmentLevel::Confirmed => &mut entry.confirmed,
-                                CommitmentLevel::Finalized => &mut entry.finalized,
-                            };
-                            *status = true;
+                            match msg.status {
+                                CommitmentLevel::Processed => {
+                                    entry.processed = true;
+                                }
+                                CommitmentLevel::Confirmed => {
+                                    entry.confirmed = true;
+                                }
+                                CommitmentLevel::Finalized => {
+                                    entry.finalized = true;
+                                }
+                                _ => {}
+                            }
                         }
 
                         if msg.status == CommitmentLevel::Finalized {
@@ -188,6 +200,7 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
+            _ => return Err(Status::internal("unreachable")),
         };
 
         match slot.and_then(|slot| storage.blocks.get(&slot)) {
@@ -216,6 +229,7 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
+            _ => return Err(Status::internal("unreachable")),
         }
         .ok_or_else(|| Status::internal("startup"))?;
 
@@ -223,10 +237,12 @@ impl BlockMetaStorage {
             .blockhashes
             .get(blockhash)
             .map(|status| match commitment {
-                CommitmentLevel::Processed => status.processed,
-                CommitmentLevel::Confirmed => status.confirmed,
-                CommitmentLevel::Finalized => status.finalized,
+                CommitmentLevel::Processed => Ok(status.processed),
+                CommitmentLevel::Confirmed => Ok(status.confirmed),
+                CommitmentLevel::Finalized => Ok(status.finalized),
+                _ => Err(Status::internal("unreachable")),
             })
+            .transpose()?
             .unwrap_or(false);
 
         Ok(Response::new(IsBlockhashValidResponse { valid, slot }))
@@ -523,6 +539,7 @@ impl GrpcService {
                             CommitmentLevel::Finalized => {
                                 slot_messages.finalized = true;
                             },
+                            _ => {}
                         }
                     }
                     if !matches!(&message, Message::Slot(_)) {
@@ -619,7 +636,7 @@ impl GrpcService {
                     for message in messages_vec.into_iter().rev() {
                         if let Message::Slot(slot) = &message {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                                CommitmentLevel::Processed => {
+                                CommitmentLevel::Processed | CommitmentLevel::FirstShredReceived | CommitmentLevel::Completed | CommitmentLevel::CreatedBank | CommitmentLevel::Dead => {
                                     (Vec::with_capacity(1), Vec::with_capacity(1))
                                 }
                                 CommitmentLevel::Confirmed => {

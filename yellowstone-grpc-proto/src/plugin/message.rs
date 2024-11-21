@@ -33,14 +33,22 @@ pub enum CommitmentLevel {
     Processed,
     Confirmed,
     Finalized,
+    FirstShredReceived,
+    Completed,
+    CreatedBank,
+    Dead,
 }
 
-impl From<SlotStatus> for CommitmentLevel {
-    fn from(status: SlotStatus) -> Self {
+impl From<&SlotStatus> for CommitmentLevel {
+    fn from(status: &SlotStatus) -> Self {
         match status {
             SlotStatus::Processed => Self::Processed,
             SlotStatus::Confirmed => Self::Confirmed,
             SlotStatus::Rooted => Self::Finalized,
+            SlotStatus::FirstShredReceived => Self::FirstShredReceived,
+            SlotStatus::Completed => Self::Completed,
+            SlotStatus::CreatedBank => Self::CreatedBank,
+            SlotStatus::Dead(_error) => Self::Dead,
         }
     }
 }
@@ -51,6 +59,10 @@ impl From<CommitmentLevel> for CommitmentLevelProto {
             CommitmentLevel::Processed => Self::Processed,
             CommitmentLevel::Confirmed => Self::Confirmed,
             CommitmentLevel::Finalized => Self::Finalized,
+            CommitmentLevel::FirstShredReceived => Self::FirstShredReceived,
+            CommitmentLevel::Completed => Self::Completed,
+            CommitmentLevel::CreatedBank => Self::CreatedBank,
+            CommitmentLevel::Dead => Self::Dead,
         }
     }
 }
@@ -61,6 +73,24 @@ impl From<CommitmentLevelProto> for CommitmentLevel {
             CommitmentLevelProto::Processed => Self::Processed,
             CommitmentLevelProto::Confirmed => Self::Confirmed,
             CommitmentLevelProto::Finalized => Self::Finalized,
+            CommitmentLevelProto::FirstShredReceived => Self::FirstShredReceived,
+            CommitmentLevelProto::Completed => Self::Completed,
+            CommitmentLevelProto::CreatedBank => Self::CreatedBank,
+            CommitmentLevelProto::Dead => Self::Dead,
+        }
+    }
+}
+
+impl CommitmentLevel {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Processed => "processed",
+            Self::Confirmed => "confirmed",
+            Self::Finalized => "finalized",
+            Self::FirstShredReceived => "first_shread_received",
+            Self::Completed => "completed",
+            Self::CreatedBank => "created_bank",
+            Self::Dead => "dead",
         }
     }
 }
@@ -73,7 +103,7 @@ pub struct MessageSlot {
 }
 
 impl MessageSlot {
-    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: SlotStatus) -> Self {
+    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &SlotStatus) -> Self {
         Self {
             slot,
             parent,

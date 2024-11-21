@@ -314,19 +314,23 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         .body(BodyEmpty::new().boxed())
 }
 
-pub fn update_slot_status(status: SlotStatus, slot: u64) {
+pub fn update_slot_status(status: &SlotStatus, slot: u64) {
     SLOT_STATUS
         .with_label_values(&[match status {
             SlotStatus::Processed => "processed",
             SlotStatus::Confirmed => "confirmed",
             SlotStatus::Rooted => "finalized",
+            SlotStatus::FirstShredReceived => "first_shread_received",
+            SlotStatus::Completed => "completed",
+            SlotStatus::CreatedBank => "created_bank",
+            SlotStatus::Dead(_error) => "dead",
         }])
         .set(slot as i64);
 }
 
 pub fn update_slot_plugin_status(status: CommitmentLevel, slot: u64) {
     SLOT_STATUS_PLUGIN
-        .with_label_values(&[commitment_level_as_str(status)])
+        .with_label_values(&[status.as_str()])
         .set(slot as i64);
 }
 
@@ -371,14 +375,6 @@ pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&F
 
 pub fn missed_status_message_inc(status: CommitmentLevel) {
     MISSED_STATUS_MESSAGE
-        .with_label_values(&[commitment_level_as_str(status)])
+        .with_label_values(&[status.as_str()])
         .inc()
-}
-
-const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
-    match commitment {
-        CommitmentLevel::Processed => "processed",
-        CommitmentLevel::Confirmed => "confirmed",
-        CommitmentLevel::Finalized => "finalized",
-    }
 }

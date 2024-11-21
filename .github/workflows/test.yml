@@ -11,7 +11,8 @@ on:
       - 'v1.17'
       - 'v1.18'
       - 'v2.0'
-      - 'v2.1'
+      - 'v3.0'
+      - 'v4.0'
   workflow_dispatch:
 
 env:
