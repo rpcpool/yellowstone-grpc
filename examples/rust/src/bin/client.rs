@@ -684,7 +684,8 @@ async fn geyser_subscribe(
                             json!({
                                 "slot": msg.slot,
                                 "parent": msg.parent,
-                                "status": status.as_str_name()
+                                "status": status.as_str_name(),
+                                "deadError": msg.dead_error,
                             }),
                         );
                     }
