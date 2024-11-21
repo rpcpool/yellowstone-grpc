@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 3.0.0
-    "yellowstone-grpc-client", # 3.0.0
-    "yellowstone-grpc-geyser", # 3.0.0
-    "yellowstone-grpc-proto", # 3.0.0
+    "examples/rust", # 3.0.0+solana.2.0.16
+    "yellowstone-grpc-client", # 3.0.0+solana.2.0.16
+    "yellowstone-grpc-geyser", # 3.0.0+solana.2.0.16
+    "yellowstone-grpc-proto", # 3.0.0+solana.2.0.16
 ]
 
 [workspace.package]
@@ -17,7 +17,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
-agave-geyser-plugin-interface = "~2.0.15"
+agave-geyser-plugin-interface = "=2.0.16"
 anyhow = "1.0.62"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -50,11 +50,11 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account-decoder = "~2.0.15"
-solana-logger = "~2.0.15"
-solana-sdk = "~2.0.15"
-solana-storage-proto = "~2.0.15"
-solana-transaction-status = "~2.0.15"
+solana-account-decoder = "=2.0.16"
+solana-logger = "=2.0.16"
+solana-sdk = "=2.0.16"
+solana-storage-proto = "=2.0.16"
+solana-transaction-status = "=2.0.16"
 smallvec = "1.13.2"
 spl-token-2022 = "4.0.0"
 thiserror = "1.0.63"
