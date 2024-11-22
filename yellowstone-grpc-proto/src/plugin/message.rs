@@ -110,7 +110,7 @@ impl MessageSlot {
             parent,
             status: status.into(),
             dead_error: if let SlotStatus::Dead(error) = status {
-                Some(error.to_owned())
+                Some(error.clone())
             } else {
                 None
             },
