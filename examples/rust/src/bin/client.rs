@@ -608,7 +608,7 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(UpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
                         None => {
-                            error!("update not found in the message");
+                            pb_multi.println("update not found in the message")?;
                             break;
                         }
                     };
@@ -651,8 +651,9 @@ async fn geyser_subscribe(
                             let dir = "grpc-client-verify";
                             let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
                             let path = format!("{dir}/{name}");
-                            error!("found unmached message, save to `{path}`");
-                            fs::create_dir(dir)
+                            pb_multi
+                                .println(format!("found unmached message, save to `{path}`"))?;
+                            fs::create_dir_all(dir)
                                 .await
                                 .context("failed to create dir for unmached")?;
                             fs::write(path, encoded_prost)
@@ -684,7 +685,8 @@ async fn geyser_subscribe(
                             json!({
                                 "slot": msg.slot,
                                 "parent": msg.parent,
-                                "status": status.as_str_name()
+                                "status": status.as_str_name(),
+                                "deadError": msg.dead_error,
                             }),
                         );
                     }

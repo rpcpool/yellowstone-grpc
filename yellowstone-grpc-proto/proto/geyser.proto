@@ -20,6 +20,10 @@ enum CommitmentLevel {
   PROCESSED = 0;
   CONFIRMED = 1;
   FINALIZED = 2;
+  FIRST_SHRED_RECEIVED = 3;
+  COMPLETED = 4;
+  CREATED_BANK = 5;
+  DEAD = 6;
 }
 
 message SubscribeRequest {
@@ -138,6 +142,7 @@ message SubscribeUpdateSlot {
   uint64 slot = 1;
   optional uint64 parent = 2;
   CommitmentLevel status = 3;
+  optional string dead_error = 4;
 }
 
 message SubscribeUpdateTransaction {
