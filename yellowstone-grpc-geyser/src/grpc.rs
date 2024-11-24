@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigGrpc,
         metrics::{self, commitment_level_as_str, DebugClientMessage},
-        monitor,
+        monitor::{self, HEALTH_CHECK_SLOT_DISTANCE},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
@@ -807,7 +807,7 @@ impl GrpcService {
                                 .get_metric_with_label_values(&[commitment_level_as_str(CommitmentLevel::Processed)])
                             {
                                 let last_updated_slot = last_slot_plugin.get();
-                                if (last_updated_slot + 10) < latest_slot as i64 {
+                                if (last_updated_slot + HEALTH_CHECK_SLOT_DISTANCE as i64) < latest_slot as i64 {
                                     error!("Latest slot from plugin is lagged, plugin is lagging behind disconnecting client #{id}");
                                     stream_tx.send(Err(Status::internal("Geyser pluging is lagging behind. Disconnecting client"))).await.unwrap();
                                     break 'outer;
