@@ -40,7 +40,7 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
-    static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
+    pub static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
         &["status"]
     ).unwrap();
@@ -375,7 +375,7 @@ pub fn missed_status_message_inc(status: CommitmentLevel) {
         .inc()
 }
 
-const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
+pub const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
     match commitment {
         CommitmentLevel::Processed => "processed",
         CommitmentLevel::Confirmed => "confirmed",

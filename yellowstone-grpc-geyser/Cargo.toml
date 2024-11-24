@@ -36,6 +36,7 @@ log = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+solana-client = { workspace = true }
 solana-logger = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
@@ -46,6 +47,7 @@ tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin"] }
+once_cell = {workspace = true}
 
 [build-dependencies]
 anyhow = { workspace = true }

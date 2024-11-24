@@ -3,12 +3,14 @@ use {
         config::Config,
         grpc::GrpcService,
         metrics::{self, PrometheusService},
+        monitor::update_latest_slot_loop,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
+    solana_client::nonblocking::rpc_client::RpcClient,
     std::{
         concat, env,
         sync::{
@@ -76,6 +78,11 @@ impl GeyserPlugin for Plugin {
             .enable_all()
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+
+        if let Some(rpc_url) = config.rpc_url {
+            let rpc_client = RpcClient::new(rpc_url);
+            runtime.spawn(update_latest_slot_loop(rpc_client));
+        }
 
         let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
             runtime.block_on(async move {

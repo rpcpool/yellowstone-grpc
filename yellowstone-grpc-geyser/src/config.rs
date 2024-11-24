@@ -21,6 +21,7 @@ pub struct Config {
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
     pub debug_clients_http: bool,
+    pub rpc_url: Option<String>,
 }
 
 impl Config {
