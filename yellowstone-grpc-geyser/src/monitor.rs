@@ -11,7 +11,7 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use tokio::time::{interval, sleep};
 
-pub const HEALTH_CHECK_SLOT_DISTANCE: u64 = 20;
+pub const HEALTH_CHECK_SLOT_DISTANCE: u64 = 100;
 
 pub static LATEST_SLOT: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
 
