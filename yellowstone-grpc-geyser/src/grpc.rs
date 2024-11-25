@@ -809,7 +809,7 @@ impl GrpcService {
                                 let last_updated_slot = last_slot_plugin.get();
                                 if (last_updated_slot + HEALTH_CHECK_SLOT_DISTANCE as i64) < latest_slot as i64 {
                                     error!("Latest slot from plugin is lagged, plugin is lagging behind disconnecting client #{id}");
-                                    stream_tx.send(Err(Status::internal("Geyser pluging is lagging behind. Disconnecting client"))).await.unwrap();
+                                    stream_tx.send(Err(Status::internal("gRPC plugin is lagging behind. Disconnecting client."))).await.unwrap();
                                     break 'outer;
                                 }
                             }
