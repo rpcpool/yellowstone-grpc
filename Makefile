@@ -1,9 +1,15 @@
+clean: clean-nodejs clean-rust
+
 clean-nodejs:
 	rm -rf examples/typescript/dist
 	rm -rf examples/typescript/node_modules
 	rm -rf yellowstone-grpc-client-nodejs/dist
 	rm -rf yellowstone-grpc-client-nodejs/node_modules
 	rm -rf yellowstone-grpc-client-nodejs/src/grpc
+
+clean-rust:
+	rm -rf target
+	rm -rf yellowstone-grpc-client-nodejs/solana-encoding-wasm/target
 
 solana-encoding-wasm-clippy:
 	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
