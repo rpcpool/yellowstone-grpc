@@ -5,8 +5,7 @@ import Client, {
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
   SubscribeUpdateTransactionInfo,
-  encode,
-  WasmUiTransactionEncoding,
+  txEncode,
 } from "@triton-one/yellowstone-grpc";
 
 async function main() {
@@ -87,11 +86,12 @@ async function subscribeCommand(client, args) {
   // Handle updates
   stream.on("data", (data) => {
     if (data.transaction && args.transactionsParsed) {
-      const encoded = SubscribeUpdateTransactionInfo.encode(
-        data.transaction.transaction
-      ).finish();
-      const tx = encode(encoded, WasmUiTransactionEncoding.Json, 255, true);
-      console.log(`TX filters: ${data.filters}, slot#${data.transaction.slot}, tx: ${tx}`);
+      const slot = data.transaction.slot;
+      const message = data.transaction.transaction;
+      const tx = txEncode.encode(message, txEncode.encoding.Json, 255, true);
+      console.log(
+        `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
+      );
       return;
     }
 
