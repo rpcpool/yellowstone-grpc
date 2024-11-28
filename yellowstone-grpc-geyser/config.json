@@ -10,8 +10,8 @@
       "key_path": ""
     },
     "compression": {
-      "accept": ["gzip"],
-      "send": ["gzip"]
+      "accept": ["gzip", "zstd"],
+      "send": ["gzip", "zstd"]
     },
     "max_decoding_message_size": "4_194_304",
     "snapshot_plugin_channel_capacity": null,
