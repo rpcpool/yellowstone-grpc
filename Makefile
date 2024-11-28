@@ -27,4 +27,6 @@ solana-encoding-wasm-build:
 		wasm-bindgen \
 			--target nodejs \
 			--out-dir ../src/encoding/ \
-			target/wasm32-unknown-unknown/release/yellowstone_grpc_solana_encoding_wasm.wasm
+			target/wasm32-unknown-unknown/release/yellowstone_grpc_solana_encoding_wasm.wasm && \
+		mkdir -p ../dist/encoding/ && \
+		cp -ap ../src/encoding/ ../dist/
