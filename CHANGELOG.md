@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-11-28
+
+- yellowstone-grpc-geyser-3.0.1
+
+### Fixes
+
+- geyser: raise default filter name length limit ([#473](https://github.com/rpcpool/yellowstone-grpc/pull/473))
+
 ## 2024-11-20
 
 - yellowstone-grpc-client-simple-3.0.0

@@ -143,11 +143,11 @@ impl ConfigGrpc {
     }
 
     const fn default_filter_name_size_limit() -> usize {
-        32
+        128
     }
 
     const fn default_filter_names_size_limit() -> usize {
-        1_024
+        4_096
     }
 
     const fn default_filter_names_cleanup_interval() -> Duration {
