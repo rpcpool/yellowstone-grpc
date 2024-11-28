@@ -31,7 +31,7 @@ solana-transaction-status = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 spl-token-2022 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
-tonic = { workspace = true }
+tonic = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -44,7 +44,7 @@ protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 
 [features]
-default = ["convert", "tonic-compression"]
+default = ["convert", "tonic", "tonic-compression"]
 convert = [
     "dep:bincode",
     "dep:solana-account-decoder",
@@ -60,10 +60,12 @@ plugin = [
     "dep:serde",
     "dep:smallvec",
     "dep:spl-token-2022",
-    "dep:thiserror"
+    "dep:thiserror",
+    "dep:tonic"
 ]
 plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
-tonic-compression = ["tonic/gzip", "tonic/zstd"]
+tonic = ["dep:tonic"]
+tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
 
 [lints]
 workspace = true
