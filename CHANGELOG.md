@@ -22,7 +22,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- geyser: raise default filter name length limit ([#472](https://github.com/rpcpool/yellowstone-grpc/pull/472))
+- geyser: raise default filter name length limit ([#473](https://github.com/rpcpool/yellowstone-grpc/pull/473))
 
 ## 2024-11-21
 
