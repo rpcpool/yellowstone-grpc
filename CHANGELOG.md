@@ -14,6 +14,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
 - nodejs: add parse tx function ([#471](https://github.com/rpcpool/yellowstone-grpc/pull/471))
 
 ### Breaking
