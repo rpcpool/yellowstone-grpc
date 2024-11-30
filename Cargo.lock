@@ -6025,6 +6025,7 @@ dependencies = [
  "criterion",
  "prost 0.11.9",
  "prost 0.13.3",
+ "prost-types 0.13.3",
  "protobuf-src",
  "serde",
  "smallvec",
