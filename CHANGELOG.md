@@ -17,6 +17,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
 - geyser: use default compression as gzip and zstd ([#475](https://github.com/rpcpool/yellowstone-grpc/pull/475))
 - proto: add `replay_from_slot` ([#477](https://github.com/rpcpool/yellowstone-grpc/pull/477))
+- example: add connection options to Rust client ([#478](https://github.com/rpcpool/yellowstone-grpc/pull/478))
 
 ### Breaking
 
