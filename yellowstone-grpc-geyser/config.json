@@ -20,8 +20,9 @@
     "unary_concurrency_limit": 100,
     "unary_disabled": false,
     "x_token": null,
-    "filter_name_size_limit": 32,
-    "filter_names_size_limit": 1024,
+    "replay_stored_slots": 0,
+    "filter_name_size_limit": 128,
+    "filter_names_size_limit": 4096,
     "filter_names_cleanup_interval": "1s",
     "filter_limits": {
       "accounts": {

@@ -111,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
             commitment: Some(commitment as i32),
             accounts_data_slice: vec![],
             ping: None,
+            replay_from_slot: None,
         })
         .await?;
 
