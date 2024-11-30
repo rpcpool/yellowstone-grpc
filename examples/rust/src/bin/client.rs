@@ -972,7 +972,9 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
 }
 
 fn print_update(kind: &str, created_at: SystemTime, filters: &[String], value: Value) {
-    let unix_since = created_at.duration_since(UNIX_EPOCH).expect("valid system time");
+    let unix_since = created_at
+        .duration_since(UNIX_EPOCH)
+        .expect("valid system time");
     info!(
         "{kind} ({}) at {}.{:0>6}: {}",
         filters.join(","),
