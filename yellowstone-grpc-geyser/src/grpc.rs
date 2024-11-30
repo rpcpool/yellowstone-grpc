@@ -6,6 +6,7 @@ use {
     },
     anyhow::Context,
     log::{error, info},
+    prost_types::Timestamp,
     solana_sdk::{
         clock::{Slot, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
@@ -16,6 +17,7 @@ use {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
+        time::SystemTime,
     },
     tokio::{
         fs,
@@ -628,6 +630,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
+                                    created_at: Timestamp::from(SystemTime::now())
                                 }));
                                 metrics::missed_status_message_inc(status);
                             }
