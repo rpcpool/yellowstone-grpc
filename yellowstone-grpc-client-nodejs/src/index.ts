@@ -2,6 +2,13 @@
  * TypeScript/JavaScript client for gRPC Geyser.
  */
 
+import {
+  ChannelCredentials,
+  credentials,
+  ChannelOptions,
+  Metadata,
+} from "@grpc/grpc-js";
+
 // Import generated gRPC client and types.
 import {
   CommitmentLevel,
@@ -15,14 +22,8 @@ import {
   SubscribeRequestFilterEntry,
   SubscribeRequestFilterSlots,
   SubscribeRequestFilterTransactions,
+  SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
-
-import {
-  ChannelCredentials,
-  credentials,
-  ChannelOptions,
-  Metadata,
-} from "@grpc/grpc-js";
 
 // Reexport automatically generated types
 export {
@@ -53,6 +54,30 @@ export {
   SubscribeUpdateTransaction,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
+
+// Import transaction encoding function created in Rust
+import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
+// Import mapper to get return type based on WasmUiTransactionEncoding
+import { MapTransactionEncodingToReturnType } from "./types";
+export const txEncode = {
+  encoding: wasm.WasmUiTransactionEncoding,
+  encode_raw: wasm.encode,
+  encode: <T extends wasm.WasmUiTransactionEncoding>(
+    message: SubscribeUpdateTransactionInfo,
+    encoding: T,
+    max_supported_transaction_version: number | undefined,
+    show_rewards: boolean
+  ): MapTransactionEncodingToReturnType[T] => {
+    return JSON.parse(
+      wasm.encode(
+        SubscribeUpdateTransactionInfo.encode(message).finish(),
+        encoding,
+        max_supported_transaction_version,
+        show_rewards
+      )
+    );
+  },
+};
 
 export default class Client {
   _client: GeyserClient;
