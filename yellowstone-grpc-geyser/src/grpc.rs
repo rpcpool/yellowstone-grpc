@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigGrpc, ConfigTokio},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
@@ -325,6 +325,7 @@ pub struct GrpcService {
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
+        config_tokio: ConfigTokio,
         config: ConfigGrpc,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
@@ -405,9 +406,17 @@ impl GrpcService {
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         spawn_blocking(move || {
-            Builder::new_multi_thread()
+            let mut builder = Builder::new_multi_thread();
+            if let Some(worker_threads) = config_tokio.worker_threads {
+                builder.worker_threads(worker_threads);
+            }
+            if let Some(tokio_cpus) = config_tokio.affinity.clone() {
+                builder.on_thread_start(move || {
+                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                });
+            }
+            builder
                 .thread_name_fn(crate::get_thread_name)
-                .worker_threads(4)
                 .enable_all()
                 .build()
                 .expect("Failed to create a new runtime for geyser loop")
