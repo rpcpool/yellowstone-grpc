@@ -57,15 +57,17 @@ export {
 
 // Import transaction encoding function created in Rust
 import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
+// Import mapper to get return type based on WasmUiTransactionEncoding
+import { MapTransactionEncodingToReturnType } from "./types";
 export const txEncode = {
   encoding: wasm.WasmUiTransactionEncoding,
   encode_raw: wasm.encode,
-  encode: (
+  encode: <T extends wasm.WasmUiTransactionEncoding>(
     message: SubscribeUpdateTransactionInfo,
-    encoding: wasm.WasmUiTransactionEncoding,
+    encoding: T,
     max_supported_transaction_version: number | undefined,
     show_rewards: boolean
-  ): any => { // TODO: replace any
+  ): MapTransactionEncodingToReturnType[T] => {
     return JSON.parse(
       wasm.encode(
         SubscribeUpdateTransactionInfo.encode(message).finish(),

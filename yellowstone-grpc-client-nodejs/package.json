@@ -26,12 +26,16 @@
   ],
   "homepage": "https://triton.one",
   "dependencies": {
-    "@grpc/grpc-js": "^1.8.0"
+    "@grpc/grpc-js": "1.8.0"
   },
   "devDependencies": {
-    "prettier": "^2.8.3",
-    "ts-proto": "^1.139.0",
-    "typescript": "^4.9.5"
+    "@solana/rpc-api": "2.0.0",
+    "prettier": "2.8.3",
+    "ts-proto": "1.139.0",
+    "typescript": "5.2.2"
+  },
+  "engines": {
+    "node": ">=20.18.0"
   },
   "files": [
     "dist"
