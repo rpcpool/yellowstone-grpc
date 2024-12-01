@@ -14,7 +14,7 @@ const json = fakeGetTransition(signature, { encoding: "json" });
 const jsonParsed = fakeGetTransition(signature, { encoding: "jsonParsed" });
 
 export type MapTransactionEncodingToReturnType = {
-  0: typeof base58;
+  0: typeof base58; // legacy (binary)
   1: typeof base64;
   2: typeof base58;
   3: typeof json;
