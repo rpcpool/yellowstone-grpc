@@ -15,11 +15,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
-- geyser: use default compression as gzip and zstd ([#475](https://github.com/rpcpool/yellowstone-grpc/pull/475))
-- example: add connection options to Rust client ([#478](https://github.com/rpcpool/yellowstone-grpc/pull/478))
-- nodejs: add parse tx function ([#471](https://github.com/rpcpool/yellowstone-grpc/pull/471))
 
 ### Breaking
+
+## 2024-12-01
+
+- yellowstone-grpc-client-simple-3.1.0
+- yellowstone-grpc-geyser-3.1.0
+
+### Features
+
+- nodejs: add parse tx function ([#471](https://github.com/rpcpool/yellowstone-grpc/pull/471))
+- geyser: use default compression as gzip and zstd ([#475](https://github.com/rpcpool/yellowstone-grpc/pull/475))
+- example: add connection options to Rust client ([#478](https://github.com/rpcpool/yellowstone-grpc/pull/478))
+- geyser: add worker_threads and affinity ([#481](https://github.com/rpcpool/yellowstone-grpc/pull/481))
 
 ## 2024-11-28
 

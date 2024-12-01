@@ -71,7 +71,16 @@ impl GeyserPlugin for Plugin {
         solana_logger::setup_with_default(&config.log.level);
 
         // Create inner
-        let runtime = Builder::new_multi_thread()
+        let mut builder = Builder::new_multi_thread();
+        if let Some(worker_threads) = config.tokio.worker_threads {
+            builder.worker_threads(worker_threads);
+        }
+        if let Some(tokio_cpus) = config.tokio.affinity.clone() {
+            builder.on_thread_start(move || {
+                affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+            });
+        }
+        let runtime = builder
             .thread_name_fn(crate::get_thread_name)
             .enable_all()
             .build()
@@ -81,6 +90,7 @@ impl GeyserPlugin for Plugin {
             runtime.block_on(async move {
                 let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
                 let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
+                    config.tokio,
                     config.grpc,
                     config.debug_clients_http.then_some(debug_client_tx),
                     is_reload,
