@@ -4,6 +4,8 @@ import Client, {
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
+  SubscribeUpdateTransactionInfo,
+  txEncode,
 } from "@triton-one/yellowstone-grpc";
 
 async function main() {
@@ -83,6 +85,16 @@ async function subscribeCommand(client, args) {
 
   // Handle updates
   stream.on("data", (data) => {
+    if (data.transaction && args.transactionsParsed) {
+      const slot = data.transaction.slot;
+      const message = data.transaction.transaction;
+      const tx = txEncode.encode(message, txEncode.encoding.Json, 255, true);
+      console.log(
+        `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
+      );
+      return;
+    }
+
     console.log("data", data);
   });
 
@@ -373,6 +385,11 @@ function parseCommandLineArgs() {
           default: [],
           description: "filter required account in transactions",
           type: "array",
+        },
+        "transactions-parsed": {
+          default: false,
+          describe: "parse transaction to json",
+          type: "boolean",
         },
         "transactions-status": {
           default: false,

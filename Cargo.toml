@@ -6,6 +6,9 @@ members = [
     "yellowstone-grpc-geyser", # 3.0.1
     "yellowstone-grpc-proto", # 3.0.0
 ]
+exclude = [
+    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 1.0.0
+]
 
 [workspace.package]
 authors = ["Triton One"]

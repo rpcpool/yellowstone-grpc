@@ -1,0 +1,36 @@
+[package]
+name = "yellowstone-grpc-solana-encoding-wasm"
+version = "2.0.0"
+authors = ["Triton One"]
+edition = "2021"
+homepage = "https://triton.one"
+repository = "https://github.com/rpcpool/yellowstone-grpc"
+license = "Apache-2.0"
+keywords = ["solana"]
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1.0.86"
+solana-transaction-status = "~2.0.16"
+wasm-bindgen = "0.2.95"
+yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "3.0.0", default-features = false, features = ["convert"] }
+
+[workspace.lints.clippy]
+clone_on_ref_ptr = "deny"
+missing_const_for_fn = "deny"
+trivially_copy_pass_by_ref = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# we need to drop `solana-metrics` for wasm32 target
+[patch.crates-io]
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-public.git", tag = "v2.0.16-grpc" }
+solana-program = { git = "https://github.com/rpcpool/solana-public.git", tag = "v2.0.16-grpc" }
+solana-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v2.0.16-grpc" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public.git", tag = "v2.0.16-grpc" }
+solana-zk-token-sdk = { git = "https://github.com/rpcpool/solana-public.git", tag = "v2.0.16-grpc" }
