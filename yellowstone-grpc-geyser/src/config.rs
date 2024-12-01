@@ -206,7 +206,7 @@ impl ConfigGrpcCompression {
     }
 
     fn default_compression() -> Vec<CompressionEncoding> {
-        vec![CompressionEncoding::Gzip]
+        vec![CompressionEncoding::Gzip, CompressionEncoding::Zstd]
     }
 }
 
