@@ -57,8 +57,12 @@ export {
 
 // Import transaction encoding function created in Rust
 import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
-// Import mapper to get return type based on WasmUiTransactionEncoding
-import { MapTransactionEncodingToReturnType } from "./types";
+import type {
+  TransactionErrorSolana,
+  // Import mapper to get return type based on WasmUiTransactionEncoding
+  MapTransactionEncodingToReturnType,
+} from "./types";
+
 export const txEncode = {
   encoding: wasm.WasmUiTransactionEncoding,
   encode_raw: wasm.tx_encode,
@@ -78,11 +82,12 @@ export const txEncode = {
     );
   },
 };
+
 export const txErrDecode = {
   decode_raw: wasm.decode_tx_error,
-  decode: (buf: any): any => {
-    return wasm.decode_tx_error(buf);
-  }
+  decode: (buf: Uint8Array): TransactionErrorSolana => {
+    return JSON.parse(wasm.decode_tx_error(buf));
+  },
 };
 
 export default class Client {

@@ -1,4 +1,5 @@
 import yargs from "yargs";
+import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
   SubscribeRequest,
@@ -94,7 +95,7 @@ async function subscribeCommand(client, args) {
         `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
       );
       const err = txErrDecode.decode(data.transaction.transaction.meta.err.err);
-      console.log(`TX error: ${err}`);
+      //   console.log(`TX error: ${inspect(err)}`);
       return;
     }
 
