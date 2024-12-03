@@ -1,4 +1,5 @@
 clean: clean-nodejs clean-rust
+	rm -rf test-ledger
 
 clean-nodejs:
 	rm -rf examples/typescript/dist
