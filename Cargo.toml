@@ -7,7 +7,7 @@ members = [
     "yellowstone-grpc-proto", # 4.0.0
 ]
 exclude = [
-    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 1.0.0
+    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
 ]
 
 [workspace.package]
