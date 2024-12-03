@@ -2,7 +2,9 @@ use {
     solana_transaction_status::{TransactionWithStatusMeta, UiTransactionEncoding},
     wasm_bindgen::prelude::*,
     yellowstone_grpc_proto::{
-        convert_from, prelude::SubscribeUpdateTransactionInfo, prost::Message,
+        convert_from,
+        prelude::{SubscribeUpdateTransactionInfo, TransactionError as TransactionErrorProto},
+        prost::Message,
     },
 };
 
@@ -29,7 +31,7 @@ impl From<WasmUiTransactionEncoding> for UiTransactionEncoding {
 }
 
 #[wasm_bindgen]
-pub fn encode(
+pub fn tx_encode(
     data: &[u8],
     encoding: WasmUiTransactionEncoding,
     max_supported_transaction_version: Option<u8>,
@@ -47,5 +49,14 @@ pub fn encode(
         .map_err(Into::into)
     } else {
         Err(JsError::new("tx with missing metadata"))
+    }
+}
+
+#[wasm_bindgen]
+pub fn decode_tx_error(err: Vec<u8>) -> Result<String, JsError> {
+    match convert_from::create_tx_error(Some(&TransactionErrorProto { err })) {
+        Ok(Some(err)) => serde_json::to_string(&err).map_err(Into::into),
+        Ok(None) => Err(JsError::new("unexpected")),
+        Err(error) => Err(JsError::new(error)),
     }
 }

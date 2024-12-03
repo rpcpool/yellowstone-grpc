@@ -3273,7 +3273,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-solana-encoding-wasm"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "serde_json",
  "solana-transaction-status",

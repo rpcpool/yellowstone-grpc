@@ -61,7 +61,7 @@ import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
 import { MapTransactionEncodingToReturnType } from "./types";
 export const txEncode = {
   encoding: wasm.WasmUiTransactionEncoding,
-  encode_raw: wasm.encode,
+  encode_raw: wasm.tx_encode,
   encode: <T extends wasm.WasmUiTransactionEncoding>(
     message: SubscribeUpdateTransactionInfo,
     encoding: T,
@@ -69,7 +69,7 @@ export const txEncode = {
     show_rewards: boolean
   ): MapTransactionEncodingToReturnType[T] => {
     return JSON.parse(
-      wasm.encode(
+      wasm.tx_encode(
         SubscribeUpdateTransactionInfo.encode(message).finish(),
         encoding,
         max_supported_transaction_version,
@@ -77,6 +77,12 @@ export const txEncode = {
       )
     );
   },
+};
+export const txErrDecode = {
+  decode_raw: wasm.decode_tx_error,
+  decode: (buf: any): any => {
+    return wasm.decode_tx_error(buf);
+  }
 };
 
 export default class Client {

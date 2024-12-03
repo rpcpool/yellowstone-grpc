@@ -6,6 +6,7 @@ import Client, {
   SubscribeRequestFilterAccountsFilterLamports,
   SubscribeUpdateTransactionInfo,
   txEncode,
+  txErrDecode,
 } from "@triton-one/yellowstone-grpc";
 
 async function main() {
@@ -92,6 +93,8 @@ async function subscribeCommand(client, args) {
       console.log(
         `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
       );
+      const err = txErrDecode.decode(data.transaction.transaction.meta.err.err);
+      console.log(`TX error: ${err}`);
       return;
     }
 
