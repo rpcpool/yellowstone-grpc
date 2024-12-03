@@ -1,5 +1,6 @@
 import { type GetTransactionApi } from "@solana/rpc-api";
-import { type Signature } from "@solana/keys/dist/types";
+import { type Signature } from "@solana/keys";
+import { type TransactionError } from "@solana/rpc-types";
 
 const fakeGetTransition: GetTransactionApi["getTransaction"] = (
   signature,
@@ -20,3 +21,5 @@ export type MapTransactionEncodingToReturnType = {
   3: typeof json;
   4: typeof jsonParsed;
 };
+
+export type TransactionErrorSolana = TransactionError;
