@@ -65,7 +65,7 @@ import type {
 
 export const txEncode = {
   encoding: wasm.WasmUiTransactionEncoding,
-  encode_raw: wasm.tx_encode,
+  encode_raw: wasm.encode_tx,
   encode: <T extends wasm.WasmUiTransactionEncoding>(
     message: SubscribeUpdateTransactionInfo,
     encoding: T,
@@ -73,7 +73,7 @@ export const txEncode = {
     show_rewards: boolean
   ): MapTransactionEncodingToReturnType[T] => {
     return JSON.parse(
-      wasm.tx_encode(
+      wasm.encode_tx(
         SubscribeUpdateTransactionInfo.encode(message).finish(),
         encoding,
         max_supported_transaction_version,

@@ -31,7 +31,7 @@ impl From<WasmUiTransactionEncoding> for UiTransactionEncoding {
 }
 
 #[wasm_bindgen]
-pub fn tx_encode(
+pub fn encode_tx(
     data: &[u8],
     encoding: WasmUiTransactionEncoding,
     max_supported_transaction_version: Option<u8>,
