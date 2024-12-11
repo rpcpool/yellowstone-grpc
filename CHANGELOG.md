@@ -12,7 +12,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- nodejs: fix connector for custom port ([#485](https://github.com/rpcpool/yellowstone-grpc/pull/485))
+- nodejs: fix connector for custom port ([#488](https://github.com/rpcpool/yellowstone-grpc/pull/48*))
 
 ### Features
 
