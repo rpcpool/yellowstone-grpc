@@ -101,6 +101,15 @@ export default class Client {
     let creds: ChannelCredentials;
 
     const endpointURL = new URL(endpoint);
+    let port = endpointURL.port;
+    if (port == "") {
+      switch (endpointURL.protocol) {
+        case "https:":
+          port = "443";
+        case "http:":
+          port = "80";
+      }
+    }
 
     // Check if we need to use TLS.
     if (endpointURL.protocol === "https:") {
@@ -121,7 +130,11 @@ export default class Client {
       }
     }
 
-    this._client = new GeyserClient(endpointURL.host, creds, channelOptions);
+    this._client = new GeyserClient(
+      `${endpointURL.host}:${port}`,
+      creds,
+      channelOptions
+    );
   }
 
   private _getInsecureMetadata(): Metadata {
