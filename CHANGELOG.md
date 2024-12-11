@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- nodejs: fix connector for custom port ([#488](https://github.com/rpcpool/yellowstone-grpc/pull/48*))
+
 ### Features
 
 - proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
