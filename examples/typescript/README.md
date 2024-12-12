@@ -11,8 +11,8 @@ This is a sample client for Solana geyser gRPC written in TypeScript.
 This can be used in the following way:
 
 ```shell
-npm start -- --endpoint https://api.rpcpool.com \
-  --x-token <token> \
+npm start -- --endpoint https://url \
+  --x-token token \
   subscribe \
   --accounts --accounts-account SysvarC1ock11111111111111111111111111111111
 ```
@@ -72,7 +72,7 @@ response: 1
 ### unary GetLatestBlockhash
 
 ```shell
-npm start -- -e="https://api.rpcpool.com" \
+npm start -- -e="http://fumarole-fumarole-server.service.consul:26847" \
   --x-token "<token>" \
   get-latest-blockhash
 ```
@@ -132,3 +132,14 @@ npm start -- -e="https://api.rpcpool.com" \
 ```text
 response: { version: "{\"version\":\"0.7.0+solana.1.15.2\",\"proto\":\"1.2.0+solana.1.15.2\",\"solana\":\"1.15.2\",\"git\":\"e03a47c-modified\",\"rustc\":\"1.68.0-nightly\",\"buildts\":\"2023-05-27T08:20:15.440278Z\"}" }
 ```
+
+## Fumarole
+
+### Create Consumer Group
+pnpm start -- -e="http://traefik.service.ams1.consul:28080/" \
+create-consumer-group
+
+### Subscribe
+pnpm start -- -e="http://traefik.service.ams1.consul:28080/" \
+fumarole-subscribe \
+--accounts --accounts-account SysvarC1ock11111111111111111111111111111111

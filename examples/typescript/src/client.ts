@@ -1,10 +1,14 @@
 import yargs from "yargs";
 import Client, {
   CommitmentLevel,
+  FumaroleSDKClient,
+  FumaroleSubscribeRequest,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
 } from "@triton-one/yellowstone-grpc";
+import { EventSubscriptionPolicy, FumaroleClient, InitialOffsetPolicy } from "@triton-one/yellowstone-grpc/dist/grpc/fumarole";
+import { Metadata } from "@grpc/grpc-js";
 
 async function main() {
   const args = parseCommandLineArgs();
@@ -13,6 +17,11 @@ async function main() {
   const client = new Client(args.endpoint, args.xToken, {
     "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
   });
+
+  const fumaroleSubscriptionId = crypto.randomUUID()
+  const fumaroleClient = new FumaroleSDKClient(args.endpoint, args.xToken, {
+    "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB,
+  }, fumaroleSubscriptionId);
 
   const commitment = parseCommitmentLevel(args.commitment);
 
@@ -46,6 +55,51 @@ async function main() {
       await subscribeCommand(client, args);
       break;
 
+    case "fumarole-subscribe":
+
+      const metadata2: Metadata = new Metadata()
+
+      const label2 = generateRandomString(6)
+
+      console.log(`subscription id ${fumaroleSubscriptionId}`);
+      console.log(`label ${label2}`);
+
+      metadata2.add("x-subscription-id", fumaroleSubscriptionId)
+
+      console.log(await fumaroleClient.createConsumerGroup({
+        commitmentLevel: CommitmentLevel.CONFIRMED,
+        consumerGroupLabel: label2,
+        eventSubscriptionPolicy: EventSubscriptionPolicy.BOTH,
+        initialOffsetPolicy: InitialOffsetPolicy.EARLIEST,
+        memberCount: 2
+      }, metadata2))
+
+
+      args.consumerGroupLabel = label2
+
+      await sleep(10000)
+
+      await fumaroleSubscribeCommand(fumaroleClient, args)
+      break;
+
+    case "create-consumer-group":
+      const metadata: Metadata = new Metadata()
+
+      const label = generateRandomString(6)
+
+      console.log(`subscription id ${fumaroleSubscriptionId}`);
+      console.log(`label ${label}`);
+
+      metadata.add("x-subscription-id", fumaroleSubscriptionId)
+
+      console.log(await fumaroleClient.createConsumerGroup({
+        commitmentLevel: CommitmentLevel.CONFIRMED,
+        consumerGroupLabel: label,
+        eventSubscriptionPolicy: EventSubscriptionPolicy.BOTH,
+        initialOffsetPolicy: InitialOffsetPolicy.EARLIEST
+      }, metadata))
+      break;
+
     default:
       console.error(
         `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
@@ -62,6 +116,68 @@ function parseCommitmentLevel(commitment: string | undefined) {
     commitment.toUpperCase() as keyof typeof CommitmentLevel;
   return CommitmentLevel[typedCommitment];
 }
+
+
+async function fumaroleSubscribeCommand(client: FumaroleSDKClient, args) {
+
+  // Subscribe for events
+  const stream = await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on("error", (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on("end", () => {
+      resolve();
+    });
+    stream.on("close", () => {
+      resolve();
+    });
+  });
+
+  // Handle updates
+  stream.on("data", (data) => {
+    console.log("data", data);
+  });
+
+  // Create subscribe request based on provided arguments.
+  const request: FumaroleSubscribeRequest = {
+    transactions: {
+      accountKeys: ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"]
+    },
+    consumerGroupLabel: args.consumerGroupLabel,
+    consumerId: 1
+  };
+  // if (args.accounts) {
+  //   if (args.accountsAccount) {
+  //     request.accounts.account = args.accountsAccount
+  //   }
+  //   if (args.accountsOwner) {
+  //     request.accounts.owner = args.accountsOwner
+  //   }
+  // }
+  console.log("request");
+  console.log(request);
+
+  // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
+}
+
 
 async function subscribeCommand(client, args) {
   // Subscribe for events
@@ -448,8 +564,83 @@ function parseCommandLineArgs() {
         },
       });
     })
+    .command("fumarole-subscribe", "subscribe to events via fumarole", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "x-subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+        accounts: {
+          default: false,
+          describe: "subscribe on accounts updates",
+          type: "boolean",
+        },
+        "accounts-account": {
+          default: [],
+          describe: "filter by account pubkey",
+          type: "array",
+        },
+        "accounts-owner": {
+          default: [],
+          describe: "filter by owner pubkey",
+          type: "array",
+        },
+        "accounts-memcmp": {
+          default: [],
+          describe:
+            "filter by offset and data, format: `offset,data in base58`",
+          type: "array",
+        },
+        "accounts-datasize": {
+          default: 0,
+          describe: "filter by data size",
+          type: "number",
+        },
+        "accounts-tokenaccountstate": {
+          default: false,
+          describe: "filter valid token accounts",
+          type: "boolean",
+        },
+        "accounts-lamports": {
+          default: [],
+          describe:
+            "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
+          type: "array",
+        },
+        "accounts-nonemptytxnsignature": {
+          description: "filter by presence of field txn_signature",
+          type: "boolean",
+        },
+        "accounts-dataslice": {
+          default: [],
+          describe:
+            "receive only part of updated data account, format: `offset,size`",
+          type: "string",
+        },
+      });
+    })
     .demandCommand(1)
     .help().argv;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 main();
+
+function generateRandomString(length) {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  const charactersLength = characters.length;
+  for (let i = 0; i < length; i++) {
+    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+  }
+  return result;
+}
