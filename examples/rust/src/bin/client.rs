@@ -741,6 +741,11 @@ async fn geyser_subscribe(
                 }
 
                 let filters = msg.filters;
+                let created_at: SystemTime = msg
+                    .created_at
+                    .ok_or(anyhow::anyhow!("no created_at in the message"))?
+                    .try_into()
+                    .context("failed to parse created_at")?;
                 match msg.update_oneof {
                     Some(UpdateOneof::Account(msg)) => {
                         let account = msg
@@ -749,13 +754,14 @@ async fn geyser_subscribe(
                         let mut value = create_pretty_account(account)?;
                         value["isStartup"] = json!(msg.is_startup);
                         value["slot"] = json!(msg.slot);
-                        print_update("account", &filters, value);
+                        print_update("account", created_at, &filters, value);
                     }
                     Some(UpdateOneof::Slot(msg)) => {
                         let status = CommitmentLevel::try_from(msg.status)
                             .context("failed to decode commitment")?;
                         print_update(
                             "slot",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -771,11 +777,12 @@ async fn geyser_subscribe(
                             .ok_or(anyhow::anyhow!("no transaction in the message"))?;
                         let mut value = create_pretty_transaction(tx)?;
                         value["slot"] = json!(msg.slot);
-                        print_update("transaction", &filters, value);
+                        print_update("transaction", created_at, &filters, value);
                     }
                     Some(UpdateOneof::TransactionStatus(msg)) => {
                         print_update(
                             "transactionStatus",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -789,11 +796,12 @@ async fn geyser_subscribe(
                         );
                     }
                     Some(UpdateOneof::Entry(msg)) => {
-                        print_update("entry", &filters, create_pretty_entry(msg)?);
+                        print_update("entry", created_at, &filters, create_pretty_entry(msg)?);
                     }
                     Some(UpdateOneof::BlockMeta(msg)) => {
                         print_update(
                             "blockmeta",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -815,6 +823,7 @@ async fn geyser_subscribe(
                     Some(UpdateOneof::Block(msg)) => {
                         print_update(
                             "block",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -962,10 +971,15 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
     }))
 }
 
-fn print_update(kind: &str, filters: &[String], value: Value) {
+fn print_update(kind: &str, created_at: SystemTime, filters: &[String], value: Value) {
+    let unix_since = created_at
+        .duration_since(UNIX_EPOCH)
+        .expect("valid system time");
     info!(
-        "{kind} ({}): {}",
+        "{kind} ({}) at {}.{:0>6}: {}",
         filters.join(","),
+        unix_since.as_secs(),
+        unix_since.subsec_micros(),
         serde_json::to_string(&value).expect("json serialization failed")
     );
 }
