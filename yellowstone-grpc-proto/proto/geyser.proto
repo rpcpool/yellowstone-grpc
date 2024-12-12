@@ -1,5 +1,6 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
 import public "solana-storage.proto";
 
 option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
@@ -115,6 +116,7 @@ message SubscribeUpdate {
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
   }
+  google.protobuf.Timestamp created_at = 11;
 }
 
 message SubscribeUpdateAccount {

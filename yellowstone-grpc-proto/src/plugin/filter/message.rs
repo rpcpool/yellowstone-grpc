@@ -24,9 +24,10 @@ use {
         },
         DecodeError,
     },
+    prost_types::Timestamp,
     smallvec::SmallVec,
     solana_sdk::signature::Signature,
-    std::{collections::HashSet, sync::Arc},
+    std::{collections::HashSet, sync::Arc, time::SystemTime},
 };
 
 #[inline]
@@ -63,6 +64,7 @@ pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
 pub struct FilteredUpdate {
     pub filters: FilteredUpdateFilters,
     pub message: FilteredUpdateOneof,
+    pub created_at: Timestamp,
 }
 
 impl prost::Message for FilteredUpdate {
@@ -72,12 +74,14 @@ impl prost::Message for FilteredUpdate {
             encode_varint(name.len() as u64, buf);
             buf.put_slice(name.as_bytes());
         }
-        self.message.encode_raw(buf)
+        self.message.encode_raw(buf);
+        message::encode(11u32, &self.created_at, buf);
     }
 
     fn encoded_len(&self) -> usize {
         prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
             + self.message.encoded_len()
+            + message::encoded_len(11u32, &self.created_at)
     }
 
     fn merge_field(
@@ -96,12 +100,24 @@ impl prost::Message for FilteredUpdate {
 }
 
 impl FilteredUpdate {
-    pub fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
-        Self { filters, message }
+    pub const fn new(
+        filters: FilteredUpdateFilters,
+        message: FilteredUpdateOneof,
+        created_at: Timestamp,
+    ) -> Self {
+        Self {
+            filters,
+            message,
+            created_at,
+        }
     }
 
     pub fn new_empty(message: FilteredUpdateOneof) -> Self {
-        Self::new(FilteredUpdateFilters::new(), message)
+        Self::new(
+            FilteredUpdateFilters::new(),
+            message,
+            Timestamp::from(SystemTime::now()),
+        )
     }
 
     fn as_subscribe_update_account(
@@ -206,7 +222,7 @@ impl FilteredUpdate {
             }),
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
-            FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.0.clone()),
+            FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.block_meta.clone()),
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
@@ -219,13 +235,16 @@ impl FilteredUpdate {
                 .map(|name| name.as_ref().to_string())
                 .collect(),
             update_oneof: Some(message),
+            created_at: Some(self.created_at),
         }
     }
 
     pub fn from_subscribe_update(update: SubscribeUpdate) -> Result<Self, &'static str> {
-        let message = match update.update_oneof.ok_or("")? {
+        let created_at = update.created_at.ok_or("create_at should be defined")?;
+
+        let message = match update.update_oneof.ok_or("update should be defined")? {
             UpdateOneof::Account(msg) => {
-                let account = MessageAccount::from_update_oneof(msg)?;
+                let account = MessageAccount::from_update_oneof(msg, created_at)?;
                 FilteredUpdateOneof::Account(FilteredUpdateAccount {
                     account: account.account,
                     slot: account.slot,
@@ -234,11 +253,11 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Slot(msg) => {
-                let slot = MessageSlot::from_update_oneof(&msg)?;
+                let slot = MessageSlot::from_update_oneof(&msg, created_at)?;
                 FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
             }
             UpdateOneof::Transaction(msg) => {
-                let tx = MessageTransaction::from_update_oneof(msg)?;
+                let tx = MessageTransaction::from_update_oneof(msg, created_at)?;
                 FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
                     transaction: tx.transaction,
                     slot: tx.slot,
@@ -262,7 +281,7 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Block(msg) => {
-                let block = MessageBlock::from_update_oneof(msg)?;
+                let block = MessageBlock::from_update_oneof(msg, created_at)?;
                 FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
                     meta: block.meta,
                     transactions: block.transactions,
@@ -275,11 +294,11 @@ impl FilteredUpdate {
             UpdateOneof::Ping(_) => FilteredUpdateOneof::Ping,
             UpdateOneof::Pong(msg) => FilteredUpdateOneof::Pong(msg),
             UpdateOneof::BlockMeta(msg) => {
-                let block_meta = MessageBlockMeta(msg);
+                let block_meta = MessageBlockMeta::from_update_oneof(msg, created_at);
                 FilteredUpdateOneof::BlockMeta(Arc::new(block_meta))
             }
             UpdateOneof::Entry(msg) => {
-                let entry = MessageEntry::from_update_oneof(&msg)?;
+                let entry = MessageEntry::from_update_oneof(&msg, created_at)?;
                 FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
             }
         };
@@ -287,6 +306,7 @@ impl FilteredUpdate {
         Ok(Self {
             filters: update.filters.into_iter().map(FilterName::new).collect(),
             message,
+            created_at,
         })
     }
 }
@@ -368,7 +388,7 @@ impl prost::Message for FilteredUpdateOneof {
                 encode_varint(0, buf);
             }
             Self::Pong(msg) => message::encode(9u32, msg, buf),
-            Self::BlockMeta(msg) => message::encode(7u32, &msg.0, buf),
+            Self::BlockMeta(msg) => message::encode(7u32, &msg.block_meta, buf),
             Self::Entry(msg) => message::encode(8u32, msg, buf),
         }
     }
@@ -382,7 +402,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Block(msg) => message::encoded_len(5u32, msg),
             Self::Ping => key_len(6u32) + encoded_len_varint(0),
             Self::Pong(msg) => message::encoded_len(9u32, msg),
-            Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.0),
+            Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.block_meta),
             Self::Entry(msg) => message::encoded_len(8u32, msg),
         }
     }
@@ -946,6 +966,7 @@ pub mod tests {
         },
         prost::Message as _,
         prost_011::Message as _,
+        prost_types::Timestamp,
         solana_sdk::{
             hash::Hash,
             message::SimpleAddressLoader,
@@ -961,6 +982,7 @@ pub mod tests {
             ops::Range,
             str::FromStr,
             sync::Arc,
+            time::SystemTime,
         },
     };
 
@@ -1031,6 +1053,7 @@ pub mod tests {
                             account: Arc::clone(&account),
                             slot,
                             is_startup,
+                            created_at: Timestamp::from(SystemTime::now()),
                         };
                         vec.push((msg, data_slice));
                     }
@@ -1049,6 +1072,7 @@ pub mod tests {
                 hash: Hash::new_from_array([98; 32]),
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
+                created_at: Timestamp::from(SystemTime::now()),
             },
             MessageEntry {
                 slot: 299888121,
@@ -1057,6 +1081,7 @@ pub mod tests {
                 hash: Hash::new_from_array([42; 32]),
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
+                created_at: Timestamp::from(SystemTime::now()),
             },
         ]
         .into_iter()
@@ -1131,20 +1156,23 @@ pub mod tests {
                 let entries = create_entries();
 
                 let slot = block.parent_slot + 1;
-                let block_meta1 = MessageBlockMeta(SubscribeUpdateBlockMeta {
-                    parent_slot: block.parent_slot,
-                    slot,
-                    parent_blockhash: block.previous_blockhash,
-                    blockhash: block.blockhash,
-                    rewards: Some(convert_to::create_rewards_obj(
-                        &block.rewards,
-                        block.num_partitions,
-                    )),
-                    block_time: block.block_time.map(convert_to::create_timestamp),
-                    block_height: block.block_height.map(convert_to::create_block_height),
-                    executed_transaction_count: transactions.len() as u64,
-                    entries_count: entries.len() as u64,
-                });
+                let block_meta1 = MessageBlockMeta {
+                    block_meta: SubscribeUpdateBlockMeta {
+                        parent_slot: block.parent_slot,
+                        slot,
+                        parent_blockhash: block.previous_blockhash,
+                        blockhash: block.blockhash,
+                        rewards: Some(convert_to::create_rewards_obj(
+                            &block.rewards,
+                            block.num_partitions,
+                        )),
+                        block_time: block.block_time.map(convert_to::create_timestamp),
+                        block_height: block.block_height.map(convert_to::create_block_height),
+                        executed_transaction_count: transactions.len() as u64,
+                        entries_count: entries.len() as u64,
+                    },
+                    created_at: Timestamp::from(SystemTime::now()),
+                };
                 let mut block_meta2 = block_meta1.clone();
                 block_meta2.rewards =
                     Some(convert_to::create_rewards_obj(&block.rewards, Some(42)));
@@ -1183,6 +1211,7 @@ pub mod tests {
         let msg = FilteredUpdate {
             filters: create_message_filters(filters),
             message,
+            created_at: Timestamp::from(SystemTime::now()),
         };
         let update = msg.as_subscribe_update();
         assert_eq!(msg.encoded_len(), update.encoded_len());
@@ -1219,6 +1248,7 @@ pub mod tests {
                             slot,
                             parent,
                             status,
+                            created_at: Timestamp::from(SystemTime::now()),
                         }),
                     )
                 }
@@ -1232,6 +1262,7 @@ pub mod tests {
             let msg = MessageTransaction {
                 transaction,
                 slot: 42,
+                created_at: Timestamp::from(SystemTime::now()),
             };
             encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction(&msg));
             encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction_status(&msg));

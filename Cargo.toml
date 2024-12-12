@@ -50,6 +50,7 @@ log = "0.4.17"
 maplit = "1.0.2"
 prometheus = "0.13.2"
 prost = "0.13.1"
+prost-types = "0.13.3"
 prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
