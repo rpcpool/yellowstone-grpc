@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 4.0.0
+    "examples/rust", # 4.1.0
     "yellowstone-grpc-client", # 4.0.0
-    "yellowstone-grpc-geyser", # 4.0.1
+    "yellowstone-grpc-geyser", # 4.1.0
     "yellowstone-grpc-proto", # 4.0.0
+]
+exclude = [
+    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
 ]
 
 [workspace.package]
@@ -17,6 +20,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
+affinity = "0.1.2"
 agave-geyser-plugin-interface = "~2.1.1"
 anyhow = "1.0.62"
 backoff = "0.4.0"
