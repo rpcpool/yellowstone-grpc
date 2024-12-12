@@ -7,9 +7,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "npm run grpc-generate && tsc -p .",
+    "build": "pnpm run grpc-generate && tsc -p .",
     "fmt": "prettier -w .",
-    "grpc-generate": "mkdir -p src/grpc && protoc -I../yellowstone-grpc-proto/proto --plugin=node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=forceLong=string --ts_proto_opt=outputServices=grpc-js --experimental_allow_proto3_optional --ts_proto_out=src/grpc geyser.proto"
+    "grpc-generate": "mkdir -p src/grpc && protoc -I../yellowstone-grpc-proto/proto --plugin=node_modules/.bin/protoc-gen-ts_proto --ts_proto_opt=forceLong=string --ts_proto_opt=outputServices=grpc-js --experimental_allow_proto3_optional --ts_proto_out=src/grpc fumarole.proto"
   },
   "repository": {
     "type": "git",

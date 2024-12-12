@@ -3,6 +3,7 @@
  */
 
 // Import generated gRPC client and types.
+import { CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, FumaroleClient, SubscribeRequest as FumaroleSubscribeRequest } from "./grpc/fumarole";
 import {
   CommitmentLevel,
   GetLatestBlockhashResponse,
@@ -53,6 +54,12 @@ export {
   SubscribeUpdateTransaction,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
+
+
+export {
+  SubscribeRequest as FumaroleSubscribeRequest,
+} from "./grpc/fumarole"
+
 
 export default class Client {
   _client: GeyserClient;
@@ -239,4 +246,73 @@ export default class Client {
       );
     });
   }
+}
+
+export class FumaroleSDKClient {
+  _client: FumaroleClient;
+  _insecureXToken: string | undefined;
+  _subscriptionId: string
+
+  constructor(
+    endpoint: string,
+    xToken: string | undefined,
+    channelOptions: ChannelOptions | undefined,
+    subscriptionId: string
+  ) {
+    let creds: ChannelCredentials;
+
+    const endpointURL = new URL(endpoint);
+
+    // Check if we need to use TLS.
+    if (endpointURL.protocol === "https:") {
+      creds = credentials.combineChannelCredentials(
+        credentials.createSsl(),
+        credentials.createFromMetadataGenerator((_params, callback) => {
+          const metadata = new Metadata();
+          if (xToken !== undefined) {
+            metadata.add("x-token", xToken);
+          }
+          return callback(null, metadata);
+        })
+      );
+    } else {
+      creds = ChannelCredentials.createInsecure();
+      if (xToken !== undefined) {
+        this._insecureXToken = xToken;
+      }
+    }
+
+    this._client = new FumaroleClient(endpointURL.host, creds, channelOptions);
+    this._subscriptionId = subscriptionId
+  }
+
+  private _getInsecureMetadata(): Metadata {
+    const metadata = new Metadata();
+    if (this._insecureXToken) {
+      metadata.add("x-token", this._insecureXToken);
+    }
+
+    metadata.add("x-subscription-id", this._subscriptionId);
+    return metadata;
+  }
+
+  async createConsumerGroup(request: CreateStaticConsumerGroupRequest, metadata: Metadata): Promise<CreateStaticConsumerGroupResponse> {
+    return await new Promise<CreateStaticConsumerGroupResponse>((resolve, reject) => {
+      this._client.createStaticConsumerGroup(request, metadata, (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async subscribe() {
+    console.log("METADATA");
+    console.log(this._getInsecureMetadata());
+
+    return await this._client.subscribe(this._getInsecureMetadata());
+  }
+
 }
