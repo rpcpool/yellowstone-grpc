@@ -12,16 +12,28 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## 2024-12-13
+
+- yellowstone-grpc-client-simple-4.2.0
+- yellowstone-grpc-client-4.1.0
+- yellowstone-grpc-geyser-4.2.0
+- yellowstone-grpc-proto-4.1.0
+
+### Fixes
+
 - nodejs: fix connector for custom port ([#488](https://github.com/rpcpool/yellowstone-grpc/pull/488))
 - nodejs: fix connector for host/hostname ([#491](https://github.com/rpcpool/yellowstone-grpc/pull/491))
 
 ### Features
 
 - proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
+- proto: add `from_slot` ([#477](https://github.com/rpcpool/yellowstone-grpc/pull/477))
 - proto: add field `created_at` to update message ([#479](https://github.com/rpcpool/yellowstone-grpc/pull/479))
 - nodejs: add parse err function ([#483](https://github.com/rpcpool/yellowstone-grpc/pull/483))
-
-### Breaking
 
 ## 2024-12-01
 
