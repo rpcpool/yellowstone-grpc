@@ -1185,7 +1185,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names());
@@ -1217,7 +1217,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.accounts.any = false;
@@ -1253,7 +1253,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.transactions.any = false;
@@ -1288,7 +1288,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.transactions.any = false;
@@ -1329,7 +1329,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1394,7 +1394,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1459,7 +1459,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1510,7 +1510,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1583,7 +1583,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
-            replay_from_slot: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();

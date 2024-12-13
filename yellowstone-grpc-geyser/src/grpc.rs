@@ -874,7 +874,7 @@ impl GrpcService {
                         }
 
                         match message {
-                            Some(Some((replay_from_slot, filter_new))) => {
+                            Some(Some((from_slot, filter_new))) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
                                     if stream_tx.send(Ok(msg)).await.is_err() {
                                         error!("client #{id}: stream closed");
@@ -888,7 +888,7 @@ impl GrpcService {
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
 
-                                if let Some(replay_from_slot) = replay_from_slot {
+                                if let Some(from_slot) = from_slot {
                                     if replay_stored_slots_tx.max_capacity() == 0 {
                                         info!("client #{id}: replay is not supported");
                                         tokio::spawn(async move {
@@ -899,7 +899,7 @@ impl GrpcService {
 
                                     let (tx, rx) = oneshot::channel();
                                     let commitment = filter.get_commitment_level();
-                                    if let Err(_error) = replay_stored_slots_tx.send((commitment, replay_from_slot, tx)).await {
+                                    if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
                                         error!("client #{id}: failed to send replay request");
                                         tokio::spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("failed to send replay request"))).await;
@@ -916,10 +916,10 @@ impl GrpcService {
                                     };
 
                                     let Some(mut messages) = messages else {
-                                        info!("client #{id}: replay from {replay_from_slot} is not available");
+                                        info!("client #{id}: replay from {from_slot} is not available");
                                         tokio::spawn(async move {
                                             let _ = stream_tx.send(Err(
-                                                Status::internal(format!("replay from {replay_from_slot} is not available"))
+                                                Status::internal(format!("replay from {from_slot} is not available"))
                                             )).await;
                                         });
                                         break 'outer;
@@ -1016,7 +1016,7 @@ impl GrpcService {
         // we start with default filter, for snapshot we need wait actual filter first
         while *is_alive {
             match client_rx.recv().await {
-                Some(Some((_replay_from_slot, filter_new))) => {
+                Some(Some((_from_slot, filter_new))) => {
                     if let Some(msg) = filter_new.get_pong_msg() {
                         if stream_tx.send(Ok(msg)).await.is_err() {
                             error!("client #{id}: stream closed");
@@ -1144,7 +1144,7 @@ impl Geyser for GrpcService {
                             filter_names.try_clean();
 
                             if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
-                                Ok(filter) => match incoming_client_tx.send(Some((request.replay_from_slot ,filter))) {
+                                Ok(filter) => match incoming_client_tx.send(Some((request.from_slot ,filter))) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
                                 },
