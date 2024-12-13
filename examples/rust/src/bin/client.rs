@@ -329,7 +329,7 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
-    /// Replay message from slot
+    /// Re-send message from slot
     #[clap(long)]
     from_slot: Option<u64>,
 

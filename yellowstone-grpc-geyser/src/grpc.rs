@@ -327,11 +327,12 @@ impl SlotMessages {
 
 type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
 
-type ReplayStoredSlotsRequest = (
-    CommitmentLevel,
-    Slot,
-    oneshot::Sender<Option<Vec<(u64, Message)>>>,
-);
+enum ReplayedResponse {
+    Messages(Vec<(u64, Message)>),
+    Lagged(Slot),
+}
+
+type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
 #[derive(Debug)]
 pub struct GrpcService {
@@ -795,7 +796,7 @@ impl GrpcService {
                 Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
                     if let Some((slot, _)) = messages.first_key_value() {
                         if replay_slot < *slot {
-                            let _ = tx.send(None);
+                            let _ = tx.send(ReplayedResponse::Lagged(*slot));
                             continue;
                         }
                     }
@@ -812,7 +813,7 @@ impl GrpcService {
                             }
                         }
                     }
-                    let _ = tx.send(Some(replayed_messages));
+                    let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
                 }
                 else => break,
             }
@@ -907,22 +908,25 @@ impl GrpcService {
                                         break 'outer;
                                     }
 
-                                    let Ok(messages) = rx.await else {
-                                        error!("client #{id}: failed to get replay response");
-                                        tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
-                                        });
-                                        break 'outer;
-                                    };
-
-                                    let Some(mut messages) = messages else {
-                                        info!("client #{id}: replay from {from_slot} is not available");
-                                        tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(
-                                                Status::internal(format!("replay from {from_slot} is not available"))
-                                            )).await;
-                                        });
-                                        break 'outer;
+                                    let mut messages = match rx.await {
+                                        Ok(ReplayedResponse::Messages(messages)) => messages,
+                                        Ok(ReplayedResponse::Lagged(slot)) => {
+                                            info!("client #{id}: broadcast from {from_slot} is not available");
+                                            tokio::spawn(async move {
+                                                let message = format!(
+                                                    "broadcast from {from_slot} is not available, last available: {slot}"
+                                                );
+                                                let _ = stream_tx.send(Err(Status::internal(message))).await;
+                                            });
+                                            break 'outer;
+                                        },
+                                        Err(_error) => {
+                                            error!("client #{id}: failed to get replay response");
+                                            tokio::spawn(async move {
+                                                let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
+                                            });
+                                            break 'outer;
+                                        }
                                     };
 
                                     messages.sort_by_key(|msg| msg.0);

@@ -189,7 +189,7 @@ pub struct ConfigGrpc {
         with = "humantime_serde"
     )]
     pub filter_names_cleanup_interval: Duration,
-    /// Number of slots stored for replay
+    /// Number of slots stored for re-broadcast (replay)
     #[serde(default = "ConfigGrpc::default_replay_stored_slots")]
     pub replay_stored_slots: u64,
 }
