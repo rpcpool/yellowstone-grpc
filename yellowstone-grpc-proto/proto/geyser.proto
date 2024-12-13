@@ -34,6 +34,7 @@ message SubscribeRequest {
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
+  optional uint64 from_slot = 11;
 }
 
 message SubscribeRequestFilterAccounts {

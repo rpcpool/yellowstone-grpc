@@ -329,6 +329,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
+    /// Re-send message from slot
+    #[clap(long)]
+    from_slot: Option<u64>,
+
     /// Send ping in subscribe request
     #[clap(long)]
     ping: Option<i32>,
@@ -522,6 +526,7 @@ impl Action {
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
                         ping,
+                        from_slot: args.from_slot,
                     },
                     args.resub.unwrap_or(0),
                     args.stats,
@@ -885,6 +890,7 @@ async fn geyser_subscribe(
                     commitment: None,
                     accounts_data_slice: Vec::default(),
                     ping: None,
+                    from_slot: None,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;
