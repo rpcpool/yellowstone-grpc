@@ -192,6 +192,16 @@ pub struct ConfigGrpc {
     /// Number of slots stored for re-broadcast (replay)
     #[serde(default = "ConfigGrpc::default_replay_stored_slots")]
     pub replay_stored_slots: u64,
+    #[serde(default)]
+    pub server_http2_adaptive_window: Option<bool>,
+    #[serde(with = "humantime_serde")]
+    pub server_http2_keepalive_interval: Option<Duration>,
+    #[serde(with = "humantime_serde")]
+    pub server_http2_keepalive_timeout: Option<Duration>,
+    #[serde(default)]
+    pub server_initial_connection_window_size: Option<u32>,
+    #[serde(default)]
+    pub server_initial_stream_window_size: Option<u32>,
 }
 
 impl ConfigGrpc {

@@ -17,6 +17,11 @@
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]
     },
+    "server_http2_adaptive_window": null,
+    "server_http2_keepalive_interval": null,
+    "server_http2_keepalive_timeout": null,
+    "server_initial_connection_window_size": null,
+    "server_initial_stream_window_size": null,
     "max_decoding_message_size": "4_194_304",
     "snapshot_plugin_channel_capacity": null,
     "snapshot_client_channel_capacity": "50_000_000",
