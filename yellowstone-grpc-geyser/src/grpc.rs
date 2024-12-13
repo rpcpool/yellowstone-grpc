@@ -891,9 +891,9 @@ impl GrpcService {
 
                                 if let Some(from_slot) = from_slot {
                                     if replay_stored_slots_tx.max_capacity() == 0 {
-                                        info!("client #{id}: replay is not supported");
+                                        info!("client #{id}: from_slot is not supported");
                                         tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("replay is not supported"))).await;
+                                            let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                         });
                                         break 'outer;
                                     }
@@ -901,9 +901,9 @@ impl GrpcService {
                                     let (tx, rx) = oneshot::channel();
                                     let commitment = filter.get_commitment_level();
                                     if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
-                                        error!("client #{id}: failed to send replay request");
+                                        error!("client #{id}: failed to send from_slot request");
                                         tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("failed to send replay request"))).await;
+                                            let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
                                         });
                                         break 'outer;
                                     }
