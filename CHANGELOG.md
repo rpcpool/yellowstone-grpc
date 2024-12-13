@@ -34,6 +34,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - proto: add `from_slot` ([#477](https://github.com/rpcpool/yellowstone-grpc/pull/477))
 - proto: add field `created_at` to update message ([#479](https://github.com/rpcpool/yellowstone-grpc/pull/479))
 - nodejs: add parse err function ([#483](https://github.com/rpcpool/yellowstone-grpc/pull/483))
+- geyser: add gRPC server options to config ([#493](https://github.com/rpcpool/yellowstone-grpc/pull/493))
 
 ## 2024-12-01
 
