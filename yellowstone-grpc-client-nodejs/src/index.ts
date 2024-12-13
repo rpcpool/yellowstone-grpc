@@ -131,7 +131,7 @@ export default class Client {
     }
 
     this._client = new GeyserClient(
-      `${endpointURL.host}:${port}`,
+      `${endpointURL.hostname}:${port}`,
       creds,
       channelOptions
     );
