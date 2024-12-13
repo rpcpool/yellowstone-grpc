@@ -1,7 +1,8 @@
 use {
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
     prost::Message as _,
-    std::time::Duration,
+    prost_types::Timestamp,
+    std::time::{Duration, SystemTime},
     yellowstone_grpc_proto::plugin::{
         filter::message::{
             tests::{
@@ -41,6 +42,7 @@ fn bench_account(c: &mut Criterion) {
         .map(|(msg, data_slice)| FilteredUpdate {
             filters: filters.clone(),
             message: FilteredUpdateOneof::account(&msg, data_slice),
+            created_at: Timestamp::from(SystemTime::now()),
         })
         .collect::<Vec<_>>();
     bench!(&updates, "accounts");
@@ -52,7 +54,9 @@ fn bench_account(c: &mut Criterion) {
             message: FilteredUpdateOneof::transaction(&MessageTransaction {
                 transaction,
                 slot: 42,
+                created_at: Timestamp::from(SystemTime::now()),
             }),
+            created_at: Timestamp::from(SystemTime::now()),
         })
         .collect::<Vec<_>>();
     bench!(&updates, "transactions");
@@ -62,6 +66,7 @@ fn bench_account(c: &mut Criterion) {
         .map(|block| FilteredUpdate {
             filters: filters.clone(),
             message: FilteredUpdateOneof::block(Box::new(block)),
+            created_at: Timestamp::from(SystemTime::now()),
         })
         .collect::<Vec<_>>();
     bench!(&updates, "blocks");

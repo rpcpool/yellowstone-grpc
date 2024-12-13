@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 4.0.0
+    "examples/rust", # 4.1.0
     "yellowstone-grpc-client", # 4.0.0
-    "yellowstone-grpc-geyser", # 4.0.1
+    "yellowstone-grpc-geyser", # 4.1.0
     "yellowstone-grpc-proto", # 4.0.0
+]
+exclude = [
+    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
 ]
 
 [workspace.package]
@@ -17,6 +20,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
+affinity = "0.1.2"
 agave-geyser-plugin-interface = "~2.1.1"
 anyhow = "1.0.62"
 backoff = "0.4.0"
@@ -46,6 +50,7 @@ log = "0.4.17"
 maplit = "1.0.2"
 prometheus = "0.13.2"
 prost = "0.13.1"
+prost-types = "0.13.3"
 prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"

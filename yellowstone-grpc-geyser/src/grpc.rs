@@ -1,11 +1,12 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigGrpc, ConfigTokio},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
     log::{error, info},
+    prost_types::Timestamp,
     solana_sdk::{
         clock::{Slot, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
@@ -16,6 +17,7 @@ use {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
+        time::SystemTime,
     },
     tokio::{
         fs,
@@ -348,6 +350,7 @@ pub struct GrpcService {
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
+        config_tokio: ConfigTokio,
         config: ConfigGrpc,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
@@ -436,9 +439,17 @@ impl GrpcService {
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         spawn_blocking(move || {
-            Builder::new_multi_thread()
+            let mut builder = Builder::new_multi_thread();
+            if let Some(worker_threads) = config_tokio.worker_threads {
+                builder.worker_threads(worker_threads);
+            }
+            if let Some(tokio_cpus) = config_tokio.affinity.clone() {
+                builder.on_thread_start(move || {
+                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                });
+            }
+            builder
                 .thread_name_fn(crate::get_thread_name)
-                .worker_threads(4)
                 .enable_all()
                 .build()
                 .expect("Failed to create a new runtime for geyser loop")
@@ -671,6 +682,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
+                                    created_at: Timestamp::from(SystemTime::now())
                                 });
                                 messages_vec.push((msgid_gen.next(), message_slot));
                                 metrics::missed_status_message_inc(status);

@@ -12,14 +12,28 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- nodejs: fix connector for custom port ([#488](https://github.com/rpcpool/yellowstone-grpc/pull/488))
+
 ### Features
 
 - proto: add tonic feature ([#474](https://github.com/rpcpool/yellowstone-grpc/pull/474))
-- geyser: use default compression as gzip and zstd ([#475](https://github.com/rpcpool/yellowstone-grpc/pull/475))
-- proto: add `replay_from_slot` ([#477](https://github.com/rpcpool/yellowstone-grpc/pull/477))
-- example: add connection options to Rust client ([#478](https://github.com/rpcpool/yellowstone-grpc/pull/478))
+- proto: add `from_slot` ([#477](https://github.com/rpcpool/yellowstone-grpc/pull/477))
+- proto: add field `created_at` to update message ([#479](https://github.com/rpcpool/yellowstone-grpc/pull/479))
+- nodejs: add parse err function ([#483](https://github.com/rpcpool/yellowstone-grpc/pull/483))
 
 ### Breaking
+
+## 2024-12-01
+
+- yellowstone-grpc-client-simple-4.1.0
+- yellowstone-grpc-geyser-4.1.0
+
+### Features
+
+- nodejs: add parse tx function ([#471](https://github.com/rpcpool/yellowstone-grpc/pull/471))
+- geyser: use default compression as gzip and zstd ([#475](https://github.com/rpcpool/yellowstone-grpc/pull/475))
+- example: add connection options to Rust client ([#478](https://github.com/rpcpool/yellowstone-grpc/pull/478))
+- geyser: add worker_threads and affinity ([#481](https://github.com/rpcpool/yellowstone-grpc/pull/481))
 
 ## 2024-11-28
 

@@ -64,6 +64,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "affinity"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "763e484feceb7dd021b21c5c6f81aee06b1594a743455ec7efbf72e6355e447b"
+dependencies = [
+ "cfg-if",
+ "errno",
+ "libc",
+ "num_cpus",
+]
+
+[[package]]
 name = "agave-geyser-plugin-interface"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2508,6 +2520,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
+dependencies = [
+ "hermit-abi 0.3.9",
+ "libc",
+]
+
+[[package]]
 name = "num_enum"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3207,9 +3229,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.19"
+version = "0.23.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "934b404430bb06b3fae2cba809eb45a1ab1aecd64491213d7c3301b88393f8d1"
+checksum = "9c9cc1d47e243d655ace55ed38201c19ae02c148ae56412ab8750e8f0166ab7f"
 dependencies = [
  "log",
  "once_cell",
@@ -5210,7 +5232,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
 dependencies = [
- "rustls 0.23.19",
+ "rustls 0.23.18",
  "rustls-pki-types",
  "tokio",
 ]
@@ -5951,7 +5973,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5976,8 +5998,9 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "4.0.1"
+version = "4.1.0"
 dependencies = [
+ "affinity",
  "agave-geyser-plugin-interface",
  "anyhow",
  "base64 0.22.1",
@@ -5997,6 +6020,7 @@ dependencies = [
  "lazy_static",
  "log",
  "prometheus",
+ "prost-types 0.13.3",
  "serde",
  "serde_json",
  "solana-logger",
@@ -6025,6 +6049,7 @@ dependencies = [
  "criterion",
  "prost 0.11.9",
  "prost 0.13.3",
+ "prost-types 0.13.3",
  "protobuf-src",
  "serde",
  "smallvec",
