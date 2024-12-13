@@ -408,6 +408,22 @@ impl GrpcService {
                 .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
                 .context("failed to apply tls_config")?;
         }
+        if let Some(enabled) = config.server_http2_adaptive_window {
+            server_builder = server_builder.http2_adaptive_window(Some(enabled));
+        }
+        if let Some(http2_keepalive_interval) = config.server_http2_keepalive_interval {
+            server_builder =
+                server_builder.http2_keepalive_interval(Some(http2_keepalive_interval));
+        }
+        if let Some(http2_keepalive_timeout) = config.server_http2_keepalive_timeout {
+            server_builder = server_builder.http2_keepalive_timeout(Some(http2_keepalive_timeout));
+        }
+        if let Some(sz) = config.server_initial_connection_window_size {
+            server_builder = server_builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = config.server_initial_stream_window_size {
+            server_builder = server_builder.initial_stream_window_size(sz);
+        }
 
         let filter_names = Arc::new(Mutex::new(FilterNames::new(
             config.filter_name_size_limit,
@@ -472,7 +488,6 @@ impl GrpcService {
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
             server_builder
-                .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .layer(interceptor(move |request: Request<()>| {
                     if let Some(x_token) = &config.x_token {
                         match request.metadata().get("x-token") {
