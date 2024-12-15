@@ -343,7 +343,7 @@ pub struct GrpcService {
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-    replay_stored_slots_tx: mpsc::Sender<ReplayStoredSlotsRequest>,
+    replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
 }
@@ -389,12 +389,12 @@ impl GrpcService {
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         // attempt to prevent spam of geyser loop with capacity eq 1
-        let (replay_stored_slots_tx, replay_stored_slots_rx) =
-            mpsc::channel(if config.replay_stored_slots == 0 {
-                0
-            } else {
-                1
-            });
+        let (replay_stored_slots_tx, replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
+            (None, None)
+        } else {
+            let (tx, rx) = mpsc::channel(1);
+            (Some(tx), Some(rx))
+        };
 
         // gRPC server builder with optional TLS
         let mut server_builder = Server::builder();
@@ -511,7 +511,7 @@ impl GrpcService {
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-        mut replay_stored_slots_rx: mpsc::Receiver<ReplayStoredSlotsRequest>,
+        replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_stored_slots: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
@@ -523,6 +523,8 @@ impl GrpcService {
         let mut processed_first_slot = None;
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
+        let (_tx, rx) = mpsc::channel(1);
+        let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
         loop {
             tokio::select! {
@@ -843,7 +845,7 @@ impl GrpcService {
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
-        replay_stored_slots_tx: mpsc::Sender<ReplayStoredSlotsRequest>,
+        replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
@@ -905,13 +907,13 @@ impl GrpcService {
                                 info!("client #{id}: filter updated");
 
                                 if let Some(from_slot) = from_slot {
-                                    if replay_stored_slots_tx.max_capacity() == 0 {
+                                    let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
                                         info!("client #{id}: from_slot is not supported");
                                         tokio::spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                         });
                                         break 'outer;
-                                    }
+                                    };
 
                                     let (tx, rx) = oneshot::channel();
                                     let commitment = filter.get_commitment_level();
