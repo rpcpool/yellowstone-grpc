@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-12-15
+
+- yellowstone-grpc-geyser-4.2.1
+
+### Fixes
+
+- geyser: fix `replay_stored_slots` ([#496](https://github.com/rpcpool/yellowstone-grpc/pull/496))
+
 ## 2024-12-13
 
 - yellowstone-grpc-client-simple-4.2.0
