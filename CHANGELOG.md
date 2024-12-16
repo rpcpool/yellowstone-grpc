@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- client: add `ca_certificate` option ([#497](https://github.com/rpcpool/yellowstone-grpc/pull/497))
+
 ### Breaking
 
 ## 2024-12-15

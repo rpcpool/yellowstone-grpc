@@ -12,11 +12,12 @@ use {
         collections::HashMap,
         env,
         fs::File,
+        path::PathBuf,
         sync::Arc,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     tokio::{fs, sync::Mutex},
-    tonic::transport::channel::ClientTlsConfig,
+    tonic::transport::{channel::ClientTlsConfig, Certificate},
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
     yellowstone_grpc_proto::{
         convert_from,
@@ -51,6 +52,10 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("http://127.0.0.1:10000"))]
     /// Service endpoint
     endpoint: String,
+
+    /// Path of a certificate authority file
+    #[clap(long)]
+    ca_certificate: Option<PathBuf>,
 
     #[clap(long)]
     x_token: Option<String>,
@@ -117,9 +122,14 @@ impl Args {
     }
 
     async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor>> {
+        let mut tls_config = ClientTlsConfig::new().with_native_roots();
+        if let Some(path) = &self.ca_certificate {
+            let bytes = fs::read(path).await?;
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(bytes));
+        }
         let mut builder = GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
             .x_token(self.x_token.clone())?
-            .tls_config(ClientTlsConfig::new().with_native_roots())?
+            .tls_config(tls_config)?
             .max_decoding_message_size(self.max_decoding_message_size);
 
         if let Some(duration) = self.connect_timeout_ms {
