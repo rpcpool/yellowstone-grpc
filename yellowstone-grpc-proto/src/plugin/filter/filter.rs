@@ -484,8 +484,8 @@ impl FilterAccountsLamports {
         match self {
             Self::Eq(value) => value == lamports,
             Self::Ne(value) => value != lamports,
-            Self::Lt(value) => value < lamports,
-            Self::Gt(value) => value > lamports,
+            Self::Lt(value) => value > lamports,
+            Self::Gt(value) => value < lamports,
         }
     }
 }
