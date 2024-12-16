@@ -14,9 +14,21 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- client: add `ca_certificate` option ([#497](https://github.com/rpcpool/yellowstone-grpc/pull/497))
-
 ### Breaking
+
+## 2024-12-16
+
+- yellowstone-grpc-client-simple-4.3.0
+- yellowstone-grpc-geyser-4.2.2
+- yellowstone-grpc-proto-4.1.1
+
+### Fixes
+
+- geyser: fix `lamports` filter ([#498](https://github.com/rpcpool/yellowstone-grpc/pull/498))
+
+### Features
+
+- example: add `ca_certificate` option ([#497](https://github.com/rpcpool/yellowstone-grpc/pull/497))
 
 ## 2024-12-15
 
