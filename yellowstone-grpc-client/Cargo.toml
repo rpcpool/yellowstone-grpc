@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "3.1.0"
+version = "3.1.0+solana.2.0.18"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
