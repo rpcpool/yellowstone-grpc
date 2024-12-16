@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser: Add option to allow the injection of a root authority ([#497](https://github.com/rpcpool/yellowstone-grpc/pull/497))
+
 ### Breaking
 
 ## 2024-12-15
