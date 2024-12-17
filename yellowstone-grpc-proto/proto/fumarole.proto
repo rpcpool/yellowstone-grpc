@@ -7,9 +7,42 @@ import public "geyser.proto";
 package fumarole;
 
 service Fumarole {
+  rpc GetConsumerGroupInfo(GetConsumerGroupInfoRequest) returns (ConsumerGroupInfo) {}
+  rpc ListConsumerGroups(ListConsumerGroupsRequest) returns (ListConsumerGroupsResponse) {}
+  rpc DeleteConsumerGroup(DeleteConsumerGroupRequest) returns (DeleteConsumerGroupResponse) {}
   rpc CreateStaticConsumerGroup(CreateStaticConsumerGroupRequest) returns (CreateStaticConsumerGroupResponse) {}
   rpc Subscribe(stream SubscribeRequest) returns (stream geyser.SubscribeUpdate) {}
   rpc GetSlotLagInfo(GetSlotLagInfoRequest) returns (GetSlotLagInfoResponse) {}
+}
+
+message GetConsumerGroupInfoRequest {
+  string consumer_group_label = 1;
+}
+
+
+message DeleteConsumerGroupRequest {
+  string consumer_group_label = 1;
+}
+
+message DeleteConsumerGroupResponse {
+  bool success = 1;
+}
+
+message ListConsumerGroupsRequest {}
+
+message ListConsumerGroupsResponse {
+  repeated ConsumerGroupInfo consumer_groups = 1;
+}
+
+
+message ConsumerGroupInfo {
+  string id = 1;
+  string consumer_group_label = 2;
+  ConsumerGroupType consumer_group_type = 3;
+  uint32 member_count = 4;
+  geyser.CommitmentLevel commitment_level = 5;
+  EventSubscriptionPolicy event_subscription_policy = 6;
+  bool is_stale = 7;
 }
 
 message GetSlotLagInfoRequest {
@@ -30,6 +63,10 @@ message SubscribeRequest {
 
 message CreateStaticConsumerGroupResponse {
   string group_id = 1;
+}
+
+enum ConsumerGroupType {
+  STATIC = 0;
 }
 
 enum InitialOffsetPolicy {
