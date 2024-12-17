@@ -3,7 +3,7 @@
  */
 
 // Import generated gRPC client and types.
-import { CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, FumaroleClient, SubscribeRequest as FumaroleSubscribeRequest } from "./grpc/fumarole";
+import { CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, FumaroleClient, GetSlotLagInfoRequest, GetSlotLagInfoResponse } from "./grpc/fumarole";
 import {
   CommitmentLevel,
   GetLatestBlockhashResponse,
@@ -55,11 +55,21 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
-
+// Reexport Fumarole types to distinguish them from Dragons Mouth types
 export {
   SubscribeRequest as FumaroleSubscribeRequest,
 } from "./grpc/fumarole"
 
+export enum YellowstoneGrpcClients {
+  DragonsMouth,
+  Fumarole
+}
+
+export interface YellowstoneGrpcClientConfig {
+  endpoint: string,
+  xToken: string | undefined,
+  channelOptions: ChannelOptions | undefined,
+}
 
 export default class Client {
   _client: GeyserClient;
@@ -296,9 +306,22 @@ export class FumaroleSDKClient {
     return metadata;
   }
 
-  async createConsumerGroup(request: CreateStaticConsumerGroupRequest, metadata: Metadata): Promise<CreateStaticConsumerGroupResponse> {
+  async createConsumerGroup(request: CreateStaticConsumerGroupRequest): Promise<CreateStaticConsumerGroupResponse> {
     return await new Promise<CreateStaticConsumerGroupResponse>((resolve, reject) => {
-      this._client.createStaticConsumerGroup(request, metadata, (err, response) => {
+      this._client.createStaticConsumerGroup(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async getSlotLagInfo(request: GetSlotLagInfoRequest) {
+
+    return await new Promise<GetSlotLagInfoResponse>((resolve, reject) => {
+      this._client.getSlotLagInfo(request, this._getInsecureMetadata(), (err, response) => {
         if (err === null || err === undefined) {
           resolve(response);
         } else {
@@ -309,10 +332,31 @@ export class FumaroleSDKClient {
   }
 
   async subscribe() {
-    console.log("METADATA");
-    console.log(this._getInsecureMetadata());
-
     return await this._client.subscribe(this._getInsecureMetadata());
   }
 
+}
+
+export function createGrpcClient(
+  type: YellowstoneGrpcClients.DragonsMouth,
+  config: YellowstoneGrpcClientConfig
+): Client;
+export function createGrpcClient(
+  type: YellowstoneGrpcClients.Fumarole,
+  config: YellowstoneGrpcClientConfig,
+  fumaroleSubscriptionId: string
+): FumaroleSDKClient;
+export function createGrpcClient(
+  type: YellowstoneGrpcClients,
+  config: YellowstoneGrpcClientConfig,
+  fumaroleSubscriptionId?: string
+) {
+  switch (type) {
+    case YellowstoneGrpcClients.DragonsMouth: {
+      return new Client(config.endpoint, config.xToken, config.channelOptions);
+    }
+    case YellowstoneGrpcClients.Fumarole: {
+      return new FumaroleSDKClient(config.endpoint, config.xToken, config.channelOptions, fumaroleSubscriptionId);
+    }
+  }
 }

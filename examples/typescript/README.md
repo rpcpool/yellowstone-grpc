@@ -135,11 +135,23 @@ response: { version: "{\"version\":\"0.7.0+solana.1.15.2\",\"proto\":\"1.2.0+sol
 
 ## Fumarole
 
+### Create Subscription Id
+npm start -- -e="https://api.rpcpool.com" \
+fumarole-create-subscription-id
+
+### Get Slot Lag Info
+npm start -- -e="https://api.rpcpool.com" \
+fumarole-get-slot-lag-info --subscription-id someId --consumer-group-label abcd
+
 ### Create Consumer Group
-pnpm start -- -e="http://traefik.service.ams1.consul:28080/" \
+npm start -- -e="https://api.rpcpool.com" \
 create-consumer-group
 
+### Create Consumer Group
+npm start -- -e="https://api.rpcpool.com" \
+fumarole-create-consumer-group --subscription-id someId --consumer-group-label helloo
+
 ### Subscribe
-pnpm start -- -e="http://traefik.service.ams1.consul:28080/" \
+npm start -- -e="https://api.rpcpool.com" \
 fumarole-subscribe \
 --accounts --accounts-account SysvarC1ock11111111111111111111111111111111
