@@ -31,6 +31,8 @@ use {
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
+    bytes::buf::BufMut,
+    prost::encoding::{encode_key, encode_varint, WireType},
     solana_sdk::{
         pubkey::{ParsePubkeyError, Pubkey},
         signature::{ParseSignatureError, Signature},
@@ -73,24 +75,24 @@ pub enum FilterError {
 pub type FilterResult<T> = Result<T, FilterError>;
 
 macro_rules! filtered_updates_once_owned {
-    ($filters:ident, $message:expr) => {{
+    ($filters:ident, $message:expr, $created_at:expr) => {{
         let mut messages = FilteredUpdates::new();
         if !$filters.is_empty() {
-            messages.push(FilteredUpdate::new($filters, $message));
+            messages.push(FilteredUpdate::new($filters, $message, $created_at));
         }
         messages
     }};
 }
 
 macro_rules! filtered_updates_once_ref {
-    ($filters:ident, $message:expr) => {{
+    ($filters:ident, $message:expr, $created_at:expr) => {{
         let mut messages = FilteredUpdates::new();
         if !$filters.is_empty() {
             let mut message_filters = FilteredUpdateFilters::new();
             for filter in $filters {
                 message_filters.push(filter.clone());
             }
-            messages.push(FilteredUpdate::new(message_filters, $message));
+            messages.push(FilteredUpdate::new(message_filters, $message, $created_at));
         }
         messages
     }};
@@ -337,7 +339,8 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::account(message, accounts_data_slice.clone())
+            FilteredUpdateOneof::account(message, accounts_data_slice.clone()),
+            message.created_at
         )
     }
 }
@@ -481,8 +484,8 @@ impl FilterAccountsLamports {
         match self {
             Self::Eq(value) => value == lamports,
             Self::Ne(value) => value != lamports,
-            Self::Lt(value) => value < lamports,
-            Self::Gt(value) => value > lamports,
+            Self::Lt(value) => value > lamports,
+            Self::Gt(value) => value < lamports,
         }
     }
 }
@@ -629,7 +632,11 @@ impl FilterSlots {
                 }
             })
             .collect::<FilteredUpdateFilters>();
-        filtered_updates_once_owned!(filters, FilteredUpdateOneof::slot(*message))
+        filtered_updates_once_owned!(
+            filters,
+            FilteredUpdateOneof::slot(message.clone()),
+            message.created_at
+        )
     }
 }
 
@@ -783,7 +790,8 @@ impl FilterTransactions {
                 FilterTransactionsType::TransactionStatus => {
                     FilteredUpdateOneof::transaction_status(message)
                 }
-            }
+            },
+            message.created_at
         )
     }
 }
@@ -811,7 +819,11 @@ impl FilterEntries {
 
     fn get_updates(&self, message: &Arc<MessageEntry>) -> FilteredUpdates {
         let filters = self.filters.as_slice();
-        filtered_updates_once_ref!(filters, FilteredUpdateOneof::entry(Arc::clone(message)))
+        filtered_updates_once_ref!(
+            filters,
+            FilteredUpdateOneof::entry(Arc::clone(message)),
+            message.created_at
+        )
     }
 }
 
@@ -939,6 +951,7 @@ impl FilterBlocks {
                     accounts,
                     entries,
                 })),
+                message.created_at,
             ));
         }
         updates
@@ -970,12 +983,13 @@ impl FilterBlocksMeta {
         let filters = self.filters.as_slice();
         filtered_updates_once_ref!(
             filters,
-            FilteredUpdateOneof::block_meta(Arc::clone(message))
+            FilteredUpdateOneof::block_meta(Arc::clone(message)),
+            message.created_at
         )
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FilterAccountsDataSlice(Arc<Vec<Range<usize>>>);
 
 impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {
@@ -1016,11 +1030,11 @@ impl FilterAccountsDataSlice {
         Ok(Self::new_unchecked(Arc::new(slices)))
     }
 
-    pub fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
+    pub const fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
         Self(slices)
     }
 
-    pub fn apply(&self, source: &[u8]) -> Vec<u8> {
+    pub fn get_slice(&self, source: &[u8]) -> Vec<u8> {
         if self.0.is_empty() {
             source.to_vec()
         } else {
@@ -1031,6 +1045,38 @@ impl FilterAccountsDataSlice {
                 }
             }
             data
+        }
+    }
+
+    pub fn get_slice_len(&self, source: &[u8]) -> usize {
+        if self.0.is_empty() {
+            source.len()
+        } else {
+            let mut len = 0;
+            for slice in self.0.iter() {
+                if source.len() >= slice.end {
+                    len += source[slice.start..slice.end].len();
+                }
+            }
+            len
+        }
+    }
+
+    pub fn slice_encode_raw(&self, tag: u32, source: &[u8], buf: &mut impl BufMut) {
+        let len = self.get_slice_len(source) as u64;
+        if len > 0 {
+            encode_key(tag, WireType::LengthDelimited, buf);
+            encode_varint(len, buf);
+
+            if self.0.is_empty() {
+                buf.put_slice(source);
+            } else {
+                for data_slice in self.0.iter() {
+                    if source.len() >= data_slice.end {
+                        buf.put_slice(&source[data_slice.start..data_slice.end]);
+                    }
+                }
+            }
         }
     }
 }
@@ -1054,6 +1100,7 @@ mod tests {
                 message::{Message, MessageTransaction, MessageTransactionInfo},
             },
         },
+        prost_types::Timestamp,
         solana_sdk::{
             hash::Hash,
             message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
@@ -1062,7 +1109,11 @@ mod tests {
             transaction::{SanitizedTransaction, Transaction},
         },
         solana_transaction_status::TransactionStatusMeta,
-        std::{collections::HashMap, sync::Arc, time::Duration},
+        std::{
+            collections::HashMap,
+            sync::Arc,
+            time::{Duration, SystemTime},
+        },
     };
 
     fn create_filter_names() -> FilterNames {
@@ -1116,6 +1167,7 @@ mod tests {
                 account_keys,
             }),
             slot: 100,
+            created_at: Timestamp::from(SystemTime::now()),
         }
     }
 
@@ -1133,6 +1185,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names());
@@ -1164,6 +1217,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.accounts.any = false;
@@ -1199,6 +1253,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.transactions.any = false;
@@ -1233,6 +1288,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let mut limit = FilterLimits::default();
         limit.transactions.any = false;
@@ -1273,6 +1329,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1337,6 +1394,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1401,6 +1459,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1451,6 +1510,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();
@@ -1523,6 +1583,7 @@ mod tests {
             commitment: None,
             accounts_data_slice: Vec::new(),
             ping: None,
+            from_slot: None,
         };
         let limit = FilterLimits::default();
         let filter = Filter::new(&config, &limit, &mut create_filter_names()).unwrap();

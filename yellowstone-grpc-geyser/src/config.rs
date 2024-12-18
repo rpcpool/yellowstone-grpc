@@ -3,7 +3,7 @@ use {
         GeyserPluginError, Result as PluginResult,
     },
     serde::{de, Deserialize, Deserializer},
-    std::{fs::read_to_string, net::SocketAddr, path::Path, time::Duration},
+    std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path, time::Duration},
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
     yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
@@ -15,6 +15,8 @@ pub struct Config {
     pub libpath: String,
     #[serde(default)]
     pub log: ConfigLog,
+    #[serde(default)]
+    pub tokio: ConfigTokio,
     pub grpc: ConfigGrpc,
     #[serde(default)]
     pub prometheus: Option<ConfigPrometheus>,
@@ -56,6 +58,74 @@ impl ConfigLog {
     fn default_level() -> String {
         "info".to_owned()
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTokio {
+    /// Number of worker threads in Tokio runtime
+    pub worker_threads: Option<usize>,
+    /// Threads affinity
+    #[serde(deserialize_with = "ConfigTokio::deserialize_affinity")]
+    pub affinity: Option<Vec<usize>>,
+}
+
+impl ConfigTokio {
+    fn deserialize_affinity<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Option::<&str>::deserialize(deserializer)? {
+            Some(taskset) => parse_taskset(taskset).map(Some).map_err(de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
+fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
+    let mut set = HashSet::new();
+    for taskset2 in taskset.split(',') {
+        match taskset2.split_once('-') {
+            Some((start, end)) => {
+                let start: usize = start
+                    .parse()
+                    .map_err(|_error| format!("failed to parse {start:?} from {taskset:?}"))?;
+                let end: usize = end
+                    .parse()
+                    .map_err(|_error| format!("failed to parse {end:?} from {taskset:?}"))?;
+                if start > end {
+                    return Err(format!("invalid interval {taskset2:?} in {taskset:?}"));
+                }
+                for idx in start..=end {
+                    set.insert(idx);
+                }
+            }
+            None => {
+                set.insert(
+                    taskset2.parse().map_err(|_error| {
+                        format!("failed to parse {taskset2:?} from {taskset:?}")
+                    })?,
+                );
+            }
+        }
+    }
+
+    let mut vec = set.into_iter().collect::<Vec<usize>>();
+    vec.sort();
+
+    if let Some(set_max_index) = vec.last().copied() {
+        let max_index = affinity::get_thread_affinity()
+            .map_err(|_err| "failed to get affinity".to_owned())?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+
+        if set_max_index > max_index {
+            return Err(format!("core index must be in the range [0, {max_index}]"));
+        }
+    }
+
+    Ok(vec)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,6 +189,19 @@ pub struct ConfigGrpc {
         with = "humantime_serde"
     )]
     pub filter_names_cleanup_interval: Duration,
+    /// Number of slots stored for re-broadcast (replay)
+    #[serde(default = "ConfigGrpc::default_replay_stored_slots")]
+    pub replay_stored_slots: u64,
+    #[serde(default)]
+    pub server_http2_adaptive_window: Option<bool>,
+    #[serde(default, with = "humantime_serde")]
+    pub server_http2_keepalive_interval: Option<Duration>,
+    #[serde(default, with = "humantime_serde")]
+    pub server_http2_keepalive_timeout: Option<Duration>,
+    #[serde(default)]
+    pub server_initial_connection_window_size: Option<u32>,
+    #[serde(default)]
+    pub server_initial_stream_window_size: Option<u32>,
 }
 
 impl ConfigGrpc {
@@ -143,15 +226,19 @@ impl ConfigGrpc {
     }
 
     const fn default_filter_name_size_limit() -> usize {
-        32
+        128
     }
 
     const fn default_filter_names_size_limit() -> usize {
-        1_024
+        4_096
     }
 
     const fn default_filter_names_cleanup_interval() -> Duration {
         Duration::from_secs(1)
+    }
+
+    const fn default_replay_stored_slots() -> u64 {
+        0
     }
 }
 
@@ -206,7 +293,7 @@ impl ConfigGrpcCompression {
     }
 
     fn default_compression() -> Vec<CompressionEncoding> {
-        vec![CompressionEncoding::Gzip]
+        vec![CompressionEncoding::Gzip, CompressionEncoding::Zstd]
     }
 }
 
