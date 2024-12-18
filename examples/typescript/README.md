@@ -136,22 +136,50 @@ response: { version: "{\"version\":\"0.7.0+solana.1.15.2\",\"proto\":\"1.2.0+sol
 ## Fumarole
 
 ### Create Subscription Id
+```shell
 npm start -- -e="https://api.rpcpool.com" \
 fumarole-create-subscription-id
+```
 
 ### Get Slot Lag Info
+```shell
 npm start -- -e="https://api.rpcpool.com" \
 fumarole-get-slot-lag-info --subscription-id someId --consumer-group-label abcd
+```
 
 ### Create Consumer Group
+```shell
 npm start -- -e="https://api.rpcpool.com" \
 create-consumer-group
+```
 
 ### Create Consumer Group
+```shell
 npm start -- -e="https://api.rpcpool.com" \
 fumarole-create-consumer-group --subscription-id someId --consumer-group-label helloo
+```
 
 ### Subscribe
+```shell
 npm start -- -e="https://api.rpcpool.com" \
 fumarole-subscribe \
 --accounts --accounts-account SysvarC1ock11111111111111111111111111111111
+```
+
+### List Consumer Groups
+```shell
+npm start --  -e="https://api.rpcpool.com" \
+fumarole-list-consumer-groups --subscription-id someId
+```
+
+### Get Consumer Group Info
+```shell
+npm start --  -e="https://api.rpcpool.com" \
+fumarole-get-consumer-group-info --subscription-id someId --consumer-group-label abcd
+```
+
+### Delete Consumer Group
+```shell
+npm start --  -e="https://api.rpcpool.com" \
+fumarole-delete-consumer-group --subscription-id someId --consumer-group-label abcd
+```

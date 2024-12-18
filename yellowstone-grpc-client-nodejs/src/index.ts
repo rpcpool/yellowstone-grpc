@@ -10,7 +10,7 @@ import {
 } from "@grpc/grpc-js";
 
 // Import generated gRPC client and types.
-import { CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, FumaroleClient, GetSlotLagInfoRequest, GetSlotLagInfoResponse } from "./grpc/fumarole";
+import { ConsumerGroupInfo, CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, DeleteConsumerGroupRequest, DeleteConsumerGroupResponse, FumaroleClient, GetConsumerGroupInfoRequest, GetSlotLagInfoRequest, GetSlotLagInfoResponse, ListConsumerGroupsRequest, ListConsumerGroupsResponse } from "./grpc/fumarole";
 import {
   CommitmentLevel,
   GetLatestBlockhashResponse,
@@ -367,9 +367,44 @@ export class FumaroleSDKClient {
   }
 
   async getSlotLagInfo(request: GetSlotLagInfoRequest) {
-
     return await new Promise<GetSlotLagInfoResponse>((resolve, reject) => {
       this._client.getSlotLagInfo(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async listConsumerGroups(request: ListConsumerGroupsRequest) {
+    return await new Promise<ListConsumerGroupsResponse>((resolve, reject) => {
+      this._client.listConsumerGroups(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async getConsumerGroupInfo(request: GetConsumerGroupInfoRequest) {
+    return await new Promise<ConsumerGroupInfo>((resolve, reject) => {
+      this._client.getConsumerGroupInfo(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async deleteConsumerGroup(request: DeleteConsumerGroupRequest) {
+    return await new Promise<DeleteConsumerGroupResponse>((resolve, reject) => {
+      this._client.deleteConsumerGroup(request, this._getInsecureMetadata(), (err, response) => {
         if (err === null || err === undefined) {
           resolve(response);
         } else {

@@ -15,6 +15,7 @@ import Client, {
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
 import { EventSubscriptionPolicy, FumaroleClient, InitialOffsetPolicy } from "@triton-one/yellowstone-grpc/dist/grpc/fumarole";
+import { WasmUiTransactionEncoding } from "@triton-one/yellowstone-grpc/dist/encoding/yellowstone_grpc_solana_encoding_wasm";
 
 async function main() {
   const args = parseCommandLineArgs();
@@ -99,6 +100,23 @@ async function main() {
       console.log(slotLagInfo);
       break;
 
+    case "fumarole-list-consumer-groups":
+      const consumerGroups = await fumaroleClient.listConsumerGroups({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(consumerGroups);
+      break;
+
+    case "fumarole-get-consumer-group-info":
+      const groupInfo = await fumaroleClient.getConsumerGroupInfo({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(groupInfo);
+      break;
+
+    case "fumarole-delete-consumer-group":
+      const deletedGroup = await fumaroleClient.deleteConsumerGroup({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(deletedGroup);
+      break;
+
+
+
     default:
       console.error(
         `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
@@ -145,7 +163,11 @@ async function fumaroleSubscribeCommand(client: FumaroleSDKClient, args) {
 
   // Handle updates
   stream.on("data", (data) => {
-    console.log(data);
+    try {
+      const parsedTx = txEncode.encode(data.transaction.transaction, WasmUiTransactionEncoding.JsonParsed, 255, true)
+      console.log(JSON.stringify(parsedTx));
+    }
+    catch (e) { }
   });
 
   // Send subscribe request
@@ -636,6 +658,44 @@ function parseCommandLineArgs() {
         },
       })
     })
+    .command("fumarole-get-consumer-group-info", "get fumarole consumer group info", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-list-consumer-groups", "list fumarole consumer groups", (yargs) => {
+      return yargs.options({
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-delete-consumer-group", "delete fumarole consumer group", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+
     .demandCommand(1)
     .help().argv;
 }
