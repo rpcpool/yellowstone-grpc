@@ -7,13 +7,14 @@
   "description": "Yellowstone gRPC Geyser TypeScript example",
   "homepage": "https://triton.one",
   "dependencies": {
-    "yargs": "^17.6.2",
-    "@triton-one/yellowstone-grpc": "file:../../yellowstone-grpc-client-nodejs"
+    "@grpc/grpc-js": "^1.12.4",
+    "@triton-one/yellowstone-grpc": "file:../../yellowstone-grpc-client-nodejs",
+    "yargs": "^17.6.2"
   },
   "scripts": {
     "build": "tsc -p .",
     "fmt": "prettier -w .",
-    "start": "npm run build && node dist/client.js"
+    "start": "pnpm run build && node dist/client.js"
   },
   "devDependencies": {
     "prettier": "^2.8.3",

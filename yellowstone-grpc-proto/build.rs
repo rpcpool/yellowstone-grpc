@@ -5,8 +5,8 @@ use {
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("PROTOC", protobuf_src::protoc());
-
     // build protos
+    tonic_build::compile_protos("proto/fumarole.proto")?;
     tonic_build::configure().compile_protos(&["proto/geyser.proto"], &["proto"])?;
 
     // build protos without tonic (wasm)
@@ -91,6 +91,7 @@ fn main() -> anyhow::Result<()> {
                 .build(),
         )
         .build();
+
     Builder::new()
         .build_client(false)
         .compile(&[geyser_service]);

@@ -2,53 +2,120 @@ import yargs from "yargs";
 import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
+  createGrpcClient,
+  FumaroleSDKClient,
+  FumaroleSubscribeRequest,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
+  YellowstoneGrpcClientConfig,
+  YellowstoneGrpcClients,
   SubscribeUpdateTransactionInfo,
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
+import { EventSubscriptionPolicy, FumaroleClient, InitialOffsetPolicy } from "@triton-one/yellowstone-grpc/dist/grpc/fumarole";
+import { WasmUiTransactionEncoding } from "@triton-one/yellowstone-grpc/dist/encoding/yellowstone_grpc_solana_encoding_wasm";
 
 async function main() {
   const args = parseCommandLineArgs();
 
-  // Open connection.
-  const client = new Client(args.endpoint, args.xToken, {
-    "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
+  const config: YellowstoneGrpcClientConfig = {
+    endpoint: args.endpoint,
+    xToken: args.xToken,
+    channelOptions: {
+      "grpc.max_receive_message_length": 1024 * 1024 * 64, // 64MiB
+    }
+  }
+
+  // Open connection to gRPC server
+
+  // Connections can be opened via:
+  // 1. Direct client initialization
+  // 2. Helper function
+  // There is no difference between these, the helper function is added to make migrations seamless
+  const dragonsMouthClient = new Client(args.endpoint, args.xToken, {
+    "grpc.max_receive_message_length": 1024 * 1024 * 64, // 64MiB
   });
+  // const dragonsMouthClient = createGrpcClient(YellowstoneGrpcClients.DragonsMouth, config)
+
+  const fumaroleSubscriptionId = args.subscriptionId || crypto.randomUUID()
+
+  // const fumaroleClient = new FumaroleSDKClient(args.endpoint, args.xToken, {
+  //   "grpc.max_receive_message_length": 1024 * 1024 * 64, // 64MiB
+  // }, fumaroleSubscriptionId);
+  const fumaroleClient = createGrpcClient(YellowstoneGrpcClients.Fumarole, config, fumaroleSubscriptionId)
 
   const commitment = parseCommitmentLevel(args.commitment);
 
   // Execute a requested command
   switch (args["_"][0]) {
     case "ping":
-      console.log("response: " + (await client.ping(1)));
+      console.log("response: " + (await dragonsMouthClient.ping(1)));
       break;
 
     case "get-version":
-      console.log("response: " + (await client.getVersion()));
+      console.log("response: " + (await dragonsMouthClient.getVersion()));
       break;
 
     case "get-slot":
-      console.log("response: " + (await client.getSlot(commitment)));
+      console.log("response: " + (await dragonsMouthClient.getSlot(commitment)));
       break;
 
     case "get-block-height":
-      console.log("response: " + (await client.getBlockHeight(commitment)));
+      console.log("response: " + (await dragonsMouthClient.getBlockHeight(commitment)));
       break;
 
     case "get-latest-blockhash":
-      console.log("response: ", await client.getLatestBlockhash(commitment));
+      console.log("response: ", await dragonsMouthClient.getLatestBlockhash(commitment));
       break;
 
     case "is-blockhash-valid":
-      console.log("response: ", await client.isBlockhashValid(args.blockhash));
+      console.log("response: ", await dragonsMouthClient.isBlockhashValid(args.blockhash));
       break;
 
     case "subscribe":
-      await subscribeCommand(client, args);
+      await subscribeCommand(dragonsMouthClient, args);
       break;
+
+    case "fumarole-subscribe":
+      await fumaroleSubscribeCommand(fumaroleClient, args)
+      break;
+
+    case "fumarole-create-consumer-group":
+      console.log(await fumaroleClient.createConsumerGroup({
+        commitmentLevel: CommitmentLevel.CONFIRMED,
+        consumerGroupLabel: args.consumerGroupLabel,
+        eventSubscriptionPolicy: EventSubscriptionPolicy.BOTH,
+        initialOffsetPolicy: InitialOffsetPolicy.LATEST
+      }))
+      break;
+
+    case "fumarole-create-subscription-id":
+      console.log(crypto.randomUUID())
+      break;
+
+    case "fumarole-get-slot-lag-info":
+      const slotLagInfo = await fumaroleClient.getSlotLagInfo({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(slotLagInfo);
+      break;
+
+    case "fumarole-list-consumer-groups":
+      const consumerGroups = await fumaroleClient.listConsumerGroups({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(consumerGroups);
+      break;
+
+    case "fumarole-get-consumer-group-info":
+      const groupInfo = await fumaroleClient.getConsumerGroupInfo({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(groupInfo);
+      break;
+
+    case "fumarole-delete-consumer-group":
+      const deletedGroup = await fumaroleClient.deleteConsumerGroup({ consumerGroupLabel: args.consumerGroupLabel })
+      console.log(deletedGroup);
+      break;
+
+
 
     default:
       console.error(
@@ -65,6 +132,59 @@ function parseCommitmentLevel(commitment: string | undefined) {
   const typedCommitment =
     commitment.toUpperCase() as keyof typeof CommitmentLevel;
   return CommitmentLevel[typedCommitment];
+}
+
+async function fumaroleSubscribeCommand(client: FumaroleSDKClient, args) {
+  const request: FumaroleSubscribeRequest = {
+    accounts: {
+      account: args.accountsAccount,
+      owner: []
+    },
+    consumerGroupLabel: args.consumerGroupLabel,
+    consumerId: 0
+  };
+
+  // Subscribe for events
+  const stream = await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on("error", (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on("end", () => {
+      resolve();
+    });
+    stream.on("close", () => {
+      resolve();
+    });
+  });
+
+  // Handle updates
+  stream.on("data", (data) => {
+    try {
+      const parsedTx = txEncode.encode(data.transaction.transaction, WasmUiTransactionEncoding.JsonParsed, 255, true)
+      console.log(JSON.stringify(parsedTx));
+    }
+    catch (e) { }
+  });
+
+  // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
 }
 
 async function subscribeCommand(client, args) {
@@ -483,6 +603,99 @@ function parseCommandLineArgs() {
         },
       });
     })
+    .command("fumarole-subscribe", "subscribe to events via fumarole", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+        accounts: {
+          default: false,
+          describe: "subscribe on accounts updates",
+          type: "boolean",
+        },
+        "accounts-account": {
+          default: [],
+          describe: "filter by account pubkey",
+          type: "array",
+        },
+      });
+    })
+    .command("fumarole-create-consumer-group", "create a fumarole consumer group", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-create-subscription-id", "create a fumarole subscription id", (yargs) => {
+      return yargs.options({});
+    })
+    .command("fumarole-get-slot-lag-info", "get fumarole slot lag info", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-get-consumer-group-info", "get fumarole consumer group info", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-list-consumer-groups", "list fumarole consumer groups", (yargs) => {
+      return yargs.options({
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+    .command("fumarole-delete-consumer-group", "delete fumarole consumer group", (yargs) => {
+      return yargs.options({
+        "consumer-group-label": {
+          default: "",
+          describe: "fumarole consumer group label",
+          type: "string"
+        },
+        "subscription-id": {
+          default: "",
+          describe: "fumarole subscription id",
+          type: "string"
+        },
+      })
+    })
+
     .demandCommand(1)
     .help().argv;
 }

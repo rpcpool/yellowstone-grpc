@@ -10,6 +10,7 @@ import {
 } from "@grpc/grpc-js";
 
 // Import generated gRPC client and types.
+import { ConsumerGroupInfo, CreateStaticConsumerGroupRequest, CreateStaticConsumerGroupResponse, DeleteConsumerGroupRequest, DeleteConsumerGroupResponse, FumaroleClient, GetConsumerGroupInfoRequest, GetSlotLagInfoRequest, GetSlotLagInfoResponse, ListConsumerGroupsRequest, ListConsumerGroupsResponse } from "./grpc/fumarole";
 import {
   CommitmentLevel,
   GetLatestBlockhashResponse,
@@ -55,6 +56,21 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
+// Reexport Fumarole types to distinguish them from Dragons Mouth types
+export {
+  SubscribeRequest as FumaroleSubscribeRequest,
+} from "./grpc/fumarole"
+
+export enum YellowstoneGrpcClients {
+  DragonsMouth,
+  Fumarole
+}
+
+export interface YellowstoneGrpcClientConfig {
+  endpoint: string,
+  xToken: string | undefined,
+  channelOptions: ChannelOptions | undefined,
+}
 // Import transaction encoding function created in Rust
 import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
 import type {
@@ -287,5 +303,143 @@ export default class Client {
         }
       );
     });
+  }
+}
+
+export class FumaroleSDKClient {
+  _client: FumaroleClient;
+  _insecureXToken: string | undefined;
+  _subscriptionId: string
+
+  constructor(
+    endpoint: string,
+    xToken: string | undefined,
+    channelOptions: ChannelOptions | undefined,
+    subscriptionId: string
+  ) {
+    let creds: ChannelCredentials;
+
+    const endpointURL = new URL(endpoint);
+
+    // Check if we need to use TLS.
+    if (endpointURL.protocol === "https:") {
+      creds = credentials.combineChannelCredentials(
+        credentials.createSsl(),
+        credentials.createFromMetadataGenerator((_params, callback) => {
+          const metadata = new Metadata();
+          if (xToken !== undefined) {
+            metadata.add("x-token", xToken);
+          }
+          return callback(null, metadata);
+        })
+      );
+    } else {
+      creds = ChannelCredentials.createInsecure();
+      if (xToken !== undefined) {
+        this._insecureXToken = xToken;
+      }
+    }
+
+    this._client = new FumaroleClient(endpointURL.host, creds, channelOptions);
+    this._subscriptionId = subscriptionId
+  }
+
+  private _getInsecureMetadata(): Metadata {
+    const metadata = new Metadata();
+    if (this._insecureXToken) {
+      metadata.add("x-token", this._insecureXToken);
+    }
+
+    metadata.add("x-subscription-id", this._subscriptionId);
+    return metadata;
+  }
+
+  async createConsumerGroup(request: CreateStaticConsumerGroupRequest): Promise<CreateStaticConsumerGroupResponse> {
+    return await new Promise<CreateStaticConsumerGroupResponse>((resolve, reject) => {
+      this._client.createStaticConsumerGroup(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async getSlotLagInfo(request: GetSlotLagInfoRequest) {
+    return await new Promise<GetSlotLagInfoResponse>((resolve, reject) => {
+      this._client.getSlotLagInfo(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async listConsumerGroups(request: ListConsumerGroupsRequest) {
+    return await new Promise<ListConsumerGroupsResponse>((resolve, reject) => {
+      this._client.listConsumerGroups(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async getConsumerGroupInfo(request: GetConsumerGroupInfoRequest) {
+    return await new Promise<ConsumerGroupInfo>((resolve, reject) => {
+      this._client.getConsumerGroupInfo(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async deleteConsumerGroup(request: DeleteConsumerGroupRequest) {
+    return await new Promise<DeleteConsumerGroupResponse>((resolve, reject) => {
+      this._client.deleteConsumerGroup(request, this._getInsecureMetadata(), (err, response) => {
+        if (err === null || err === undefined) {
+          resolve(response);
+        } else {
+          reject(err);
+        }
+      })
+    });
+  }
+
+  async subscribe() {
+    return await this._client.subscribe(this._getInsecureMetadata());
+  }
+
+}
+
+export function createGrpcClient(
+  type: YellowstoneGrpcClients.DragonsMouth,
+  config: YellowstoneGrpcClientConfig
+): Client;
+export function createGrpcClient(
+  type: YellowstoneGrpcClients.Fumarole,
+  config: YellowstoneGrpcClientConfig,
+  fumaroleSubscriptionId: string
+): FumaroleSDKClient;
+export function createGrpcClient(
+  type: YellowstoneGrpcClients,
+  config: YellowstoneGrpcClientConfig,
+  fumaroleSubscriptionId?: string
+) {
+  switch (type) {
+    case YellowstoneGrpcClients.DragonsMouth: {
+      return new Client(config.endpoint, config.xToken, config.channelOptions);
+    }
+    case YellowstoneGrpcClients.Fumarole: {
+      return new FumaroleSDKClient(config.endpoint, config.xToken, config.channelOptions, fumaroleSubscriptionId);
+    }
   }
 }
