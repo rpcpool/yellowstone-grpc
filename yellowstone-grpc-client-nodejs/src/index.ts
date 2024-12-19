@@ -107,7 +107,7 @@ export default class Client {
         case "https:":
           port = "443";
           break;
-          case "http:":
+        case "http:":
           port = "80";
           break;
       }
