@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- nodejs: fix port for https ([#502](https://github.com/rpcpool/yellowstone-grpc/pull/502))
+
 ### Features
 
 ### Breaking

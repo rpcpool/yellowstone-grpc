@@ -106,8 +106,10 @@ export default class Client {
       switch (endpointURL.protocol) {
         case "https:":
           port = "443";
+          break;
         case "http:":
           port = "80";
+          break;
       }
     }
 
