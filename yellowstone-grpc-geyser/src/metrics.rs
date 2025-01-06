@@ -58,6 +58,11 @@ lazy_static::lazy_static! {
         "connections_total", "Total number of connections to gRPC service"
     ).unwrap();
 
+    static ref CONNECTIONS_CLOSE_STATUS_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("connections_close_status_total", "Total number of closed connections by status"),
+        &["status"]
+    ).unwrap();
+
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
@@ -197,6 +202,7 @@ impl PrometheusService {
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
+            register!(CONNECTIONS_CLOSE_STATUS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
 
@@ -347,6 +353,33 @@ pub fn connections_total_inc() {
 
 pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionCloseStatus {
+    FromSlot,
+    TxClosed,
+    RxClosed,
+    Lagged,
+    Internal,
+}
+
+impl ConnectionCloseStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            ConnectionCloseStatus::FromSlot => "fromslot",
+            ConnectionCloseStatus::TxClosed => "out-conn-closed",
+            ConnectionCloseStatus::RxClosed => "in-conn-closed",
+            ConnectionCloseStatus::Lagged => "lagged",
+            ConnectionCloseStatus::Internal => "internal",
+        }
+    }
+}
+
+pub fn connections_close_status_inc(status: ConnectionCloseStatus) {
+    CONNECTIONS_CLOSE_STATUS_TOTAL
+        .with_label_values(&[status.as_str()])
+        .inc();
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {

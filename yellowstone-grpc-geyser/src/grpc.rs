@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
-        metrics::{self, DebugClientMessage},
+        metrics::{self, ConnectionCloseStatus, DebugClientMessage},
         version::GrpcVersionInfo,
     },
     anyhow::Context as _,
@@ -898,6 +898,7 @@ impl GrpcService {
                                 if let Some(msg) = filter_new.get_pong_msg() {
                                     if stream_tx.send(Ok(msg)).await.is_err() {
                                         error!("client #{id}: stream closed");
+                                        metrics::connections_close_status_inc(ConnectionCloseStatus::TxClosed);
                                         break 'outer;
                                     }
                                     continue;
@@ -914,6 +915,7 @@ impl GrpcService {
                                         tokio::spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                         });
+                                        metrics::connections_close_status_inc(ConnectionCloseStatus::FromSlot);
                                         break 'outer;
                                     };
 
@@ -924,6 +926,7 @@ impl GrpcService {
                                         tokio::spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
                                         });
+                                        metrics::connections_close_status_inc(ConnectionCloseStatus::FromSlot);
                                         break 'outer;
                                     }
 
@@ -937,6 +940,7 @@ impl GrpcService {
                                                 );
                                                 let _ = stream_tx.send(Err(Status::internal(message))).await;
                                             });
+                                            metrics::connections_close_status_inc(ConnectionCloseStatus::FromSlot);
                                             break 'outer;
                                         },
                                         Err(_error) => {
@@ -944,6 +948,7 @@ impl GrpcService {
                                             tokio::spawn(async move {
                                                 let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                             });
+                                            metrics::connections_close_status_inc(ConnectionCloseStatus::FromSlot);
                                             break 'outer;
                                         }
                                     };
@@ -955,6 +960,7 @@ impl GrpcService {
                                                 Ok(()) => {}
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
+                                                    metrics::connections_close_status_inc(ConnectionCloseStatus::TxClosed);
                                                     break 'outer;
                                                 }
                                             }
@@ -963,9 +969,11 @@ impl GrpcService {
                                 }
                             }
                             Some(None) => {
+                                metrics::connections_close_status_inc(ConnectionCloseStatus::RxClosed);
                                 break 'outer;
                             },
                             None => {
+                                metrics::connections_close_status_inc(ConnectionCloseStatus::RxClosed);
                                 break 'outer;
                             }
                         }
@@ -974,6 +982,7 @@ impl GrpcService {
                         let (commitment, messages) = match message {
                             Ok((commitment, messages)) => (commitment, messages),
                             Err(broadcast::error::RecvError::Closed) => {
+                                metrics::connections_close_status_inc(ConnectionCloseStatus::Internal);
                                 break 'outer;
                             },
                             Err(broadcast::error::RecvError::Lagged(_)) => {
@@ -981,6 +990,7 @@ impl GrpcService {
                                 tokio::spawn(async move {
                                     let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                                 });
+                                metrics::connections_close_status_inc(ConnectionCloseStatus::Lagged);
                                 break 'outer;
                             }
                         };
@@ -995,10 +1005,12 @@ impl GrpcService {
                                             tokio::spawn(async move {
                                                 let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                             });
+                                            metrics::connections_close_status_inc(ConnectionCloseStatus::Lagged);
                                             break 'outer;
                                         }
                                         Err(mpsc::error::TrySendError::Closed(_)) => {
                                             error!("client #{id}: stream closed");
+                                            metrics::connections_close_status_inc(ConnectionCloseStatus::TxClosed);
                                             break 'outer;
                                         }
                                     }
