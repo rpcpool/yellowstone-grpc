@@ -18,6 +18,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2024-01-06
+
+- yellowstone-grpc-geyser-4.3.0
+- yellowstone-grpc-proto-4.2.0
+
+### Features
+
+- geyser: add connection slot lag metric ([#507](https://github.com/rpcpool/yellowstone-grpc/pull/507))
+
 ## 2024-12-16
 
 - yellowstone-grpc-client-simple-4.3.0
