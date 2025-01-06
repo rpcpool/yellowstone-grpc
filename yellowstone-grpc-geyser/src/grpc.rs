@@ -4,7 +4,8 @@ use {
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
-    anyhow::Context,
+    anyhow::Context as _,
+    futures::stream::Stream,
     log::{error, info},
     prost_types::Timestamp,
     solana_sdk::{
@@ -13,10 +14,12 @@ use {
     },
     std::{
         collections::{BTreeMap, HashMap},
+        pin::Pin,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
+        task::{Context, Poll},
         time::SystemTime,
     },
     tokio::{
@@ -26,7 +29,6 @@ use {
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
     },
-    tokio_stream::wrappers::ReceiverStream,
     tonic::{
         service::interceptor::interceptor,
         transport::{
@@ -1089,7 +1091,7 @@ impl GrpcService {
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
+    type SubscribeStream = ReceiverStream;
 
     async fn subscribe(
         &self,
@@ -1295,5 +1297,24 @@ impl Geyser for GrpcService {
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))
+    }
+}
+
+#[derive(Debug)]
+pub struct ReceiverStream {
+    rx: mpsc::Receiver<TonicResult<FilteredUpdate>>,
+}
+
+impl ReceiverStream {
+    const fn new(rx: mpsc::Receiver<TonicResult<FilteredUpdate>>) -> Self {
+        Self { rx }
+    }
+}
+
+impl Stream for ReceiverStream {
+    type Item = TonicResult<FilteredUpdate>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
     }
 }

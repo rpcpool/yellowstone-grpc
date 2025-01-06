@@ -6029,7 +6029,6 @@ dependencies = [
  "spl-token-2022 6.0.0",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tonic",
  "tonic-health",
  "vergen",
