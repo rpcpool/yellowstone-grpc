@@ -25,7 +25,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: add connection slot lag metric ([#507](https://github.com/rpcpool/yellowstone-grpc/pull/507))
+- geyser: add connection slot lag metric ([#508](https://github.com/rpcpool/yellowstone-grpc/pull/508))
 
 ## 2024-12-16
 
