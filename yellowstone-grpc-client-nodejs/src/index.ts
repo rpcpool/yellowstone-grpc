@@ -177,7 +177,7 @@ export default class Client {
           commitment,
           accountsDataSlice,
         },
-        (err) => {
+        (err: any) => {
           if (err === null || err === undefined) {
             resolve();
           } else {
