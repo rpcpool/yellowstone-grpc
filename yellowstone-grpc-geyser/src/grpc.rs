@@ -346,6 +346,7 @@ pub struct GrpcService {
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
+    metric_connection_slot_lag: bool,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
 }
@@ -355,6 +356,7 @@ impl GrpcService {
     pub async fn create(
         config_tokio: ConfigTokio,
         config: ConfigGrpc,
+        metric_connection_slot_lag: bool,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
     ) -> anyhow::Result<(
@@ -444,6 +446,7 @@ impl GrpcService {
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
+            metric_connection_slot_lag,
             debug_clients_tx,
             filter_names,
         })
@@ -1220,7 +1223,10 @@ impl Geyser for GrpcService {
             },
         ));
 
-        Ok(Response::new(ReceiverStream::new(stream_rx)))
+        Ok(Response::new(ReceiverStream::new(
+            stream_rx,
+            self.metric_connection_slot_lag,
+        )))
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
@@ -1315,11 +1321,20 @@ impl Geyser for GrpcService {
 #[derive(Debug)]
 pub struct ReceiverStream {
     rx: mpsc::Receiver<TonicResult<FilteredUpdate>>,
+    metric_connection_slot_lag: bool,
+    max_slot: Slot,
 }
 
 impl ReceiverStream {
-    const fn new(rx: mpsc::Receiver<TonicResult<FilteredUpdate>>) -> Self {
-        Self { rx }
+    const fn new(
+        rx: mpsc::Receiver<TonicResult<FilteredUpdate>>,
+        metric_connection_slot_lag: bool,
+    ) -> Self {
+        Self {
+            rx,
+            metric_connection_slot_lag,
+            max_slot: 0,
+        }
     }
 }
 
@@ -1327,6 +1342,19 @@ impl Stream for ReceiverStream {
     type Item = TonicResult<FilteredUpdate>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx.poll_recv(cx)
+        let value = futures::ready!(self.rx.poll_recv(cx));
+        if self.metric_connection_slot_lag {
+            if let Some(slot) = value
+                .as_ref()
+                .and_then(|item| item.as_ref().map(|item| item.message.get_slot()).ok())
+                .flatten()
+            {
+                if slot > self.max_slot {
+                    self.max_slot = slot;
+                    metrics::connections_slot_lag_observe(slot);
+                }
+            }
+        }
+        Poll::Ready(value)
     }
 }

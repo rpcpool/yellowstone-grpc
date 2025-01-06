@@ -86,6 +86,7 @@
     }
   },
   "prometheus": {
-    "address": "0.0.0.0:8999"
+    "address": "0.0.0.0:8999",
+    "metric_connection_slot_lag": false
   }
 }

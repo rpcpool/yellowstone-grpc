@@ -26,7 +26,7 @@ use {
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
-    solana_sdk::signature::Signature,
+    solana_sdk::{clock::Slot, signature::Signature},
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
@@ -333,6 +333,20 @@ pub enum FilteredUpdateOneof {
 }
 
 impl FilteredUpdateOneof {
+    pub fn get_slot(&self) -> Option<Slot> {
+        match self {
+            Self::Account(item) => Some(item.slot),
+            Self::Slot(item) => Some(item.slot),
+            Self::Transaction(item) => Some(item.slot),
+            Self::TransactionStatus(item) => Some(item.slot),
+            Self::Block(item) => Some(item.meta.slot),
+            Self::Ping => None,
+            Self::Pong(_) => None,
+            Self::BlockMeta(item) => Some(item.block_meta.slot),
+            Self::Entry(item) => Some(item.0.slot),
+        }
+    }
+
     pub fn account(message: &MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
         Self::Account(FilteredUpdateAccount {
             slot: message.slot,

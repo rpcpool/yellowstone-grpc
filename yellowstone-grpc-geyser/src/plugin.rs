@@ -92,6 +92,10 @@ impl GeyserPlugin for Plugin {
                 let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
                     config.tokio,
                     config.grpc,
+                    config
+                        .prometheus
+                        .map(|c| c.metric_connection_slot_lag)
+                        .unwrap_or_default(),
                     config.debug_clients_http.then_some(debug_client_tx),
                     is_reload,
                 )
@@ -102,7 +106,7 @@ impl GeyserPlugin for Plugin {
                     config.debug_clients_http.then_some(debug_client_rx),
                 )
                 .await
-                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+                .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
                 Ok::<_, GeyserPluginError>((
                     snapshot_channel,
                     grpc_channel,
@@ -191,6 +195,7 @@ impl GeyserPlugin for Plugin {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
             metrics::update_slot_status(status, slot);
+            metrics::connections_slot_lag_new_tip(slot);
             Ok(())
         })
     }

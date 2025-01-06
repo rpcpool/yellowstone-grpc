@@ -12,12 +12,14 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{
+        Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
+    },
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
-        sync::{Arc, Once},
+        sync::{Arc, Once, OnceLock},
     },
     tokio::{
         net::TcpListener,
@@ -63,6 +65,13 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
+    static ref CONNECTIONS_SLOT_LAG: Histogram = Histogram::with_opts(
+        HistogramOpts {
+            common_opts: Opts::new("connections_slot_lag", "Connection lag in slots"),
+            buckets: vec![0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 50.0, 100.0]
+        }
+    ).unwrap();
+
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
@@ -73,6 +82,8 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 }
+
+static CONNECTIONS_SLOT_LAG_TX: OnceLock<mpsc::Sender<ConnectionsSlotLagMessage>> = OnceLock::new();
 
 #[derive(Debug)]
 pub enum DebugClientMessage {
@@ -186,7 +197,7 @@ impl PrometheusService {
     pub async fn new(
         config: Option<ConfigPrometheus>,
         debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
-    ) -> std::io::Result<Self> {
+    ) -> anyhow::Result<Self> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             macro_rules! register {
@@ -203,6 +214,7 @@ impl PrometheusService {
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
             register!(CONNECTIONS_CLOSE_STATUS_TOTAL);
+            register!(CONNECTIONS_SLOT_LAG);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
 
@@ -221,7 +233,11 @@ impl PrometheusService {
 
         let shutdown = Arc::new(Notify::new());
         let mut debug_clients_statuses = None;
-        if let Some(ConfigPrometheus { address }) = config {
+        if let Some(ConfigPrometheus {
+            address,
+            metric_connection_slot_lag,
+        }) = config
+        {
             if let Some(debug_clients_rx) = debug_clients_rx {
                 debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
             }
@@ -288,6 +304,15 @@ impl PrometheusService {
                     });
                 }
             });
+
+            if metric_connection_slot_lag {
+                let (tx, rx) = mpsc::channel(8_192);
+                anyhow::ensure!(
+                    CONNECTIONS_SLOT_LAG_TX.set(tx).is_ok(),
+                    "failed to set connections slot lag tx channel"
+                );
+                tokio::spawn(connections_slot_lag_loop(rx));
+            }
         }
 
         Ok(PrometheusService {
@@ -380,6 +405,39 @@ pub fn connections_close_status_inc(status: ConnectionCloseStatus) {
     CONNECTIONS_CLOSE_STATUS_TOTAL
         .with_label_values(&[status.as_str()])
         .inc();
+}
+
+#[derive(Debug)]
+enum ConnectionsSlotLagMessage {
+    NewTip(Slot),
+    Observe(Slot),
+}
+
+pub fn connections_slot_lag_new_tip(slot: Slot) {
+    if let Some(tx) = CONNECTIONS_SLOT_LAG_TX.get() {
+        let _ = tx.try_send(ConnectionsSlotLagMessage::NewTip(slot));
+    }
+}
+
+pub fn connections_slot_lag_observe(slot: Slot) {
+    if let Some(tx) = CONNECTIONS_SLOT_LAG_TX.get() {
+        let _ = tx.try_send(ConnectionsSlotLagMessage::Observe(slot));
+    }
+}
+
+async fn connections_slot_lag_loop(mut rx: mpsc::Receiver<ConnectionsSlotLagMessage>) {
+    let mut latest = 0;
+
+    while let Some(message) = rx.recv().await {
+        match message {
+            ConnectionsSlotLagMessage::NewTip(slot) => {
+                latest = latest.max(slot);
+            }
+            ConnectionsSlotLagMessage::Observe(slot) => {
+                CONNECTIONS_SLOT_LAG.observe((latest - slot) as f64);
+            }
+        }
+    }
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {

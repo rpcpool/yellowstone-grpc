@@ -302,6 +302,9 @@ impl ConfigGrpcCompression {
 pub struct ConfigPrometheus {
     /// Address of Prometheus service.
     pub address: SocketAddr,
+    /// Sent slots to lag metric
+    #[serde(default)]
+    pub metric_connection_slot_lag: bool,
 }
 
 #[derive(Deserialize)]
