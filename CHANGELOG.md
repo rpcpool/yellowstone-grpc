@@ -12,11 +12,21 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- nodejs: fix port for https ([#502](https://github.com/rpcpool/yellowstone-grpc/pull/502))
-
 ### Features
 
 ### Breaking
+
+## 2025-01-07
+
+- @triton-one/yellowstone-grpc@2.0.0
+
+### Fixes
+
+- nodejs: fix port for https ([#502](https://github.com/rpcpool/yellowstone-grpc/pull/502))
+
+### Breaking
+
+- nodejs: support ESM environment ([#509](https://github.com/rpcpool/yellowstone-grpc/pull/509))
 
 ## 2024-12-16
 
