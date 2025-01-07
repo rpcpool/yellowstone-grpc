@@ -8,9 +8,7 @@
     "sourceMap": true,
     "allowJs": true,
     "outDir": "dist/cjs",
-    "moduleResolution": "Node",
-    "declaration": true,
-    "declarationDir": "dist/types"
+    "moduleResolution": "Node"
   },
   "files": ["src/index.ts"],
   "include": ["src/**/*"],
