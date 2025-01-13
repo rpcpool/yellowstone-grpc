@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 4.3.0+solana.2.1.7
-    "yellowstone-grpc-client", # 4.1.0+solana.2.1.7
-    "yellowstone-grpc-geyser", # 4.2.2+solana.2.1.7
-    "yellowstone-grpc-proto", # 4.1.1+solana.2.1.7
+    "examples/rust", # 4.3.0+solana.2.1.8
+    "yellowstone-grpc-client", # 4.1.0+solana.2.1.8
+    "yellowstone-grpc-geyser", # 4.2.2+solana.2.1.8
+    "yellowstone-grpc-proto", # 4.1.1+solana.2.1.8
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -21,7 +21,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "=2.1.7"
+agave-geyser-plugin-interface = "=2.1.8"
 anyhow = "1.0.62"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -55,11 +55,11 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account-decoder = "=2.1.7"
-solana-logger = "=2.1.7"
-solana-sdk = "=2.1.7"
-solana-storage-proto = "=2.1.7"
-solana-transaction-status = "=2.1.7"
+solana-account-decoder = "=2.1.8"
+solana-logger = "=2.1.8"
+solana-sdk = "=2.1.8"
+solana-storage-proto = "=2.1.8"
+solana-transaction-status = "=2.1.8"
 smallvec = "1.13.2"
 spl-token-2022 = "6.0.0"
 thiserror = "1.0.63"
