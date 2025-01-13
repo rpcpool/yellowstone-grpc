@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "examples/rust", # 3.3.0
-    "yellowstone-grpc-client", # 3.1.0
+    "yellowstone-grpc-client", # 3.1.1
     "yellowstone-grpc-geyser", # 3.2.2
     "yellowstone-grpc-proto", # 3.1.1
 ]

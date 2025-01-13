@@ -1,4 +1,4 @@
-pub use tonic::service::Interceptor;
+pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
     futures::{
@@ -11,7 +11,7 @@ use {
         codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
         service::interceptor::InterceptedService,
-        transport::channel::{Channel, ClientTlsConfig, Endpoint},
+        transport::channel::{Channel, Endpoint},
         Request, Response, Status,
     },
     tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
