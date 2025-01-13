@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-01-13
+
+- yellowstone-grpc-client-4.1.1
+
+### Fixes
+
+- client: re-export `ClientTlsConfig` ([#511](https://github.com/rpcpool/yellowstone-grpc/pull/511))
+
 ## 2025-01-07
 
 - @triton-one/yellowstone-grpc@2.0.0

@@ -1,6 +1,4 @@
-pub use tonic::service::Interceptor;
-// Exposed publicly so client can configure TLS
-pub use tonic::transport::ClientTlsConfig;
+pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
     futures::{
