@@ -1,5 +1,5 @@
 use {
-    chrono::{DateTime, NaiveDateTime, Utc},
+    chrono::{DateTime, Utc},
     clap::{Parser, ValueEnum},
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
@@ -9,6 +9,7 @@ use {
         collections::{BTreeMap, HashMap},
         env,
     },
+    tonic::transport::channel::ClientTlsConfig,
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
@@ -85,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
+        .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
@@ -109,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
             commitment: Some(commitment as i32),
             accounts_data_slice: vec![],
             ping: None,
+            from_slot: None,
         })
         .await?;
 
@@ -131,10 +134,8 @@ async fn main() -> anyhow::Result<()> {
                     Some(UpdateOneof::BlockMeta(block)) => {
                         let entry = messages.entry(block.slot).or_default();
                         entry.0 = block.block_time.map(|obj| {
-                            DateTime::from_naive_utc_and_offset(
-                                NaiveDateTime::from_timestamp_opt(obj.timestamp, 0).unwrap(),
-                                Utc,
-                            )
+                            DateTime::from_timestamp(obj.timestamp, 0)
+                                .expect("invalid or out-of-range datetime")
                         });
                         if let Some(timestamp) = entry.0 {
                             for sig in &entry.1 {

@@ -1,13 +1,13 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "1.13.0+solana.1.18.16"
+version = "4.3.0"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = "Apache-2.0"
 keywords = { workspace = true }
-publish = false
+publish = { workspace = true }
 
 [[bin]]
 name = "client"
@@ -22,11 +22,16 @@ clap = { workspace = true, features = ["derive"] }
 env_logger = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+indicatif = { workspace = true }
 log = { workspace = true }
 maplit = { workspace = true }
 serde_json = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
+tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
-yellowstone-grpc-proto = { workspace = true }
+yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
+
+[lints]
+workspace = true

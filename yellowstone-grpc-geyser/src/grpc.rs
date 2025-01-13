@@ -1,34 +1,28 @@
 use {
     crate::{
-        config::{ConfigBlockFailAction, ConfigGrpc, ConfigGrpcFilters},
-        filters::{Filter, FilterAccountsDataSlice},
-        prom::{self, DebugClientMessage, CONNECTIONS_TOTAL, MESSAGE_QUEUE_SIZE},
+        config::{ConfigGrpc, ConfigTokio},
+        metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
     log::{error, info},
-    solana_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV3, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
-        SlotStatus,
-    },
+    prost_types::Timestamp,
     solana_sdk::{
-        clock::{UnixTimestamp, MAX_RECENT_BLOCKHASHES},
+        clock::{Slot, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
-        signature::Signature,
-        transaction::SanitizedTransaction,
     },
-    solana_transaction_status::{Reward, TransactionStatusMeta},
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
+        time::SystemTime,
     },
     tokio::{
         fs,
         runtime::Builder,
-        sync::{broadcast, mpsc, Mutex, Notify, RwLock, Semaphore},
+        sync::{broadcast, mpsc, oneshot, Mutex, Notify, RwLock, Semaphore},
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
     },
@@ -43,443 +37,27 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
-        convert_to,
+        plugin::{
+            filter::{
+                limits::FilterLimits,
+                message::{FilteredUpdate, FilteredUpdateOneof},
+                name::FilterNames,
+                Filter,
+            },
+            message::{
+                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransactionInfo,
+            },
+            proto::geyser_server::{Geyser, GeyserServer},
+        },
         prelude::{
-            geyser_server::{Geyser, GeyserServer},
-            subscribe_update::UpdateOneof,
-            CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse,
+            CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdatePing,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus, TransactionError as SubscribeUpdateTransactionError,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
         },
     },
 };
-
-#[derive(Debug, Clone)]
-pub struct MessageAccountInfo {
-    pub pubkey: Pubkey,
-    pub lamports: u64,
-    pub owner: Pubkey,
-    pub executable: bool,
-    pub rent_epoch: u64,
-    pub data: Vec<u8>,
-    pub write_version: u64,
-    pub txn_signature: Option<Signature>,
-}
-
-impl MessageAccountInfo {
-    fn to_proto(
-        &self,
-        accounts_data_slice: &[FilterAccountsDataSlice],
-    ) -> SubscribeUpdateAccountInfo {
-        let data = if accounts_data_slice.is_empty() {
-            self.data.clone()
-        } else {
-            let mut data = Vec::with_capacity(accounts_data_slice.iter().map(|ds| ds.length).sum());
-            for data_slice in accounts_data_slice {
-                if self.data.len() >= data_slice.end {
-                    data.extend_from_slice(&self.data[data_slice.start..data_slice.end]);
-                }
-            }
-            data
-        };
-        SubscribeUpdateAccountInfo {
-            pubkey: self.pubkey.as_ref().into(),
-            lamports: self.lamports,
-            owner: self.owner.as_ref().into(),
-            executable: self.executable,
-            rent_epoch: self.rent_epoch,
-            data,
-            write_version: self.write_version,
-            txn_signature: self.txn_signature.map(|s| s.as_ref().into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageAccount {
-    pub account: MessageAccountInfo,
-    pub slot: u64,
-    pub is_startup: bool,
-}
-
-impl<'a> From<(&'a ReplicaAccountInfoV3<'a>, u64, bool)> for MessageAccount {
-    fn from((account, slot, is_startup): (&'a ReplicaAccountInfoV3<'a>, u64, bool)) -> Self {
-        Self {
-            account: MessageAccountInfo {
-                pubkey: Pubkey::try_from(account.pubkey).expect("valid Pubkey"),
-                lamports: account.lamports,
-                owner: Pubkey::try_from(account.owner).expect("valid Pubkey"),
-                executable: account.executable,
-                rent_epoch: account.rent_epoch,
-                data: account.data.into(),
-                write_version: account.write_version,
-                txn_signature: account.txn.map(|txn| *txn.signature()),
-            },
-            slot,
-            is_startup,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MessageSlot {
-    pub slot: u64,
-    pub parent: Option<u64>,
-    pub status: CommitmentLevel,
-}
-
-impl From<(u64, Option<u64>, SlotStatus)> for MessageSlot {
-    fn from((slot, parent, status): (u64, Option<u64>, SlotStatus)) -> Self {
-        Self {
-            slot,
-            parent,
-            status: match status {
-                SlotStatus::Processed => CommitmentLevel::Processed,
-                SlotStatus::Confirmed => CommitmentLevel::Confirmed,
-                SlotStatus::Rooted => CommitmentLevel::Finalized,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageTransactionInfo {
-    pub signature: Signature,
-    pub is_vote: bool,
-    pub transaction: SanitizedTransaction,
-    pub meta: TransactionStatusMeta,
-    pub index: usize,
-}
-
-impl MessageTransactionInfo {
-    fn to_proto(&self) -> SubscribeUpdateTransactionInfo {
-        SubscribeUpdateTransactionInfo {
-            signature: self.signature.as_ref().into(),
-            is_vote: self.is_vote,
-            transaction: Some(convert_to::create_transaction(&self.transaction)),
-            meta: Some(convert_to::create_transaction_meta(&self.meta)),
-            index: self.index as u64,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageTransaction {
-    pub transaction: MessageTransactionInfo,
-    pub slot: u64,
-}
-
-impl<'a> From<(&'a ReplicaTransactionInfoV2<'a>, u64)> for MessageTransaction {
-    fn from((transaction, slot): (&'a ReplicaTransactionInfoV2<'a>, u64)) -> Self {
-        Self {
-            transaction: MessageTransactionInfo {
-                signature: *transaction.signature,
-                is_vote: transaction.is_vote,
-                transaction: transaction.transaction.clone(),
-                meta: transaction.transaction_status_meta.clone(),
-                index: transaction.index,
-            },
-            slot,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageEntry {
-    pub slot: u64,
-    pub index: usize,
-    pub num_hashes: u64,
-    pub hash: Vec<u8>,
-    pub executed_transaction_count: u64,
-    pub starting_transaction_index: u64,
-}
-
-impl From<&ReplicaEntryInfoV2<'_>> for MessageEntry {
-    fn from(entry: &ReplicaEntryInfoV2) -> Self {
-        Self {
-            slot: entry.slot,
-            index: entry.index,
-            num_hashes: entry.num_hashes,
-            hash: entry.hash.into(),
-            executed_transaction_count: entry.executed_transaction_count,
-            starting_transaction_index: entry
-                .starting_transaction_index
-                .try_into()
-                .expect("failed convert usize to u64"),
-        }
-    }
-}
-
-impl MessageEntry {
-    fn to_proto(&self) -> SubscribeUpdateEntry {
-        SubscribeUpdateEntry {
-            slot: self.slot,
-            index: self.index as u64,
-            num_hashes: self.num_hashes,
-            hash: self.hash.clone(),
-            executed_transaction_count: self.executed_transaction_count,
-            starting_transaction_index: self.starting_transaction_index,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageBlock {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: String,
-    pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
-    pub transactions: Vec<MessageTransactionInfo>,
-    pub updated_account_count: u64,
-    pub accounts: Vec<MessageAccountInfo>,
-    pub entries_count: u64,
-    pub entries: Vec<MessageEntry>,
-}
-
-impl
-    From<(
-        MessageBlockMeta,
-        Vec<MessageTransactionInfo>,
-        Vec<MessageAccountInfo>,
-        Vec<MessageEntry>,
-    )> for MessageBlock
-{
-    fn from(
-        (blockinfo, transactions, accounts, entries): (
-            MessageBlockMeta,
-            Vec<MessageTransactionInfo>,
-            Vec<MessageAccountInfo>,
-            Vec<MessageEntry>,
-        ),
-    ) -> Self {
-        Self {
-            parent_slot: blockinfo.parent_slot,
-            slot: blockinfo.slot,
-            blockhash: blockinfo.blockhash,
-            parent_blockhash: blockinfo.parent_blockhash,
-            rewards: blockinfo.rewards,
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
-            executed_transaction_count: blockinfo.executed_transaction_count,
-            transactions,
-            updated_account_count: accounts.len() as u64,
-            accounts,
-            entries_count: entries.len() as u64,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageBlockMeta {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: String,
-    pub blockhash: String,
-    pub rewards: Vec<Reward>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
-    pub entries_count: u64,
-}
-
-impl<'a> From<&'a ReplicaBlockInfoV3<'a>> for MessageBlockMeta {
-    fn from(blockinfo: &'a ReplicaBlockInfoV3<'a>) -> Self {
-        Self {
-            parent_slot: blockinfo.parent_slot,
-            slot: blockinfo.slot,
-            parent_blockhash: blockinfo.parent_blockhash.to_string(),
-            blockhash: blockinfo.blockhash.to_string(),
-            rewards: blockinfo.rewards.into(),
-            block_time: blockinfo.block_time,
-            block_height: blockinfo.block_height,
-            executed_transaction_count: blockinfo.executed_transaction_count,
-            entries_count: blockinfo.entry_count,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum Message {
-    Slot(MessageSlot),
-    Account(MessageAccount),
-    Transaction(MessageTransaction),
-    Entry(MessageEntry),
-    Block(MessageBlock),
-    BlockMeta(MessageBlockMeta),
-}
-
-impl Message {
-    pub const fn get_slot(&self) -> u64 {
-        match self {
-            Self::Slot(msg) => msg.slot,
-            Self::Account(msg) => msg.slot,
-            Self::Transaction(msg) => msg.slot,
-            Self::Entry(msg) => msg.slot,
-            Self::Block(msg) => msg.slot,
-            Self::BlockMeta(msg) => msg.slot,
-        }
-    }
-
-    pub const fn kind(&self) -> &'static str {
-        match self {
-            Self::Slot(_) => "Slot",
-            Self::Account(_) => "Account",
-            Self::Transaction(_) => "Transaction",
-            Self::Entry(_) => "Entry",
-            Self::Block(_) => "Block",
-            Self::BlockMeta(_) => "BlockMeta",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageBlockRef<'a> {
-    pub parent_slot: u64,
-    pub slot: u64,
-    pub parent_blockhash: &'a String,
-    pub blockhash: &'a String,
-    pub rewards: &'a Vec<Reward>,
-    pub block_time: Option<UnixTimestamp>,
-    pub block_height: Option<u64>,
-    pub executed_transaction_count: u64,
-    pub transactions: Vec<&'a MessageTransactionInfo>,
-    pub updated_account_count: u64,
-    pub accounts: Vec<&'a MessageAccountInfo>,
-    pub entries_count: u64,
-    pub entries: Vec<&'a MessageEntry>,
-}
-
-impl<'a>
-    From<(
-        &'a MessageBlock,
-        Vec<&'a MessageTransactionInfo>,
-        Vec<&'a MessageAccountInfo>,
-        Vec<&'a MessageEntry>,
-    )> for MessageBlockRef<'a>
-{
-    fn from(
-        (block, transactions, accounts, entries): (
-            &'a MessageBlock,
-            Vec<&'a MessageTransactionInfo>,
-            Vec<&'a MessageAccountInfo>,
-            Vec<&'a MessageEntry>,
-        ),
-    ) -> Self {
-        Self {
-            parent_slot: block.parent_slot,
-            slot: block.slot,
-            parent_blockhash: &block.parent_blockhash,
-            blockhash: &block.blockhash,
-            rewards: &block.rewards,
-            block_time: block.block_time,
-            block_height: block.block_height,
-            executed_transaction_count: block.executed_transaction_count,
-            transactions,
-            updated_account_count: block.updated_account_count,
-            accounts,
-            entries_count: block.entries_count,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum MessageRef<'a> {
-    Slot(&'a MessageSlot),
-    Account(&'a MessageAccount),
-    Transaction(&'a MessageTransaction),
-    TransactionStatus(&'a MessageTransaction),
-    Entry(&'a MessageEntry),
-    Block(MessageBlockRef<'a>),
-    BlockMeta(&'a MessageBlockMeta),
-}
-
-impl<'a> MessageRef<'a> {
-    pub fn to_proto(&self, accounts_data_slice: &[FilterAccountsDataSlice]) -> UpdateOneof {
-        match self {
-            Self::Slot(message) => UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: message.slot,
-                parent: message.parent,
-                status: message.status as i32,
-            }),
-            Self::Account(message) => UpdateOneof::Account(SubscribeUpdateAccount {
-                account: Some(message.account.to_proto(accounts_data_slice)),
-                slot: message.slot,
-                is_startup: message.is_startup,
-            }),
-            Self::Transaction(message) => UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                transaction: Some(message.transaction.to_proto()),
-                slot: message.slot,
-            }),
-            Self::TransactionStatus(message) => {
-                UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-                    slot: message.slot,
-                    signature: message.transaction.signature.as_ref().into(),
-                    is_vote: message.transaction.is_vote,
-                    index: message.transaction.index as u64,
-                    err: match &message.transaction.meta.status {
-                        Ok(()) => None,
-                        Err(err) => Some(SubscribeUpdateTransactionError {
-                            err: bincode::serialize(&err)
-                                .expect("transaction error to serialize to bytes"),
-                        }),
-                    },
-                })
-            }
-            Self::Entry(message) => UpdateOneof::Entry(message.to_proto()),
-            Self::Block(message) => UpdateOneof::Block(SubscribeUpdateBlock {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-                transactions: message
-                    .transactions
-                    .iter()
-                    .map(|tx| tx.to_proto())
-                    .collect(),
-                updated_account_count: message.updated_account_count,
-                accounts: message
-                    .accounts
-                    .iter()
-                    .map(|acc| acc.to_proto(accounts_data_slice))
-                    .collect(),
-                entries_count: message.entries_count,
-                entries: message
-                    .entries
-                    .iter()
-                    .map(|entry| entry.to_proto())
-                    .collect(),
-            }),
-            Self::BlockMeta(message) => UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: message.slot,
-                blockhash: message.blockhash.clone(),
-                rewards: Some(convert_to::create_rewards_obj(message.rewards.as_slice())),
-                block_time: message.block_time.map(convert_to::create_timestamp),
-                block_height: message.block_height.map(convert_to::create_block_height),
-                parent_slot: message.parent_slot,
-                parent_blockhash: message.parent_blockhash.clone(),
-                executed_transaction_count: message.executed_transaction_count,
-                entries_count: message.entries_count,
-            }),
-        }
-    }
-}
 
 #[derive(Debug)]
 struct BlockhashStatus {
@@ -502,7 +80,7 @@ impl BlockhashStatus {
 
 #[derive(Debug, Default)]
 struct BlockMetaStorageInner {
-    blocks: HashMap<u64, MessageBlockMeta>,
+    blocks: HashMap<u64, Arc<MessageBlockMeta>>,
     blockhashes: HashMap<String, BlockhashStatus>,
     processed: Option<u64>,
     confirmed: Option<u64>,
@@ -529,11 +107,17 @@ impl BlockMetaStorage {
                 match message {
                     Message::Slot(msg) => {
                         match msg.status {
-                            CommitmentLevel::Processed => &mut storage.processed,
-                            CommitmentLevel::Confirmed => &mut storage.confirmed,
-                            CommitmentLevel::Finalized => &mut storage.finalized,
+                            CommitmentLevel::Processed => {
+                                storage.processed.replace(msg.slot);
+                            }
+                            CommitmentLevel::Confirmed => {
+                                storage.confirmed.replace(msg.slot);
+                            }
+                            CommitmentLevel::Finalized => {
+                                storage.finalized.replace(msg.slot);
+                            }
+                            _ => {}
                         }
-                        .replace(msg.slot);
 
                         if let Some(blockhash) = storage
                             .blocks
@@ -545,12 +129,18 @@ impl BlockMetaStorage {
                                 .entry(blockhash)
                                 .or_insert_with(|| BlockhashStatus::new(msg.slot));
 
-                            let status = match msg.status {
-                                CommitmentLevel::Processed => &mut entry.processed,
-                                CommitmentLevel::Confirmed => &mut entry.confirmed,
-                                CommitmentLevel::Finalized => &mut entry.finalized,
-                            };
-                            *status = true;
+                            match msg.status {
+                                CommitmentLevel::Processed => {
+                                    entry.processed = true;
+                                }
+                                CommitmentLevel::Confirmed => {
+                                    entry.confirmed = true;
+                                }
+                                CommitmentLevel::Finalized => {
+                                    entry.finalized = true;
+                                }
+                                _ => {}
+                            }
                         }
 
                         if msg.status == CommitmentLevel::Finalized {
@@ -587,11 +177,13 @@ impl BlockMetaStorage {
     }
 
     fn parse_commitment(commitment: Option<i32>) -> Result<CommitmentLevel, Status> {
-        let commitment = commitment.unwrap_or(CommitmentLevel::Processed as i32);
-        CommitmentLevel::try_from(commitment).map_err(|_error| {
-            let msg = format!("failed to create CommitmentLevel from {commitment:?}");
-            Status::unknown(msg)
-        })
+        let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
+        CommitmentLevelProto::try_from(commitment)
+            .map(Into::into)
+            .map_err(|_error| {
+                let msg = format!("failed to create CommitmentLevel from {commitment:?}");
+                Status::unknown(msg)
+            })
     }
 
     async fn get_block<F, T>(
@@ -610,6 +202,7 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
+            _ => return Err(Status::internal("unreachable")),
         };
 
         match slot.and_then(|slot| storage.blocks.get(&slot)) {
@@ -638,6 +231,7 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
+            _ => return Err(Status::internal("unreachable")),
         }
         .ok_or_else(|| Status::internal("startup"))?;
 
@@ -645,10 +239,12 @@ impl BlockMetaStorage {
             .blockhashes
             .get(blockhash)
             .map(|status| match commitment {
-                CommitmentLevel::Processed => status.processed,
-                CommitmentLevel::Confirmed => status.confirmed,
-                CommitmentLevel::Finalized => status.finalized,
+                CommitmentLevel::Processed => Ok(status.processed),
+                CommitmentLevel::Confirmed => Ok(status.confirmed),
+                CommitmentLevel::Finalized => Ok(status.finalized),
+                _ => Err(Status::internal("unreachable")),
             })
+            .transpose()?
             .unwrap_or(false);
 
         Ok(Response::new(IsBlockhashValidResponse { valid, slot }))
@@ -656,20 +252,36 @@ impl BlockMetaStorage {
 }
 
 #[derive(Debug, Default)]
+struct MessageId {
+    id: u64,
+}
+
+impl MessageId {
+    fn next(&mut self) -> u64 {
+        self.id = self.id.checked_add(1).expect("message id overflow");
+        self.id
+    }
+}
+
+#[derive(Debug, Default)]
 struct SlotMessages {
-    messages: Vec<Option<Arc<Message>>>, // Option is used for accounts with low write_version
-    block_meta: Option<MessageBlockMeta>,
-    transactions: Vec<MessageTransactionInfo>,
+    messages: Vec<Option<(u64, Message)>>, // Option is used for accounts with low write_version
+    messages_slots: Vec<(u64, Message)>,
+    block_meta: Option<Arc<MessageBlockMeta>>,
+    transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts_dedup: HashMap<Pubkey, (u64, usize)>, // (write_version, message_index)
-    entries: Vec<MessageEntry>,
+    entries: Vec<Arc<MessageEntry>>,
     sealed: bool,
     entries_count: usize,
     confirmed_at: Option<usize>,
     finalized_at: Option<usize>,
+    parent_slot: Option<Slot>,
+    confirmed: bool,
+    finalized: bool,
 }
 
 impl SlotMessages {
-    pub fn try_seal(&mut self) -> Option<Arc<Message>> {
+    pub fn try_seal(&mut self, msgid_gen: &mut MessageId) -> Option<(u64, Message)> {
         if !self.sealed {
             if let Some(block_meta) = &self.block_meta {
                 let executed_transaction_count = block_meta.executed_transaction_count as usize;
@@ -688,15 +300,19 @@ impl SlotMessages {
 
                     let mut accounts = Vec::with_capacity(self.messages.len());
                     for item in self.messages.iter().flatten() {
-                        if let Message::Account(account) = item.as_ref() {
-                            accounts.push(account.account.clone());
+                        if let (_msgid, Message::Account(account)) = item {
+                            accounts.push(Arc::clone(&account.account));
                         }
                     }
 
-                    let message = Arc::new(Message::Block(
-                        (block_meta.clone(), transactions, accounts, entries).into(),
-                    ));
-                    self.messages.push(Some(Arc::clone(&message)));
+                    let message_block = Message::Block(Arc::new(MessageBlock::new(
+                        Arc::clone(block_meta),
+                        transactions,
+                        accounts,
+                        entries,
+                    )));
+                    let message = (msgid_gen.next(), message_block);
+                    self.messages.push(Some(message.clone()));
 
                     self.sealed = true;
                     self.entries_count = entries_count;
@@ -709,28 +325,39 @@ impl SlotMessages {
     }
 }
 
+type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
+
+enum ReplayedResponse {
+    Messages(Vec<(u64, Message)>),
+    Lagged(Slot),
+}
+
+type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
+
 #[derive(Debug)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
-    config_filters: Arc<ConfigGrpcFilters>,
+    config_filter_limits: Arc<FilterLimits>,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
-    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Option<Message>>>>,
-    broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
+    broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+    filter_names: Arc<Mutex<FilterNames>>,
 }
 
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
+        config_tokio: ConfigTokio,
         config: ConfigGrpc,
-        block_fail_action: ConfigBlockFailAction,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
     ) -> anyhow::Result<(
-        Option<crossbeam_channel::Sender<Option<Message>>>,
-        mpsc::UnboundedSender<Arc<Message>>,
+        Option<crossbeam_channel::Sender<Box<Message>>>,
+        mpsc::UnboundedSender<Message>,
         Arc<Notify>,
     )> {
         // Bind service address
@@ -761,6 +388,13 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+        // attempt to prevent spam of geyser loop with capacity eq 1
+        let (replay_stored_slots_tx, replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
+            (None, None)
+        } else {
+            let (tx, rx) = mpsc::channel(1);
+            (Some(tx), Some(rx))
+        };
 
         // gRPC server builder with optional TLS
         let mut server_builder = Server::builder();
@@ -774,18 +408,42 @@ impl GrpcService {
                 .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
                 .context("failed to apply tls_config")?;
         }
+        if let Some(enabled) = config.server_http2_adaptive_window {
+            server_builder = server_builder.http2_adaptive_window(Some(enabled));
+        }
+        if let Some(http2_keepalive_interval) = config.server_http2_keepalive_interval {
+            server_builder =
+                server_builder.http2_keepalive_interval(Some(http2_keepalive_interval));
+        }
+        if let Some(http2_keepalive_timeout) = config.server_http2_keepalive_timeout {
+            server_builder = server_builder.http2_keepalive_timeout(Some(http2_keepalive_timeout));
+        }
+        if let Some(sz) = config.server_initial_connection_window_size {
+            server_builder = server_builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = config.server_initial_stream_window_size {
+            server_builder = server_builder.initial_stream_window_size(sz);
+        }
+
+        let filter_names = Arc::new(Mutex::new(FilterNames::new(
+            config.filter_name_size_limit,
+            config.filter_names_size_limit,
+            config.filter_names_cleanup_interval,
+        )));
 
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
-            config_filters: Arc::new(config.filters),
+            config_filter_limits: Arc::new(config.filter_limits),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
+            replay_stored_slots_tx,
             debug_clients_tx,
+            filter_names,
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -798,9 +456,17 @@ impl GrpcService {
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         spawn_blocking(move || {
-            Builder::new_multi_thread()
+            let mut builder = Builder::new_multi_thread();
+            if let Some(worker_threads) = config_tokio.worker_threads {
+                builder.worker_threads(worker_threads);
+            }
+            if let Some(tokio_cpus) = config_tokio.affinity.clone() {
+                builder.on_thread_start(move || {
+                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                });
+            }
+            builder
                 .thread_name_fn(crate::get_thread_name)
-                .worker_threads(4)
                 .enable_all()
                 .build()
                 .expect("Failed to create a new runtime for geyser loop")
@@ -808,7 +474,8 @@ impl GrpcService {
                     messages_rx,
                     blocks_meta_tx,
                     broadcast_tx,
-                    block_fail_action,
+                    replay_stored_slots_rx,
+                    config.replay_stored_slots,
                 ));
         });
 
@@ -821,7 +488,6 @@ impl GrpcService {
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
             server_builder
-                .http2_keepalive_interval(Some(Duration::from_secs(5)))
                 .layer(interceptor(move |request: Request<()>| {
                     if let Some(x_token) = &config.x_token {
                         match request.metadata().get("x-token") {
@@ -842,47 +508,52 @@ impl GrpcService {
     }
 
     async fn geyser_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Arc<Message>>,
+        mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
-        broadcast_tx: broadcast::Sender<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
-        block_fail_action: ConfigBlockFailAction,
+        broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+        replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        replay_stored_slots: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
 
+        let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
         let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
         tokio::pin!(processed_sleep);
+        let (_tx, rx) = mpsc::channel(1);
+        let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
         loop {
             tokio::select! {
                 Some(message) = messages_rx.recv() => {
-                    MESSAGE_QUEUE_SIZE.dec();
+                    metrics::message_queue_size_dec();
+                    let msgid = msgid_gen.next();
 
                     // Update metrics
-                    if let Message::Slot(slot_message) = message.as_ref() {
-                        prom::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                    if let Message::Slot(slot_message) = &message {
+                        metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                     }
 
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                        if matches!(message.as_ref(), Message::Slot(_) | Message::BlockMeta(_)) {
-                            let _ = blocks_meta_tx.send(message.as_ref().clone());
+                        if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
+                            let _ = blocks_meta_tx.send(message.clone());
                         }
                     }
 
                     // Remove outdated block reconstruction info
-                    match message.as_ref() {
-                        // On startup we can receive few Confirmed/Finalized slots without BlockMeta message
+                    match &message {
+                        // On startup we can receive multiple Confirmed/Finalized slots without BlockMeta message
                         // With saved first Processed slot we can ignore errors caused by startup process
                         Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
                             processed_first_slot = Some(msg.slot);
                         }
                         Message::Slot(msg) if msg.status == CommitmentLevel::Finalized => {
-                            // keep extra 10 slots
-                            if let Some(msg_slot) = msg.slot.checked_sub(10) {
+                            // keep extra 10 slots + slots for replay
+                            if let Some(msg_slot) = msg.slot.checked_sub(10 + replay_stored_slots) {
                                 loop {
                                     match messages.keys().next().cloned() {
                                         Some(slot) if slot < msg_slot => {
@@ -913,15 +584,7 @@ impl GrpcService {
                                                     }
                                                     let reason = reasons.join(",");
 
-                                                    prom::update_invalid_blocks(format!("failed reconstruct {reason}"));
-                                                    match block_fail_action {
-                                                        ConfigBlockFailAction::Log => {
-                                                            error!("failed reconstruct #{slot} {reason}");
-                                                        }
-                                                        ConfigBlockFailAction::Panic => {
-                                                            panic!("failed reconstruct #{slot} {reason}");
-                                                        }
-                                                    }
+                                                    metrics::update_invalid_blocks(format!("failed reconstruct {reason}"));
                                                 }
                                             }
                                         }
@@ -935,42 +598,50 @@ impl GrpcService {
 
                     // Update block reconstruction info
                     let slot_messages = messages.entry(message.get_slot()).or_default();
-                    if !matches!(message.as_ref(), Message::Slot(_)) {
-                        slot_messages.messages.push(Some(Arc::clone(&message)));
+                    if let Message::Slot(msg) = &message {
+                        match msg.status {
+                            CommitmentLevel::Processed => {
+                                slot_messages.parent_slot = msg.parent;
+                            },
+                            CommitmentLevel::Confirmed => {
+                                slot_messages.confirmed = true;
+                            },
+                            CommitmentLevel::Finalized => {
+                                slot_messages.finalized = true;
+                            },
+                            _ => {}
+                        }
+                    }
+                    if matches!(&message, Message::Slot(_)) {
+                        slot_messages.messages_slots.push((msgid, message.clone()));
+                    } else {
+                        slot_messages.messages.push(Some((msgid, message.clone())));
 
                         // If we already build Block message, new message will be a problem
-                        if slot_messages.sealed && !(matches!(message.as_ref(), Message::Entry(_)) && slot_messages.entries_count == 0) {
-                            prom::update_invalid_blocks(format!("unexpected message {}", message.kind()));
-                            match block_fail_action {
-                                ConfigBlockFailAction::Log => {
-                                    error!("unexpected message #{} -- {} (invalid order)", message.get_slot(), message.kind());
-                                }
-                                ConfigBlockFailAction::Panic => {
-                                    panic!("unexpected message #{} -- {} (invalid order)", message.get_slot(), message.kind());
-                                }
-                            }
+                        if slot_messages.sealed && !(matches!(&message, Message::Entry(_)) && slot_messages.entries_count == 0) {
+                            let kind = match &message {
+                                Message::Slot(_) => "Slot",
+                                Message::Account(_) => "Account",
+                                Message::Transaction(_) => "Transaction",
+                                Message::Entry(_) => "Entry",
+                                Message::BlockMeta(_) => "BlockMeta",
+                                Message::Block(_) => "Block",
+                            };
+                            metrics::update_invalid_blocks(format!("unexpected message {kind}"));
                         }
                     }
                     let mut sealed_block_msg = None;
-                    match message.as_ref() {
+                    match &message {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
-                                prom::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
-                                match block_fail_action {
-                                    ConfigBlockFailAction::Log => {
-                                        error!("unexpected message #{} -- BlockMeta (duplicate)", message.get_slot());
-                                    }
-                                    ConfigBlockFailAction::Panic => {
-                                        panic!("unexpected message #{} -- BlockMeta (duplicate)", message.get_slot());
-                                    }
-                                }
+                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
                             }
-                            slot_messages.block_meta = Some(msg.clone());
-                            sealed_block_msg = slot_messages.try_seal();
+                            slot_messages.block_meta = Some(Arc::clone(msg));
+                            sealed_block_msg = slot_messages.try_seal(&mut msgid_gen);
                         }
                         Message::Transaction(msg) => {
-                            slot_messages.transactions.push(msg.transaction.clone());
-                            sealed_block_msg = slot_messages.try_seal();
+                            slot_messages.transactions.push(Arc::clone(&msg.transaction));
+                            sealed_block_msg = slot_messages.try_seal(&mut msgid_gen);
                         }
                         // Dedup accounts by max write_version
                         Message::Account(msg) => {
@@ -987,22 +658,60 @@ impl GrpcService {
                             }
                         }
                         Message::Entry(msg) => {
-                            slot_messages.entries.push(msg.clone());
-                            sealed_block_msg = slot_messages.try_seal();
+                            slot_messages.entries.push(Arc::clone(msg));
+                            sealed_block_msg = slot_messages.try_seal(&mut msgid_gen);
                         }
                         _ => {}
                     }
 
                     // Send messages to filter (and to clients)
-                    let mut messages_vec = vec![message];
+                    let mut messages_vec = Vec::with_capacity(4);
                     if let Some(sealed_block_msg) = sealed_block_msg {
                         messages_vec.push(sealed_block_msg);
                     }
+                    let slot_status = if let Message::Slot(msg) = &message {
+                        Some((msg.slot, msg.status))
+                    } else {
+                        None
+                    };
+                    messages_vec.push((msgid, message));
 
-                    for message in messages_vec {
-                        if let Message::Slot(slot) = message.as_ref() {
+                    // sometimes we do not receive all statuses
+                    if let Some((slot, status)) = slot_status {
+                        let mut slots = vec![slot];
+                        while let Some((parent, Some(entry))) = slots
+                            .pop()
+                            .and_then(|slot| messages.get(&slot))
+                            .and_then(|entry| entry.parent_slot)
+                            .map(|parent| (parent, messages.get_mut(&parent)))
+                        {
+                            if (status == CommitmentLevel::Confirmed && !entry.confirmed) ||
+                                (status == CommitmentLevel::Finalized && !entry.finalized)
+                            {
+                                if status == CommitmentLevel::Confirmed {
+                                    entry.confirmed = true;
+                                } else if status == CommitmentLevel::Finalized {
+                                    entry.finalized = true;
+                                }
+
+                                slots.push(parent);
+                                let message_slot = Message::Slot(MessageSlot {
+                                    slot: parent,
+                                    parent: entry.parent_slot,
+                                    status,
+                                    dead_error: None,
+                                    created_at: Timestamp::from(SystemTime::now())
+                                });
+                                messages_vec.push((msgid_gen.next(), message_slot));
+                                metrics::missed_status_message_inc(status);
+                            }
+                        }
+                    }
+
+                    for message in messages_vec.into_iter().rev() {
+                        if let Message::Slot(slot) = &message.1 {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                                CommitmentLevel::Processed => {
+                                CommitmentLevel::Processed | CommitmentLevel::FirstShredReceived | CommitmentLevel::Completed | CommitmentLevel::CreatedBank | CommitmentLevel::Dead => {
                                     (Vec::with_capacity(1), Vec::with_capacity(1))
                                 }
                                 CommitmentLevel::Confirmed => {
@@ -1034,7 +743,7 @@ impl GrpcService {
                             };
 
                             // processed
-                            processed_messages.push(Arc::clone(&message));
+                            processed_messages.push(message.clone());
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
@@ -1043,7 +752,7 @@ impl GrpcService {
                                 .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                             // confirmed
-                            confirmed_messages.push(Arc::clone(&message));
+                            confirmed_messages.push(message.clone());
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
 
@@ -1054,8 +763,8 @@ impl GrpcService {
                         } else {
                             let mut confirmed_messages = vec![];
                             let mut finalized_messages = vec![];
-                            if matches!(message.as_ref(), Message::Block(_)) {
-                                if let Some(slot_messages) = messages.get(&message.get_slot()) {
+                            if matches!(&message.1, Message::Block(_)) {
+                                if let Some(slot_messages) = messages.get(&message.1.get_slot()) {
                                     if let Some(confirmed_at) = slot_messages.confirmed_at {
                                         confirmed_messages.extend(
                                             slot_messages.messages.as_slice()[confirmed_at..].iter().filter_map(|x| x.clone())
@@ -1101,6 +810,28 @@ impl GrpcService {
                     }
                     processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                 }
+                Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
+                    if let Some((slot, _)) = messages.first_key_value() {
+                        if replay_slot < *slot {
+                            let _ = tx.send(ReplayedResponse::Lagged(*slot));
+                            continue;
+                        }
+                    }
+
+                    let mut replayed_messages = Vec::with_capacity(32_768);
+                    for (slot, messages) in messages.iter() {
+                        if *slot >= replay_slot {
+                            replayed_messages.extend_from_slice(&messages.messages_slots);
+                            if commitment == CommitmentLevel::Processed
+                                || (commitment == CommitmentLevel::Finalized && messages.finalized)
+                                || (commitment == CommitmentLevel::Confirmed && messages.confirmed)
+                            {
+                                replayed_messages.extend(messages.messages.iter().filter_map(|v| v.clone()));
+                            }
+                        }
+                    }
+                    let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
+                }
                 else => break,
             }
         }
@@ -1110,33 +841,18 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
-        config_filters: Arc<ConfigGrpcFilters>,
-        stream_tx: mpsc::Sender<TonicResult<SubscribeUpdate>>,
-        mut client_rx: mpsc::UnboundedReceiver<Option<Filter>>,
-        mut snapshot_rx: Option<crossbeam_channel::Receiver<Option<Message>>>,
-        mut messages_rx: broadcast::Receiver<(CommitmentLevel, Arc<Vec<Arc<Message>>>)>,
+        stream_tx: mpsc::Sender<TonicResult<FilteredUpdate>>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
+        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
     ) {
-        let mut filter = Filter::new(
-            &SubscribeRequest {
-                accounts: HashMap::new(),
-                slots: HashMap::new(),
-                transactions: HashMap::new(),
-                transactions_status: HashMap::new(),
-                blocks: HashMap::new(),
-                blocks_meta: HashMap::new(),
-                entry: HashMap::new(),
-                commitment: None,
-                accounts_data_slice: Vec::new(),
-                ping: None,
-            },
-            &config_filters,
-        )
-        .expect("empty filter");
-        prom::update_subscriptions(&endpoint, None, Some(&filter));
+        let mut filter = Filter::default();
+        metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
-        CONNECTIONS_TOTAL.inc();
+        metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
             filter: Box::new(filter.clone()),
@@ -1145,70 +861,38 @@ impl GrpcService {
 
         let mut is_alive = true;
         if let Some(snapshot_rx) = snapshot_rx.take() {
-            info!("client #{id}: going to receive snapshot data");
-
-            // we start with default filter, for snapshot we need wait actual filter first
-            while is_alive {
-                match client_rx.recv().await {
-                    Some(Some(filter_new)) => {
-                        if let Some(msg) = filter_new.get_pong_msg() {
-                            if stream_tx.send(Ok(msg)).await.is_err() {
-                                error!("client #{id}: stream closed");
-                                is_alive = false;
-                                break;
-                            }
-                            continue;
-                        }
-
-                        prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
-                        filter = filter_new;
-                        info!("client #{id}: filter updated");
-                    }
-                    Some(None) => {
-                        is_alive = false;
-                    }
-                    None => {
-                        is_alive = false;
-                    }
-                };
-            }
-
-            while is_alive {
-                let message = match snapshot_rx.try_recv() {
-                    Ok(message) => {
-                        MESSAGE_QUEUE_SIZE.dec();
-                        match message {
-                            Some(message) => message,
-                            None => break,
-                        }
-                    }
-                    Err(crossbeam_channel::TryRecvError::Empty) => {
-                        sleep(Duration::from_millis(1)).await;
-                        continue;
-                    }
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        error!("client #{id}: snapshot channel disconnected");
-                        is_alive = false;
-                        break;
-                    }
-                };
-
-                for message in filter.get_update(&message, None) {
-                    if stream_tx.send(Ok(message)).await.is_err() {
-                        error!("client #{id}: stream closed");
-                        is_alive = false;
-                        break;
-                    }
-                }
-            }
+            Self::client_loop_snapshot(
+                id,
+                &endpoint,
+                &stream_tx,
+                &mut client_rx,
+                snapshot_rx,
+                &mut is_alive,
+                &mut filter,
+            )
+            .await;
         }
 
         if is_alive {
             'outer: loop {
                 tokio::select! {
-                    message = client_rx.recv() => {
+                    mut message = client_rx.recv() => {
+                        // forward to latest filter
+                        loop {
+                            match client_rx.try_recv() {
+                                Ok(message_new) => {
+                                    message = Some(message_new);
+                                }
+                                Err(mpsc::error::TryRecvError::Empty) => break,
+                                Err(mpsc::error::TryRecvError::Disconnected) => {
+                                    message = None;
+                                    break;
+                                }
+                            }
+                        }
+
                         match message {
-                            Some(Some(filter_new)) => {
+                            Some(Some((from_slot, filter_new))) => {
                                 if let Some(msg) = filter_new.get_pong_msg() {
                                     if stream_tx.send(Ok(msg)).await.is_err() {
                                         error!("client #{id}: stream closed");
@@ -1217,10 +901,64 @@ impl GrpcService {
                                     continue;
                                 }
 
-                                prom::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                                metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
                                 info!("client #{id}: filter updated");
+
+                                if let Some(from_slot) = from_slot {
+                                    let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
+                                        info!("client #{id}: from_slot is not supported");
+                                        tokio::spawn(async move {
+                                            let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
+                                        });
+                                        break 'outer;
+                                    };
+
+                                    let (tx, rx) = oneshot::channel();
+                                    let commitment = filter.get_commitment_level();
+                                    if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
+                                        error!("client #{id}: failed to send from_slot request");
+                                        tokio::spawn(async move {
+                                            let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
+                                        });
+                                        break 'outer;
+                                    }
+
+                                    let mut messages = match rx.await {
+                                        Ok(ReplayedResponse::Messages(messages)) => messages,
+                                        Ok(ReplayedResponse::Lagged(slot)) => {
+                                            info!("client #{id}: broadcast from {from_slot} is not available");
+                                            tokio::spawn(async move {
+                                                let message = format!(
+                                                    "broadcast from {from_slot} is not available, last available: {slot}"
+                                                );
+                                                let _ = stream_tx.send(Err(Status::internal(message))).await;
+                                            });
+                                            break 'outer;
+                                        },
+                                        Err(_error) => {
+                                            error!("client #{id}: failed to get replay response");
+                                            tokio::spawn(async move {
+                                                let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
+                                            });
+                                            break 'outer;
+                                        }
+                                    };
+
+                                    messages.sort_by_key(|msg| msg.0);
+                                    for (_msgid, message) in messages.iter() {
+                                        for message in filter.get_updates(message, Some(commitment)) {
+                                            match stream_tx.send(Ok(message)).await {
+                                                Ok(()) => {}
+                                                Err(mpsc::error::SendError(_)) => {
+                                                    error!("client #{id}: stream closed");
+                                                    break 'outer;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             Some(None) => {
                                 break 'outer;
@@ -1239,21 +977,21 @@ impl GrpcService {
                             Err(broadcast::error::RecvError::Lagged(_)) => {
                                 info!("client #{id}: lagged to receive geyser messages");
                                 tokio::spawn(async move {
-                                    let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                                 });
                                 break 'outer;
                             }
                         };
 
                         if commitment == filter.get_commitment_level() {
-                            for message in messages.iter() {
-                                for message in filter.get_update(message, Some(commitment)) {
+                            for (_msgid, message) in messages.iter() {
+                                for message in filter.get_updates(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
-                                            error!("client #{id}: lagged to send update");
+                                            error!("client #{id}: lagged to send an update");
                                             tokio::spawn(async move {
-                                                let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                                                let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                             });
                                             break 'outer;
                                         }
@@ -1268,7 +1006,7 @@ impl GrpcService {
 
                         if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
                             for message in messages.iter() {
-                                if let Message::Slot(slot_message) = message.as_ref() {
+                                if let Message::Slot(slot_message) = &message.1 {
                                     DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
                                 }
                             }
@@ -1278,24 +1016,93 @@ impl GrpcService {
             }
         }
 
-        CONNECTIONS_TOTAL.dec();
+        metrics::connections_total_dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
-        prom::update_subscriptions(&endpoint, Some(&filter), None);
+        metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
         drop_client();
+    }
+
+    async fn client_loop_snapshot(
+        id: usize,
+        endpoint: &str,
+        stream_tx: &mpsc::Sender<TonicResult<FilteredUpdate>>,
+        client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
+        is_alive: &mut bool,
+        filter: &mut Filter,
+    ) {
+        info!("client #{id}: going to receive snapshot data");
+
+        // we start with default filter, for snapshot we need wait actual filter first
+        while *is_alive {
+            match client_rx.recv().await {
+                Some(Some((_from_slot, filter_new))) => {
+                    if let Some(msg) = filter_new.get_pong_msg() {
+                        if stream_tx.send(Ok(msg)).await.is_err() {
+                            error!("client #{id}: stream closed");
+                            *is_alive = false;
+                        }
+                        continue;
+                    }
+
+                    metrics::update_subscriptions(endpoint, Some(filter), Some(&filter_new));
+                    *filter = filter_new;
+                    info!("client #{id}: filter updated");
+                    break;
+                }
+                Some(None) => {
+                    *is_alive = false;
+                }
+                None => {
+                    *is_alive = false;
+                }
+            };
+        }
+
+        while *is_alive {
+            let message = match snapshot_rx.try_recv() {
+                Ok(message) => {
+                    metrics::message_queue_size_dec();
+                    message
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {
+                    sleep(Duration::from_millis(1)).await;
+                    continue;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    info!("client #{id}: end of startup");
+                    break;
+                }
+            };
+
+            for message in filter.get_updates(&message, None) {
+                if stream_tx.send(Ok(message)).await.is_err() {
+                    error!("client #{id}: stream closed");
+                    *is_alive = false;
+                    break;
+                }
+            }
+        }
     }
 }
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<SubscribeUpdate>>;
+    type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
 
     async fn subscribe(
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
-        let snapshot_rx = self.snapshot_rx.lock().await.take();
+
+        let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
+        let snapshot_rx = if x_request_snapshot {
+            self.snapshot_rx.lock().await.take()
+        } else {
+            None
+        };
         let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
@@ -1312,18 +1119,14 @@ impl Geyser for GrpcService {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
 
-            let ping_msg = SubscribeUpdate {
-                filters: vec![],
-                update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-            };
-
             loop {
                 tokio::select! {
                     _ = &mut exit => {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        match ping_stream_tx.try_send(Ok(ping_msg.clone())) {
+                        let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
+                        match ping_stream_tx.try_send(Ok(msg)) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -1342,7 +1145,8 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
-        let config_filters = Arc::clone(&self.config_filters);
+        let config_filter_limits = Arc::clone(&self.config_filter_limits);
+        let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
@@ -1357,8 +1161,11 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            if let Err(error) = match Filter::new(&request, &config_filters) {
-                                Ok(filter) => match incoming_client_tx.send(Some(filter)) {
+                            let mut filter_names = filter_names.lock().await;
+                            filter_names.try_clean();
+
+                            if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
+                                Ok(filter) => match incoming_client_tx.send(Some((request.from_slot ,filter))) {
                                     Ok(()) => Ok(()),
                                     Err(error) => Err(error.to_string()),
                                 },
@@ -1387,11 +1194,11 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
-            Arc::clone(&self.config_filters),
             stream_tx,
             client_rx,
             snapshot_rx,
             self.broadcast_tx.subscribe(),
+            self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
             move || {
                 notify_exit1.notify_one();
@@ -1416,14 +1223,12 @@ impl Geyser for GrpcService {
             blocks_meta
                 .get_block(
                     |block| {
-                        block
-                            .block_height
-                            .map(|block_height| GetLatestBlockhashResponse {
-                                slot: block.slot,
-                                blockhash: block.blockhash.clone(),
-                                last_valid_block_height: block_height
-                                    + MAX_RECENT_BLOCKHASHES as u64,
-                            })
+                        block.block_height.map(|value| GetLatestBlockhashResponse {
+                            slot: block.slot,
+                            blockhash: block.blockhash.clone(),
+                            last_valid_block_height: value.block_height
+                                + MAX_RECENT_BLOCKHASHES as u64,
+                        })
                     },
                     request.get_ref().commitment,
                 )
@@ -1441,9 +1246,9 @@ impl Geyser for GrpcService {
             blocks_meta
                 .get_block(
                     |block| {
-                        block
-                            .block_height
-                            .map(|block_height| GetBlockHeightResponse { block_height })
+                        block.block_height.map(|value| GetBlockHeightResponse {
+                            block_height: value.block_height,
+                        })
                     },
                     request.get_ref().commitment,
                 )

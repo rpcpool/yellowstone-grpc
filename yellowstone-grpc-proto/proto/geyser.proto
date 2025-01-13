@@ -1,8 +1,9 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
 import public "solana-storage.proto";
 
-option go_package = "github.com/rpcpool/solana-geyser-grpc/golang/proto";
+option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
 
 package geyser;
 
@@ -20,6 +21,10 @@ enum CommitmentLevel {
   PROCESSED = 0;
   CONFIRMED = 1;
   FINALIZED = 2;
+  FIRST_SHRED_RECEIVED = 3;
+  COMPLETED = 4;
+  CREATED_BANK = 5;
+  DEAD = 6;
 }
 
 message SubscribeRequest {
@@ -33,12 +38,14 @@ message SubscribeRequest {
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
+  optional uint64 from_slot = 11;
 }
 
 message SubscribeRequestFilterAccounts {
   repeated string account = 2;
   repeated string owner = 3;
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
+  optional bool nonempty_txn_signature = 5;
 }
 
 message SubscribeRequestFilterAccountsFilter {
@@ -46,6 +53,7 @@ message SubscribeRequestFilterAccountsFilter {
     SubscribeRequestFilterAccountsFilterMemcmp memcmp = 1;
     uint64 datasize = 2;
     bool token_account_state = 3;
+    SubscribeRequestFilterAccountsFilterLamports lamports = 4;
   }
 }
 
@@ -55,6 +63,15 @@ message SubscribeRequestFilterAccountsFilterMemcmp {
     bytes bytes = 2;
     string base58 = 3;
     string base64 = 4;
+  }
+}
+
+message SubscribeRequestFilterAccountsFilterLamports {
+  oneof cmp {
+    uint64 eq = 1;
+    uint64 ne = 2;
+    uint64 lt = 3;
+    uint64 gt = 4;
   }
 }
 
@@ -104,6 +121,7 @@ message SubscribeUpdate {
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
   }
+  google.protobuf.Timestamp created_at = 11;
 }
 
 message SubscribeUpdateAccount {
@@ -127,6 +145,7 @@ message SubscribeUpdateSlot {
   uint64 slot = 1;
   optional uint64 parent = 2;
   CommitmentLevel status = 3;
+  optional string dead_error = 4;
 }
 
 message SubscribeUpdateTransaction {

@@ -1,10 +1,25 @@
-/target
-/test-ledger
+# Solana
+test-ledger
 
-yellowstone-grpc-geyser/config-test.json
-dump.rdb
-*.sw?
-.idea/
-.vscode
+# Rust
+target
+yellowstone-grpc-proto/src/bin/raw.rs
+
+# Node.js
+examples/typescript/dist
+examples/typescript/node_modules
+yellowstone-grpc-client-nodejs/dist
+yellowstone-grpc-client-nodejs/node_modules
+yellowstone-grpc-client-nodejs/src/encoding
+yellowstone-grpc-client-nodejs/src/grpc
+
+# Python
 venv
 __pycache__/
+
+# IDE
+.idea
+.vscode
+
+# Configs
+yellowstone-grpc-geyser/config-test.json

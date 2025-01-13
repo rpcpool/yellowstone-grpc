@@ -1,0 +1,21 @@
+root = true
+
+[*]
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{diff,md}]
+trim_trailing_whitespace = false
+
+[*.{js,json,proto}]
+indent_style = space
+indent_size = 2
+
+[*.rs]
+indent_style = space
+indent_size = 4
+
+[{Makefile,**.mk}]
+indent_style = tab

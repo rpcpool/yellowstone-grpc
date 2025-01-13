@@ -11,7 +11,7 @@ use {
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
-        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
+        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
         service::interceptor::InterceptedService,
         transport::channel::{Channel, Endpoint},
         Request, Response, Status,
@@ -29,18 +29,18 @@ use {
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
-}
-
-impl From<Option<AsciiMetadataValue>> for InterceptorXToken {
-    fn from(x_token: Option<AsciiMetadataValue>) -> Self {
-        Self { x_token }
-    }
+    pub x_request_snapshot: bool,
 }
 
 impl Interceptor for InterceptorXToken {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         if let Some(x_token) = self.x_token.clone() {
             request.metadata_mut().insert("x-token", x_token);
+        }
+        if self.x_request_snapshot {
+            request
+                .metadata_mut()
+                .insert("x-request-snapshot", MetadataValue::from_static("true"));
         }
         Ok(request)
     }
@@ -74,7 +74,7 @@ impl GeyserGrpcClient<()> {
 }
 
 impl<F: Interceptor> GeyserGrpcClient<F> {
-    pub fn new(
+    pub const fn new(
         health: HealthClient<InterceptedService<Channel, F>>,
         geyser: GeyserClient<InterceptedService<Channel, F>>,
     ) -> Self {
@@ -203,12 +203,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
 pub enum GeyserGrpcBuilderError {
     #[error("Failed to parse x-token: {0}")]
     MetadataValueError(#[from] InvalidMetadataValue),
-    #[error("Invalid X-Token length: {0}, expected 28")]
-    InvalidXTokenLength(usize),
     #[error("gRPC transport error: {0}")]
     TonicError(#[from] tonic::transport::Error),
-    #[error("tonic::transport::Channel should be created, use `connect` or `connect_lazy` first")]
-    EmptyChannel,
 }
 
 pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
@@ -217,6 +213,7 @@ pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
     pub x_token: Option<AsciiMetadataValue>,
+    pub x_request_snapshot: bool,
     pub send_compressed: Option<CompressionEncoding>,
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
@@ -225,10 +222,11 @@ pub struct GeyserGrpcBuilder {
 
 impl GeyserGrpcBuilder {
     // Create new builder
-    fn new(endpoint: Endpoint) -> Self {
+    const fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
             x_token: None,
+            x_request_snapshot: false,
             send_compressed: None,
             accept_compressed: None,
             max_decoding_message_size: None,
@@ -249,7 +247,10 @@ impl GeyserGrpcBuilder {
         self,
         channel: Channel,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
-        let interceptor: InterceptorXToken = self.x_token.into();
+        let interceptor = InterceptorXToken {
+            x_token: self.x_token,
+            x_request_snapshot: self.x_request_snapshot,
+        };
 
         let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
         if let Some(encoding) = self.send_compressed {
@@ -287,18 +288,17 @@ impl GeyserGrpcBuilder {
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
     {
         Ok(Self {
-            x_token: match x_token {
-                Some(x_token) => {
-                    let x_token = x_token.try_into()?;
-                    if x_token.is_empty() {
-                        return Err(GeyserGrpcBuilderError::InvalidXTokenLength(x_token.len()));
-                    }
-                    Some(x_token)
-                }
-                None => None,
-            },
+            x_token: x_token.map(|x_token| x_token.try_into()).transpose()?,
             ..self
         })
+    }
+
+    // Include `x-request-snapshot`
+    pub fn set_x_request_snapshot(self, value: bool) -> Self {
+        Self {
+            x_request_snapshot: value,
+            ..self
+        }
     }
 
     // Endpoint options
@@ -307,20 +307,6 @@ impl GeyserGrpcBuilder {
             endpoint: self.endpoint.connect_timeout(dur),
             ..self
         }
-    }
-
-    pub fn timeout(self, dur: Duration) -> Self {
-        Self {
-            endpoint: self.endpoint.timeout(dur),
-            ..self
-        }
-    }
-
-    pub fn tls_config(self, tls_config: ClientTlsConfig) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self {
-            endpoint: self.endpoint.tls_config(tls_config)?,
-            ..self
-        })
     }
 
     pub fn buffer_size(self, sz: impl Into<Option<usize>>) -> Self {
@@ -386,6 +372,20 @@ impl GeyserGrpcBuilder {
         }
     }
 
+    pub fn timeout(self, dur: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.timeout(dur),
+            ..self
+        }
+    }
+
+    pub fn tls_config(self, tls_config: ClientTlsConfig) -> GeyserGrpcBuilderResult<Self> {
+        Ok(Self {
+            endpoint: self.endpoint.tls_config(tls_config)?,
+            ..self
+        })
+    }
+
     // Geyser options
     pub fn send_compressed(self, encoding: CompressionEncoding) -> Self {
         Self {
@@ -418,7 +418,7 @@ impl GeyserGrpcBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{GeyserGrpcBuilderError, GeyserGrpcClient};
+    use super::GeyserGrpcClient;
 
     #[tokio::test]
     async fn test_channel_https_success() {
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_invalid_token_some() {
+    async fn test_channel_empty_token_some() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "";
 
@@ -459,10 +459,7 @@ mod tests {
         assert!(res.is_ok());
 
         let res = res.unwrap().x_token(Some(x_token));
-        assert!(matches!(
-            res,
-            Err(GeyserGrpcBuilderError::InvalidXTokenLength(_))
-        ));
+        assert!(res.is_ok());
     }
 
     #[tokio::test]

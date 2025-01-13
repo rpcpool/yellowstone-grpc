@@ -2,6 +2,13 @@
  * TypeScript/JavaScript client for gRPC Geyser.
  */
 
+import {
+  ChannelCredentials,
+  credentials,
+  ChannelOptions,
+  Metadata,
+} from "@grpc/grpc-js";
+
 // Import generated gRPC client and types.
 import {
   CommitmentLevel,
@@ -15,14 +22,8 @@ import {
   SubscribeRequestFilterEntry,
   SubscribeRequestFilterSlots,
   SubscribeRequestFilterTransactions,
+  SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
-
-import {
-  ChannelCredentials,
-  credentials,
-  ChannelOptions,
-  Metadata,
-} from "@grpc/grpc-js";
 
 // Reexport automatically generated types
 export {
@@ -32,6 +33,7 @@ export {
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterMemcmp,
+  SubscribeRequestFilterAccountsFilterLamports,
   SubscribeRequestFilterBlocks,
   SubscribeRequestFilterBlocksMeta,
   SubscribeRequestFilterEntry,
@@ -53,9 +55,44 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
+// Import transaction encoding function created in Rust
+import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
+import type {
+  TransactionErrorSolana,
+  // Import mapper to get return type based on WasmUiTransactionEncoding
+  MapTransactionEncodingToReturnType,
+} from "./types";
+
+export const txEncode = {
+  encoding: wasm.WasmUiTransactionEncoding,
+  encode_raw: wasm.encode_tx,
+  encode: <T extends wasm.WasmUiTransactionEncoding>(
+    message: SubscribeUpdateTransactionInfo,
+    encoding: T,
+    max_supported_transaction_version: number | undefined,
+    show_rewards: boolean
+  ): MapTransactionEncodingToReturnType[T] => {
+    return JSON.parse(
+      wasm.encode_tx(
+        SubscribeUpdateTransactionInfo.encode(message).finish(),
+        encoding,
+        max_supported_transaction_version,
+        show_rewards
+      )
+    );
+  },
+};
+
+export const txErrDecode = {
+  decode_raw: wasm.decode_tx_error,
+  decode: (buf: Uint8Array): TransactionErrorSolana => {
+    return JSON.parse(wasm.decode_tx_error(buf));
+  },
+};
+
 export default class Client {
   _client: GeyserClient;
-
+  _insecureXToken: string | undefined;
   constructor(
     endpoint: string,
     xToken: string | undefined,
@@ -64,6 +101,17 @@ export default class Client {
     let creds: ChannelCredentials;
 
     const endpointURL = new URL(endpoint);
+    let port = endpointURL.port;
+    if (port == "") {
+      switch (endpointURL.protocol) {
+        case "https:":
+          port = "443";
+          break;
+        case "http:":
+          port = "80";
+          break;
+      }
+    }
 
     // Check if we need to use TLS.
     if (endpointURL.protocol === "https:") {
@@ -79,13 +127,28 @@ export default class Client {
       );
     } else {
       creds = ChannelCredentials.createInsecure();
+      if (xToken !== undefined) {
+        this._insecureXToken = xToken;
+      }
     }
 
-    this._client = new GeyserClient(endpointURL.host, creds, channelOptions);
+    this._client = new GeyserClient(
+      `${endpointURL.hostname}:${port}`,
+      creds,
+      channelOptions
+    );
+  }
+
+  private _getInsecureMetadata(): Metadata {
+    const metadata = new Metadata();
+    if (this._insecureXToken) {
+      metadata.add("x-token", this._insecureXToken);
+    }
+    return metadata;
   }
 
   async subscribe() {
-    return await this._client.subscribe();
+    return await this._client.subscribe(this._getInsecureMetadata());
   }
 
   async subscribeOnce(
@@ -99,7 +162,7 @@ export default class Client {
     commitment: CommitmentLevel | undefined,
     accountsDataSlice: SubscribeRequestAccountsDataSlice[]
   ) {
-    const stream = await this._client.subscribe();
+    const stream = await this._client.subscribe(this._getInsecureMetadata());
 
     await new Promise<void>((resolve, reject) => {
       stream.write(
@@ -114,7 +177,7 @@ export default class Client {
           commitment,
           accountsDataSlice,
         },
-        (err) => {
+        (err: any) => {
           if (err === null || err === undefined) {
             resolve();
           } else {
@@ -129,13 +192,17 @@ export default class Client {
 
   async ping(count: number): Promise<number> {
     return await new Promise<number>((resolve, reject) => {
-      this._client.ping({ count }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.count);
-        } else {
-          reject(err);
+      this._client.ping(
+        { count },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.count);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
@@ -143,37 +210,49 @@ export default class Client {
     commitment?: CommitmentLevel
   ): Promise<GetLatestBlockhashResponse> {
     return await new Promise<GetLatestBlockhashResponse>((resolve, reject) => {
-      this._client.getLatestBlockhash({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response);
-        } else {
-          reject(err);
+      this._client.getLatestBlockhash(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
   async getBlockHeight(commitment?: CommitmentLevel): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getBlockHeight({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.blockHeight);
-        } else {
-          reject(err);
+      this._client.getBlockHeight(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.blockHeight);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
   async getSlot(commitment?: CommitmentLevel): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getSlot({ commitment }, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.slot);
-        } else {
-          reject(err);
+      this._client.getSlot(
+        { commitment },
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.slot);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 
@@ -184,6 +263,7 @@ export default class Client {
     return await new Promise<IsBlockhashValidResponse>((resolve, reject) => {
       this._client.isBlockhashValid(
         { blockhash, commitment },
+        this._getInsecureMetadata(),
         (err, response) => {
           if (err === null || err === undefined) {
             resolve(response);
@@ -197,13 +277,17 @@ export default class Client {
 
   async getVersion(): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      this._client.getVersion({}, (err, response) => {
-        if (err === null || err === undefined) {
-          resolve(response.version);
-        } else {
-          reject(err);
+      this._client.getVersion(
+        {},
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response.version);
+          } else {
+            reject(err);
+          }
         }
-      });
+      );
     });
   }
 }

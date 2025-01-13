@@ -14,9 +14,11 @@ on:
       - 'master'
       - 'v1.16'
       - 'v1.17'
+      - 'v1.18'
+      - 'v2.0'
+      - 'v2.1'
     tags:
       - 'v*'
-      - 'tools-v*'
   workflow_dispatch:
 
 env:
@@ -29,24 +31,16 @@ jobs:
         os: [ubuntu-20.04, ubuntu-22.04]
     runs-on: ["${{ matrix.os }}"]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set rust version
-        run: |
-          source ci/rust-version.sh
-          echo "RUST_STABLE=$rust_stable" | tee -a $GITHUB_ENV
-
-      - name: Set env vars
-        run: |
-          source ci/env.sh
-          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
-          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
-
-      - uses: actions-rs/toolchain@v1
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
         with:
-          toolchain: ${{ env.RUST_STABLE }}
-          override: true
-          profile: minimal
+          root-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - uses: actions/checkout@v4
 
       - uses: actions/cache@v4
         with:
@@ -55,8 +49,25 @@ jobs:
               ~/.cargo/registry/index/
               ~/.cargo/registry/cache/
               ~/.cargo/git/db/
-              target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0001
+              ./target
+          key: v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
 
       - name: Install dependencies
         run: |
@@ -82,27 +93,18 @@ jobs:
         run: |
           rm -rf \
             target/release/client.d \
-            target/release/config-check.d \
-            target/release/grpc-google-pubsub.d \
-            target/release/grpc-kafka.d \
-            target/release/grpc-scylladb.d
+            target/release/config-check.d
 
       - name: Remove debug information
         run: |
           strip \
             target/release/client \
-            target/release/config-check \
-            target/release/grpc-google-pubsub \
-            target/release/grpc-kafka \
-            target/release/grpc-scylladb
+            target/release/config-check
 
       - name: Rename binaries
         run: |
           mv target/release/client target/release/client-${{ matrix.os }}
           mv target/release/config-check target/release/config-check-${{ matrix.os }}
-          mv target/release/grpc-google-pubsub target/release/grpc-google-pubsub-${{ matrix.os }}
-          mv target/release/grpc-kafka target/release/grpc-kafka-${{ matrix.os }}
-          mv target/release/grpc-scylladb target/release/grpc-scylladb-${{ matrix.os }}
 
       - name: Rename lib for ubuntu22 release
         if: matrix.os == 'ubuntu-22.04'
@@ -124,9 +126,6 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
-            target/release/grpc-google-pubsub*
-            target/release/grpc-kafka*
-            target/release/grpc-scylladb*
 
       - uses: actions/upload-artifact@v4
         with:
@@ -136,6 +135,3 @@ jobs:
             yellowstone-grpc-proto/proto/*.proto
             target/release/client*
             target/release/config-check*
-            target/release/grpc-google-pubsub*
-            target/release/grpc-kafka*
-            target/release/grpc-scylladb*

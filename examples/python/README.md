@@ -1,5 +1,11 @@
 # Python example
 
+## DISCLAIMER
+
+This example can contains errors or be behind of the latest stable version, please use it only as an example of how your subscription can looks like. If you want well tested production ready example, please check our implementation on Rust.
+
+<hr>
+
 ## Instruction
 
 This Python example uses [grpc.io](https://grpc.io/) library.
