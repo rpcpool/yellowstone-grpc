@@ -1,4 +1,6 @@
 pub use tonic::service::Interceptor;
+// Exposed publicly so client can configure TLS
+pub use tonic::transport::ClientTlsConfig;
 use {
     bytes::Bytes,
     futures::{
@@ -11,7 +13,7 @@ use {
         codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue},
         service::interceptor::InterceptedService,
-        transport::channel::{Channel, ClientTlsConfig, Endpoint},
+        transport::channel::{Channel, Endpoint},
         Request, Response, Status,
     },
     tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
