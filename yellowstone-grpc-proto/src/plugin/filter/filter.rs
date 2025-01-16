@@ -595,6 +595,11 @@ impl<'a> FilterAccountsMatch<'a> {
                 if af.owner_required.contains(name) && !self.owner.contains(name) {
                     return None;
                 }
+
+                if af.ata_owners_required.contains(name) && !self.ata_owner.contains(name) {
+                    return None;
+                }
+
                 if !filter.is_empty() && !self.data.contains(name) {
                     return None;
                 }
