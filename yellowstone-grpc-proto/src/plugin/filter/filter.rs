@@ -258,6 +258,8 @@ struct FilterAccounts {
     owner: HashMap<Pubkey, HashSet<FilterName>>,
     owner_required: HashSet<FilterName>,
     filters: Vec<(FilterName, FilterAccountsState)>,
+    ata_owners: HashMap<Pubkey, HashSet<FilterName>>,
+    ata_owners_required: HashSet<FilterName>,
 }
 
 impl FilterAccounts {
@@ -300,6 +302,14 @@ impl FilterAccounts {
                 Filter::decode_pubkeys(&filter.owner, &limits.owner_reject),
             )?;
 
+            Self::set(
+                &mut this.ata_owners,
+                &mut this.ata_owners_required,
+                name,
+                names,
+                Filter::decode_pubkeys(&filter.ata_owner, &limits.owner_reject),
+            )?;
+
             this.filters
                 .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
         }
@@ -336,12 +346,7 @@ impl FilterAccounts {
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
-
-        println!(
-            "Account Data Size: {:?}, Account Data: {:?}",
-            message.account.data.len(),
-            message.account.data
-        );
+        filter.match_ata_owner(&message.account.data);
 
         let filters = filter.get_filters();
 
@@ -505,6 +510,7 @@ struct FilterAccountsMatch<'a> {
     account: HashSet<&'a str>,
     owner: HashSet<&'a str>,
     data: HashSet<&'a str>,
+    ata_owner: HashSet<&'a str>,
 }
 
 impl<'a> FilterAccountsMatch<'a> {
@@ -515,6 +521,7 @@ impl<'a> FilterAccountsMatch<'a> {
             account: Default::default(),
             owner: Default::default(),
             data: Default::default(),
+            ata_owner: Default::default(),
         }
     }
 
@@ -546,6 +553,18 @@ impl<'a> FilterAccountsMatch<'a> {
 
     fn match_owner(&mut self, pubkey: &Pubkey) {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
+    }
+
+    fn match_ata_owner(&mut self, data: &[u8]) {
+        Self::extend(
+            &mut self.ata_owner,
+            &self.filter.ata_owners,
+            &Pubkey::new_from_array(
+                data[32..64]
+                    .try_into()
+                    .expect("slice with incorrect length"),
+            ),
+        );
     }
 
     fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
