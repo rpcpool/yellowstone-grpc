@@ -932,7 +932,8 @@ impl GrpcService {
                                     for (_msgid, message) in messages.iter() {
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
-                                                Ok(()) => {}
+                                                Ok(()) => {
+                                                }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
                                                     break 'outer;

@@ -336,7 +336,15 @@ impl FilterAccounts {
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
+
+        println!(
+            "Account Data Size: {:?}, Account Data: {:?}",
+            message.account.data.len(),
+            message.account.data
+        );
+
         let filters = filter.get_filters();
+
         filtered_updates_once_owned!(
             filters,
             FilteredUpdateOneof::account(message, accounts_data_slice.clone()),
