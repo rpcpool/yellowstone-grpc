@@ -41,8 +41,8 @@ message SubscribeRequestFilterAccounts {
   repeated string account = 2;
   repeated string owner = 3;
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
-  optional bool nonempty_txn_signature = 5;
-  repeated string ata_owner = 6;
+  repeated string ata_owner = 5;
+  optional bool nonempty_txn_signature = 6;
 }
 
 message SubscribeRequestFilterAccountsFilter {
