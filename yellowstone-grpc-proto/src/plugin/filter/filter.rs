@@ -342,6 +342,11 @@ impl FilterAccounts {
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
         let mut filter = FilterAccountsMatch::new(self);
+
+        if message.account.data.len() == 165 {
+            println!("Message: {:?}", message.clone());
+        }
+
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
@@ -556,16 +561,24 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_ata_owner(&mut self, data: &[u8]) {
-        if data.len() >= 64 {
+        println!("LEN: {:?}", data.len());
+        if data.len() == 165 {
+            let ata_owner_pubkey = Pubkey::new_from_array(
+                data[32..64]
+                    .try_into()
+                    .expect("slice with incorrect length"),
+            );
+
             Self::extend(
                 &mut self.ata_owner,
                 &self.filter.ata_owners,
-                &Pubkey::new_from_array(
-                    data[32..64]
-                        .try_into()
-                        .expect("slice with incorrect length"),
-                ),
+                &ata_owner_pubkey,
             );
+
+            println!("Deserialized Pubkey: {:?}", ata_owner_pubkey);
+            println!("Hash Set ata_owner: {:?}", self.ata_owner);
+            println!("Filters: {:?}", self.filter.ata_owners);
+            println!("ata_owners_required: {:?}", self.filter.ata_owners_required);
         } else {
             eprintln!(
                 "Data slice is too small. Expected at least 64 bytes, got {}",
