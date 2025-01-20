@@ -302,13 +302,15 @@ impl FilterAccounts {
                 Filter::decode_pubkeys(&filter.owner, &limits.owner_reject),
             )?;
 
-            Self::set(
-                &mut this.ata_owners,
-                &mut this.ata_owners_required,
-                name,
-                names,
-                Filter::decode_pubkeys(&filter.ata_owner, &limits.owner_reject),
-            )?;
+            if let Some(ata_owner_filter) = &filter.ata_owners {
+                Self::set(
+                    &mut this.ata_owners,
+                    &mut this.ata_owners_required,
+                    name,
+                    names,
+                    Filter::decode_pubkeys(&ata_owner_filter.ata_owners, &limits.owner_reject),
+                )?;
+            }
 
             this.filters
                 .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
@@ -342,10 +344,6 @@ impl FilterAccounts {
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
         let mut filter = FilterAccountsMatch::new(self);
-
-        if message.account.data.len() == 165 {
-            println!("Message: {:?}", message.clone());
-        }
 
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
@@ -561,30 +559,23 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_ata_owner(&mut self, data: &[u8]) {
-        println!("LEN: {:?}", data.len());
-        if data.len() == 165 {
-            let ata_owner_pubkey = Pubkey::new_from_array(
-                data[32..64]
-                    .try_into()
-                    .expect("slice with incorrect length"),
-            );
-
-            Self::extend(
-                &mut self.ata_owner,
-                &self.filter.ata_owners,
-                &ata_owner_pubkey,
-            );
-
-            println!("Deserialized Pubkey: {:?}", ata_owner_pubkey);
-            println!("Hash Set ata_owner: {:?}", self.ata_owner);
-            println!("Filters: {:?}", self.filter.ata_owners);
-            println!("ata_owners_required: {:?}", self.filter.ata_owners_required);
-        } else {
-            eprintln!(
-                "Data slice is too small. Expected at least 64 bytes, got {}",
-                data.len()
-            );
+        if data.len() != 165 {
+            return;
         }
+
+        let ata_owner_pubkey = match data[32..64].try_into() {
+            Ok(array) => Pubkey::new_from_array(array),
+            Err(e) => {
+                eprintln!("Error decoding ata_owner_pubkey: {:?}", e);
+                return;
+            }
+        };
+
+        Self::extend(
+            &mut self.ata_owner,
+            &self.filter.ata_owners,
+            &ata_owner_pubkey,
+        );
     }
 
     fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
@@ -1140,8 +1131,8 @@ mod tests {
         crate::{
             convert_to,
             geyser::{
-                SubscribeRequest, SubscribeRequestFilterAccounts,
-                SubscribeRequestFilterTransactions,
+                SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAtaOwner,
+                SubscribeRequestFilterTransactions, TokenPrograms,
             },
             plugin::{
                 filter::{
@@ -1255,7 +1246,7 @@ mod tests {
                 account: vec![],
                 owner: vec![],
                 filters: vec![],
-                ata_owner: vec![],
+                ata_owners: None,
             },
         );
 

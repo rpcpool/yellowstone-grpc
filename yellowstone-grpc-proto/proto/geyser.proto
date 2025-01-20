@@ -41,7 +41,7 @@ message SubscribeRequestFilterAccounts {
   repeated string account = 2;
   repeated string owner = 3;
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
-  repeated string ata_owner = 5;
+  SubscribeRequestFilterAtaOwner ata_owners = 5;
   optional bool nonempty_txn_signature = 6;
 }
 
@@ -70,6 +70,17 @@ message SubscribeRequestFilterAccountsFilterLamports {
     uint64 lt = 3;
     uint64 gt = 4;
   }
+}
+
+message SubscribeRequestFilterAtaOwner{
+    repeated string ata_owners = 1;
+    TokenPrograms token_program_type = 2;
+}
+
+enum TokenPrograms {
+   TOKEN_PROGRAM = 0;
+   TOKEN_PROGRAM_2022 = 1;
+   BOTH = 2;
 }
 
 message SubscribeRequestFilterSlots {
