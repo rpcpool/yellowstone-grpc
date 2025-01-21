@@ -561,30 +561,24 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_ata_owner(&mut self, data: &[u8], token: Option<TokenPrograms>) {
-        dbg!(&self.account);
-        dbg!(data.len());
         if data.len() < 165 {
             return;
         }
-        dbg!(Pubkey::new_from_array(data[32..64].try_into().unwrap()));
 
-        match token.unwrap() {
-            TokenPrograms::TokenProgram => {
-                let ata_owner_pubkey = match data[32..64].try_into() {
-                    Ok(array) => Pubkey::new_from_array(array),
-                    Err(e) => {
-                        eprintln!("Error decoding ata_owner_pubkey: {:?}", e);
-                        return;
-                    }
-                };
+        if let Some(TokenPrograms::TokenProgram) = token {
+            let ata_owner_pubkey = match data[32..64].try_into() {
+                Ok(array) => Pubkey::new_from_array(array),
+                Err(e) => {
+                    eprintln!("Error decoding ata_owner_pubkey: {:?}", e);
+                    return;
+                }
+            };
 
-                Self::extend(
-                    &mut self.ata_owner,
-                    &self.filter.ata_owners,
-                    &ata_owner_pubkey,
-                );
-            }
-            _ => {}
+            Self::extend(
+                &mut self.ata_owner,
+                &self.filter.ata_owners,
+                &ata_owner_pubkey,
+            );
         }
     }
 
