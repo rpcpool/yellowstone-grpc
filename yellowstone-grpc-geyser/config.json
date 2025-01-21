@@ -1,5 +1,5 @@
 {
-  "libpath": "../target/release/libyellowstone_grpc_geyser.so",
+  "libpath": "../target/debug/libyellowstone_grpc_geyser.so",
   "log": {
     "level": "info"
   },
@@ -9,10 +9,6 @@
   },
   "grpc": {
     "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
     "compression": {
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]

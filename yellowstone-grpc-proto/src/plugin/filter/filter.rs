@@ -9,7 +9,7 @@ use {
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
+            SubscribeRequestFilterTransactions, TokenPrograms,
         },
         plugin::{
             filter::{
@@ -260,6 +260,7 @@ struct FilterAccounts {
     filters: Vec<(FilterName, FilterAccountsState)>,
     ata_owners: HashMap<Pubkey, HashSet<FilterName>>,
     ata_owners_required: HashSet<FilterName>,
+    token_program: Option<TokenPrograms>,
 }
 
 impl FilterAccounts {
@@ -303,6 +304,7 @@ impl FilterAccounts {
             )?;
 
             if let Some(ata_owner_filter) = &filter.ata_owners {
+                this.token_program = Some(ata_owner_filter.token_program_type());
                 Self::set(
                     &mut this.ata_owners,
                     &mut this.ata_owners_required,
@@ -349,7 +351,7 @@ impl FilterAccounts {
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
-        filter.match_ata_owner(&message.account.data);
+        filter.match_ata_owner(&message.account.data, self.token_program);
 
         let filters = filter.get_filters();
 
@@ -558,24 +560,32 @@ impl<'a> FilterAccountsMatch<'a> {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
     }
 
-    fn match_ata_owner(&mut self, data: &[u8]) {
-        if data.len() != 165 {
+    fn match_ata_owner(&mut self, data: &[u8], token: Option<TokenPrograms>) {
+        dbg!(&self.account);
+        dbg!(data.len());
+        if data.len() < 165 {
             return;
         }
+        dbg!(Pubkey::new_from_array(data[32..64].try_into().unwrap()));
 
-        let ata_owner_pubkey = match data[32..64].try_into() {
-            Ok(array) => Pubkey::new_from_array(array),
-            Err(e) => {
-                eprintln!("Error decoding ata_owner_pubkey: {:?}", e);
-                return;
+        match token.unwrap() {
+            TokenPrograms::TokenProgram => {
+                let ata_owner_pubkey = match data[32..64].try_into() {
+                    Ok(array) => Pubkey::new_from_array(array),
+                    Err(e) => {
+                        eprintln!("Error decoding ata_owner_pubkey: {:?}", e);
+                        return;
+                    }
+                };
+
+                Self::extend(
+                    &mut self.ata_owner,
+                    &self.filter.ata_owners,
+                    &ata_owner_pubkey,
+                );
             }
-        };
-
-        Self::extend(
-            &mut self.ata_owner,
-            &self.filter.ata_owners,
-            &ata_owner_pubkey,
-        );
+            _ => {}
+        }
     }
 
     fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
@@ -1131,8 +1141,8 @@ mod tests {
         crate::{
             convert_to,
             geyser::{
-                SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAtaOwner,
-                SubscribeRequestFilterTransactions, TokenPrograms,
+                SubscribeRequest, SubscribeRequestFilterAccounts,
+                SubscribeRequestFilterTransactions,
             },
             plugin::{
                 filter::{
