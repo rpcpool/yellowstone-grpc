@@ -22,7 +22,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- geyser: force geyser panics to be logged ([#515](https://github.com/rpcpool/yellowstone-grpc/pull/519))
+- geyser: log gRPC server panics ([#515](https://github.com/rpcpool/yellowstone-grpc/pull/519))
 
 ## 2025-01-13
 
