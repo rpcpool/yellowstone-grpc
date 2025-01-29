@@ -494,8 +494,6 @@ impl GrpcService {
             let (mut health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            
-
             let result = server_builder
                 .layer(interceptor(move |request: Request<()>| {
                     if let Some(x_token) = &config.x_token {
