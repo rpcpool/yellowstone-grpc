@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-01-29
+
+- yellowstone-grpc-geyser-4.2.3
+
+### Fixes
+
+- geyser: force geyser panics to be logged ([#515](https://github.com/rpcpool/yellowstone-grpc/pull/519))
+
 ## 2025-01-13
 
 - yellowstone-grpc-client-4.1.1
