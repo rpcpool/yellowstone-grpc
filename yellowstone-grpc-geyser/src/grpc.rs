@@ -483,11 +483,20 @@ impl GrpcService {
         let shutdown = Arc::new(Notify::new());
         let shutdown_grpc = Arc::clone(&shutdown);
         tokio::spawn(async move {
+            // Add low-overhead panic hook without affecting any hooks added by Solana.
+            let old_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic_info| {
+                error!("gRPC server task panicked: {:?}", panic_info);
+                old_hook(panic_info); // Chain to the previous hook
+            }));
+
             // gRPC Health check service
             let (mut health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            server_builder
+            
+
+            let result = server_builder
                 .layer(interceptor(move |request: Request<()>| {
                     if let Some(x_token) = &config.x_token {
                         match request.metadata().get("x-token") {
@@ -501,7 +510,12 @@ impl GrpcService {
                 .add_service(health_service)
                 .add_service(service)
                 .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
-                .await
+                .await;
+
+            match result {
+                Ok(_) => info!("gRPC server task finished"),
+                Err(e) => error!("gRPC server task failed: {e}"),
+            }
         });
 
         Ok((snapshot_tx, messages_tx, shutdown))
