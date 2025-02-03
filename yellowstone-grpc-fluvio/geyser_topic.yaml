@@ -1,0 +1,10 @@
+version: 0.1.0
+meta:
+  name: geyser
+deduplication:
+  bounds:
+    count: 36000000 # about 20000 events per second for 30 minutes
+    age: 30m # remember records for at least 5 seconds
+  filter:
+    transform:
+      uses: infinyon-labs/dedup-filter@0.0.2

@@ -23,3 +23,6 @@ __pycache__/
 
 # Configs
 yellowstone-grpc-geyser/config-test.json
+
+# Custom local config files for development
+.local
