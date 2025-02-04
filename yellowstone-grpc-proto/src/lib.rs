@@ -52,12 +52,13 @@ pub mod convert_to {
                 LegacyMessage, MessageHeader, SanitizedMessage,
             },
             pubkey::Pubkey,
+            reward_type::RewardType,
             signature::Signature,
             transaction::{SanitizedTransaction, TransactionError},
             transaction_context::TransactionReturnData,
         },
-        solana_transaction_status::{
-            InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
+        solana_transaction_status_client_types::{
+            InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta,
             TransactionTokenBalance,
         },
     };
@@ -299,6 +300,11 @@ pub mod convert_to {
 
 #[cfg(feature = "convert")]
 pub mod convert_from {
+    #[cfg(feature = "transaction-status")]
+    use solana_transaction_status::{
+        ConfirmedBlock, RewardsAndNumPartitions, TransactionWithStatusMeta,
+        VersionedTransactionWithStatusMeta,
+    };
     use {
         super::prelude as proto,
         solana_account_decoder::parse_token::UiTokenAmount,
@@ -311,19 +317,20 @@ pub mod convert_from {
                 Message, MessageHeader, VersionedMessage,
             },
             pubkey::Pubkey,
+            reward_type::RewardType,
             signature::Signature,
             transaction::{TransactionError, VersionedTransaction},
             transaction_context::TransactionReturnData,
         },
-        solana_transaction_status::{
-            ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
-            RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
-            TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
+        solana_transaction_status_client_types::{
+            InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta,
+            TransactionTokenBalance,
         },
     };
 
     type CreateResult<T> = Result<T, &'static str>;
 
+    #[cfg(feature = "transaction-status")]
     pub fn create_block(block: proto::SubscribeUpdateBlock) -> CreateResult<ConfirmedBlock> {
         let mut transactions = vec![];
         for tx in block.transactions {
@@ -358,6 +365,7 @@ pub mod convert_from {
         })
     }
 
+    #[cfg(feature = "transaction-status")]
     pub fn create_tx_with_meta(
         tx: proto::SubscribeUpdateTransactionInfo,
     ) -> CreateResult<TransactionWithStatusMeta> {
@@ -542,6 +550,7 @@ pub mod convert_from {
         })
     }
 
+    #[cfg(feature = "transaction-status")]
     pub fn create_rewards_obj(rewards: proto::Rewards) -> CreateResult<RewardsAndNumPartitions> {
         Ok(RewardsAndNumPartitions {
             rewards: rewards

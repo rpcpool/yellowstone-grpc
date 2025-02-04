@@ -6434,6 +6434,7 @@ dependencies = [
  "solana-sdk",
  "solana-storage-proto",
  "solana-transaction-status",
+ "solana-transaction-status-client-types",
  "spl-token-2022 6.0.0",
  "thiserror 1.0.69",
  "tonic",
