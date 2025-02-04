@@ -625,7 +625,11 @@ impl FilterSlots {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if !inner.filter_by_commitment || commitment == Some(message.status) {
+                if (!inner.filter_by_commitment || commitment == Some(message.status))
+                    && (commitment == Some(CommitmentLevel::Processed)
+                        || commitment == Some(CommitmentLevel::Confirmed)
+                        || commitment == Some(CommitmentLevel::Finalized))
+                {
                     Some(name.clone())
                 } else {
                     None
