@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-solana-encoding-wasm"
-version = "3.0.0"
+version = "4.3.0"
 authors = ["Triton One"]
 edition = "2021"
 homepage = "https://triton.one"
@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 serde_json = "1.0.86"
 solana-transaction-status = "~2.1.1"
 wasm-bindgen = "0.2.95"
-yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "4.1.1", default-features = false, features = ["convert"] }
+yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "4.3.0", default-features = false, features = ["convert"] }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
