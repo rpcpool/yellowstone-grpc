@@ -26,7 +26,7 @@ use {
             },
             message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
-                MessageEntry, MessageSlot, MessageTransaction,
+                MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
             },
         },
     },
@@ -637,13 +637,14 @@ impl FilterSlots {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if (!inner.filter_by_commitment || commitment == Some(message.status))
+                if (!inner.filter_by_commitment
+                    || commitment
+                        .map(|commitment| commitment == message.status)
+                        .unwrap_or(false))
                     && (inner.interslot_updates
                         || matches!(
                             message.status,
-                            CommitmentLevel::Processed
-                                | CommitmentLevel::Confirmed
-                                | CommitmentLevel::Finalized
+                            SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
                         ))
                 {
                     Some(name.clone())

@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-02-??
+
+- @triton-one/yellowstone-grpc@3.0.0
+- yellowstone-grpc-client-simple-5.0.0
+- yellowstone-grpc-client-5.0.0
+- yellowstone-grpc-geyser-5.0.0
+- yellowstone-grpc-proto-5.0.0
+
+### Breaking
+
+- proto: add enum `SlotStatus` ([#529](https://github.com/rpcpool/yellowstone-grpc/pull/529))
+
 ## 2025-02-05
 
 - yellowstone-grpc-client-simple-4.4.1
