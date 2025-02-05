@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-02-05
+
+- @triton-one/yellowstone-grpc@2.1.0
+- yellowstone-grpc-client-simple-4.4.0
+- yellowstone-grpc-client-4.2.0
+- yellowstone-grpc-geyser-4.3.0
+- yellowstone-grpc-proto-4.2.0
+
+### Features
+
+- proto: add field `interslot_updates` ([#527](https://github.com/rpcpool/yellowstone-grpc/pull/527))
+
 ## 2025-01-13
 
 - yellowstone-grpc-client-4.1.1

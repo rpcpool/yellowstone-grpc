@@ -77,6 +77,7 @@ message SubscribeRequestFilterAccountsFilterLamports {
 
 message SubscribeRequestFilterSlots {
   optional bool filter_by_commitment = 1;
+  optional bool interslot_updates = 2;
 }
 
 message SubscribeRequestFilterTransactions {
