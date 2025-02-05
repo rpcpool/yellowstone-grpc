@@ -256,6 +256,10 @@ struct ActionSubscribe {
     #[clap(long)]
     slots_filter_by_commitment: bool,
 
+    /// Subscribe on interslot slot updates
+    #[clap(long)]
+    slots_interslot_updates: bool,
+
     /// Subscribe on transactions updates
     #[clap(long)]
     transactions: bool,
@@ -451,6 +455,7 @@ impl Action {
                         "client".to_owned(),
                         SubscribeRequestFilterSlots {
                             filter_by_commitment: Some(args.slots_filter_by_commitment),
+                            interslot_updates: Some(args.slots_interslot_updates),
                         },
                     );
                 }
