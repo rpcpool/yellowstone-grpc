@@ -21,6 +21,12 @@ enum CommitmentLevel {
   PROCESSED = 0;
   CONFIRMED = 1;
   FINALIZED = 2;
+}
+
+enum SlotCommitmentLevel {
+  PROCESSED = 0;
+  CONFIRMED = 1;
+  FINALIZED = 2;
   FIRST_SHRED_RECEIVED = 3;
   COMPLETED = 4;
   CREATED_BANK = 5;
@@ -77,6 +83,7 @@ message SubscribeRequestFilterAccountsFilterLamports {
 
 message SubscribeRequestFilterSlots {
   optional bool filter_by_commitment = 1;
+  optional repeated SlotCommitmentLevel commitment_levels = 2;
 }
 
 message SubscribeRequestFilterTransactions {
