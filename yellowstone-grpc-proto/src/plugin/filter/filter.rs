@@ -170,9 +170,22 @@ impl Filter {
 
     fn decode_commitment(commitment: Option<i32>) -> FilterResult<CommitmentLevel> {
         let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
-        CommitmentLevelProto::try_from(commitment)
+        let commitment = CommitmentLevelProto::try_from(commitment)
             .map(Into::into)
-            .map_err(|_error| FilterError::InvalidCommitment { commitment })
+            .map_err(|_error| FilterError::InvalidCommitment { commitment })?;
+        if matches!(
+            commitment,
+            CommitmentLevel::FirstShredReceived
+                | CommitmentLevel::Completed
+                | CommitmentLevel::CreatedBank
+                | CommitmentLevel::Dead
+        ) {
+            Err(FilterError::InvalidCommitment {
+                commitment: commitment as i32,
+            })
+        } else {
+            Ok(commitment)
+        }
     }
 
     fn decode_pubkeys<'a>(

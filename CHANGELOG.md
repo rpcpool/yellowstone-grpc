@@ -18,6 +18,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2025-02-05
 
+- yellowstone-grpc-client-simple-4.4.1
+- yellowstone-grpc-client-4.2.1
+- yellowstone-grpc-geyser-4.3.1
+- yellowstone-grpc-proto-4.2.1
+
+### Fixes
+
+- geyser: runtime error on invalid commitment ([#528](https://github.com/rpcpool/yellowstone-grpc/pull/528))
+
+## 2025-02-05
+
 - @triton-one/yellowstone-grpc@2.1.0
 - yellowstone-grpc-client-simple-4.4.0
 - yellowstone-grpc-client-4.2.0
