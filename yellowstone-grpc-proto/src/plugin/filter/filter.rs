@@ -173,12 +173,9 @@ impl Filter {
         let commitment = CommitmentLevelProto::try_from(commitment)
             .map(Into::into)
             .map_err(|_error| FilterError::InvalidCommitment { commitment })?;
-        if matches!(
+        if !matches!(
             commitment,
-            CommitmentLevel::FirstShredReceived
-                | CommitmentLevel::Completed
-                | CommitmentLevel::CreatedBank
-                | CommitmentLevel::Dead
+            CommitmentLevel::Processed | CommitmentLevel::Confirmed | CommitmentLevel::Finalized
         ) {
             Err(FilterError::InvalidCommitment {
                 commitment: commitment as i32,
