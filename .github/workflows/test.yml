@@ -76,6 +76,7 @@ jobs:
       - name: cargo tree
         run: |
           cargo tree
+          git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
@@ -83,6 +84,7 @@ jobs:
         run: |
           cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
           cargo tree
+          git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
