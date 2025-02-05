@@ -176,6 +176,10 @@ enum ArgsCommitment {
     Processed,
     Confirmed,
     Finalized,
+    FirstShredReceived,
+    Completed,
+    CreatedBank,
+    Dead,
 }
 
 impl From<ArgsCommitment> for CommitmentLevel {
@@ -184,6 +188,10 @@ impl From<ArgsCommitment> for CommitmentLevel {
             ArgsCommitment::Processed => CommitmentLevel::Processed,
             ArgsCommitment::Confirmed => CommitmentLevel::Confirmed,
             ArgsCommitment::Finalized => CommitmentLevel::Finalized,
+            ArgsCommitment::FirstShredReceived => CommitmentLevel::FirstShredReceived,
+            ArgsCommitment::Completed => CommitmentLevel::Completed,
+            ArgsCommitment::CreatedBank => CommitmentLevel::CreatedBank,
+            ArgsCommitment::Dead => CommitmentLevel::Dead,
         }
     }
 }
