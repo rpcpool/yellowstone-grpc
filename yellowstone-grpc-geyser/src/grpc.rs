@@ -710,9 +710,14 @@ impl GrpcService {
 
                     for message in messages_vec.into_iter().rev() {
                         if let Message::Slot(slot) = &message.1 {
-                            let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                                CommitmentLevel::Processed | CommitmentLevel::FirstShredReceived | CommitmentLevel::Completed | CommitmentLevel::CreatedBank | CommitmentLevel::Dead => {
-                                    (Vec::with_capacity(1), Vec::with_capacity(1))
+                            let (mut confirmed_messages, mut finalized_messages, commitment_level_messages) = match slot.status {
+                                CommitmentLevel::FirstShredReceived | CommitmentLevel::Completed | CommitmentLevel::CreatedBank | CommitmentLevel::Dead => {
+                                    let mut commitment_level_vec = Vec::with_capacity(1);
+                                    commitment_level_vec.push(message.clone());
+                                    (Vec::with_capacity(1), Vec::with_capacity(1), Some(commitment_level_vec))
+                                }
+                                CommitmentLevel::Processed => {
+                                    (Vec::with_capacity(1), Vec::with_capacity(1), None)
                                 }
                                 CommitmentLevel::Confirmed => {
                                     if let Some(slot_messages) = messages.get_mut(&slot.slot) {
@@ -725,7 +730,7 @@ impl GrpcService {
                                         .get(&slot.slot)
                                         .map(|slot_messages| slot_messages.messages.iter().flatten().cloned().collect())
                                         .unwrap_or_default();
-                                    (vec, Vec::with_capacity(1))
+                                    (vec, Vec::with_capacity(1), None)
                                 }
                                 CommitmentLevel::Finalized => {
                                     if let Some(slot_messages) = messages.get_mut(&slot.slot) {
@@ -738,9 +743,16 @@ impl GrpcService {
                                         .get_mut(&slot.slot)
                                         .map(|slot_messages| slot_messages.messages.iter().flatten().cloned().collect())
                                         .unwrap_or_default();
-                                    (Vec::with_capacity(1), vec)
+                                    (Vec::with_capacity(1), vec, None)
                                 }
                             };
+
+                            // In order to notify clients of slot updates for other commitment levels than processed, confirmed and finalized
+                            // we send the slot message out to the listeners on these commitment levels too
+                            if let Some(commitment_level_messages) = commitment_level_messages {
+                                let _ =
+                                    broadcast_tx.send((slot.status, commitment_level_messages.into()));
+                            }
 
                             // processed
                             processed_messages.push(message.clone());
