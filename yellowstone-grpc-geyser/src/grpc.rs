@@ -889,14 +889,6 @@ impl GrpcService {
 
                         match message {
                             Some(Some((from_slot, filter_new))) => {
-                                if let Some(msg) = filter_new.get_pong_msg() {
-                                    if stream_tx.send(Ok(msg)).await.is_err() {
-                                        error!("client #{id}: stream closed");
-                                        break 'outer;
-                                    }
-                                    continue;
-                                }
-
                                 metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
@@ -1161,9 +1153,20 @@ impl Geyser for GrpcService {
                             filter_names.try_clean();
 
                             if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
-                                Ok(filter) => match incoming_client_tx.send(Some((request.from_slot ,filter))) {
-                                    Ok(()) => Ok(()),
-                                    Err(error) => Err(error.to_string()),
+                                Ok(filter) => {
+                                    if let Some(msg) = filter.get_pong_msg() {
+                                        if incoming_stream_tx.send(Ok(msg)).await.is_err() {
+                                            error!("client #{id}: stream closed");
+                                            let _ = incoming_client_tx.send(None);
+                                            break;
+                                        }
+                                        continue;
+                                    }
+
+                                    match incoming_client_tx.send(Some((request.from_slot, filter))) {
+                                        Ok(()) => Ok(()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
                                 },
                                 Err(error) => Err(error.to_string()),
                             } {
