@@ -26,7 +26,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- geyser: fix filter with followed ping ([#530](https://github.com/rpcpool/yellowstone-grpc/pull/530))
+- geyser: fix filter with followed ping ([#532](https://github.com/rpcpool/yellowstone-grpc/pull/532))
 
 ### Breaking
 
