@@ -3259,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "4.2.1"
+version = "5.0.0"
 dependencies = [
  "anyhow",
  "bincode",
