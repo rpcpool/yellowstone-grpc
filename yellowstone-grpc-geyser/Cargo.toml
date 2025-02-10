@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
-affinity = { workspace = true }
+affinity = { workspace = true, optional = true }
 agave-geyser-plugin-interface = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }

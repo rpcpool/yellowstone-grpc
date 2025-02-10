@@ -1,18 +1,15 @@
 {
-  "libpath": "../target/release/libyellowstone_grpc_geyser.so",
+  "libpath": "../target/release/libyellowstone_grpc_geyser.dylib",
   "log": {
     "level": "info"
   },
   "tokio": {
     "worker_threads": 8,
-    "affinity": "0-1,12-13"
+    "affinity": null
   },
   "grpc": {
     "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
+    "tls_config": null,
     "compression": {
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]

@@ -9,6 +9,9 @@ use {
     yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
 };
 
+#[cfg(target_os = "linux")]
+use affinity;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -114,11 +117,15 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     vec.sort();
 
     if let Some(set_max_index) = vec.last().copied() {
+        #[cfg(target_os = "linux")]
         let max_index = affinity::get_thread_affinity()
             .map_err(|_err| "failed to get affinity".to_owned())?
             .into_iter()
             .max()
             .unwrap_or(0);
+
+        #[cfg(not(target_os = "linux"))]
+        let max_index = 0;
 
         if set_max_index > max_index {
             return Err(format!("core index must be in the range [0, {max_index}]"));

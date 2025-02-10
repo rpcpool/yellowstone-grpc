@@ -26,8 +26,13 @@ use {
     },
 };
 
+#[cfg(target_os = "linux")]
+use affinity;
+
 #[derive(Debug)]
 pub struct PluginInner {
+    #[cfg(target_os = "linux")]
+    affinity: Option<Affinity>,
     runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
@@ -76,9 +81,13 @@ impl GeyserPlugin for Plugin {
             builder.worker_threads(worker_threads);
         }
         if let Some(tokio_cpus) = config.tokio.affinity.clone() {
+            #[cfg(target_os = "linux")]
             builder.on_thread_start(move || {
                 affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
             });
+
+            #[cfg(not(target_os = "linux"))]
+            log::warn!("Thread affinity is only supported on Linux");
         }
         let runtime = builder
             .thread_name_fn(crate::get_thread_name)

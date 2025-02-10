@@ -1,3 +1,6 @@
+#[cfg(target_os = "linux")]
+use affinity;
+
 use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
@@ -457,9 +460,13 @@ impl GrpcService {
                 builder.worker_threads(worker_threads);
             }
             if let Some(tokio_cpus) = config_tokio.affinity.clone() {
+                #[cfg(target_os = "linux")]
                 builder.on_thread_start(move || {
                     affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
                 });
+
+                #[cfg(not(target_os = "linux"))]
+                log::warn!("Thread affinity is only supported on Linux");
             }
             builder
                 .thread_name_fn(crate::get_thread_name)
