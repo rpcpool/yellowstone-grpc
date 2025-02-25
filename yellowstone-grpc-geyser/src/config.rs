@@ -190,7 +190,7 @@ pub struct ConfigGrpc {
     )]
     pub filter_names_cleanup_interval: Duration,
     /// Number of slots stored for re-broadcast (replay)
-    #[serde(default = "ConfigGrpc::default_replay_stored_slots")]
+    #[serde(default = "ConfigGrpc::default_replay_stored_slots", deserialize_with = "deserialize_u64_str")]
     pub replay_stored_slots: u64,
     #[serde(default)]
     pub server_http2_adaptive_window: Option<bool>,
@@ -338,3 +338,24 @@ where
         None => Ok(None),
     }
 }
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ValueU64Str<'a> {
+    Int(u64),
+    Str(&'a str),
+}
+
+fn deserialize_u64_str<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match ValueU64Str::deserialize(deserializer)? {
+        ValueU64Str::Int(value) => Ok(value),
+        ValueU64Str::Str(value) => value
+            .replace('_', "")
+            .parse::<u64>()
+            .map_err(de::Error::custom),
+    }
+}
+
