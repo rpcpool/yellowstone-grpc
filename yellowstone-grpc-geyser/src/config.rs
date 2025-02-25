@@ -190,7 +190,10 @@ pub struct ConfigGrpc {
     )]
     pub filter_names_cleanup_interval: Duration,
     /// Number of slots stored for re-broadcast (replay)
-    #[serde(default = "ConfigGrpc::default_replay_stored_slots", deserialize_with = "deserialize_u64_str")]
+    #[serde(
+        default = "ConfigGrpc::default_replay_stored_slots",
+        deserialize_with = "deserialize_u64_str"
+    )]
     pub replay_stored_slots: u64,
     #[serde(default)]
     pub server_http2_adaptive_window: Option<bool>,
@@ -358,4 +361,3 @@ where
             .map_err(de::Error::custom),
     }
 }
-
