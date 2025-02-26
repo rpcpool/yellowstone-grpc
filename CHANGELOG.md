@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-02-26
+
+- yellowstone-grpc-geyser-5.0.0
+
+### Fixes
+
+- geyser: add `string` to `u64` deserializer for config param `replay_stored_slots` ([#541](https://github.com/rpcpool/yellowstone-grpc/pull/541))
+
 ## 2025-02-06
 
 - @triton-one/yellowstone-grpc@3.0.0
