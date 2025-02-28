@@ -3,7 +3,10 @@ use {
         GeyserPluginError, Result as PluginResult,
     },
     serde::{de, Deserialize, Deserializer},
-    std::{collections::HashSet, fs::read_to_string, net::SocketAddr, path::Path, time::Duration},
+    std::{
+        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        time::Duration,
+    },
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
     yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
@@ -141,32 +144,32 @@ pub struct ConfigGrpc {
     /// Limits the maximum size of a decoded message, default is 4MiB
     #[serde(
         default = "ConfigGrpc::max_decoding_message_size_default",
-        deserialize_with = "deserialize_usize_str"
+        deserialize_with = "deserialize_int_str"
     )]
     pub max_decoding_message_size: usize,
     /// Capacity of the channel used for accounts from snapshot,
     /// on reaching the limit Sender block validator startup.
     #[serde(
         default = "ConfigGrpc::snapshot_plugin_channel_capacity_default",
-        deserialize_with = "deserialize_usize_str_maybe"
+        deserialize_with = "deserialize_int_str_maybe"
     )]
     pub snapshot_plugin_channel_capacity: Option<usize>,
     /// Capacity of the client channel, applicable only with snapshot
     #[serde(
         default = "ConfigGrpc::snapshot_client_channel_capacity_default",
-        deserialize_with = "deserialize_usize_str"
+        deserialize_with = "deserialize_int_str"
     )]
     pub snapshot_client_channel_capacity: usize,
     /// Capacity of the channel per connection
     #[serde(
         default = "ConfigGrpc::channel_capacity_default",
-        deserialize_with = "deserialize_usize_str"
+        deserialize_with = "deserialize_int_str"
     )]
     pub channel_capacity: usize,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
-        deserialize_with = "deserialize_usize_str"
+        deserialize_with = "deserialize_int_str"
     )]
     pub unary_concurrency_limit: usize,
     /// Enable/disable unary methods
@@ -192,7 +195,7 @@ pub struct ConfigGrpc {
     /// Number of slots stored for re-broadcast (replay)
     #[serde(
         default = "ConfigGrpc::default_replay_stored_slots",
-        deserialize_with = "deserialize_u64_str"
+        deserialize_with = "deserialize_int_str"
     )]
     pub replay_stored_slots: u64,
     #[serde(default)]
@@ -309,55 +312,39 @@ pub struct ConfigPrometheus {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum ValueIntStr<'a> {
-    Int(usize),
+enum ValueIntStr<'a, T> {
+    Int(T),
     Str(&'a str),
 }
 
-fn deserialize_usize_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn deserialize_int_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    <T as FromStr>::Err: fmt::Display,
 {
-    match ValueIntStr::deserialize(deserializer)? {
+    match ValueIntStr::<T>::deserialize(deserializer)? {
         ValueIntStr::Int(value) => Ok(value),
         ValueIntStr::Str(value) => value
             .replace('_', "")
-            .parse::<usize>()
+            .parse::<T>()
             .map_err(de::Error::custom),
     }
 }
 
-fn deserialize_usize_str_maybe<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+fn deserialize_int_str_maybe<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    <T as FromStr>::Err: fmt::Display,
 {
-    match Option::<ValueIntStr>::deserialize(deserializer)? {
+    match Option::<ValueIntStr<T>>::deserialize(deserializer)? {
         Some(ValueIntStr::Int(value)) => Ok(Some(value)),
         Some(ValueIntStr::Str(value)) => value
             .replace('_', "")
-            .parse::<usize>()
+            .parse::<T>()
             .map(Some)
             .map_err(de::Error::custom),
         None => Ok(None),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ValueU64Str<'a> {
-    Int(u64),
-    Str(&'a str),
-}
-
-fn deserialize_u64_str<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    match ValueU64Str::deserialize(deserializer)? {
-        ValueU64Str::Int(value) => Ok(value),
-        ValueU64Str::Str(value) => value
-            .replace('_', "")
-            .parse::<u64>()
-            .map_err(de::Error::custom),
     }
 }
