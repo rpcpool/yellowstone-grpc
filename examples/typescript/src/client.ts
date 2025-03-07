@@ -6,9 +6,12 @@ import Client, {
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
   SubscribeUpdateTransactionInfo,
+  SubscribeUpdateTransaction,
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
+import bs58 from 'bs58';
+import { decodeTokenInstruction } from "./decode";
 
 async function main() {
   const args = parseCommandLineArgs();
@@ -67,6 +70,7 @@ function parseCommitmentLevel(commitment: string | undefined) {
   return CommitmentLevel[typedCommitment];
 }
 
+
 async function subscribeCommand(client, args) {
   // Subscribe for events
   const stream = await client.subscribe();
@@ -87,28 +91,52 @@ async function subscribeCommand(client, args) {
 
   // Handle updates
   stream.on("data", (data) => {
-    if (
-      data.transaction &&
-      (args.transactionsParsed || args.transactionsDecodeErr)
-    ) {
-      const slot = data.transaction.slot;
-      const message = data.transaction.transaction;
-      if (args.transactionsParsed) {
-        const tx = txEncode.encode(message, txEncode.encoding.Json, 255, true);
-        console.log(
-          `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
-        );
-      }
-      if (message.meta.err && args.transactionsDecodeErr) {
-        const err = txErrDecode.decode(message.meta.err.err);
-        console.log(
-          `TX filters: ${data.filters}, slot#${slot}, err: ${inspect(err)}}`
-        );
-      }
-      return;
-    }
+    if (data.transaction) {
+      const txUpdate = data.transaction as SubscribeUpdateTransaction;
 
-    console.log("data", data);
+      // TODO: Right not we are assuming this is an `init-pregrad` transaction.
+
+      // Get the slot and transaction info
+      const slot = txUpdate.slot;
+      const tx = txUpdate.transaction;
+
+      // Properly encode signature to base58
+      const signature = bs58.encode(Buffer.from(tx.signature));
+      console.log('Slot:', slot);
+      console.log('Signature:', signature);
+
+      // Properly encode account keys to base58
+      const accountKeys: string[] = tx.transaction.message.accountKeys.map(key =>
+          bs58.encode(Buffer.from(key))
+      );
+      console.log('Account Keys:', accountKeys);
+
+      // Rest of the transaction details
+
+      for (const ix of tx.meta.innerInstructions) {
+        for (const iix of ix.instructions) {
+          console.log('Instruction:', iix);
+          // Check if the inner transaction is a TokenProgram instruction
+          if (accountKeys[iix.programIdIndex] === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') {
+            console.log('Token Program Instruction:');
+            const decoded = decodeTokenInstruction(
+              Buffer.from(iix.data),
+              Array.from(iix.accounts).map(idx => accountKeys[idx]),
+            );
+
+            if (decoded.type === 'mintTo') {
+              console.log('Mint To Instruction:', decoded);
+            }
+          }
+        }
+      }
+
+      if (tx.meta) {
+        console.log('Fee:', tx.meta.fee);
+        console.log('Pre Token Balances:', tx.meta.preTokenBalances);
+        console.log('Post Token Balances:', tx.meta.postTokenBalances);
+      }
+    }
   });
 
   // Create subscribe request based on provided arguments.
