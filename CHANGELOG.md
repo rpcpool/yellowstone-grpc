@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-03-10
+
+- @triton-one/yellowstone-grpc@4.0.0
+- yellowstone-grpc-client-simple-6.0.0
+- yellowstone-grpc-client-6.0.0
+- yellowstone-grpc-geyser-6.0.0
+- yellowstone-grpc-proto-6.0.0
+
+### Breaking
+
+- geyser: upgrade to v2.2 ([#554](https://github.com/rpcpool/yellowstone-grpc/pull/554))
+
 ## 2025-02-28
 
 - yellowstone-grpc-geyser-5.0.1
