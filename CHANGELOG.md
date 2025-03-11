@@ -19,10 +19,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## 2025-03-10
 
 - @triton-one/yellowstone-grpc@4.0.0
-- yellowstone-grpc-client-simple-5.0.0
-- yellowstone-grpc-client-5.0.0
-- yellowstone-grpc-geyser-5.0.0
-- yellowstone-grpc-proto-5.0.0
+- yellowstone-grpc-client-simple-6.0.0
+- yellowstone-grpc-client-6.0.0
+- yellowstone-grpc-geyser-6.0.0
+- yellowstone-grpc-proto-6.0.0
 
 ### Breaking
 
