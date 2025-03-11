@@ -36,7 +36,7 @@ use {
 };
 
 #[inline]
-pub fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
+pub const fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
     key_len(tag) + encoded_len_varint(len as u64) + len
 }
 
@@ -48,7 +48,7 @@ fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
 }
 
 #[inline]
-pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
+pub const fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
     prost_field_encoded_len(tag, value.len())
 }
 
