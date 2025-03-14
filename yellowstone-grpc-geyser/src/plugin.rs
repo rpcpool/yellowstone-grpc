@@ -12,7 +12,7 @@ use {
     std::{
         concat, env,
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         time::Duration,
@@ -88,8 +88,23 @@ impl GeyserPlugin for Plugin {
             builder.worker_threads(worker_threads);
         }
         if let Some(tokio_cpus) = config.tokio.affinity.clone() {
+            // Use atomic counter to distribute threads across configured cores in round-robin fashion
+            let thread_counter = Arc::new(AtomicUsize::new(0));
             builder.on_thread_start(move || {
-                affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                let thread_idx = thread_counter.fetch_add(1, Ordering::Relaxed);
+                let core_idx = thread_idx % tokio_cpus.len();
+                let core_id = core_affinity::CoreId {
+                    id: tokio_cpus[core_idx],
+                };
+
+                // Try to set affinity, just warn if it fails
+                if !core_affinity::set_for_current(core_id) {
+                    log::warn!(
+                        "Failed to set affinity for thread {} to core {}",
+                        thread_idx,
+                        tokio_cpus[core_idx]
+                    );
+                }
             });
         }
         let plugin_cancellation_token = CancellationToken::new();
