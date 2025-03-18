@@ -12,12 +12,12 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{Histogram, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
-        sync::{Arc, Once},
+        sync::{Arc, Once}, time::Duration,
     },
     tokio::{
         net::TcpListener,
@@ -66,6 +66,18 @@ lazy_static::lazy_static! {
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
+    ).unwrap();
+
+
+    static ref GEYSER_LOOP_ITERATION_DURATION: Histogram = Histogram::with_opts(
+        HistogramOpts::new("geyser_loop_iteration_duration_microsecond", "Duration of ONE geyser loop iteration in MICROSECOND")
+            .buckets(vec![100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0])
+        ).unwrap();
+
+    static ref FILTER_UPDATE_DURATION_VEC: HistogramVec = HistogramVec::new(
+        HistogramOpts::new("filter_update_duration_ms", "Filter Duration Observations per geyser message in MILLISECOND")
+            .buckets(vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0, 144.0]),
+        &["x_subscription_id"]
     ).unwrap();
 }
 
@@ -312,6 +324,17 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn observe_filter_update_duration(subscription_id: impl AsRef<str>, duration: Duration) {
+    let duration = duration.as_millis() as f64;
+    FILTER_UPDATE_DURATION_VEC
+        .with_label_values(&[&subscription_id.as_ref()])
+        .observe(duration);
+}
+
+pub fn observe_geyser_loop_duration(micro: u64) {
+    GEYSER_LOOP_ITERATION_DURATION.observe(micro as f64);
 }
 
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {

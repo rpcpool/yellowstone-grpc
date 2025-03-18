@@ -12,12 +12,10 @@ use {
         pubkey::Pubkey,
     },
     std::{
-        collections::{BTreeMap, HashMap},
-        sync::{
+        collections::{BTreeMap, HashMap}, str::FromStr, sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
-        },
-        time::SystemTime,
+        }, time::SystemTime
     },
     tokio::{
         fs,
@@ -510,21 +508,24 @@ impl GrpcService {
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_stored_slots: u64,
     ) {
+        // If we assume 3000 TPS, 31 messages will be processed in ~10ms
         const PROCESSED_MESSAGES_MAX: usize = 31;
-        const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
 
         let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
-        let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
-        tokio::pin!(processed_sleep);
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
         loop {
+            let t = Instant::now();
             tokio::select! {
-                Some(message) = messages_rx.recv() => {
+                maybe = messages_rx.recv() => {
+                    let message = match maybe {
+                        Some(message) => message,
+                        None => break,
+                    };
                     metrics::message_queue_size_dec();
                     let msgid = msgid_gen.next();
 
@@ -743,9 +744,6 @@ impl GrpcService {
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                            processed_sleep
-                                .as_mut()
-                                .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                             // confirmed
                             confirmed_messages.push(message.clone());
@@ -782,9 +780,6 @@ impl GrpcService {
                                 let _ = broadcast_tx
                                     .send((CommitmentLevel::Processed, processed_messages.into()));
                                 processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                                processed_sleep
-                                    .as_mut()
-                                    .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                             }
 
                             if !confirmed_messages.is_empty() {
@@ -799,14 +794,11 @@ impl GrpcService {
                         }
                     }
                 }
-                () = &mut processed_sleep => {
-                    if !processed_messages.is_empty() {
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
-                    processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
-                }
-                Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
+                maybe = replay_stored_slots_rx.recv() => {
+                    let (commitment, replay_slot, tx) = match maybe {
+                        Some(x) => x,
+                        None => break,
+                    };
                     if let Some((slot, _)) = messages.first_key_value() {
                         if replay_slot < *slot {
                             let _ = tx.send(ReplayedResponse::Lagged(*slot));
@@ -828,8 +820,11 @@ impl GrpcService {
                     }
                     let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
                 }
-                else => break,
-            }
+            }    
+            
+            let elapsed = t.elapsed();
+            let micro: u64 = elapsed.as_micros().try_into().unwrap_or(u64::MAX);
+            metrics::observe_geyser_loop_duration(micro);
         }
     }
 
@@ -837,6 +832,7 @@ impl GrpcService {
     async fn client_loop(
         id: usize,
         endpoint: String,
+        x_subscription_id: Option<String>,
         stream_tx: mpsc::Sender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
@@ -854,7 +850,7 @@ impl GrpcService {
             filter: Box::new(filter.clone()),
         });
         info!("client #{id}: new");
-
+        let client_name = x_subscription_id.unwrap_or(format!("unknown-{id}"));
         let mut is_alive = true;
         if let Some(snapshot_rx) = snapshot_rx.take() {
             Self::client_loop_snapshot(
@@ -972,8 +968,12 @@ impl GrpcService {
                         };
 
                         if commitment == filter.get_commitment_level() {
+                            let mut cumu_filter_time = Duration::ZERO;
                             for (_msgid, message) in messages.iter() {
-                                for message in filter.get_updates(message, Some(commitment)) {
+                                let t = Instant::now();
+                                let updates = filter.get_updates(message, Some(commitment));
+                                cumu_filter_time += t.elapsed();
+                                for message in updates {
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
@@ -990,6 +990,7 @@ impl GrpcService {
                                     }
                                 }
                             }
+                            metrics::observe_filter_update_duration(&client_name, cumu_filter_time);
                         }
 
                         if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
@@ -1091,6 +1092,15 @@ impl Geyser for GrpcService {
         } else {
             None
         };
+
+        let x_subscription_id = request.metadata()
+            .get("x-subscription-id")
+            .and_then(|ascii| ascii.to_str().ok())
+            .map(String::from_str)
+            .transpose()
+            .ok()
+            .flatten();
+
         let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
@@ -1193,6 +1203,7 @@ impl Geyser for GrpcService {
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
+            x_subscription_id,
             stream_tx,
             client_rx,
             snapshot_rx,
