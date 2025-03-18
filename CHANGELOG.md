@@ -16,6 +16,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-03-17
+
+- yellowstone-grpc-client-simple-6.0.1
+
+### Fixes
+
+- client: fix `SlotStatus` ([#557](https://github.com/rpcpool/yellowstone-grpc/pull/557))
+
 ## 2025-03-10
 
 - @triton-one/yellowstone-grpc@4.0.0

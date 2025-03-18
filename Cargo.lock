@@ -6350,7 +6350,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "anyhow",
  "backoff",
