@@ -12,10 +12,13 @@ use {
         pubkey::Pubkey,
     },
     std::{
-        collections::{BTreeMap, HashMap}, str::FromStr, sync::{
+        collections::{BTreeMap, HashMap},
+        str::FromStr,
+        sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
-        }, time::SystemTime
+        },
+        time::SystemTime,
     },
     tokio::{
         fs,
@@ -820,8 +823,8 @@ impl GrpcService {
                     }
                     let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
                 }
-            }    
-            
+            }
+
             let elapsed = t.elapsed();
             let micro: u64 = elapsed.as_micros().try_into().unwrap_or(u64::MAX);
             metrics::observe_geyser_loop_duration(micro);
@@ -1093,7 +1096,8 @@ impl Geyser for GrpcService {
             None
         };
 
-        let x_subscription_id = request.metadata()
+        let x_subscription_id = request
+            .metadata()
             .get("x-subscription-id")
             .and_then(|ascii| ascii.to_str().ok())
             .map(String::from_str)
