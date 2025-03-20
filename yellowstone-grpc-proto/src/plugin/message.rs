@@ -503,7 +503,6 @@ impl MessageBlock {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[repr(align(64))] // Message is currently 56 bytes in size, so aligning to 64 bytes so it fits in a cache line
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),

@@ -508,7 +508,7 @@ impl GrpcService {
     }
 
     async fn geyser_loop(
-        mut geyser_rx: crossbeam_channel::Receiver<Message>,
+        geyser_rx: crossbeam_channel::Receiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     ) {
