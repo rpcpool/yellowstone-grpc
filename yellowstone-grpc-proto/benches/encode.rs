@@ -54,7 +54,6 @@ fn bench_account(c: &mut Criterion) {
             message: FilteredUpdateOneof::transaction(&MessageTransaction {
                 transaction,
                 slot: 42,
-                created_at: Timestamp::from(SystemTime::now()),
             }),
             created_at: Timestamp::from(SystemTime::now()),
         })

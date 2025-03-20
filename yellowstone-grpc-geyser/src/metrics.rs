@@ -333,7 +333,7 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
 pub fn observe_filter_update_duration(subscription_id: impl AsRef<str>, duration: Duration) {
     let duration = duration.as_millis() as f64;
     FILTER_UPDATE_DURATION_VEC
-        .with_label_values(&[&subscription_id.as_ref()])
+        .with_label_values(&[subscription_id.as_ref()])
         .observe(duration);
 }
 

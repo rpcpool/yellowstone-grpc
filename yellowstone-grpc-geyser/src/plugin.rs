@@ -104,38 +104,31 @@ impl GeyserPlugin for Plugin {
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
         let (geyser_tx, geyser_rx) = crossbeam_channel::bounded(GEYSER_CHANNEL_SIZE);
-        let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
-            runtime.block_on(async move {
-                let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
-                let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
-                    config.tokio,
-                    config.grpc,
-                    config.debug_clients_http.then_some(debug_client_tx),
-                    is_reload,
-                    geyser_rx,
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-                let prometheus = PrometheusService::new(
-                    config.prometheus,
-                    config.debug_clients_http.then_some(debug_client_rx),
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-                Ok::<_, GeyserPluginError>((
-                    snapshot_channel,
-                    grpc_channel,
-                    grpc_shutdown,
-                    prometheus,
-                ))
-            })?;
+        let (snapshot_channel, grpc_shutdown, prometheus) = runtime.block_on(async move {
+            let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
+            let (snapshot_channel, grpc_shutdown) = GrpcService::create(
+                config.tokio,
+                config.grpc,
+                config.debug_clients_http.then_some(debug_client_tx),
+                is_reload,
+                geyser_rx,
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
+            let prometheus = PrometheusService::new(
+                config.prometheus,
+                config.debug_clients_http.then_some(debug_client_rx),
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_shutdown, prometheus))
+        })?;
 
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
             geyser_channel: geyser_tx,
-            grpc_channel,
             grpc_shutdown,
             prometheus,
         });

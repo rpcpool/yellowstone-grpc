@@ -251,7 +251,7 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Slot(msg) => {
-                let slot = MessageSlot::from_update_oneof(&msg, created_at)?;
+                let slot = MessageSlot::from_update_oneof(&msg)?;
                 FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
             }
             UpdateOneof::Transaction(msg) => {
@@ -279,7 +279,7 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Block(msg) => {
-                let block = MessageBlock::from_update_oneof(msg, created_at)?;
+                let block = MessageBlock::from_update_oneof(msg)?;
                 FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
                     meta: block.meta,
                     transactions: block.transactions,

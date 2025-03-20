@@ -6,7 +6,6 @@ use {
     },
     anyhow::Context,
     log::{error, info},
-    prost_types::Timestamp,
     solana_sdk::{
         clock::{Slot, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
@@ -18,11 +17,9 @@ use {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::SystemTime,
     },
     tokio::{
         fs,
-        runtime::Builder,
         sync::{broadcast, mpsc, oneshot, Mutex, Notify, RwLock, Semaphore},
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
@@ -324,6 +321,7 @@ impl SlotMessages {
 
 type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
 
+#[allow(dead_code)]
 enum ReplayedResponse {
     Messages(Vec<(u64, Message)>),
     Lagged(Slot),
@@ -348,16 +346,12 @@ pub struct GrpcService {
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
-        config_tokio: ConfigTokio,
+        _config_tokio: ConfigTokio,
         config: ConfigGrpc,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
         geyser_rx: crossbeam_channel::Receiver<Message>,
-    ) -> anyhow::Result<(
-        Option<crossbeam_channel::Sender<Box<Message>>>,
-        mpsc::UnboundedSender<Message>,
-        Arc<Notify>,
-    )> {
+    ) -> anyhow::Result<(Option<crossbeam_channel::Sender<Box<Message>>>, Arc<Notify>)> {
         // Bind service address
         let incoming = TcpIncoming::new(
             config.address,
@@ -387,7 +381,7 @@ impl GrpcService {
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         // attempt to prevent spam of geyser loop with capacity eq 1
-        let (replay_stored_slots_tx, replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
+        let (replay_stored_slots_tx, _replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
             (None, None)
         } else {
             let (tx, rx) = mpsc::channel(1);
@@ -452,7 +446,7 @@ impl GrpcService {
         }
 
         // Run geyser message loop
-        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+        // let (messages_tx, _messages_rx) = mpsc::unbounded_channel();
         // spawn_blocking(move || {
         //     let mut builder = Builder::new_multi_thread();
         //     if let Some(worker_threads) = config_tokio.worker_threads {
@@ -504,7 +498,7 @@ impl GrpcService {
                 .await
         });
 
-        Ok((snapshot_tx, messages_tx, shutdown))
+        Ok((snapshot_tx, shutdown))
     }
 
     async fn geyser_loop(
@@ -519,10 +513,12 @@ impl GrpcService {
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
 
-        let mut buffer = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        // 64 bytes per message (technically it is 56, but crossbeam uses 64)
+        const MESSAGES_PER_OS_PAGE: usize = 4096 / 64;
+        let mut buffer = Vec::with_capacity(MESSAGES_PER_OS_PAGE);
         'outer: loop {
             let t = Instant::now();
-            while buffer.len() < PROCESSED_MESSAGES_MAX {
+            while buffer.len() < MESSAGES_PER_OS_PAGE {
                 match geyser_rx.try_recv() {
                     Ok(message) => {
                         buffer.push(message);

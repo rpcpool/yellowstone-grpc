@@ -13,7 +13,6 @@ use {
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
         SlotStatus as GeyserSlotStatus,
     },
-    prost_types::Timestamp,
     solana_sdk::{
         clock::Slot,
         hash::{Hash, HASH_BYTES},
@@ -24,7 +23,6 @@ use {
         collections::HashSet,
         ops::{Deref, DerefMut},
         sync::Arc,
-        time::SystemTime,
     },
 };
 
@@ -167,10 +165,7 @@ impl MessageSlot {
         }
     }
 
-    pub fn from_update_oneof(
-        msg: &SubscribeUpdateSlot,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
+    pub fn from_update_oneof(msg: &SubscribeUpdateSlot) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             slot: msg.slot,
             parent: msg.parent,
@@ -464,10 +459,7 @@ impl MessageBlock {
         }
     }
 
-    pub fn from_update_oneof(
-        msg: SubscribeUpdateBlock,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
+    pub fn from_update_oneof(msg: SubscribeUpdateBlock) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             meta: Arc::new(MessageBlockMeta {
                 block_meta: SubscribeUpdateBlockMeta {
@@ -524,22 +516,17 @@ impl Message {
         }
     }
 
-    pub fn from_update_oneof(
-        oneof: UpdateOneof,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
+    pub fn from_update_oneof(oneof: UpdateOneof) -> FromUpdateOneofResult<Self> {
         Ok(match oneof {
             UpdateOneof::Account(msg) => Self::Account(MessageAccount::from_update_oneof(msg)?),
-            UpdateOneof::Slot(msg) => Self::Slot(MessageSlot::from_update_oneof(&msg, created_at)?),
+            UpdateOneof::Slot(msg) => Self::Slot(MessageSlot::from_update_oneof(&msg)?),
             UpdateOneof::Transaction(msg) => {
                 Self::Transaction(MessageTransaction::from_update_oneof(msg)?)
             }
             UpdateOneof::TransactionStatus(_) => {
                 return Err("TransactionStatus message is not supported")
             }
-            UpdateOneof::Block(msg) => {
-                Self::Block(Arc::new(MessageBlock::from_update_oneof(msg, created_at)?))
-            }
+            UpdateOneof::Block(msg) => Self::Block(Arc::new(MessageBlock::from_update_oneof(msg)?)),
             UpdateOneof::Ping(_) => return Err("Ping message is not supported"),
             UpdateOneof::Pong(_) => return Err("Pong message is not supported"),
             UpdateOneof::BlockMeta(msg) => {

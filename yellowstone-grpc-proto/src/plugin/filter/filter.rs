@@ -1109,7 +1109,6 @@ mod tests {
                 message::{Message, MessageTransaction, MessageTransactionInfo},
             },
         },
-        prost_types::Timestamp,
         solana_sdk::{
             hash::Hash,
             message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
@@ -1118,11 +1117,7 @@ mod tests {
             transaction::{SanitizedTransaction, Transaction},
         },
         solana_transaction_status::TransactionStatusMeta,
-        std::{
-            collections::HashMap,
-            sync::Arc,
-            time::{Duration, SystemTime},
-        },
+        std::{collections::HashMap, sync::Arc, time::Duration},
     };
 
     fn create_filter_names() -> FilterNames {
