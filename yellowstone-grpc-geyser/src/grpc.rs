@@ -519,10 +519,12 @@ impl GrpcService {
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
 
-        let mut buffer = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        // 64 bytes per message (technically it is 56, but crossbeam uses 64)
+        const MESSAGES_PER_OS_PAGE: usize = 4096 / 64;
+        let mut buffer = Vec::with_capacity(MESSAGES_PER_OS_PAGE);
         'outer: loop {
             let t = Instant::now();
-            while buffer.len() < PROCESSED_MESSAGES_MAX {
+            while buffer.len() < MESSAGES_PER_OS_PAGE {
                 match geyser_rx.try_recv() {
                     Ok(message) => {
                         buffer.push(message);
