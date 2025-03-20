@@ -514,24 +514,26 @@ impl GrpcService {
     ) {
         // If we assume 3000 TPS, 31 messages will be processed in ~10ms
         const PROCESSED_MESSAGES_MAX: usize = 32;
-
         let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
 
-        let mut buffer = Vec::with_capacity(32);
+        let mut buffer = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         'outer: loop {
             let t = Instant::now();
-            for _ in 0..32 {
-                match geyser_rx.recv() {
+            while buffer.len() < PROCESSED_MESSAGES_MAX {
+                match geyser_rx.try_recv() {
                     Ok(message) => {
                         buffer.push(message);
                     }
-                    Err(e) => {
-                        log::error!("failed to receive message: {e}");
-                        break 'outer;
-                    }
+                    Err(e) => match e {
+                        crossbeam_channel::TryRecvError::Empty => continue,
+                        crossbeam_channel::TryRecvError::Disconnected => {
+                            log::error!("geyser_rx disconnected");
+                            break 'outer;
+                        }
+                    },
                 }
             }
 
