@@ -998,8 +998,8 @@ pub mod tests {
         solana_message::SimpleAddressLoader,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        solana_transaction::sanitized::{MessageHash, SanitizedTransaction},
         solana_storage_proto::convert::generated,
+        solana_transaction::sanitized::{MessageHash, SanitizedTransaction},
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
             collections::{HashMap, HashSet},

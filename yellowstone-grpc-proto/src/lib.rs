@@ -300,8 +300,8 @@ pub mod convert_to {
 pub mod convert_from {
     use {
         super::prelude as proto,
-        solana_account_decoder::parse_token::UiTokenAmount,
         solana_account::Account,
+        solana_account_decoder::parse_token::UiTokenAmount,
         solana_hash::{Hash, HASH_BYTES},
         solana_message::{
             compiled_instruction::CompiledInstruction,
@@ -311,8 +311,8 @@ pub mod convert_from {
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         solana_transaction::versioned::VersionedTransaction,
-        solana_transaction_error::TransactionError,
         solana_transaction_context::TransactionReturnData,
+        solana_transaction_error::TransactionError,
         solana_transaction_status::{
             ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
             RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
