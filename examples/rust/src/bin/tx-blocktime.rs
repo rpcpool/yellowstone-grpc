@@ -4,7 +4,7 @@ use {
     futures::{sink::SinkExt, stream::StreamExt},
     log::{error, info},
     maplit::hashmap,
-    solana_sdk::signature::Signature,
+    solana_signature::Signature,
     std::{
         collections::{BTreeMap, HashMap},
         env,

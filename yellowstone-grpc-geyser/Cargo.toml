@@ -38,8 +38,9 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+solana-clock = { workspace = true }
 solana-logger = { workspace = true }
-solana-sdk = { workspace = true }
+solana-pubkey = { workspace = true }
 solana-transaction-status = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }

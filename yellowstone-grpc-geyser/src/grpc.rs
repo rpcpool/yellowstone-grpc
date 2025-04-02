@@ -7,10 +7,8 @@ use {
     anyhow::Context,
     log::{error, info},
     prost_types::Timestamp,
-    solana_sdk::{
-        clock::{Slot, MAX_RECENT_BLOCKHASHES},
-        pubkey::Pubkey,
-    },
+    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
         sync::{

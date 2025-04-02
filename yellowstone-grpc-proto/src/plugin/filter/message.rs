@@ -26,7 +26,7 @@ use {
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
-    solana_sdk::signature::Signature,
+    solana_signature::Signature,
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
@@ -994,13 +994,11 @@ pub mod tests {
         prost::Message as _,
         prost_011::Message as _,
         prost_types::Timestamp,
-        solana_sdk::{
-            hash::Hash,
-            message::SimpleAddressLoader,
-            pubkey::Pubkey,
-            signature::Signature,
-            transaction::{MessageHash, SanitizedTransaction},
-        },
+        solana_hash::Hash,
+        solana_message::SimpleAddressLoader,
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        solana_transaction::sanitized::{MessageHash, SanitizedTransaction},
         solana_storage_proto::convert::generated,
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
