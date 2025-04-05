@@ -4,8 +4,8 @@
   "license": "Apache-2.0",
   "author": "Triton One",
   "description": "Yellowstone gRPC Geyser Node.js Client",
-  "main": "dist/cjs/index.js",
-  "types": "dist/types/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/types/index.d.ts",
   "scripts": {
     "build": "npm run grpc-generate && tsc --project tsconfig.esm.json && tsc --project tsconfig.cjs.json && npm run cp-encoding-files && node add-js-extensions.js",
     "cp-encoding-files": "mkdir -p dist/esm/encoding && cp -r src/encoding/* dist/cjs/encoding/ && mkdir -p dist/esm/encoding && cp -r src/encoding/* dist/esm/encoding/ && mkdir -p dist/types/encoding && cp -r src/encoding/* dist/types/encoding/",
@@ -46,7 +46,8 @@
   "exports": {
     ".": {
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js"
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
     }
   }
 }
