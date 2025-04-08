@@ -6,7 +6,9 @@ use {
     indicatif::{MultiProgress, ProgressBar, ProgressStyle},
     log::{error, info},
     serde_json::{json, Value},
-    solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature},
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_signature::Signature,
     solana_transaction_status::UiTransactionEncoding,
     std::{
         collections::HashMap,
