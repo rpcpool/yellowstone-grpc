@@ -105,24 +105,16 @@ impl prost::Message for FilteredUpdate {
 }
 
 impl FilteredUpdate {
-    pub const fn new(
-        filters: FilteredUpdateFilters,
-        message: FilteredUpdateOneof,
-        created_at: Timestamp,
-    ) -> Self {
+    pub fn new(filters: FilteredUpdateFilters, message: FilteredUpdateOneof) -> Self {
         Self {
             filters,
             message,
-            created_at,
+            created_at: Timestamp::from(SystemTime::now()),
         }
     }
 
     pub fn new_empty(message: FilteredUpdateOneof) -> Self {
-        Self::new(
-            FilteredUpdateFilters::new(),
-            message,
-            Timestamp::from(SystemTime::now()),
-        )
+        Self::new(FilteredUpdateFilters::new(), message)
     }
 
     fn as_subscribe_update_account(
@@ -250,7 +242,7 @@ impl FilteredUpdate {
 
         let message = match update.update_oneof.ok_or("update should be defined")? {
             UpdateOneof::Account(msg) => {
-                let account = MessageAccount::from_update_oneof(msg, created_at)?;
+                let account = MessageAccount::from_update_oneof(msg)?;
                 FilteredUpdateOneof::Account(FilteredUpdateAccount {
                     account: account.account,
                     slot: account.slot,
@@ -259,11 +251,11 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Slot(msg) => {
-                let slot = MessageSlot::from_update_oneof(&msg, created_at)?;
+                let slot = MessageSlot::from_update_oneof(&msg)?;
                 FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
             }
             UpdateOneof::Transaction(msg) => {
-                let tx = MessageTransaction::from_update_oneof(msg, created_at)?;
+                let tx = MessageTransaction::from_update_oneof(msg)?;
                 FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
                     transaction: tx.transaction,
                     slot: tx.slot,
@@ -287,7 +279,7 @@ impl FilteredUpdate {
                 })
             }
             UpdateOneof::Block(msg) => {
-                let block = MessageBlock::from_update_oneof(msg, created_at)?;
+                let block = MessageBlock::from_update_oneof(msg)?;
                 FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
                     meta: block.meta,
                     transactions: block.transactions,
@@ -300,11 +292,11 @@ impl FilteredUpdate {
             UpdateOneof::Ping(_) => FilteredUpdateOneof::Ping,
             UpdateOneof::Pong(msg) => FilteredUpdateOneof::Pong(msg),
             UpdateOneof::BlockMeta(msg) => {
-                let block_meta = MessageBlockMeta::from_update_oneof(msg, created_at);
+                let block_meta = MessageBlockMeta::from_update_oneof(msg);
                 FilteredUpdateOneof::BlockMeta(Arc::new(block_meta))
             }
             UpdateOneof::Entry(msg) => {
-                let entry = MessageEntry::from_update_oneof(&msg, created_at)?;
+                let entry = MessageEntry::from_update_oneof(&msg)?;
                 FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
             }
         };
@@ -1080,7 +1072,6 @@ pub mod tests {
                             account: Arc::clone(&account),
                             slot,
                             is_startup,
-                            created_at: Timestamp::from(SystemTime::now()),
                         };
                         vec.push((msg, data_slice));
                     }
@@ -1099,7 +1090,6 @@ pub mod tests {
                 hash: Hash::new_from_array([98; 32]),
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
-                created_at: Timestamp::from(SystemTime::now()),
             },
             MessageEntry {
                 slot: 299888121,
@@ -1108,7 +1098,6 @@ pub mod tests {
                 hash: Hash::new_from_array([42; 32]),
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
-                created_at: Timestamp::from(SystemTime::now()),
             },
         ]
         .into_iter()
@@ -1198,7 +1187,6 @@ pub mod tests {
                         executed_transaction_count: transactions.len() as u64,
                         entries_count: entries.len() as u64,
                     },
-                    created_at: Timestamp::from(SystemTime::now()),
                 };
                 let mut block_meta2 = block_meta1.clone();
                 block_meta2.rewards =
@@ -1280,7 +1268,6 @@ pub mod tests {
                             parent,
                             status,
                             dead_error: None,
-                            created_at: Timestamp::from(SystemTime::now()),
                         }),
                     )
                 }
@@ -1291,7 +1278,6 @@ pub mod tests {
                         parent,
                         status: SlotStatus::Dead,
                         dead_error: Some("123".to_owned()),
-                        created_at: Timestamp::from(SystemTime::now()),
                     }),
                 )
             }
@@ -1304,7 +1290,6 @@ pub mod tests {
             let msg = MessageTransaction {
                 transaction,
                 slot: 42,
-                created_at: Timestamp::from(SystemTime::now()),
             };
             encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction(&msg));
             encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction_status(&msg));

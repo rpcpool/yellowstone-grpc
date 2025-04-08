@@ -26,19 +26,36 @@ use {
     },
 };
 
+///
+/// Crossbean bounded channel is a implemented as a ring buffer with a fixed size.
+///
+/// The capacity of the channel is 2^23 "slots".
+///
+/// Each slot contains header + data
+/// header size is 64 bytes (AtomicUSize),
+/// WE NEED TO MAKE THE DATA ALLIGNED TO 64 BYTES TOO.
+/// SO MAKE SURE THE MESSAGE STRUCT NEVER EXCEED 64 BYTES!
+///
+/// By doing so, each "Slot" is 128 bytes (contiguous) which is equal to two cacheline for x86_64 CPU.
+/// Since Slot is 128 of contiguous memory, CPU can prefetch the next cachine (bytes 64..128)
+///
+/// 2^23 * 128 bytes ~ 1GB of pre-allocated channel capacity
+/// Since each slot is 128 bytes, we can 32 slots in a single OS page (4KB)
+const GEYSER_CHANNEL_SIZE: usize = 2 ^ 23;
+
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
-    grpc_channel: mpsc::UnboundedSender<Message>,
+    geyser_channel: crossbeam_channel::Sender<Message>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
 }
 
 impl PluginInner {
     fn send_message(&self, message: Message) {
-        if self.grpc_channel.send(message).is_ok() {
+        if self.geyser_channel.send(message).is_ok() {
             metrics::message_queue_size_inc();
         }
     }
@@ -86,36 +103,32 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
-            runtime.block_on(async move {
-                let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
-                let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
-                    config.tokio,
-                    config.grpc,
-                    config.debug_clients_http.then_some(debug_client_tx),
-                    is_reload,
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-                let prometheus = PrometheusService::new(
-                    config.prometheus,
-                    config.debug_clients_http.then_some(debug_client_rx),
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-                Ok::<_, GeyserPluginError>((
-                    snapshot_channel,
-                    grpc_channel,
-                    grpc_shutdown,
-                    prometheus,
-                ))
-            })?;
+        let (geyser_tx, geyser_rx) = crossbeam_channel::bounded(GEYSER_CHANNEL_SIZE);
+        let (snapshot_channel, grpc_shutdown, prometheus) = runtime.block_on(async move {
+            let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
+            let (snapshot_channel, grpc_shutdown) = GrpcService::create(
+                config.tokio,
+                config.grpc,
+                config.debug_clients_http.then_some(debug_client_tx),
+                is_reload,
+                geyser_rx,
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
+            let prometheus = PrometheusService::new(
+                config.prometheus,
+                config.debug_clients_http.then_some(debug_client_rx),
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_shutdown, prometheus))
+        })?;
 
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
-            grpc_channel,
+            geyser_channel: geyser_tx,
             grpc_shutdown,
             prometheus,
         });
@@ -126,7 +139,7 @@ impl GeyserPlugin for Plugin {
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
             inner.grpc_shutdown.notify_one();
-            drop(inner.grpc_channel);
+            drop(inner.geyser_channel);
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
         }
