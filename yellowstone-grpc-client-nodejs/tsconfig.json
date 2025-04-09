@@ -1,8 +1,12 @@
 {
   "compilerOptions": {
-    "esModuleInterop": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true
-  }
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "baseUrl": ".",
+    "noEmit": true,
+    "declaration": true,
+    "esModuleInterop": true
+  },
+  "include": ["src", "tsup.config.ts"]
 }

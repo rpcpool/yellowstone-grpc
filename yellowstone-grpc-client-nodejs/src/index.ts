@@ -25,7 +25,6 @@ import {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
-// Reexport automatically generated types
 export {
   CommitmentLevel,
   SubscribeRequest,
@@ -54,6 +53,9 @@ export {
   SubscribeUpdateTransaction,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
+
+// Re-export Solana types
+export * from "./grpc/solana-storage";
 
 // Import transaction encoding function created in Rust
 import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";

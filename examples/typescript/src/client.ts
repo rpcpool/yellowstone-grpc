@@ -5,7 +5,6 @@ import Client, {
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
-  SubscribeUpdateTransactionInfo,
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
