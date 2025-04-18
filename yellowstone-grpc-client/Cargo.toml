@@ -14,7 +14,7 @@ publish = true
 bytes = { workspace = true }
 futures = { workspace = true }
 thiserror ={ workspace = true }
-tonic = { workspace = true, features = ["tls", "tls-roots"] }
+tonic = { workspace = true, features = ["_tls-any"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
 
