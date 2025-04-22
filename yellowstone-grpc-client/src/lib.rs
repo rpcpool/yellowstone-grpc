@@ -1,11 +1,7 @@
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
-    futures::{
-        channel::mpsc,
-        sink::{Sink, SinkExt},
-        stream::Stream,
-    },
+    futures::{channel::mpsc, sink::SinkExt},
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -88,9 +84,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok(response.into_inner())
     }
 
-    pub async fn health_watch(
-        &mut self,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<HealthCheckResponse, Status>>> {
+    pub async fn health_watch(&mut self) -> GeyserGrpcClientResult<Streaming<HealthCheckResponse>> {
         let request = HealthCheckRequest {
             service: "geyser.Geyser".to_owned(),
         };
@@ -102,8 +96,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     pub async fn subscribe(
         &mut self,
     ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>>,
+        mpsc::UnboundedSender<SubscribeRequest>,
+        Streaming<SubscribeUpdate>,
     )> {
         self.subscribe_with_request(None).await
     }
@@ -112,8 +106,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         &mut self,
         request: Option<SubscribeRequest>,
     ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>>,
+        mpsc::UnboundedSender<SubscribeRequest>,
+        Streaming<SubscribeUpdate>,
     )> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
@@ -130,7 +124,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
+    ) -> GeyserGrpcClientResult<Streaming<SubscribeUpdate>> {
         self.subscribe_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
@@ -244,7 +238,7 @@ impl GeyserGrpcBuilder {
     fn build(
         self,
         channel: Channel,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<InterceptorXToken>> {
         let interceptor = InterceptorXToken {
             x_token: self.x_token,
             x_request_snapshot: self.x_request_snapshot,
@@ -270,12 +264,12 @@ impl GeyserGrpcBuilder {
         ))
     }
 
-    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<InterceptorXToken>> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
-    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<InterceptorXToken>> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
     }
