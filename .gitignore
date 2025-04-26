@@ -3,12 +3,14 @@ test-ledger
 
 # Rust
 target
+yellowstone-grpc-proto/src/bin/raw.rs
 
 # Node.js
 examples/typescript/dist
 examples/typescript/node_modules
 yellowstone-grpc-client-nodejs/dist
 yellowstone-grpc-client-nodejs/node_modules
+yellowstone-grpc-client-nodejs/src/encoding
 yellowstone-grpc-client-nodejs/src/grpc
 
 # Python
@@ -21,3 +23,6 @@ __pycache__/
 
 # Configs
 yellowstone-grpc-geyser/config-test.json
+
+# local files for development
+.local

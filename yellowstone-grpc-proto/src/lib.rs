@@ -4,7 +4,10 @@ pub mod geyser {
     #![allow(clippy::clone_on_ref_ptr)]
     #![allow(clippy::missing_const_for_fn)]
 
-    tonic::include_proto!("geyser");
+    #[cfg(feature = "tonic")]
+    include!(concat!(env!("OUT_DIR"), "/geyser.rs"));
+    #[cfg(not(feature = "tonic"))]
+    include!(concat!(env!("OUT_DIR"), "/no-tonic/geyser.rs"));
 }
 
 pub mod solana {
@@ -12,7 +15,16 @@ pub mod solana {
 
     pub mod storage {
         pub mod confirmed_block {
-            tonic::include_proto!("solana.storage.confirmed_block");
+            #[cfg(feature = "tonic")]
+            include!(concat!(
+                env!("OUT_DIR"),
+                "/solana.storage.confirmed_block.rs"
+            ));
+            #[cfg(not(feature = "tonic"))]
+            include!(concat!(
+                env!("OUT_DIR"),
+                "/no-tonic/solana.storage.confirmed_block.rs"
+            ));
         }
     }
 }
@@ -21,7 +33,9 @@ pub mod prelude {
     pub use super::{geyser::*, solana::storage::confirmed_block::*};
 }
 
-pub use {prost, tonic};
+#[cfg(feature = "tonic")]
+pub use tonic;
+pub use {prost, prost_types};
 
 #[cfg(feature = "plugin")]
 pub mod plugin;
@@ -235,8 +249,7 @@ pub mod convert_to {
     pub fn create_rewards_obj(rewards: &[Reward], num_partitions: Option<u64>) -> proto::Rewards {
         proto::Rewards {
             rewards: create_rewards(rewards),
-            num_partitions: num_partitions
-                .map(|num_partitions| proto::NumPartitions { num_partitions }),
+            num_partitions: num_partitions.map(create_num_partitions),
         }
     }
 
@@ -249,15 +262,23 @@ pub mod convert_to {
             pubkey: reward.pubkey.clone(),
             lamports: reward.lamports,
             post_balance: reward.post_balance,
-            reward_type: match reward.reward_type {
-                None => proto::RewardType::Unspecified,
-                Some(RewardType::Fee) => proto::RewardType::Fee,
-                Some(RewardType::Rent) => proto::RewardType::Rent,
-                Some(RewardType::Staking) => proto::RewardType::Staking,
-                Some(RewardType::Voting) => proto::RewardType::Voting,
-            } as i32,
+            reward_type: create_reward_type(reward.reward_type) as i32,
             commission: reward.commission.map(|c| c.to_string()).unwrap_or_default(),
         }
+    }
+
+    pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::RewardType {
+        match reward_type {
+            None => proto::RewardType::Unspecified,
+            Some(RewardType::Fee) => proto::RewardType::Fee,
+            Some(RewardType::Rent) => proto::RewardType::Rent,
+            Some(RewardType::Staking) => proto::RewardType::Staking,
+            Some(RewardType::Voting) => proto::RewardType::Voting,
+        }
+    }
+
+    pub const fn create_num_partitions(num_partitions: u64) -> proto::NumPartitions {
+        proto::NumPartitions { num_partitions }
     }
 
     pub fn create_return_data(return_data: &TransactionReturnData) -> proto::ReturnData {
@@ -403,7 +424,9 @@ pub mod convert_from {
             VersionedMessage::V0(MessageV0 {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
-                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                recent_blockhash: Hash::new_from_array(
+                    <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
+                ),
                 instructions: create_message_instructions(message.instructions)?,
                 address_table_lookups,
             })
@@ -411,7 +434,9 @@ pub mod convert_from {
             VersionedMessage::Legacy(Message {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
-                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                recent_blockhash: Hash::new_from_array(
+                    <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
+                ),
                 instructions: create_message_instructions(message.instructions)?,
             })
         })

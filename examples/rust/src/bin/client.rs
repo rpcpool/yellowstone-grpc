@@ -8,12 +8,21 @@ use {
     serde_json::{json, Value},
     solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature},
     solana_transaction_status::UiTransactionEncoding,
-    std::{collections::HashMap, env, fs::File, sync::Arc, time::Duration},
-    tokio::sync::Mutex,
-    tonic::transport::channel::ClientTlsConfig,
+    std::{
+        collections::HashMap,
+        env,
+        fs::File,
+        path::PathBuf,
+        sync::Arc,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    },
+    tokio::{fs, sync::Mutex},
+    tonic::transport::{channel::ClientTlsConfig, Certificate},
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
     yellowstone_grpc_proto::{
         convert_from,
+        geyser::SlotStatus,
+        plugin::filter::message::FilteredUpdate,
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
@@ -45,16 +54,64 @@ struct Args {
     /// Service endpoint
     endpoint: String,
 
+    /// Path of a certificate authority file
+    #[clap(long)]
+    ca_certificate: Option<PathBuf>,
+
     #[clap(long)]
     x_token: Option<String>,
 
-    /// Commitment level: processed, confirmed or finalized
+    /// Apply a timeout to connecting to the uri.
     #[clap(long)]
-    commitment: Option<ArgsCommitment>,
+    connect_timeout_ms: Option<u64>,
+
+    /// Sets the tower service default internal buffer size, default is 1024
+    #[clap(long)]
+    buffer_size: Option<usize>,
+
+    /// Sets whether to use an adaptive flow control. Uses hyper’s default otherwise.
+    #[clap(long)]
+    http2_adaptive_window: Option<bool>,
+
+    /// Set http2 KEEP_ALIVE_TIMEOUT. Uses hyper’s default otherwise.
+    #[clap(long)]
+    http2_keep_alive_interval_ms: Option<u64>,
+
+    /// Sets the max connection-level flow control for HTTP2, default is 65,535
+    #[clap(long)]
+    initial_connection_window_size: Option<u32>,
+
+    ///Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control, default is 65,535
+    #[clap(long)]
+    initial_stream_window_size: Option<u32>,
+
+    ///Set http2 KEEP_ALIVE_TIMEOUT. Uses hyper’s default otherwise.
+    #[clap(long)]
+    keep_alive_timeout_ms: Option<u64>,
+
+    /// Set http2 KEEP_ALIVE_WHILE_IDLE. Uses hyper’s default otherwise.
+    #[clap(long)]
+    keep_alive_while_idle: Option<bool>,
+
+    /// Set whether TCP keepalive messages are enabled on accepted connections.
+    #[clap(long)]
+    tcp_keepalive_ms: Option<u64>,
+
+    /// Set the value of TCP_NODELAY option for accepted connections. Enabled by default.
+    #[clap(long)]
+    tcp_nodelay: Option<bool>,
+
+    /// Apply a timeout to each request.
+    #[clap(long)]
+    timeout_ms: Option<u64>,
 
     /// Max message size before decoding, full blocks can be super large, default is 1GiB
     #[clap(long, default_value_t = 1024 * 1024 * 1024)]
     max_decoding_message_size: usize,
+
+    /// Commitment level: processed, confirmed or finalized
+    #[clap(long)]
+    commitment: Option<ArgsCommitment>,
 
     #[command(subcommand)]
     action: Action,
@@ -66,15 +123,51 @@ impl Args {
     }
 
     async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor>> {
-        GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
+        let mut tls_config = ClientTlsConfig::new().with_native_roots();
+        if let Some(path) = &self.ca_certificate {
+            let bytes = fs::read(path).await?;
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(bytes));
+        }
+        let mut builder = GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
             .x_token(self.x_token.clone())?
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(10))
-            .tls_config(ClientTlsConfig::new().with_native_roots())?
-            .max_decoding_message_size(self.max_decoding_message_size)
-            .connect()
-            .await
-            .map_err(Into::into)
+            .tls_config(tls_config)?
+            .max_decoding_message_size(self.max_decoding_message_size);
+
+        if let Some(duration) = self.connect_timeout_ms {
+            builder = builder.connect_timeout(Duration::from_millis(duration));
+        }
+        if let Some(sz) = self.buffer_size {
+            builder = builder.buffer_size(sz);
+        }
+        if let Some(enabled) = self.http2_adaptive_window {
+            builder = builder.http2_adaptive_window(enabled);
+        }
+        if let Some(duration) = self.http2_keep_alive_interval_ms {
+            builder = builder.http2_keep_alive_interval(Duration::from_millis(duration));
+        }
+        if let Some(sz) = self.initial_connection_window_size {
+            builder = builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = self.initial_stream_window_size {
+            builder = builder.initial_stream_window_size(sz);
+        }
+        if let Some(duration) = self.keep_alive_timeout_ms {
+            builder = builder.keep_alive_timeout(Duration::from_millis(duration));
+        }
+        if let Some(enabled) = self.keep_alive_while_idle {
+            builder = builder.keep_alive_while_idle(enabled);
+        }
+        if let Some(duration) = self.tcp_keepalive_ms {
+            builder = builder.tcp_keepalive(Some(Duration::from_millis(duration)));
+        }
+        if let Some(enabled) = self.tcp_nodelay {
+            builder = builder.tcp_nodelay(enabled);
+        }
+        if let Some(duration) = self.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(duration));
+        }
+
+        builder.connect().await.map_err(Into::into)
     }
 }
 
@@ -164,6 +257,10 @@ struct ActionSubscribe {
     #[clap(long)]
     slots_filter_by_commitment: bool,
 
+    /// Subscribe on interslot slot updates
+    #[clap(long)]
+    slots_interslot_updates: bool,
+
     /// Subscribe on transactions updates
     #[clap(long)]
     transactions: bool,
@@ -247,6 +344,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
+    /// Re-send message from slot
+    #[clap(long)]
+    from_slot: Option<u64>,
+
     /// Send ping in subscribe request
     #[clap(long)]
     ping: Option<i32>,
@@ -258,13 +359,17 @@ struct ActionSubscribe {
     /// Show total stat instead of messages
     #[clap(long, default_value_t = false)]
     stats: bool,
+
+    /// Verify manually implemented encoding against prost
+    #[clap(long, default_value_t = false)]
+    verify_encoding: bool,
 }
 
 impl Action {
     async fn get_subscribe_request(
         &self,
         commitment: Option<CommitmentLevel>,
-    ) -> anyhow::Result<Option<(SubscribeRequest, usize, bool)>> {
+    ) -> anyhow::Result<Option<(SubscribeRequest, usize, bool, bool)>> {
         Ok(match self {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
@@ -351,6 +456,7 @@ impl Action {
                         "client".to_owned(),
                         SubscribeRequestFilterSlots {
                             filter_by_commitment: Some(args.slots_filter_by_commitment),
+                            interslot_updates: Some(args.slots_interslot_updates),
                         },
                     );
                 }
@@ -436,9 +542,11 @@ impl Action {
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
                         ping,
+                        from_slot: args.from_slot,
                     },
                     args.resub.unwrap_or(0),
                     args.stats,
+                    args.verify_encoding,
                 ))
             }
             _ => None,
@@ -485,7 +593,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(|response| info!("response: {response:?}")),
                 Action::HealthWatch => geyser_health_watch(client).await,
                 Action::Subscribe(_) => {
-                    let (request, resub, stats) = args
+                    let (request, resub, stats, verify_encoding) = args
                         .action
                         .get_subscribe_request(commitment)
                         .await
@@ -494,7 +602,7 @@ async fn main() -> anyhow::Result<()> {
                             "expect subscribe action"
                         )))?;
 
-                    geyser_subscribe(client, request, resub, stats).await
+                    geyser_subscribe(client, request, resub, stats, verify_encoding).await
                 }
                 Action::Ping { count } => client
                     .ping(*count)
@@ -552,26 +660,29 @@ async fn geyser_subscribe(
     request: SubscribeRequest,
     resub: usize,
     stats: bool,
+    verify_encoding: bool,
 ) -> anyhow::Result<()> {
     let pb_multi = MultiProgress::new();
     let mut pb_accounts_c = 0;
-    let pb_accounts = crate_progress_bar(&pb_multi, "accounts", false)?;
+    let pb_accounts = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("accounts"))?;
     let mut pb_slots_c = 0;
-    let pb_slots = crate_progress_bar(&pb_multi, "slots", false)?;
+    let pb_slots = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("slots"))?;
     let mut pb_txs_c = 0;
-    let pb_txs = crate_progress_bar(&pb_multi, "transactions", false)?;
+    let pb_txs = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("transactions"))?;
     let mut pb_txs_st_c = 0;
-    let pb_txs_st = crate_progress_bar(&pb_multi, "transactions statuses", false)?;
+    let pb_txs_st = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("transactions statuses"))?;
     let mut pb_entries_c = 0;
-    let pb_entries = crate_progress_bar(&pb_multi, "entries", false)?;
+    let pb_entries = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("entries"))?;
     let mut pb_blocks_mt_c = 0;
-    let pb_blocks_mt = crate_progress_bar(&pb_multi, "blocks meta", false)?;
+    let pb_blocks_mt = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks meta"))?;
     let mut pb_blocks_c = 0;
-    let pb_blocks = crate_progress_bar(&pb_multi, "blocks", false)?;
+    let pb_blocks = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks"))?;
     let mut pb_pp_c = 0;
-    let pb_pp = crate_progress_bar(&pb_multi, "ping/pong", false)?;
+    let pb_pp = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("ping/pong"))?;
     let mut pb_total_c = 0;
-    let pb_total = crate_progress_bar(&pb_multi, "total", true)?;
+    let pb_total = crate_progress_bar(&pb_multi, ProgressBarTpl::Total)?;
+    let mut pb_verify_c = verify_encoding.then_some((0, 0));
+    let pb_verify = crate_progress_bar(&pb_multi, ProgressBarTpl::Verify)?;
 
     let (mut subscribe_tx, mut stream) = client.subscribe_with_request(Some(request)).await?;
 
@@ -593,7 +704,7 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(UpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
                         None => {
-                            error!("update not found in the message");
+                            pb_multi.println("update not found in the message")?;
                             break;
                         }
                     };
@@ -603,10 +714,59 @@ async fn geyser_subscribe(
                     pb_total_c += 1;
                     pb_total.set_message(format_thousands(pb_total_c));
                     pb_total.inc(encoded_len);
+
+                    if let Some((prost_c, ref_c)) = &mut pb_verify_c {
+                        let encoded_len_prost0 = msg.encoded_len();
+                        let encoded_prost0 = msg.encode_to_vec();
+
+                        let update = FilteredUpdate::from_subscribe_update(msg)
+                            .map_err(|error| anyhow::anyhow!(error))
+                            .context("failed to convert update message to filtered update")?;
+
+                        let ts = Instant::now();
+                        let msg2 = update.as_subscribe_update();
+                        let encoded_len_prost = msg2.encoded_len();
+                        let encoded_prost = msg2.encode_to_vec();
+                        *prost_c += ts.elapsed().as_nanos();
+
+                        let ts = Instant::now();
+                        let encoded_len_ref = update.encoded_len();
+                        let encoded_ref = update.encode_to_vec();
+                        *ref_c += ts.elapsed().as_nanos();
+
+                        pb_verify.set_message(format!(
+                            "{:.2?}%",
+                            100f64 * (*ref_c as f64) / (*prost_c as f64)
+                        ));
+
+                        if encoded_len_prost0 != encoded_len_prost
+                            || encoded_len_prost != encoded_len_ref
+                            || encoded_prost0 != encoded_prost
+                            || encoded_prost != encoded_ref
+                        {
+                            let dir = "grpc-client-verify";
+                            let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+                            let path = format!("{dir}/{name}");
+                            pb_multi
+                                .println(format!("found unmached message, save to `{path}`"))?;
+                            fs::create_dir_all(dir)
+                                .await
+                                .context("failed to create dir for unmached")?;
+                            fs::write(path, encoded_prost)
+                                .await
+                                .context("failed to save unmached")?;
+                        }
+                    }
+
                     continue;
                 }
 
                 let filters = msg.filters;
+                let created_at: SystemTime = msg
+                    .created_at
+                    .ok_or(anyhow::anyhow!("no created_at in the message"))?
+                    .try_into()
+                    .context("failed to parse created_at")?;
                 match msg.update_oneof {
                     Some(UpdateOneof::Account(msg)) => {
                         let account = msg
@@ -615,18 +775,20 @@ async fn geyser_subscribe(
                         let mut value = create_pretty_account(account)?;
                         value["isStartup"] = json!(msg.is_startup);
                         value["slot"] = json!(msg.slot);
-                        print_update("account", &filters, value);
+                        print_update("account", created_at, &filters, value);
                     }
                     Some(UpdateOneof::Slot(msg)) => {
-                        let status = CommitmentLevel::try_from(msg.status)
+                        let status = SlotStatus::try_from(msg.status)
                             .context("failed to decode commitment")?;
                         print_update(
                             "slot",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
                                 "parent": msg.parent,
-                                "status": status.as_str_name()
+                                "status": status.as_str_name(),
+                                "deadError": msg.dead_error,
                             }),
                         );
                     }
@@ -636,11 +798,12 @@ async fn geyser_subscribe(
                             .ok_or(anyhow::anyhow!("no transaction in the message"))?;
                         let mut value = create_pretty_transaction(tx)?;
                         value["slot"] = json!(msg.slot);
-                        print_update("transaction", &filters, value);
+                        print_update("transaction", created_at, &filters, value);
                     }
                     Some(UpdateOneof::TransactionStatus(msg)) => {
                         print_update(
                             "transactionStatus",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -654,11 +817,12 @@ async fn geyser_subscribe(
                         );
                     }
                     Some(UpdateOneof::Entry(msg)) => {
-                        print_update("entry", &filters, create_pretty_entry(msg)?);
+                        print_update("entry", created_at, &filters, create_pretty_entry(msg)?);
                     }
                     Some(UpdateOneof::BlockMeta(msg)) => {
                         print_update(
                             "blockmeta",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -680,6 +844,7 @@ async fn geyser_subscribe(
                     Some(UpdateOneof::Block(msg)) => {
                         print_update(
                             "block",
+                            created_at,
                             &filters,
                             json!({
                                 "slot": msg.slot,
@@ -743,6 +908,7 @@ async fn geyser_subscribe(
                     commitment: None,
                     accounts_data_slice: Vec::default(),
                     ping: None,
+                    from_slot: None,
                 })
                 .await
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;
@@ -752,14 +918,29 @@ async fn geyser_subscribe(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressBarTpl {
+    Msg(&'static str),
+    Total,
+    Verify,
+}
+
 fn crate_progress_bar(
     pb: &MultiProgress,
-    kind: &str,
-    elapsed: bool,
+    pb_t: ProgressBarTpl,
 ) -> Result<ProgressBar, indicatif::style::TemplateError> {
     let pb = pb.add(ProgressBar::no_length());
-    let elapsed = if elapsed { " in {elapsed_precise}" } else { "" };
-    let tpl = format!("{{spinner}} {kind}: {{msg}} / ~{{bytes}} (~{{bytes_per_sec}}){elapsed}");
+    let tpl = match pb_t {
+        ProgressBarTpl::Msg(kind) => {
+            format!("{{spinner}} {kind}: {{msg}} / ~{{bytes}} (~{{bytes_per_sec}})")
+        }
+        ProgressBarTpl::Total => {
+            "{spinner} total: {msg} / ~{bytes} (~{bytes_per_sec}) in {elapsed_precise}".to_owned()
+        }
+        ProgressBarTpl::Verify => {
+            "{spinner} verify: {msg} (elapsed time, compare to prost)".to_owned()
+        }
+    };
     pb.set_style(ProgressStyle::with_template(&tpl)?);
     Ok(pb)
 }
@@ -812,10 +993,15 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
     }))
 }
 
-fn print_update(kind: &str, filters: &[String], value: Value) {
+fn print_update(kind: &str, created_at: SystemTime, filters: &[String], value: Value) {
+    let unix_since = created_at
+        .duration_since(UNIX_EPOCH)
+        .expect("valid system time");
     info!(
-        "{kind} ({}): {}",
+        "{kind} ({}) at {}.{:0>6}: {}",
         filters.join(","),
+        unix_since.as_secs(),
+        unix_since.subsec_micros(),
         serde_json::to_string(&value).expect("json serialization failed")
     );
 }

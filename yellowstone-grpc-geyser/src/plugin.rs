@@ -21,7 +21,9 @@ use {
         runtime::{Builder, Runtime},
         sync::{mpsc, Notify},
     },
-    yellowstone_grpc_proto::plugin::message::Message,
+    yellowstone_grpc_proto::plugin::message::{
+        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+    },
 };
 
 #[derive(Debug)]
@@ -69,7 +71,16 @@ impl GeyserPlugin for Plugin {
         solana_logger::setup_with_default(&config.log.level);
 
         // Create inner
-        let runtime = Builder::new_multi_thread()
+        let mut builder = Builder::new_multi_thread();
+        if let Some(worker_threads) = config.tokio.worker_threads {
+            builder.worker_threads(worker_threads);
+        }
+        if let Some(tokio_cpus) = config.tokio.affinity.clone() {
+            builder.on_thread_start(move || {
+                affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+            });
+        }
+        let runtime = builder
             .thread_name_fn(crate::get_thread_name)
             .enable_all()
             .build()
@@ -79,8 +90,8 @@ impl GeyserPlugin for Plugin {
             runtime.block_on(async move {
                 let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
                 let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
+                    config.tokio,
                     config.grpc,
-                    config.block_fail_action,
                     config.debug_clients_http.then_some(debug_client_tx),
                     is_reload,
                 )
@@ -140,7 +151,8 @@ impl GeyserPlugin for Plugin {
 
             if is_startup {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message = Message::Account((account, slot, is_startup).into());
+                    let message =
+                        Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
                     match channel.send(Box::new(message)) {
                         Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
@@ -153,7 +165,8 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
-                let message = Message::Account((account, slot, is_startup).into());
+                let message =
+                    Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
                 inner.send_message(message);
             }
 
@@ -172,10 +185,10 @@ impl GeyserPlugin for Plugin {
         &self,
         slot: u64,
         parent: Option<u64>,
-        status: SlotStatus,
+        status: &SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot((slot, parent, status).into());
+            let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
             metrics::update_slot_status(status, slot);
             Ok(())
@@ -195,7 +208,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_2(info) => info,
             };
 
-            let message = Message::Transaction((transaction, slot).into());
+            let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
             inner.send_message(message);
 
             Ok(())
@@ -212,7 +225,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaEntryInfoVersions::V0_0_2(entry) => entry,
             };
 
-            let message = Message::Entry(Arc::new(entry.into()));
+            let message = Message::Entry(Arc::new(MessageEntry::from_geyser(entry)));
             inner.send_message(message);
 
             Ok(())
@@ -234,7 +247,7 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
 
-            let message = Message::BlockMeta(Arc::new(blockinfo.into()));
+            let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
             inner.send_message(message);
 
             Ok(())
@@ -243,6 +256,10 @@ impl GeyserPlugin for Plugin {
 
     fn account_data_notifications_enabled(&self) -> bool {
         true
+    }
+
+    fn account_data_snapshot_notifications_enabled(&self) -> bool {
+        false
     }
 
     fn transaction_notifications_enabled(&self) -> bool {

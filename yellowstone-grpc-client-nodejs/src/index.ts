@@ -2,6 +2,13 @@
  * TypeScript/JavaScript client for gRPC Geyser.
  */
 
+import {
+  ChannelCredentials,
+  credentials,
+  ChannelOptions,
+  Metadata,
+} from "@grpc/grpc-js";
+
 // Import generated gRPC client and types.
 import {
   CommitmentLevel,
@@ -15,14 +22,8 @@ import {
   SubscribeRequestFilterEntry,
   SubscribeRequestFilterSlots,
   SubscribeRequestFilterTransactions,
+  SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
-
-import {
-  ChannelCredentials,
-  credentials,
-  ChannelOptions,
-  Metadata,
-} from "@grpc/grpc-js";
 
 // Reexport automatically generated types
 export {
@@ -54,6 +55,41 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
+// Import transaction encoding function created in Rust
+import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
+import type {
+  TransactionErrorSolana,
+  // Import mapper to get return type based on WasmUiTransactionEncoding
+  MapTransactionEncodingToReturnType,
+} from "./types";
+
+export const txEncode = {
+  encoding: wasm.WasmUiTransactionEncoding,
+  encode_raw: wasm.encode_tx,
+  encode: <T extends wasm.WasmUiTransactionEncoding>(
+    message: SubscribeUpdateTransactionInfo,
+    encoding: T,
+    max_supported_transaction_version: number | undefined,
+    show_rewards: boolean
+  ): MapTransactionEncodingToReturnType[T] => {
+    return JSON.parse(
+      wasm.encode_tx(
+        SubscribeUpdateTransactionInfo.encode(message).finish(),
+        encoding,
+        max_supported_transaction_version,
+        show_rewards
+      )
+    );
+  },
+};
+
+export const txErrDecode = {
+  decode_raw: wasm.decode_tx_error,
+  decode: (buf: Uint8Array): TransactionErrorSolana => {
+    return JSON.parse(wasm.decode_tx_error(buf));
+  },
+};
+
 export default class Client {
   _client: GeyserClient;
   _insecureXToken: string | undefined;
@@ -65,6 +101,17 @@ export default class Client {
     let creds: ChannelCredentials;
 
     const endpointURL = new URL(endpoint);
+    let port = endpointURL.port;
+    if (port == "") {
+      switch (endpointURL.protocol) {
+        case "https:":
+          port = "443";
+          break;
+        case "http:":
+          port = "80";
+          break;
+      }
+    }
 
     // Check if we need to use TLS.
     if (endpointURL.protocol === "https:") {
@@ -85,7 +132,11 @@ export default class Client {
       }
     }
 
-    this._client = new GeyserClient(endpointURL.host, creds, channelOptions);
+    this._client = new GeyserClient(
+      `${endpointURL.hostname}:${port}`,
+      creds,
+      channelOptions
+    );
   }
 
   private _getInsecureMetadata(): Metadata {
@@ -126,7 +177,7 @@ export default class Client {
           commitment,
           accountsDataSlice,
         },
-        (err) => {
+        (err: any) => {
           if (err === null || err === undefined) {
             resolve();
           } else {

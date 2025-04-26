@@ -1,7 +1,11 @@
 {
-  "libpath": "../target/debug/libyellowstone_grpc_geyser.so",
+  "libpath": "../target/release/libyellowstone_grpc_geyser.so",
   "log": {
     "level": "info"
+  },
+  "tokio": {
+    "worker_threads": 8,
+    "affinity": "0-1,12-13"
   },
   "grpc": {
     "address": "0.0.0.0:10000",
@@ -10,9 +14,14 @@
       "key_path": ""
     },
     "compression": {
-      "accept": ["gzip"],
-      "send": ["gzip"]
+      "accept": ["gzip", "zstd"],
+      "send": ["gzip", "zstd"]
     },
+    "server_http2_adaptive_window": null,
+    "server_http2_keepalive_interval": null,
+    "server_http2_keepalive_timeout": null,
+    "server_initial_connection_window_size": null,
+    "server_initial_stream_window_size": null,
     "max_decoding_message_size": "4_194_304",
     "snapshot_plugin_channel_capacity": null,
     "snapshot_client_channel_capacity": "50_000_000",
@@ -20,10 +29,11 @@
     "unary_concurrency_limit": 100,
     "unary_disabled": false,
     "x_token": null,
-    "filter_name_size_limit": 32,
-    "filter_names_size_limit": 1024,
+    "replay_stored_slots": 0,
+    "filter_name_size_limit": 128,
+    "filter_names_size_limit": 4096,
     "filter_names_cleanup_interval": "1s",
-    "filters": {
+    "filter_limits": {
       "accounts": {
         "max": 1,
         "any": false,
@@ -77,6 +87,5 @@
   },
   "prometheus": {
     "address": "0.0.0.0:8999"
-  },
-  "block_fail_action": "log"
+  }
 }

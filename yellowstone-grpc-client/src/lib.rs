@@ -1,4 +1,4 @@
-pub use tonic::service::Interceptor;
+pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
     futures::{
@@ -11,7 +11,7 @@ use {
         codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
         service::interceptor::InterceptedService,
-        transport::channel::{Channel, ClientTlsConfig, Endpoint},
+        transport::channel::{Channel, Endpoint},
         Request, Response, Status,
     },
     tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
@@ -201,12 +201,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
 pub enum GeyserGrpcBuilderError {
     #[error("Failed to parse x-token: {0}")]
     MetadataValueError(#[from] InvalidMetadataValue),
-    #[error("Invalid X-Token length: {0}, expected 28")]
-    InvalidXTokenLength(usize),
     #[error("gRPC transport error: {0}")]
     TonicError(#[from] tonic::transport::Error),
-    #[error("tonic::transport::Channel should be created, use `connect` or `connect_lazy` first")]
-    EmptyChannel,
 }
 
 pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
@@ -290,16 +286,7 @@ impl GeyserGrpcBuilder {
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
     {
         Ok(Self {
-            x_token: match x_token {
-                Some(x_token) => {
-                    let x_token = x_token.try_into()?;
-                    if x_token.is_empty() {
-                        return Err(GeyserGrpcBuilderError::InvalidXTokenLength(x_token.len()));
-                    }
-                    Some(x_token)
-                }
-                None => None,
-            },
+            x_token: x_token.map(|x_token| x_token.try_into()).transpose()?,
             ..self
         })
     }
@@ -318,20 +305,6 @@ impl GeyserGrpcBuilder {
             endpoint: self.endpoint.connect_timeout(dur),
             ..self
         }
-    }
-
-    pub fn timeout(self, dur: Duration) -> Self {
-        Self {
-            endpoint: self.endpoint.timeout(dur),
-            ..self
-        }
-    }
-
-    pub fn tls_config(self, tls_config: ClientTlsConfig) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self {
-            endpoint: self.endpoint.tls_config(tls_config)?,
-            ..self
-        })
     }
 
     pub fn buffer_size(self, sz: impl Into<Option<usize>>) -> Self {
@@ -397,6 +370,20 @@ impl GeyserGrpcBuilder {
         }
     }
 
+    pub fn timeout(self, dur: Duration) -> Self {
+        Self {
+            endpoint: self.endpoint.timeout(dur),
+            ..self
+        }
+    }
+
+    pub fn tls_config(self, tls_config: ClientTlsConfig) -> GeyserGrpcBuilderResult<Self> {
+        Ok(Self {
+            endpoint: self.endpoint.tls_config(tls_config)?,
+            ..self
+        })
+    }
+
     // Geyser options
     pub fn send_compressed(self, encoding: CompressionEncoding) -> Self {
         Self {
@@ -429,7 +416,7 @@ impl GeyserGrpcBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{GeyserGrpcBuilderError, GeyserGrpcClient};
+    use super::GeyserGrpcClient;
 
     #[tokio::test]
     async fn test_channel_https_success() {
@@ -462,7 +449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_invalid_token_some() {
+    async fn test_channel_empty_token_some() {
         let endpoint = "http://127.0.0.1:10000";
         let x_token = "";
 
@@ -470,10 +457,7 @@ mod tests {
         assert!(res.is_ok());
 
         let res = res.unwrap().x_token(Some(x_token));
-        assert!(matches!(
-            res,
-            Err(GeyserGrpcBuilderError::InvalidXTokenLength(_))
-        ));
+        assert!(res.is_ok());
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "2.0.0"
+version = "6.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -10,15 +10,34 @@ license = "Apache-2.0"
 keywords = { workspace = true }
 publish = true
 
+[[bench]]
+name = "encode"
+harness = false
+required-features = ["plugin-bench"]
+
 [dependencies]
 agave-geyser-plugin-interface = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+bs58 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
+prost_011 = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
+solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
+spl-token-2022 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
-tonic = { workspace = true }
+tonic = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+prost_011 = { workspace = true }
+solana-storage-proto = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -26,7 +45,7 @@ protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 
 [features]
-default = ["convert", "tonic-compression"]
+default = ["convert", "tonic", "tonic-compression"]
 convert = [
     "dep:bincode",
     "dep:solana-account-decoder",
@@ -36,9 +55,18 @@ convert = [
 plugin = [
     "convert",
     "dep:agave-geyser-plugin-interface",
-    "dep:thiserror"
+    "dep:base64",
+    "dep:bs58",
+    "dep:bytes",
+    "dep:serde",
+    "dep:smallvec",
+    "dep:spl-token-2022",
+    "dep:thiserror",
+    "dep:tonic"
 ]
-tonic-compression = ["tonic/gzip", "tonic/zstd"]
+plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
+tonic = ["dep:tonic"]
+tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
 
 [lints]
 workspace = true

@@ -32,7 +32,7 @@ Please check [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/
 
    - `commitment` — commitment level: `processed` / `confirmed` / `finalized`
    - `accounts_data_slice` — array of objects `{ offset: uint64, length: uint64 }`, allow to receive only required data from accounts
-   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if client doesn't send anything during some time. As workaroud you can send same filter every N seconds, but this would be not optimal since you need to keep this filter. Instead, you can send subscribe request with `ping` field set to `true` and ignore rest of the fields in the request. Since we sent `Ping` message every 15s from the server, you can send subscribe request with `ping` as reply and receive `Pong` message.
+   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if client doesn't send anything during some time. As workaround you can send same filter every N seconds, but this would be not optimal since you need to keep this filter. Instead, you can send subscribe request with `ping` field set to `true` and ignore rest of the fields in the request. Since we sent `Ping` message every 15s from the server, you can send subscribe request with `ping` as reply and receive `Pong` message.
 
 #### Slots
 
@@ -42,11 +42,11 @@ Please check [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/
 
 Accounts can be filtered by:
 
-   - `account` — acount Pubkey, match to any Pubkey from the array
+   - `account` — account Pubkey, match to any Pubkey from the array
    - `owner` — account owner Pubkey, match to any Pubkey from the array
    - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
-If all fields are empty then all accounts are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
+If all fields are empty then all accounts are broadcasted. Otherwise fields work as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
 
 #### Transactions
 
@@ -76,7 +76,7 @@ Same as `Blocks` but without `transactions`, `accounts` and entries. Currently w
 
 ### Limit filters
 
-It's possible to add limits for filters in the config. If `filters` field is omitted then filters doesn't have any limits.
+It's possible to add limits for filters in the config. If `filters` field is omitted then filters don't have any limits.
 
 ```json
 "grpc": {

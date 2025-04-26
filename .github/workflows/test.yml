@@ -11,6 +11,8 @@ on:
       - 'v1.17'
       - 'v1.18'
       - 'v2.0'
+      - 'v2.1'
+      - 'v2.2'
   workflow_dispatch:
 
 env:
@@ -64,6 +66,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          targets: wasm32-unknown-unknown
           toolchain: ${{ env.RUST_STABLE }}
 
       - name: Install dependencies
@@ -74,30 +77,59 @@ jobs:
       - name: cargo tree
         run: |
           cargo tree
+          git diff Cargo.lock
+          git checkout Cargo.lock
+          cargo tree --frozen
+
+      - name: cargo tree wasm
+        run: |
+          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cargo tree
+          git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
       - name: cargo fmt
         run: cargo +nightly fmt --all -- --check
 
+      - name: cargo fmt wasm
+        run: |
+          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cargo +nightly fmt --all -- --check
+
       - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v1
+        uses: EmbarkStudios/cargo-deny-action@v2.0.1
         with:
           command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
+
+      - name: cargo deny check advisories wasm
+        uses: EmbarkStudios/cargo-deny-action@v2.0.1
+        with:
+          command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
+          manifest-path: ./yellowstone-grpc-client-nodejs/solana-encoding-wasm/Cargo.toml
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --tests #-- --deny=warnings
+        run: cargo clippy --workspace --all-targets
+      - name: cargo clippy wasm
+        run: |
+          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cargo clippy --target wasm32-unknown-unknown --all-targets
 
       - name: check features in `client`
-        run: cargo check -p yellowstone-grpc-client --all-targets --tests
+        run: cargo check -p yellowstone-grpc-client --all-targets
       - name: check features in `client-simple`
-        run: cargo check -p yellowstone-grpc-client-simple --all-targets --tests
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets
       - name: check features in `geyser`
-        run: cargo check -p yellowstone-grpc-geyser --all-targets --tests
+        run: cargo check -p yellowstone-grpc-geyser --all-targets
       - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets --tests
+        run: cargo check -p yellowstone-grpc-proto --all-targets
       - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets --tests --all-features
+        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
+
+      - name: cargo test
+        run: cargo test --all-features
 
       - name: Build
         run: ./ci/cargo-build-test.sh

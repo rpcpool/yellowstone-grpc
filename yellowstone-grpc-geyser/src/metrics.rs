@@ -1,6 +1,6 @@
 use {
-    crate::{config::ConfigPrometheus, filters::Filter, version::VERSION as VERSION_INFO},
-    agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
+    crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
+    agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
@@ -24,7 +24,7 @@ use {
         sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
-    yellowstone_grpc_proto::plugin::message::CommitmentLevel,
+    yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
 };
 
 lazy_static::lazy_static! {
@@ -314,19 +314,15 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         .body(BodyEmpty::new().boxed())
 }
 
-pub fn update_slot_status(status: SlotStatus, slot: u64) {
+pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
     SLOT_STATUS
-        .with_label_values(&[match status {
-            SlotStatus::Processed => "processed",
-            SlotStatus::Confirmed => "confirmed",
-            SlotStatus::Rooted => "finalized",
-        }])
+        .with_label_values(&[status.as_str()])
         .set(slot as i64);
 }
 
-pub fn update_slot_plugin_status(status: CommitmentLevel, slot: u64) {
+pub fn update_slot_plugin_status(status: SlotStatus, slot: u64) {
     SLOT_STATUS_PLUGIN
-        .with_label_values(&[commitment_level_as_str(status)])
+        .with_label_values(&[status.as_str()])
         .set(slot as i64);
 }
 
@@ -369,16 +365,8 @@ pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&F
     }
 }
 
-pub fn missed_status_message_inc(status: CommitmentLevel) {
+pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
-        .with_label_values(&[commitment_level_as_str(status)])
+        .with_label_values(&[status.as_str()])
         .inc()
-}
-
-const fn commitment_level_as_str(commitment: CommitmentLevel) -> &'static str {
-    match commitment {
-        CommitmentLevel::Processed => "processed",
-        CommitmentLevel::Confirmed => "confirmed",
-        CommitmentLevel::Finalized => "finalized",
-    }
 }
