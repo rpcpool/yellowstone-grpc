@@ -208,6 +208,16 @@ pub struct ConfigGrpc {
     pub server_initial_connection_window_size: Option<u32>,
     #[serde(default)]
     pub server_initial_stream_window_size: Option<u32>,
+    /// Kafka topic for billing events
+    pub billing_kafka_topic: String,
+    /// Kafka bootstrap servers (comma-separated)
+    pub billing_kafka_brokers: String,
+    /// Optional SASL username for secured Kafka
+    #[serde(default)]
+    pub billing_kafka_username: Option<String>,
+    /// Optional SASL password for secured Kafka
+    #[serde(default)]
+    pub billing_kafka_password: Option<String>,
 }
 
 impl ConfigGrpc {

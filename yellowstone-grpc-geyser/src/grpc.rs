@@ -3,6 +3,7 @@ use {
         config::{ConfigGrpc, ConfigTokio},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
+        kafka_producer_service::{BillingEvent, KafkaProducerService},
     },
     anyhow::Context,
     log::{error, info},
@@ -19,6 +20,7 @@ use {
         },
         time::SystemTime,
     },
+    time::{OffsetDateTime},
     tokio::{
         fs,
         runtime::Builder,
@@ -36,6 +38,9 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
+    prost::{
+        Message as ProstMessage,
+    },
     yellowstone_grpc_proto::{
         plugin::{
             filter::{
@@ -342,6 +347,7 @@ pub struct GrpcService {
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
+    billing_tx: mpsc::Sender<BillingEvent>,
 }
 
 impl GrpcService {
@@ -427,6 +433,14 @@ impl GrpcService {
             config.filter_names_cleanup_interval,
         )));
 
+        // TODO - handle kafka task shutdown on grpc server close
+        let (kafka_service, kafka_task) = KafkaProducerService::new(
+            &config.billing_kafka_brokers,
+            config.billing_kafka_username.as_deref(),
+            config.billing_kafka_password.as_deref(),
+            config.billing_kafka_topic.clone(),
+        );
+
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -440,6 +454,7 @@ impl GrpcService {
             replay_stored_slots_tx,
             debug_clients_tx,
             filter_names,
+            billing_tx: kafka_service.sender.clone(),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -844,7 +859,13 @@ impl GrpcService {
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         drop_client: impl FnOnce(),
+        team_id: String,
+        billing_tx: mpsc::Sender<BillingEvent>,
     ) {
+        let mut bytes_sent: u64 = 0;
+        // TODO - configs
+        let mut billing_ticker = tokio::time::interval(Duration::from_secs(10));
+
         let mut filter = Filter::default();
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
 
@@ -956,6 +977,7 @@ impl GrpcService {
                             }
                         }
                     }
+                    // If a message is received, it will be filtered and sent to the client
                     message = messages_rx.recv() => {
                         let (commitment, messages) = match message {
                             Ok((commitment, messages)) => (commitment, messages),
@@ -974,6 +996,8 @@ impl GrpcService {
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
                                 for message in filter.get_updates(message, Some(commitment)) {
+                                    let size = ProstMessage::encoded_len(&message) as u64;
+                                    bytes_sent += size;
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
@@ -998,6 +1022,17 @@ impl GrpcService {
                                     DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
                                 }
                             }
+                        }
+                    }
+                    // If a billing ticker is received, it will be used to update the billing
+                     _ = billing_ticker.tick() => {
+                        if bytes_sent > 0 {
+                           let event = BillingEvent {
+                                team_id: team_id.to_string(),
+                                bytes: std::mem::take(&mut bytes_sent),
+                                timestamp: OffsetDateTime::now_utc(),
+                                };
+                            let _ = billing_tx.send(event).await;
                         }
                     }
                 }
@@ -1103,6 +1138,8 @@ impl Geyser for GrpcService {
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
         let ping_exit = Arc::clone(&notify_exit1);
+
+        // Spawns the task that sends ping messages to the client
         tokio::spawn(async move {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
@@ -1133,11 +1170,22 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
+        let team_id = request
+                .metadata()
+                .get("x-team-id")
+                .ok_or(Status::invalid_argument("missing team id"))?
+                .to_str()
+                .map_err(|_| Status::invalid_argument("invalid team id"))?
+                .to_string();
+
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
+
+        // Spawns the task that listens for messages from the client and updates the filters
+        // on the streaming task
         tokio::spawn(async move {
             let exit = incoming_exit.notified();
             tokio::pin!(exit);
@@ -1190,6 +1238,7 @@ impl Geyser for GrpcService {
             }
         });
 
+        // Spawns the task that listens for messages from solana RPC
         tokio::spawn(Self::client_loop(
             id,
             endpoint,
@@ -1203,6 +1252,8 @@ impl Geyser for GrpcService {
                 notify_exit1.notify_one();
                 notify_exit2.notify_one();
             },
+            team_id,
+            self.billing_tx.clone(),
         ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))

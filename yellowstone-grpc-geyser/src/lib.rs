@@ -1,5 +1,6 @@
 pub mod config;
 pub mod grpc;
+pub mod kafka_producer_service;
 pub mod metrics;
 pub mod plugin;
 pub mod version;
