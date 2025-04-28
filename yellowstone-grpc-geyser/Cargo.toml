@@ -51,6 +51,10 @@ yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin"] }
 prost = "0.13.5"
 rdkafka = "0.37.0"
 time = { version = "0.3.41", features = ["macros", "serde"] }
+dashmap = "7.0.0-rc2"
+moka = { version = "=0.5.4", features = ["future"] }
+redis = { version = "0.30.0", features = ["aio", "connection-manager", "tokio-comp"] }
+deadpool-redis = "0.20.0"
 
 [build-dependencies]
 anyhow = { workspace = true }

@@ -63,6 +63,10 @@ use {
         },
     },
 };
+use crate::connection_manager::ConnectionManager;
+// use crate::redis::redis_client_wrapper::RedisClientWrapper;
+use crate::redis::redis_quota_checker::start_redis_quota_checker;
+use crate::redis::refreshing_fallback_cache::RefreshingFallbackCache;
 
 #[derive(Debug)]
 struct BlockhashStatus {
@@ -348,6 +352,7 @@ pub struct GrpcService {
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
     billing_tx: mpsc::Sender<BillingEvent>,
+    connection_manager: Arc<ConnectionManager>,
 }
 
 impl GrpcService {
@@ -441,6 +446,27 @@ impl GrpcService {
             config.billing_kafka_topic.clone(),
         );
 
+        let quota_cache = Arc::new(
+            RefreshingFallbackCache::new(
+                "redis://localhost:6379",
+                "your-prefix".to_string(),
+                Duration::from_secs(30),    // ttl
+                10_000,                     // capacity
+                Duration::from_secs(15),    // background buffer
+                Arc::new(|opt| matches!(opt.as_deref(), Some("CAPPED"))), // how to parse Redis value
+            )
+                .await
+                .expect("failed to initialize quota cache"),
+        );
+
+        let connection_manager = Arc::new(ConnectionManager::new());
+
+        tokio::spawn(start_redis_quota_checker(
+            connection_manager.clone(),
+            quota_cache.clone(),
+            Duration::from_secs(10), // check every 10s
+        ));
+
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -455,6 +481,7 @@ impl GrpcService {
             debug_clients_tx,
             filter_names,
             billing_tx: kafka_service.sender.clone(),
+            connection_manager,
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -861,10 +888,13 @@ impl GrpcService {
         drop_client: impl FnOnce(),
         team_id: String,
         billing_tx: mpsc::Sender<BillingEvent>,
+        shutdown_tx: broadcast::Sender<()>,
     ) {
         let mut bytes_sent: u64 = 0;
         // TODO - configs
         let mut billing_ticker = tokio::time::interval(Duration::from_secs(10));
+
+        let mut shutdown_rx = shutdown_tx.subscribe();
 
         let mut filter = Filter::default();
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
@@ -1035,6 +1065,17 @@ impl GrpcService {
                             let _ = billing_tx.send(event).await;
                         }
                     }
+
+                    _ = shutdown_rx.recv() => {
+                        info!("Shutdown signal received for client #{id}");
+                        if let Err(e) = stream_tx.send(Err(Status::resource_exhausted(
+                          "connection closed: quota exceeded",
+                        ))).await {
+                           error!("Failed to send shutdown message to client #{id}: {:?}", e);
+                        }
+
+                        break 'outer;
+                    }
                 }
             }
         }
@@ -1139,10 +1180,24 @@ impl Geyser for GrpcService {
         let ping_client_tx = client_tx.clone();
         let ping_exit = Arc::clone(&notify_exit1);
 
+        let team_id = request
+            .metadata()
+            .get("x-team-id")
+            .ok_or(Status::invalid_argument("missing team id"))?
+            .to_str()
+            .map_err(|_| Status::invalid_argument("invalid team id"))?
+            .to_string();
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
+        self.connection_manager.register(team_id.clone(), shutdown_tx.clone());
+
+        let ping_shutdown_tx = shutdown_tx.clone();
         // Spawns the task that sends ping messages to the client
         tokio::spawn(async move {
             let exit = ping_exit.notified();
             tokio::pin!(exit);
+            let mut shutdown_rx = ping_shutdown_tx.subscribe();
 
             loop {
                 tokio::select! {
@@ -1160,6 +1215,10 @@ impl Geyser for GrpcService {
                             }
                         }
                     }
+                    _ = shutdown_rx.recv() => {
+                        info!("Shutdown signal received for client #{id}");
+                        break;
+                    }
                 }
             }
         });
@@ -1170,29 +1229,27 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
-        let team_id = request
-                .metadata()
-                .get("x-team-id")
-                .ok_or(Status::invalid_argument("missing team id"))?
-                .to_str()
-                .map_err(|_| Status::invalid_argument("invalid team id"))?
-                .to_string();
-
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_exit = Arc::clone(&notify_exit2);
 
+        let filters_shutdown_tx = shutdown_tx.clone();
         // Spawns the task that listens for messages from the client and updates the filters
         // on the streaming task
         tokio::spawn(async move {
             let exit = incoming_exit.notified();
             tokio::pin!(exit);
+            let mut shutdown_rx = filters_shutdown_tx.subscribe();
 
             loop {
                 tokio::select! {
                     _ = &mut exit => {
+                        break;
+                    }
+                    _ = shutdown_rx.recv() => {
+                        info!("Shutdown signal received for client #{id}");
                         break;
                     }
                     message = request.get_mut().message() => match message {
@@ -1254,6 +1311,7 @@ impl Geyser for GrpcService {
             },
             team_id,
             self.billing_tx.clone(),
+            shutdown_tx.clone(),
         ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
