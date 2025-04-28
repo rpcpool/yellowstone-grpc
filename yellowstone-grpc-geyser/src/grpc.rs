@@ -936,14 +936,24 @@ impl GrpcService {
 
                                     messages.sort_by_key(|msg| msg.0);
                                     for (_msgid, message) in messages.iter() {
+                                        let time_since_created_ms = message.time_since_created_ms();
+                                        let message_type = message.type_name();
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
-                                                Ok(()) => {}
+                                                Ok(()) => {
+                                                    metrics::message_send_latency_observe(
+                                                        time_since_created_ms,
+                                                        message_type,
+                                                        &id.to_string(),
+                                                    );
+                                                }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
                                                     break 'outer;
                                                 }
                                             }
+
+                                            metrics::message_queue_size_dec();
                                         }
                                     }
                                 }

@@ -12,7 +12,10 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{
+        HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder,
+    },
     solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
@@ -66,6 +69,11 @@ lazy_static::lazy_static! {
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
+    ).unwrap();
+
+    static ref MESSAGE_SEND_LATENCY: HistogramVec = HistogramVec::new(
+        HistogramOpts::new("message_send_latency_ms", "Latency of sending messages"),
+        &["message_type", "client_id"]
     ).unwrap();
 }
 
@@ -347,6 +355,12 @@ pub fn connections_total_inc() {
 
 pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
+}
+
+pub fn message_send_latency_observe(latency: f64, message_type: &str, client_id: &str) {
+    MESSAGE_SEND_LATENCY
+        .with_label_values(&vec![message_type, client_id])
+        .observe(latency);
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {

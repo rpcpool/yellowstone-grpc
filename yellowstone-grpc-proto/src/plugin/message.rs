@@ -585,4 +585,32 @@ impl Message {
             }
         })
     }
+
+    pub fn created_at(&self) -> Timestamp {
+        match self {
+            Self::Slot(msg) => msg.created_at,
+            Self::Account(msg) => msg.created_at,
+            Self::Transaction(msg) => msg.created_at,
+            Self::Entry(msg) => msg.created_at,
+            Self::BlockMeta(msg) => msg.created_at,
+            Self::Block(msg) => msg.created_at,
+        }
+    }
+
+    pub fn time_since_created_ms(&self) -> f64 {
+        let current_time = Timestamp::from(SystemTime::now());
+        let created_at = self.created_at();
+        (current_time.nanos - created_at.nanos) as f64 / 1_000_000.0
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Slot(_) => "slot",
+            Self::Account(_) => "account",
+            Self::Transaction(_) => "transaction",
+            Self::Entry(_) => "entry",
+            Self::BlockMeta(_) => "block_meta",
+            Self::Block(_) => "block",
+        }
+    }
 }
