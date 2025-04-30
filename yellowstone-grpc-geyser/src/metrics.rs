@@ -70,11 +70,6 @@ lazy_static::lazy_static! {
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
     ).unwrap();
-
-    static ref MESSAGE_SEND_LATENCY: HistogramVec = HistogramVec::new(
-        HistogramOpts::new("message_send_latency_ms", "Latency of sending messages"),
-        &["message_type", "client_id"]
-    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -206,7 +201,6 @@ impl PrometheusService {
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
-            register!(MISSED_STATUS_MESSAGE);
 
             VERSION
                 .with_label_values(&[
@@ -355,12 +349,6 @@ pub fn connections_total_inc() {
 
 pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
-}
-
-pub fn message_send_latency_observe(latency: f64, message_type: &str, client_id: &str) {
-    MESSAGE_SEND_LATENCY
-        .with_label_values(&vec![message_type, client_id])
-        .observe(latency);
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {

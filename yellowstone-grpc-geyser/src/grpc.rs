@@ -4,6 +4,7 @@ use {
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
+    ::metrics::histogram,
     anyhow::Context,
     log::{error, info},
     prost_types::Timestamp,
@@ -458,7 +459,8 @@ impl GrpcService {
             }
             if let Some(tokio_cpus) = config_tokio.affinity.clone() {
                 builder.on_thread_start(move || {
-                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                    affinity_linux::set_thread_affinity(tokio_cpus.clone().into_iter())
+                        .expect("failed to set affinity")
                 });
             }
             builder
@@ -941,11 +943,7 @@ impl GrpcService {
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
                                                 Ok(()) => {
-                                                    metrics::message_send_latency_observe(
-                                                        time_since_created_ms,
-                                                        message_type,
-                                                        &id.to_string(),
-                                                    );
+                                                    histogram!("message_send_latency_ms", "message_type" => message_type, "client_id" => id.to_string()).record(time_since_created_ms);
                                                 }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
