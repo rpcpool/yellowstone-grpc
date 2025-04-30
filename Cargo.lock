@@ -700,6 +700,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
+name = "cadence"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62fd689c825a93386a2ac05a46f88342c6df9ec3e79416f665650614e92e7475"
+dependencies = [
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "cargo-lock"
 version = "10.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2310,6 +2319,17 @@ checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
 dependencies = [
  "ahash",
  "portable-atomic",
+]
+
+[[package]]
+name = "metrics-exporter-statsd"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57971e32cdee88619fb6c673fd89cfd37c12f2dd7c187fb400b7aae0ede0ed9e"
+dependencies = [
+ "cadence",
+ "metrics",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -6500,6 +6520,7 @@ dependencies = [
  "lazy_static",
  "log",
  "metrics",
+ "metrics-exporter-statsd",
  "prometheus",
  "prost-types 0.13.5",
  "serde",

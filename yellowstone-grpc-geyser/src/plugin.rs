@@ -4,11 +4,13 @@ use {
         grpc::GrpcService,
         metrics::{self, PrometheusService},
     },
+    ::metrics::set_global_recorder,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
+    metrics_exporter_statsd::StatsdBuilder,
     std::{
         concat, env,
         sync::{
@@ -104,6 +106,18 @@ impl GeyserPlugin for Plugin {
                 )
                 .await
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+                // check if statsd feature is enabled
+                // #[cfg(feature = "statsd")]
+                // {
+                let recorder = StatsdBuilder::from("127.0.0.1", 7998)
+                    .with_queue_size(5000)
+                    .with_buffer_size(1024)
+                    .build(Some("prefix"))
+                    .expect("Could not create StatsdRecorder");
+
+                set_global_recorder(recorder).expect("Could not set global recorder");
+                // }
+
                 Ok::<_, GeyserPluginError>((
                     snapshot_channel,
                     grpc_channel,

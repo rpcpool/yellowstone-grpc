@@ -18,6 +18,7 @@ name = "config-check"
 
 [dependencies]
 affinity-linux = { workspace = true }
+metrics-exporter-statsd = { workspace = true }
 agave-geyser-plugin-interface = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
