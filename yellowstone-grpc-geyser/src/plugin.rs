@@ -107,16 +107,16 @@ impl GeyserPlugin for Plugin {
                 .await
                 .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-                // #[cfg(feature = "statsd")]
-                // {
-                let recorder = StatsdBuilder::from("0.0.0.0", 7998)
-                    .with_queue_size(50_000)
-                    .with_buffer_size(1024)
-                    .build(Some("yellowstone_geyser"))
-                    .expect("Could not create StatsdRecorder");
+                #[cfg(feature = "statsd")]
+                {
+                    let recorder = StatsdBuilder::from("0.0.0.0", 7998)
+                        .with_queue_size(50_000)
+                        .with_buffer_size(1024)
+                        .build(Some("yellowstone_geyser"))
+                        .expect("Could not create StatsdRecorder");
 
-                set_global_recorder(recorder).expect("Could not set global recorder");
-                // }
+                    set_global_recorder(recorder).expect("Could not set global recorder");
+                }
 
                 Ok::<_, GeyserPluginError>((
                     snapshot_channel,
