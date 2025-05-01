@@ -938,13 +938,9 @@ impl GrpcService {
 
                                     messages.sort_by_key(|msg| msg.0);
                                     for (_msgid, message) in messages.iter() {
-                                        let time_since_created_ms = message.time_since_created_ms();
-                                        let message_type = message.type_name();
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
                                                 Ok(()) => {
-                                                    info!("message_send_latency_ms: {}", time_since_created_ms);
-                                                    histogram!("message_send_latency_ms", "message_type" => message_type, "client_id" => id.to_string()).record(time_since_created_ms);
                                                 }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
@@ -982,9 +978,13 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
+                                let time_since_created_ms = message.time_since_created_ms();
+                                let message_type = message.type_name();
                                 for message in filter.get_updates(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {
-                                        Ok(()) => {}
+                                        Ok(()) => {
+                                            histogram!("message_send_latency_ms", "message_type" => message_type, "client_id" => id.to_string()).record(time_since_created_ms);
+                                        }
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send an update");
                                             tokio::spawn(async move {

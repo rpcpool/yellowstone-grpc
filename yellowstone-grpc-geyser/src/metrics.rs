@@ -20,7 +20,10 @@ use {
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
-        sync::{Arc, Once},
+        sync::{
+            atomic::{AtomicI64, AtomicUsize, Ordering},
+            Arc, Once,
+        },
     },
     tokio::{
         net::TcpListener,
@@ -38,33 +41,17 @@ lazy_static::lazy_static! {
         &["buildts", "git", "package", "proto", "rustc", "solana", "version"]
     ).unwrap();
 
-    static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("slot_status", "Lastest received slot from Geyser"),
-        &["status"]
-    ).unwrap();
+    static ref SLOT_STATUS: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
-    static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
-        &["status"]
-    ).unwrap();
+    static ref SLOT_STATUS_PLUGIN: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
-    static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("invalid_full_blocks_total", "Total number of fails on constructin full blocks"),
-        &["reason"]
-    ).unwrap();
+    static ref INVALID_FULL_BLOCKS: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
-    static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
-        "message_queue_size", "Size of geyser message queue"
-    ).unwrap();
+    static ref MESSAGE_QUEUE_SIZE: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
-    static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
-        "connections_total", "Total number of connections to gRPC service"
-    ).unwrap();
+    static ref CONNECTIONS_TOTAL: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
-    static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
-        &["endpoint", "subscription"]
-    ).unwrap();
+    static ref SUBSCRIPTIONS_TOTAL: Arc<AtomicI64> = Arc::new(AtomicI64::new(0));
 
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
@@ -195,12 +182,12 @@ impl PrometheusService {
                 };
             }
             register!(VERSION);
-            register!(SLOT_STATUS);
-            register!(SLOT_STATUS_PLUGIN);
-            register!(INVALID_FULL_BLOCKS);
-            register!(MESSAGE_QUEUE_SIZE);
-            register!(CONNECTIONS_TOTAL);
-            register!(SUBSCRIPTIONS_TOTAL);
+            // register!(SLOT_STATUS);
+            // register!(SLOT_STATUS_PLUGIN);
+            // register!(INVALID_FULL_BLOCKS);
+            // register!(MESSAGE_QUEUE_SIZE);
+            // register!(CONNECTIONS_TOTAL);
+            // register!(SUBSCRIPTIONS_TOTAL);
 
             VERSION
                 .with_label_values(&[
@@ -317,80 +304,66 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
 }
 
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
-    SLOT_STATUS
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    ::metrics::gauge!("slot_status", "status" => status.as_str()).set(slot as f64);
 }
 
 pub fn update_slot_plugin_status(status: SlotStatus, slot: u64) {
-    SLOT_STATUS_PLUGIN
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    ::metrics::gauge!("slot_status_plugin", "status" => status.as_str()).set(slot as f64);
 }
 
-pub fn update_invalid_blocks(reason: impl AsRef<str>) {
-    INVALID_FULL_BLOCKS
-        .with_label_values(&[reason.as_ref()])
-        .inc();
-    INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+pub fn update_invalid_blocks(reason: String) {
+    INVALID_FULL_BLOCKS.fetch_add(1, Ordering::Relaxed);
+    ::metrics::gauge!("invalid_full_blocks", "reason" => reason)
+        .set(INVALID_FULL_BLOCKS.load(Ordering::Relaxed) as f64);
 }
 
 pub fn message_queue_size_inc() {
-    // #[cfg(feature = "metrics-rs")]
-    // {
-    ::metrics::counter!("message_queue_size").increment(1);
-    // }
-    // #[cfg(not(feature = "metrics-rs"))]
-    // {
-    //     MESSAGE_QUEUE_SIZE.inc()
-    // }
+    MESSAGE_QUEUE_SIZE.fetch_add(1, Ordering::Relaxed);
+    ::metrics::counter!("message_queue_size")
+        .increment(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as u64);
 }
+
 pub fn message_queue_size_dec() {
-    // #[cfg(feature = "metrics-rs")]
-    // {
-    ::metrics::counter!("message_queue_size").increment(1);
-    // }
-    // #[cfg(not(feature = "metrics-rs"))]
-    // {
-    // MESSAGE_QUEUE_SIZE.dec()
-    // }
+    MESSAGE_QUEUE_SIZE.fetch_sub(1, Ordering::Relaxed);
+    ::metrics::counter!("message_queue_size")
+        .increment(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as u64);
 }
+
 pub fn connections_total_inc() {
-    // #[cfg(feature = "metrics-rs")]
-    // {
-    ::metrics::counter!("connections_total").increment(1);
-    // }
-    // #[cfg(not(feature = "metrics-rs"))]
-    // {
-    //     CONNECTIONS_TOTAL.inc()
-    // }
+    CONNECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    ::metrics::counter!("connections_total")
+        .increment(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as u64);
 }
 
 pub fn connections_total_dec() {
-    // #[cfg(feature = "metrics-rs")]
-    // {
-    ::metrics::counter!("connections_total").increment(1);
-    // }
-    // #[cfg(not(feature = "metrics-rs"))]
-    // {
-    //     CONNECTIONS_TOTAL.dec()
-    // }
+    CONNECTIONS_TOTAL.fetch_sub(1, Ordering::Relaxed);
+    ::metrics::counter!("connections_total")
+        .increment(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as u64);
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
-            SUBSCRIPTIONS_TOTAL
-                .with_label_values(&[endpoint, "grpc_total"])
-                .add(multiplier);
+            SUBSCRIPTIONS_TOTAL.fetch_add(multiplier, Ordering::Relaxed);
 
             for (name, value) in filter.get_metrics() {
-                SUBSCRIPTIONS_TOTAL
-                    .with_label_values(&[endpoint, name])
-                    .add((value as i64) * multiplier);
+                SUBSCRIPTIONS_TOTAL.fetch_add(value as i64 * multiplier as i64, Ordering::Relaxed);
             }
         }
     }
+    // for (multiplier, filter) in [(-1, old), (1, new)] {
+    //     if let Some(filter) = filter {
+    //         SUBSCRIPTIONS_TOTAL
+    //             .with_label_values(&[endpoint, "grpc_total"])
+    //             .add(multiplier);
+
+    //         for (name, value) in filter.get_metrics() {
+    //             SUBSCRIPTIONS_TOTAL
+    //                 .with_label_values(&[endpoint, name])
+    //                 .add((value as i64) * multiplier);
+    //         }
+    //     }
+    // }
 }
 
 pub fn missed_status_message_inc(status: SlotStatus) {
