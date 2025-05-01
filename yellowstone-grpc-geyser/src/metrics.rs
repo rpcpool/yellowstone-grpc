@@ -336,45 +336,45 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
 }
 
 pub fn message_queue_size_inc() {
-    #[cfg(feature = "metrics-rs")]
-    {
-        ::metrics::gauge!("message_queue_size").increment(1);
-    }
-    #[cfg(not(feature = "metrics-rs"))]
-    {
-        MESSAGE_QUEUE_SIZE.inc()
-    }
+    // #[cfg(feature = "metrics-rs")]
+    // {
+    ::metrics::gauge!("message_queue_size").increment(1);
+    // }
+    // #[cfg(not(feature = "metrics-rs"))]
+    // {
+    //     MESSAGE_QUEUE_SIZE.inc()
+    // }
 }
 pub fn message_queue_size_dec() {
-    #[cfg(feature = "metrics-rs")]
-    {
-        ::metrics::gauge!("message_queue_size").decrement(1);
-    }
-    #[cfg(not(feature = "metrics-rs"))]
-    {
-        MESSAGE_QUEUE_SIZE.dec()
-    }
+    // #[cfg(feature = "metrics-rs")]
+    // {
+    ::metrics::gauge!("message_queue_size").decrement(1);
+    // }
+    // #[cfg(not(feature = "metrics-rs"))]
+    // {
+    // MESSAGE_QUEUE_SIZE.dec()
+    // }
 }
 pub fn connections_total_inc() {
-    #[cfg(feature = "metrics-rs")]
-    {
-        ::metrics::gauge!("connections_total").increment(1);
-    }
-    #[cfg(not(feature = "metrics-rs"))]
-    {
-        CONNECTIONS_TOTAL.inc()
-    }
+    // #[cfg(feature = "metrics-rs")]
+    // {
+    ::metrics::gauge!("connections_total").increment(1);
+    // }
+    // #[cfg(not(feature = "metrics-rs"))]
+    // {
+    //     CONNECTIONS_TOTAL.inc()
+    // }
 }
 
 pub fn connections_total_dec() {
-    #[cfg(feature = "metrics-rs")]
-    {
-        ::metrics::gauge!("connections_total").decrement(1);
-    }
-    #[cfg(not(feature = "metrics-rs"))]
-    {
-        CONNECTIONS_TOTAL.dec()
-    }
+    // #[cfg(feature = "metrics-rs")]
+    // {
+    ::metrics::gauge!("connections_total").decrement(1);
+    // }
+    // #[cfg(not(feature = "metrics-rs"))]
+    // {
+    //     CONNECTIONS_TOTAL.dec()
+    // }
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
