@@ -632,7 +632,7 @@ impl GrpcService {
                     match &message {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
-                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
+                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)".to_string());
                             }
                             slot_messages.block_meta = Some(Arc::clone(msg));
                             sealed_block_msg = slot_messages.try_seal(&mut msgid_gen);

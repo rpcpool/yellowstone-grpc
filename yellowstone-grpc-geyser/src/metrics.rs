@@ -341,29 +341,19 @@ pub fn connections_total_dec() {
         .increment(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as u64);
 }
 
+// NOTE: These will not work correctly in statsd
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
-            SUBSCRIPTIONS_TOTAL.fetch_add(multiplier, Ordering::Relaxed);
+            let endpoint = endpoint.to_string();
+            ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.clone(), "filter" => "grpc_total").increment(multiplier as f64);
 
             for (name, value) in filter.get_metrics() {
-                SUBSCRIPTIONS_TOTAL.fetch_add(value as i64 * multiplier as i64, Ordering::Relaxed);
+                ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.clone(), "filter" => name)
+                    .increment(value as f64 * multiplier as f64);
             }
         }
     }
-    // for (multiplier, filter) in [(-1, old), (1, new)] {
-    //     if let Some(filter) = filter {
-    //         SUBSCRIPTIONS_TOTAL
-    //             .with_label_values(&[endpoint, "grpc_total"])
-    //             .add(multiplier);
-
-    //         for (name, value) in filter.get_metrics() {
-    //             SUBSCRIPTIONS_TOTAL
-    //                 .with_label_values(&[endpoint, name])
-    //                 .add((value as i64) * multiplier);
-    //         }
-    //     }
-    // }
 }
 
 pub fn missed_status_message_inc(status: SlotStatus) {
