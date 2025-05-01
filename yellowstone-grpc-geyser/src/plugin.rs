@@ -110,9 +110,9 @@ impl GeyserPlugin for Plugin {
                 #[cfg(feature = "statsd")]
                 {
                     let recorder = StatsdBuilder::from("127.0.0.1", 7998)
-                        .with_queue_size(5000)
+                        .with_queue_size(50_000)
                         .with_buffer_size(1024)
-                        .build(Some("prefix"))
+                        .build(Some("yellowstone"))
                         .expect("Could not create StatsdRecorder");
 
                     set_global_recorder(recorder).expect("Could not set global recorder");
