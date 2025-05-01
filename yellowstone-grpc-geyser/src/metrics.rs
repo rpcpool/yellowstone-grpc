@@ -344,11 +344,11 @@ pub fn connections_total_dec() {
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
-            #[cfg(feature = "statsd")]
-            {
-                SUBSCRIPTIONS_TOTAL.fetch_add(multiplier, Ordering::Relaxed);
-                ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.to_string(), "filter" => "grpc_total").set(SUBSCRIPTIONS_TOTAL.load(Ordering::Relaxed) as f64);
-            }
+            // #[cfg(feature = "statsd")]
+            // {
+            SUBSCRIPTIONS_TOTAL.fetch_add(multiplier, Ordering::Relaxed);
+            ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.to_string(), "filter" => "grpc_total").set(SUBSCRIPTIONS_TOTAL.load(Ordering::Relaxed) as f64);
+            // }
             // NOTE: These will not work correctly in statsd so we only track the total
             let endpoint = endpoint.to_string();
             ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.clone(), "filter" => "grpc_total").increment(multiplier as f64);
