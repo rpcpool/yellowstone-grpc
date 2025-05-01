@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
@@ -220,6 +221,12 @@ message SubscribeUpdatePong {
 }
 
 // non-streaming methods
+
+message SubscribeReplayInfoRequest {}
+
+message SubscribeReplayInfoResponse {
+  optional uint64 first_available = 1;
+}
 
 message PingRequest {
   int32 count = 1;

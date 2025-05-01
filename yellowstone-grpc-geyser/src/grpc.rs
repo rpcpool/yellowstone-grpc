@@ -14,7 +14,7 @@ use {
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
         time::SystemTime,
@@ -54,7 +54,8 @@ use {
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
+            SubscribeReplayInfoResponse, SubscribeRequest,
         },
     },
 };
@@ -340,6 +341,7 @@ pub struct GrpcService {
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
+    replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
 }
@@ -385,12 +387,13 @@ impl GrpcService {
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         // attempt to prevent spam of geyser loop with capacity eq 1
-        let (replay_stored_slots_tx, replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
-            (None, None)
-        } else {
-            let (tx, rx) = mpsc::channel(1);
-            (Some(tx), Some(rx))
-        };
+        let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
+            if config.replay_stored_slots == 0 {
+                (None, None, None)
+            } else {
+                let (tx, rx) = mpsc::channel(1);
+                (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
+            };
 
         // gRPC server builder with optional TLS
         let mut server_builder = Server::builder();
@@ -438,6 +441,7 @@ impl GrpcService {
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
+            replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
             filter_names,
         })
@@ -471,6 +475,7 @@ impl GrpcService {
                     blocks_meta_tx,
                     broadcast_tx,
                     replay_stored_slots_rx,
+                    replay_first_available_slot,
                     config.replay_stored_slots,
                 ));
         });
@@ -508,6 +513,7 @@ impl GrpcService {
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
@@ -585,6 +591,11 @@ impl GrpcService {
                                             }
                                         }
                                         _ => break,
+                                    }
+                                }
+                                if let Some(stored) = &replay_first_available_slot {
+                                    if let Some(slot) = messages.keys().next().copied() {
+                                        stored.store(slot, Ordering::Relaxed);
                                     }
                                 }
                             }
@@ -1206,6 +1217,19 @@ impl Geyser for GrpcService {
         ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
+    }
+
+    async fn subscribe_first_available_slot(
+        &self,
+        _request: Request<SubscribeReplayInfoRequest>,
+    ) -> Result<Response<SubscribeReplayInfoResponse>, Status> {
+        let response = SubscribeReplayInfoResponse {
+            first_available: self
+                .replay_first_available_slot
+                .as_ref()
+                .map(|stored| stored.load(Ordering::Relaxed)),
+        };
+        Ok(Response::new(response))
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
