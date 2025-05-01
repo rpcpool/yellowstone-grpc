@@ -943,6 +943,7 @@ impl GrpcService {
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
                                                 Ok(()) => {
+                                                    info!("message_send_latency_ms: {}", time_since_created_ms);
                                                     histogram!("message_send_latency_ms", "message_type" => message_type, "client_id" => id.to_string()).record(time_since_created_ms);
                                                 }
                                                 Err(mpsc::error::SendError(_)) => {

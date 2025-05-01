@@ -338,7 +338,7 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
 pub fn message_queue_size_inc() {
     // #[cfg(feature = "metrics-rs")]
     // {
-    ::metrics::gauge!("message_queue_size").increment(1);
+    ::metrics::counter!("message_queue_size").increment(1);
     // }
     // #[cfg(not(feature = "metrics-rs"))]
     // {
@@ -348,7 +348,7 @@ pub fn message_queue_size_inc() {
 pub fn message_queue_size_dec() {
     // #[cfg(feature = "metrics-rs")]
     // {
-    ::metrics::gauge!("message_queue_size").decrement(1);
+    ::metrics::counter!("message_queue_size").increment(1);
     // }
     // #[cfg(not(feature = "metrics-rs"))]
     // {
@@ -358,7 +358,7 @@ pub fn message_queue_size_dec() {
 pub fn connections_total_inc() {
     // #[cfg(feature = "metrics-rs")]
     // {
-    ::metrics::gauge!("connections_total").increment(1);
+    ::metrics::counter!("connections_total").increment(1);
     // }
     // #[cfg(not(feature = "metrics-rs"))]
     // {
@@ -369,7 +369,7 @@ pub fn connections_total_inc() {
 pub fn connections_total_dec() {
     // #[cfg(feature = "metrics-rs")]
     // {
-    ::metrics::gauge!("connections_total").decrement(1);
+    ::metrics::counter!("connections_total").increment(1);
     // }
     // #[cfg(not(feature = "metrics-rs"))]
     // {
