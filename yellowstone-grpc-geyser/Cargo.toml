@@ -61,6 +61,5 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 workspace = true
 
 [features]
-default = ["statsd", "metrics-rs"]
+default = []
 statsd = []
-metrics-rs = []
