@@ -4,6 +4,7 @@ use {
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
     },
+    ::metrics::histogram,
     anyhow::Context,
     log::{error, info},
     prost_types::Timestamp,
@@ -458,7 +459,8 @@ impl GrpcService {
             }
             if let Some(tokio_cpus) = config_tokio.affinity.clone() {
                 builder.on_thread_start(move || {
-                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                    affinity_linux::set_thread_affinity(tokio_cpus.clone().into_iter())
+                        .expect("failed to set affinity")
                 });
             }
             builder
@@ -630,7 +632,7 @@ impl GrpcService {
                     match &message {
                         Message::BlockMeta(msg) => {
                             if slot_messages.block_meta.is_some() {
-                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)");
+                                metrics::update_invalid_blocks("unexpected message: BlockMeta (duplicate)".to_string());
                             }
                             slot_messages.block_meta = Some(Arc::clone(msg));
                             sealed_block_msg = slot_messages.try_seal(&mut msgid_gen);
@@ -938,12 +940,15 @@ impl GrpcService {
                                     for (_msgid, message) in messages.iter() {
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
-                                                Ok(()) => {}
+                                                Ok(()) => {
+                                                }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
                                                     break 'outer;
                                                 }
                                             }
+
+                                            metrics::message_queue_size_dec();
                                         }
                                     }
                                 }
@@ -973,9 +978,13 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
+                                let time_since_created_ms = message.time_since_created_ms();
+                                let message_type = message.type_name();
                                 for message in filter.get_updates(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {
-                                        Ok(()) => {}
+                                        Ok(()) => {
+                                            histogram!("message_send_latency_ms", "message_type" => message_type, "client_id" => id.to_string()).record(time_since_created_ms);
+                                        }
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send an update");
                                             tokio::spawn(async move {
