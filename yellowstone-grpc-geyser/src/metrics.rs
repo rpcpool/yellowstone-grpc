@@ -313,26 +313,22 @@ pub fn update_invalid_blocks(reason: String) {
 
 pub fn message_queue_size_inc() {
     MESSAGE_QUEUE_SIZE.fetch_add(1, Ordering::Relaxed);
-    ::metrics::counter!("message_queue_size")
-        .increment(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as u64);
+    ::metrics::gauge!("message_queue_size").set(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as f64);
 }
 
 pub fn message_queue_size_dec() {
     MESSAGE_QUEUE_SIZE.fetch_sub(1, Ordering::Relaxed);
-    ::metrics::counter!("message_queue_size")
-        .increment(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as u64);
+    ::metrics::gauge!("message_queue_size").set(MESSAGE_QUEUE_SIZE.load(Ordering::Relaxed) as f64);
 }
 
 pub fn connections_total_inc() {
     CONNECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-    ::metrics::counter!("connections_total")
-        .increment(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as u64);
+    ::metrics::gauge!("connections_total").set(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as f64);
 }
 
 pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.fetch_sub(1, Ordering::Relaxed);
-    ::metrics::counter!("connections_total")
-        .increment(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as u64);
+    ::metrics::gauge!("connections_total").set(CONNECTIONS_TOTAL.load(Ordering::Relaxed) as f64);
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
