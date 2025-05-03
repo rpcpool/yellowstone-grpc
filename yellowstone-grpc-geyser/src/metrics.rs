@@ -182,12 +182,6 @@ impl PrometheusService {
                 };
             }
             register!(VERSION);
-            // register!(SLOT_STATUS);
-            // register!(SLOT_STATUS_PLUGIN);
-            // register!(INVALID_FULL_BLOCKS);
-            // register!(MESSAGE_QUEUE_SIZE);
-            // register!(CONNECTIONS_TOTAL);
-            // register!(SUBSCRIPTIONS_TOTAL);
 
             VERSION
                 .with_label_values(&[
@@ -349,7 +343,7 @@ pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&F
                 SUBSCRIPTIONS_TOTAL.fetch_add(multiplier, Ordering::Relaxed);
                 ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.to_string(), "filter" => "grpc_total").set(SUBSCRIPTIONS_TOTAL.load(Ordering::Relaxed) as f64);
             }
-            // NOTE: These will not work correctly in statsd so we only track the total
+            // NOTE: These below do not work with statsd
             let endpoint = endpoint.to_string();
             ::metrics::gauge!("subscriptions_total", "endpoint" => endpoint.clone(), "filter" => "grpc_total").increment(multiplier as f64);
 
