@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "5.0.0"
+version = "5.0.0+solana.2.1.21"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -50,7 +50,7 @@ convert = [
     "dep:bincode",
     "dep:solana-account-decoder",
     "dep:solana-sdk",
-    "dep:solana-transaction-status"
+    "dep:solana-transaction-status",
 ]
 plugin = [
     "convert",
@@ -62,7 +62,7 @@ plugin = [
     "dep:smallvec",
     "dep:spl-token-2022",
     "dep:thiserror",
-    "dep:tonic"
+    "dep:tonic",
 ]
 plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
 tonic = ["dep:tonic"]
