@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-05-12
+
+- yellowstone-grpc-client-simple-5.1.0
+- yellowstone-grpc-client-5.1.0
+- yellowstone-grpc-geyser-5.1.0
+- yellowstone-grpc-proto-5.1.0
+
+### Features
+
+- proto: add unary method `SubscribeReplayInfo` ([#578](https://github.com/rpcpool/yellowstone-grpc/pull/578))
+
 ## 2025-03-17
 
 - yellowstone-grpc-client-simple-5.0.1

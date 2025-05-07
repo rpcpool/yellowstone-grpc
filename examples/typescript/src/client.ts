@@ -22,6 +22,10 @@ async function main() {
 
   // Execute a requested command
   switch (args["_"][0]) {
+    case "subscribe-replay-info":
+      console.log("response: " + inspect(await client.subscribeReplayInfo()));
+      break;
+
     case "ping":
       console.log("response: " + (await client.ping(1)));
       break;
@@ -291,6 +295,7 @@ function parseCommandLineArgs() {
         choices: ["processed", "confirmed", "finalized"],
       },
     })
+    .command("subscribe-replay-info", "get subscribe replay info")
     .command("ping", "single ping of the RPC server")
     .command("get-version", "get the server version")
     .command("get-latest-blockhash", "get the latest block hash")

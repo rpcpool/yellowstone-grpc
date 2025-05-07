@@ -23,6 +23,7 @@ import {
   SubscribeRequestFilterSlots,
   SubscribeRequestFilterTransactions,
   SubscribeUpdateTransactionInfo,
+  SubscribeReplayInfoResponse,
 } from "./grpc/geyser";
 
 // Reexport automatically generated types
@@ -188,6 +189,22 @@ export default class Client {
     });
 
     return stream;
+  }
+
+  async subscribeReplayInfo(): Promise<SubscribeReplayInfoResponse> {
+    return await new Promise<SubscribeReplayInfoResponse>((resolve, reject) => {
+      this._client.subscribeReplayInfo(
+        {},
+        this._getInsecureMetadata(),
+        (err, response) => {
+          if (err === null || err === undefined) {
+            resolve(response);
+          } else {
+            reject(err);
+          }
+        }
+      );
+    });
   }
 
   async ping(count: number): Promise<number> {
