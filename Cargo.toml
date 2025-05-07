@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 6.0.1
-    "yellowstone-grpc-client", # 6.0.0
-    "yellowstone-grpc-geyser", # 6.0.0
-    "yellowstone-grpc-proto", # 6.0.0
+    "examples/rust", # 6.1.0
+    "yellowstone-grpc-client", # 6.1.0
+    "yellowstone-grpc-geyser", # 6.1.0
+    "yellowstone-grpc-proto", # 6.1.0
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -69,8 +69,8 @@ tonic = "0.12.1"
 tonic-build = "0.12.1"
 tonic-health = "0.12.1"
 vergen = "9.0.0"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "6.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "6.0.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "6.1.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "6.1.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

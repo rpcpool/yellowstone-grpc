@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Geyser_Subscribe_FullMethodName          = "/geyser.Geyser/Subscribe"
-	Geyser_Ping_FullMethodName               = "/geyser.Geyser/Ping"
-	Geyser_GetLatestBlockhash_FullMethodName = "/geyser.Geyser/GetLatestBlockhash"
-	Geyser_GetBlockHeight_FullMethodName     = "/geyser.Geyser/GetBlockHeight"
-	Geyser_GetSlot_FullMethodName            = "/geyser.Geyser/GetSlot"
-	Geyser_IsBlockhashValid_FullMethodName   = "/geyser.Geyser/IsBlockhashValid"
-	Geyser_GetVersion_FullMethodName         = "/geyser.Geyser/GetVersion"
+	Geyser_Subscribe_FullMethodName           = "/geyser.Geyser/Subscribe"
+	Geyser_SubscribeReplayInfo_FullMethodName = "/geyser.Geyser/SubscribeReplayInfo"
+	Geyser_Ping_FullMethodName                = "/geyser.Geyser/Ping"
+	Geyser_GetLatestBlockhash_FullMethodName  = "/geyser.Geyser/GetLatestBlockhash"
+	Geyser_GetBlockHeight_FullMethodName      = "/geyser.Geyser/GetBlockHeight"
+	Geyser_GetSlot_FullMethodName             = "/geyser.Geyser/GetSlot"
+	Geyser_IsBlockhashValid_FullMethodName    = "/geyser.Geyser/IsBlockhashValid"
+	Geyser_GetVersion_FullMethodName          = "/geyser.Geyser/GetVersion"
 )
 
 // GeyserClient is the client API for Geyser service.
@@ -33,6 +34,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GeyserClient interface {
 	Subscribe(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SubscribeRequest, SubscribeUpdate], error)
+	SubscribeReplayInfo(ctx context.Context, in *SubscribeReplayInfoRequest, opts ...grpc.CallOption) (*SubscribeReplayInfoResponse, error)
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PongResponse, error)
 	GetLatestBlockhash(ctx context.Context, in *GetLatestBlockhashRequest, opts ...grpc.CallOption) (*GetLatestBlockhashResponse, error)
 	GetBlockHeight(ctx context.Context, in *GetBlockHeightRequest, opts ...grpc.CallOption) (*GetBlockHeightResponse, error)
@@ -61,6 +63,16 @@ func (c *geyserClient) Subscribe(ctx context.Context, opts ...grpc.CallOption) (
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Geyser_SubscribeClient = grpc.BidiStreamingClient[SubscribeRequest, SubscribeUpdate]
+
+func (c *geyserClient) SubscribeReplayInfo(ctx context.Context, in *SubscribeReplayInfoRequest, opts ...grpc.CallOption) (*SubscribeReplayInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubscribeReplayInfoResponse)
+	err := c.cc.Invoke(ctx, Geyser_SubscribeReplayInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *geyserClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PongResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -127,6 +139,7 @@ func (c *geyserClient) GetVersion(ctx context.Context, in *GetVersionRequest, op
 // for forward compatibility.
 type GeyserServer interface {
 	Subscribe(grpc.BidiStreamingServer[SubscribeRequest, SubscribeUpdate]) error
+	SubscribeReplayInfo(context.Context, *SubscribeReplayInfoRequest) (*SubscribeReplayInfoResponse, error)
 	Ping(context.Context, *PingRequest) (*PongResponse, error)
 	GetLatestBlockhash(context.Context, *GetLatestBlockhashRequest) (*GetLatestBlockhashResponse, error)
 	GetBlockHeight(context.Context, *GetBlockHeightRequest) (*GetBlockHeightResponse, error)
@@ -145,6 +158,9 @@ type UnimplementedGeyserServer struct{}
 
 func (UnimplementedGeyserServer) Subscribe(grpc.BidiStreamingServer[SubscribeRequest, SubscribeUpdate]) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
+}
+func (UnimplementedGeyserServer) SubscribeReplayInfo(context.Context, *SubscribeReplayInfoRequest) (*SubscribeReplayInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubscribeReplayInfo not implemented")
 }
 func (UnimplementedGeyserServer) Ping(context.Context, *PingRequest) (*PongResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
@@ -191,6 +207,24 @@ func _Geyser_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error 
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Geyser_SubscribeServer = grpc.BidiStreamingServer[SubscribeRequest, SubscribeUpdate]
+
+func _Geyser_SubscribeReplayInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubscribeReplayInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeyserServer).SubscribeReplayInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Geyser_SubscribeReplayInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeyserServer).SubscribeReplayInfo(ctx, req.(*SubscribeReplayInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _Geyser_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PingRequest)
@@ -307,6 +341,10 @@ var Geyser_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "geyser.Geyser",
 	HandlerType: (*GeyserServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SubscribeReplayInfo",
+			Handler:    _Geyser_SubscribeReplayInfo_Handler,
+		},
 		{
 			MethodName: "Ping",
 			Handler:    _Geyser_Ping_Handler,
