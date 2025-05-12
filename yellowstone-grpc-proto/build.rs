@@ -38,6 +38,15 @@ fn main() -> anyhow::Result<()> {
         )
         .method(
             Method::builder()
+                .name("subscribe_first_available_slot")
+                .route_name("SubscribeReplayInfo")
+                .input_type("crate::geyser::SubscribeReplayInfoRequest")
+                .output_type("crate::geyser::SubscribeReplayInfoResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .method(
+            Method::builder()
                 .name("ping")
                 .route_name("Ping")
                 .input_type("crate::geyser::PingRequest")

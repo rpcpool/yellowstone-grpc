@@ -21,6 +21,7 @@ use {
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
     yellowstone_grpc_proto::{
         convert_from,
+        geyser::SlotStatus,
         plugin::filter::message::FilteredUpdate,
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
@@ -193,6 +194,7 @@ enum Action {
     HealthCheck,
     HealthWatch,
     Subscribe(Box<ActionSubscribe>),
+    SubscribeReplayInfo,
     Ping {
         #[clap(long, short, default_value_t = 0)]
         count: i32,
@@ -603,6 +605,11 @@ async fn main() -> anyhow::Result<()> {
 
                     geyser_subscribe(client, request, resub, stats, verify_encoding).await
                 }
+                Action::SubscribeReplayInfo => client
+                    .subscribe_replay_info()
+                    .await
+                    .map_err(anyhow::Error::new)
+                    .map(|response| info!("response: {response:?}")),
                 Action::Ping { count } => client
                     .ping(*count)
                     .await
@@ -777,7 +784,7 @@ async fn geyser_subscribe(
                         print_update("account", created_at, &filters, value);
                     }
                     Some(UpdateOneof::Slot(msg)) => {
-                        let status = CommitmentLevel::try_from(msg.status)
+                        let status = SlotStatus::try_from(msg.status)
                             .context("failed to decode commitment")?;
                         print_update(
                             "slot",
