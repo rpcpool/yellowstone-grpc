@@ -150,20 +150,21 @@ impl GeyserPlugin for Plugin {
             };
 
             if is_startup {
-                if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message =
-                        Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
-                    match channel.send(Box::new(message)) {
-                        Ok(()) => metrics::message_queue_size_inc(),
-                        Err(_) => {
-                            if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
-                                log::error!(
-                                    "failed to send message to startup queue: channel closed"
-                                )
-                            }
-                        }
-                    }
-                }
+                // if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
+                //     let message =
+                //         Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                //     match channel.send(Box::new(message)) {
+                //         Ok(()) => metrics::message_queue_size_inc(),
+                //         Err(_) => {
+                //             if !inner.snapshot_channel_closed.swap(true, Ordering::Relaxed) {
+                //                 log::error!(
+                //                     "failed to send message to startup queue: channel closed"
+                //                 )
+                //             }
+                //         }
+                //     }
+                // }
+                return Ok(());
             } else {
                 let message =
                     Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
@@ -207,6 +208,13 @@ impl GeyserPlugin for Plugin {
                 }
                 ReplicaTransactionInfoVersions::V0_0_2(info) => info,
             };
+
+            if transaction.is_vote {
+                return Ok(());
+            }
+            if transaction.transaction_status_meta.status.is_err() {
+                return Ok(());
+            }
 
             let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
             inner.send_message(message);
@@ -267,7 +275,7 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 }
 

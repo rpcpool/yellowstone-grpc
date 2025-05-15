@@ -542,7 +542,7 @@ pub enum Message {
     Transaction(MessageTransaction),
     Entry(Arc<MessageEntry>),
     BlockMeta(Arc<MessageBlockMeta>),
-    Block(Arc<MessageBlock>),
+    // Block(Arc<MessageBlock>),
 }
 
 impl Message {
@@ -553,7 +553,7 @@ impl Message {
             Self::Transaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
-            Self::Block(msg) => msg.meta.slot,
+            // Self::Block(msg) => msg.meta.slot,
         }
     }
 
@@ -572,8 +572,9 @@ impl Message {
             UpdateOneof::TransactionStatus(_) => {
                 return Err("TransactionStatus message is not supported")
             }
-            UpdateOneof::Block(msg) => {
-                Self::Block(Arc::new(MessageBlock::from_update_oneof(msg, created_at)?))
+            UpdateOneof::Block(_) => {
+                return Err("Block message is not supported");
+                // Self::Block(Arc::new(MessageBlock::from_update_oneof(msg, created_at)?))
             }
             UpdateOneof::Ping(_) => return Err("Ping message is not supported"),
             UpdateOneof::Pong(_) => return Err("Pong message is not supported"),

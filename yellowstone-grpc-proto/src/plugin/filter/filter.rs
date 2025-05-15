@@ -248,7 +248,7 @@ impl Filter {
                 updates
             }
             Message::Entry(message) => self.entries.get_updates(message),
-            Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
+            // Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
         }
     }
