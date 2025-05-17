@@ -29,6 +29,7 @@ solana-account-decoder = { workspace = true, optional = true }
 solana-sdk = { workspace = true, optional = true }
 solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
+solana-transaction-status-client-types = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 spl-token-2022 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
@@ -45,12 +46,17 @@ protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 
 [features]
-default = ["convert", "tonic", "tonic-compression"]
+default = [
+    "convert",
+    "tonic",
+    "tonic-compression",
+    "transaction-status"
+]
 convert = [
     "dep:bincode",
     "dep:solana-account-decoder",
     "dep:solana-sdk",
-    "dep:solana-transaction-status"
+    "dep:solana-transaction-status-client-types",
 ]
 plugin = [
     "convert",
@@ -67,6 +73,7 @@ plugin = [
 plugin-bench = ["plugin", "dep:prost_011", "dep:solana-storage-proto"]
 tonic = ["dep:tonic"]
 tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
+transaction-status = ["convert", "dep:solana-transaction-status"]
 
 [lints]
 workspace = true
