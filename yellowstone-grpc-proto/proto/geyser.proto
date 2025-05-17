@@ -9,7 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
-  rpc SubscribeAccountsUpdate(stream SubscribeAccountRequest) returns (stream SubscribeAccountUpdate) {}
+  rpc SubscribeAccount(stream SubscribeAccountRequest) returns (stream SubscribeAccountUpdate) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
@@ -39,6 +39,7 @@ message SubscribeAccountRequest {
      SubscribeAccountRequestActionInsert insert = 1;
      SubscribeAccountRequestActionRemove remove = 2;
      bool clear = 3;
+     SubscribeRequestPing ping = 4;
   }
 }
 
@@ -51,8 +52,12 @@ message SubscribeAccountRequestActionRemove {
 }
 
 message SubscribeAccountUpdate {
-  SubscribeUpdateAccount account = 1;
-  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp created_at = 1;
+  oneof message {
+    SubscribeUpdateAccount account = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+  }
 }
 
 message SubscribeRequest {

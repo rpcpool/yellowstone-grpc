@@ -5,21 +5,19 @@ use {
         version::GrpcVersionInfo,
     },
     anyhow::Context,
+    dashmap::DashSet,
     log::{error, info},
-    prost_types::Timestamp,
     solana_sdk::{
         clock::{Slot, MAX_RECENT_BLOCKHASHES},
         pubkey::Pubkey,
     },
     std::{
         collections::{BTreeMap, HashMap},
-        ops::Deref,
         str::FromStr,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::SystemTime,
     },
     tokio::{
         fs,
@@ -39,6 +37,7 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
+        geyser::{SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdatePong},
         plugin::{
             filter::{
                 limits::FilterLimits,
@@ -46,17 +45,15 @@ use {
                 name::FilterNames,
                 Filter,
             },
-            message::{
-                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
+            message::{CommitmentLevel, Message, MessageBlockMeta, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
         prelude::{
-            CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
-            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-            GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
+            geyser, CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest,
+            GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+            GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
+            IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
+            SubscribeAccountRequest, SubscribeAccountUpdate, SubscribeRequest, SubscribeUpdatePing,
         },
     },
 };
@@ -861,6 +858,123 @@ impl GrpcService {
         drop_client();
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn client_loop_account(
+        id: usize,
+        stream_tx: mpsc::Sender<TonicResult<SubscribeAccountUpdate>>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<geyser::subscribe_account_request::Action>>,
+        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+        drop_client: impl FnOnce(),
+    ) {
+        let accounts: DashSet<Pubkey> = DashSet::new();
+        metrics::connections_total_inc();
+        info!("client #{id}: new");
+
+        let is_alive = true;
+
+        if is_alive {
+            'outer: loop {
+                tokio::select! {
+                    message = client_rx.recv() => {
+                        match message {
+                            Some(Some(action)) => {
+                                match action {
+                                    geyser::subscribe_account_request::Action::Insert(args) => {
+                                        for key in args.accounts {
+                                            if let Ok(key) = Pubkey::from_str(&key) {
+                                                accounts.insert(key);
+                                            }
+                                        };
+                                    },
+                                    geyser::subscribe_account_request::Action::Remove(args) => {
+                                        for key in args.accounts {
+                                            if let Ok(key) = Pubkey::from_str(&key) {
+                                                accounts.remove(&key);
+                                            }
+                                        };
+                                    },
+                                    geyser::subscribe_account_request::Action::Clear(_) => {
+                                        accounts.clear();
+                                    },
+                                    _ => {},
+                                }
+                            }
+                            Some(None) => {
+                                break 'outer;
+                            },
+                            None => {
+                                break 'outer;
+                            }
+                        }
+                    }
+                    message = messages_rx.recv() => {
+                        let (commitment, messages) = match message {
+                            Ok((commitment, messages)) => (commitment, messages),
+                            Err(broadcast::error::RecvError::Closed) => {
+                                break 'outer;
+                            },
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                info!("client #{id}: lagged to receive geyser messages");
+                                tokio::spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
+                                });
+                                break 'outer;
+                            }
+                        };
+                        if commitment != CommitmentLevel::Processed {
+                            continue;
+                        }
+                        for (_msg_id, message) in messages.iter() {
+                            if let Message::Account(message) = message {
+                                if !accounts.contains(&message.account.pubkey) {
+                                    continue;
+                                }
+                                let account = &message.account;
+                                match stream_tx.try_send(Ok(SubscribeAccountUpdate {
+                                    created_at: Some(message.created_at),
+                                    message: Some(geyser::subscribe_account_update::Message::Account(SubscribeUpdateAccount{
+                                        account: Some(SubscribeUpdateAccountInfo {
+                                            pubkey: account.pubkey.to_bytes().to_vec(),
+                                            lamports: account.lamports,
+                                            owner: account.owner.to_bytes().to_vec(),
+                                            executable: account.executable,
+                                            rent_epoch: account.rent_epoch,
+                                            data: account.data.clone(),
+                                            write_version: account.write_version,
+                                            txn_signature: account.txn_signature.as_ref().map(|v| v.as_ref().to_vec()),
+                                        }),
+                                        slot: message.slot,
+                                        is_startup: message.is_startup,
+                                    }))
+                                })) {
+                                    Ok(()) => {},
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        error!("client #{id}: lagged to send an update");
+                                        tokio::spawn(async move {
+                                            let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                        });
+                                        break 'outer;
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("client #{id}: stream closed");
+                                        break 'outer;
+                                    }
+                                };
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        metrics::connections_total_dec();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
+        // metrics::update_subscriptions(&endpoint, Some(&filter), None);
+        info!("client #{id}: removed");
+        drop_client();
+    }
+
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
@@ -928,12 +1042,107 @@ impl GrpcService {
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
+    type SubscribeAccountStream = ReceiverStream<TonicResult<SubscribeAccountUpdate>>;
 
     async fn subscribe_account(
         &self,
         mut request: Request<Streaming<SubscribeAccountRequest>>,
-    ) -> TonicResult<Response<Self::SubscribeStream>> {
-        todo!()
+    ) -> TonicResult<Response<Self::SubscribeAccountStream>> {
+        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+
+        let (stream_tx, stream_rx) = mpsc::channel(self.config_channel_capacity);
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let notify_exit1 = Arc::new(Notify::new());
+        let notify_exit2 = Arc::new(Notify::new());
+
+        let ping_stream_tx = stream_tx.clone();
+        let ping_client_tx = client_tx.clone();
+        let ping_exit = Arc::clone(&notify_exit1);
+        tokio::spawn(async move {
+            let exit = ping_exit.notified();
+            tokio::pin!(exit);
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
+                        break;
+                    }
+                    _ = sleep(Duration::from_secs(10)) => {
+                        let msg = SubscribeAccountUpdate {
+                            created_at: None,
+                            message: Some(geyser::subscribe_account_update::Message::Ping(SubscribeUpdatePing{})),
+                        };
+                        match ping_stream_tx.try_send(Ok(msg)) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                let _ = ping_client_tx.send(None);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let incoming_client_tx = client_tx;
+        let incoming_stream_tx = stream_tx.clone();
+        let incoming_exit = Arc::clone(&notify_exit2);
+        tokio::spawn(async move {
+            let exit = incoming_exit.notified();
+            tokio::pin!(exit);
+
+            loop {
+                tokio::select! {
+                    _ = &mut exit => {
+                        break;
+                    }
+                    message = request.get_mut().message() => match message {
+                        Ok(Some(request)) => {
+
+                            if let Some(action) = request.action {
+                                match action {
+                                    geyser::subscribe_account_request::Action::Ping(_) => {
+                                        if let Err(e) = incoming_stream_tx.send(Ok(SubscribeAccountUpdate{
+                                            created_at: None,
+                                            message: Some(geyser::subscribe_account_update::Message::Pong(SubscribeUpdatePong { id: 1 })),
+                                        })).await {
+                                            error!("subscribe_account_update->send_message_to_client_failed: {:?}", e);
+                                        }
+                                    },
+                                    _ => {
+                                        if let Err(e) = incoming_client_tx.send(Some(action)) {
+                                            error!("subscribe_account_update->send_aciont_failed: {:?}", e);
+                                        }
+                                    },
+                                };
+                            };
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(_error) => {
+                            let _ = incoming_client_tx.send(None);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(Self::client_loop_account(
+            id,
+            stream_tx,
+            client_rx,
+            self.broadcast_tx.subscribe(),
+            self.debug_clients_tx.clone(),
+            move || {
+                notify_exit1.notify_one();
+                notify_exit2.notify_one();
+            },
+        ));
+
+        Ok(Response::new(ReceiverStream::new(stream_rx)))
     }
 
     async fn subscribe(

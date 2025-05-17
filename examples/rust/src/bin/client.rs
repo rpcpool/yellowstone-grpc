@@ -748,13 +748,13 @@ async fn geyser_subscribe(
                             let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
                             let path = format!("{dir}/{name}");
                             pb_multi
-                                .println(format!("found unmached message, save to `{path}`"))?;
+                                .println(format!("found unmatched message, save to `{path}`"))?;
                             fs::create_dir_all(dir)
                                 .await
-                                .context("failed to create dir for unmached")?;
+                                .context("failed to create dir for unmatched")?;
                             fs::write(path, encoded_prost)
                                 .await
-                                .context("failed to save unmached")?;
+                                .context("failed to save unmatched")?;
                         }
                     }
 

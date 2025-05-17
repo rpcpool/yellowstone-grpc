@@ -5,18 +5,10 @@
   },
   "tokio": {
     "worker_threads": 8,
-    "affinity": "0-1,12-13"
+    "affinity": "0-4"
   },
   "grpc": {
     "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
-    "compression": {
-      "accept": ["gzip", "zstd"],
-      "send": ["gzip", "zstd"]
-    },
     "server_http2_adaptive_window": null,
     "server_http2_keepalive_interval": null,
     "server_http2_keepalive_timeout": null,

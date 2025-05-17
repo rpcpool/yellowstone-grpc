@@ -1,4 +1,8 @@
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
+pub use yellowstone_grpc_proto::prelude::{
+    geyser, geyser::subscribe_account_request::Action as SubscribeAccountRequestAction,
+    geyser::subscribe_account_update::Message as SubscribeAccountUpdateMessage,
+};
 use {
     bytes::Bytes,
     futures::{
@@ -20,7 +24,7 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeRequest, SubscribeUpdate,
+        SubscribeAccountRequest, SubscribeAccountUpdate, SubscribeRequest, SubscribeUpdate,
     },
 };
 
@@ -96,6 +100,36 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         };
         let response = self.health.watch(request).await?;
         Ok(response.into_inner())
+    }
+
+    pub async fn subscribe_account(
+        &mut self,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeAccountRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeAccountUpdate, Status>>,
+    )> {
+        self.subscribe_account_with_request(None).await
+    }
+
+    pub async fn subscribe_account_with_request(
+        &mut self,
+        request: Option<SubscribeAccountRequestAction>,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeAccountRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeAccountUpdate, Status>>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(SubscribeAccountRequest {
+                    action: Some(request),
+                })
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
+        let response: Response<Streaming<SubscribeAccountUpdate>> =
+            self.geyser.subscribe_account(subscribe_rx).await?;
+        Ok((subscribe_tx, response.into_inner()))
     }
 
     // Subscribe

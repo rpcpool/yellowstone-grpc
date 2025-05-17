@@ -13,6 +13,7 @@ publish = { workspace = true }
 name = "client"
 
 [dependencies]
+arrayref = { workspace = true }
 anyhow = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
 bincode = { workspace = true }
