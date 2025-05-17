@@ -929,6 +929,13 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
 
+    async fn subscribe_account(
+        &self,
+        mut request: Request<Streaming<SubscribeAccountRequest>>,
+    ) -> TonicResult<Response<Self::SubscribeStream>> {
+        todo!()
+    }
+
     async fn subscribe(
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
