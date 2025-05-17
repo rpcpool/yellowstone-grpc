@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribeAccount(stream SubscribeAccountRequest) returns (stream SubscribeAccountUpdate) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
   rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
@@ -31,6 +32,32 @@ enum SlotStatus {
   SLOT_COMPLETED = 4;
   SLOT_CREATED_BANK = 5;
   SLOT_DEAD = 6;
+}
+
+message SubscribeAccountRequest {
+  oneof action {
+     SubscribeAccountRequestActionInsert insert = 1;
+     SubscribeAccountRequestActionRemove remove = 2;
+     bool clear = 3;
+     SubscribeRequestPing ping = 4;
+  }
+}
+
+message SubscribeAccountRequestActionInsert {
+  repeated string accounts = 1;
+}
+
+message SubscribeAccountRequestActionRemove {
+  repeated string accounts = 1;
+}
+
+message SubscribeAccountUpdate {
+  google.protobuf.Timestamp created_at = 1;
+  oneof message {
+    SubscribeUpdateAccount account = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+  }
 }
 
 message SubscribeRequest {
