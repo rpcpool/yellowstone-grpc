@@ -45,7 +45,7 @@ spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-stream = { workspace = true }
-tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots"] }
+tonic = { workspace = true, features = ["gzip", "zstd", "_tls-any"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin"] }
 

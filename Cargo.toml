@@ -65,9 +65,9 @@ spl-token-2022 = "6.0.0"
 thiserror = "1.0.63"
 tokio = "1.21.2"
 tokio-stream = "0.1.11"
-tonic = "0.12.1"
-tonic-build = "0.12.1"
-tonic-health = "0.12.1"
+tonic = "0.13.0"
+tonic-build = "0.13.0"
+tonic-health = "0.13.0"
 vergen = "9.0.0"
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "6.1.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "6.1.0", default-features = false }
