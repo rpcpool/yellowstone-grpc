@@ -1,6 +1,6 @@
 {
   "name": "yellowstone-grpc-client-example-ts",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "license": "Apache-2.0",
   "author": "Triton One",
   "main": "dist/client.js",
