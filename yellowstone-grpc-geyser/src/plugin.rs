@@ -11,10 +11,7 @@ use {
     },
     std::{
         concat, env,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
-        },
+        sync::{Arc, Mutex},
         time::Duration,
     },
     tokio::{
@@ -30,7 +27,6 @@ use {
 pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
-    snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Message>,
     grpc_shutdown: Arc<Notify>,
     prometheus: PrometheusService,
@@ -114,7 +110,7 @@ impl GeyserPlugin for Plugin {
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
-            snapshot_channel_closed: AtomicBool::new(false),
+            // snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
             grpc_shutdown,
             prometheus,
