@@ -7,10 +7,8 @@ use {
     anyhow::Context,
     dashmap::DashSet,
     log::{error, info},
-    solana_sdk::{
-        clock::{Slot, MAX_RECENT_BLOCKHASHES},
-        pubkey::Pubkey,
-    },
+    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
         str::FromStr,

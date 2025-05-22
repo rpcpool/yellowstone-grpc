@@ -2,7 +2,7 @@ use {
     clap::Parser,
     futures::{sink::SinkExt, stream::StreamExt},
     log::info,
-    solana_sdk::pubkey::Pubkey,
+    solana_pubkey::Pubkey,
     std::{env, str::FromStr},
     tokio::time::{interval, Duration},
     tonic::transport::channel::ClientTlsConfig,

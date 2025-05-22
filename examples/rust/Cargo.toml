@@ -27,7 +27,10 @@ indicatif = { workspace = true }
 log = { workspace = true }
 maplit = { workspace = true }
 serde_json = { workspace = true }
-solana-sdk = { workspace = true }
+# solana-sdk = { workspace = true }
+solana-hash = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-signature = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
 tonic = { workspace = true }

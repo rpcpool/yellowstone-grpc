@@ -26,7 +26,19 @@ prost-types = { workspace = true }
 prost_011 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
-solana-sdk = { workspace = true, optional = true }
+# solana-sdk = { workspace = true, optional = true }
+solana-pubkey = { workspace = true, optional = true }
+solana-signature = { workspace = true, optional = true }
+solana-clock = { workspace = true, optional = true }
+solana-instruction = { workspace = true, optional = true }
+solana-message = { workspace = true, optional = true }
+solana-hash = { workspace = true, optional = true }
+solana-account = { workspace = true, optional = true }
+solana-signer = { workspace = true, optional = true }
+solana-transaction = { workspace = true, optional = true }
+solana-transaction-context = { workspace = true, optional = true }
+solana-transaction-error = { workspace = true, optional = true }
+
 solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
@@ -49,7 +61,17 @@ default = ["convert", "tonic", "tonic-compression"]
 convert = [
   "dep:bincode",
   "dep:solana-account-decoder",
-  "dep:solana-sdk",
+  "dep:solana-pubkey",
+  "dep:solana-signature",
+  "dep:solana-clock",
+  "dep:solana-message",
+  "dep:solana-hash",
+  "dep:solana-account",
+  "dep:solana-signer",
+  "dep:solana-transaction",
+  "dep:solana-transaction-error",
+  "dep:solana-transaction-context",
+  "dep:solana-instruction",
   "dep:solana-transaction-status",
 ]
 plugin = [

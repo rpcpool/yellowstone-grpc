@@ -39,7 +39,7 @@ prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 solana-logger = { workspace = true }
-solana-sdk = { workspace = true }
+# solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
@@ -49,6 +49,8 @@ tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin"] }
 dashmap = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-clock = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
