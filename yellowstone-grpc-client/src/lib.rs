@@ -54,6 +54,7 @@ pub enum GeyserGrpcClientError {
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
+#[derive(Debug, Clone)]
 pub struct GeyserGrpcClient<F> {
     pub health: HealthClient<InterceptedService<Channel, F>>,
     pub geyser: GeyserClient<InterceptedService<Channel, F>>,
