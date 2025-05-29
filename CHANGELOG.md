@@ -16,6 +16,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-05-29
+
+- yellowstone-grpc-client-7.0.0
+
+### Features
+- client: add `Debug + Clone` to `GeyserGrpcClient`
+  ([#589](https://https://github.com/rpcpool/yellowstone-grpc/pull/589))
+
+### Fixes
+- client: construct client instances with `InterceptorXToken` instead of opaque `Interceptor`
+  ([#589](https://https://github.com/rpcpool/yellowstone-grpc/pull/589))
+
+
 ## 2025-05-01
 
 - @triton-one/yellowstone-grpc@4.1.0
