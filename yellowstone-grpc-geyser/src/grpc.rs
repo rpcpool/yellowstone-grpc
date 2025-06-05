@@ -534,7 +534,7 @@ impl GrpcService {
                         metrics::update_slot_status_plugin_event_time(slot_message.slot,slot_message.status);
                     }
                     if let Message::BlockMeta(msg)= &message{
-                        metrics::update_block_receiving_delay(msg.get_slot(), "to_plugin", msg.block_meta.block_time.map_or(0, |t| t.timestamp));
+                        metrics::update_block_receiving_delay(message.get_slot(), "to_plugin", msg.block_meta.block_time.map_or(0, |t| t.timestamp));
                     }
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {
@@ -977,7 +977,7 @@ impl GrpcService {
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
                                 if let Message::Block(msg) = &message {
-                                    metrics::update_block_receiving_delay(msg.get_slot(),"to_client",msg.block_meta.block_time.map_or(0, |t| t.timestamp));
+                                    metrics::update_block_receiving_delay(message.get_slot(),"to_client",msg.meta.block_time.map_or(0, |t| t.timestamp));
                                 }
                                 for message in filter.get_updates(message, Some(commitment)) {
                                     match stream_tx.try_send(Ok(message)) {

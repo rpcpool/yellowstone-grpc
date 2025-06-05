@@ -1,7 +1,7 @@
 use {
     crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
-    chrono::Utc::{self, DateTime},
+    chrono::{self, DateTime, Utc},
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
@@ -14,8 +14,8 @@ use {
     },
     log::{error, info},
     prometheus::{
-        Histogram, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts,
-        Registry, TextEncoder, TEXT_FORMAT,
+        HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder, TEXT_FORMAT,
     },
     solana_sdk::clock::Slot,
     std::{
@@ -398,7 +398,7 @@ pub fn missed_status_message_inc(status: SlotStatus) {
         .inc()
 }
 
-pub fn update_slot_status_event_time(slot: u64, status: SlotStatus) {
+pub fn update_slot_status_event_time(slot: u64, status: &GeyserSlosStatus) {
     SLOT_STATUS_EVENT_TIME
         .with_label_values(&[slot.to_string().as_str(), status.as_str()])
         .set(Utc::now().timestamp_micros());
@@ -410,8 +410,10 @@ pub fn update_slot_status_plugin_event_time(slot: u64, status: SlotStatus) {
         .set(Utc::now().timestamp_micros());
 }
 
-pub fn update_block_receiving_delay(slot: u64, point: &str, start_time: Utc::DateTime) {
+pub fn update_block_receiving_delay(slot: u64, point: &str, start_time: i64) {
+    let utc_start_datetime: DateTime<Utc> = DateTime::from_timestamp(start_time, 0).unwrap();
+    let d = (Utc::now() - utc_start_datetime).num_milliseconds();
     BLOCK_RECEIVING_DELAY
         .with_label_values(&[slot.to_string().as_str(), point])
-        .set((Utc::now() - start_time).num_milliseconds());
+        .observe(d as f64);
 }

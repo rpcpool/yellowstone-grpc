@@ -191,7 +191,7 @@ impl GeyserPlugin for Plugin {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
             metrics::update_slot_status(status, slot);
-            metrics::update_slot_status_event_time(status, slot);
+            metrics::update_slot_status_event_time(slot, status);
             Ok(())
         })
     }
