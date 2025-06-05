@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-06-01
+
+- @triton-one/yellowstone-grpc@4.1.0
+- yellowstone-grpc-client-simple-7.0.0
+- yellowstone-grpc-client-7.0.0
+- yellowstone-grpc-geyser-7.0.0
+- yellowstone-grpc-proto-7.0.0
+
+### Breaking
+
+- geyser, plugin, proto: remove deprecated `solana-sdk` dependency ([#590](https://github.com/rpcpool/yellowstone-grpc/pull/590))
+
 ## 2025-05-01
 
 - @triton-one/yellowstone-grpc@4.1.0
@@ -703,7 +715,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - tools: correctly handle SIGINT in kafka ([#219](https://github.com/rpcpool/yellowstone-grpc/pull/219))
 - geyser: use Ordering::Relaxed instead of SeqCst ([#221](https://github.com/rpcpool/yellowstone-grpc/pull/221))
 - proto: add optional field `ping` to `SubscribeRequest` ([#227](https://github.com/rpcpool/yellowstone-grpc/pull/227))
-- geyser: remove startup_status (allow reload plugin)  ([#230](https://github.com/rpcpool/yellowstone-grpc/pull/230))
+- geyser: remove startup_status (allow reload plugin) ([#230](https://github.com/rpcpool/yellowstone-grpc/pull/230))
 
 ### Features
 
