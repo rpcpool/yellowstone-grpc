@@ -1125,7 +1125,7 @@ mod tests {
         solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
         solana_pubkey::Pubkey,
         solana_signer::Signer,
-        solana_transaction::{SanitizedTransaction, Transaction},
+        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
