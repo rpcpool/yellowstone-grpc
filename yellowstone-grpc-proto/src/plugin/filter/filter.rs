@@ -33,10 +33,8 @@ use {
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
     prost::encoding::{encode_key, encode_varint, WireType},
-    solana_sdk::{
-        pubkey::{ParsePubkeyError, Pubkey},
-        signature::{ParseSignatureError, Signature},
-    },
+    solana_pubkey::{ParsePubkeyError, Pubkey},
+    solana_signature::{ParseSignatureError, Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
@@ -1122,13 +1120,12 @@ mod tests {
             },
         },
         prost_types::Timestamp,
-        solana_sdk::{
-            hash::Hash,
-            message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
-            pubkey::Pubkey,
-            signer::{keypair::Keypair, Signer},
-            transaction::{SanitizedTransaction, Transaction},
-        },
+        solana_hash::Hash,
+        solana_keypair::Keypair,
+        solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
+        solana_pubkey::Pubkey,
+        solana_signer::Signer,
+        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
