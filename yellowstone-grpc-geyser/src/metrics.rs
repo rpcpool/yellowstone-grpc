@@ -88,7 +88,7 @@ lazy_static::lazy_static! {
     // - to_client: Marked when the slot status is ready to be sent to the client
     static ref BLOCK_RECEIVING_DELAY: HistogramVec = HistogramVec::new(
         HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit milliseconds").buckets(vec![10.0,100.0,500.0,1000.0,1500.0,2000.0,2500.0,3000.0,4000.0,5000.0]),
-        &["slot","status","mark_point"]
+        &["slot","mark_point"]
     ).unwrap();
 }
 
