@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "6.0.0"
+version = "7.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -38,8 +38,9 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+solana-clock = { workspace = true }
 solana-logger = { workspace = true }
-solana-sdk = { workspace = true }
+solana-pubkey = { workspace = true }
 solana-transaction-status = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
