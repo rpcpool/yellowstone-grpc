@@ -1,6 +1,7 @@
 use {
     crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
+    chrono::{self, DateTime, Utc},
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
@@ -12,8 +13,11 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
-    solana_clock::Slot,
+    prometheus::{
+        HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder, TEXT_FORMAT,
+    },
+    solana_sdk::clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
@@ -66,6 +70,25 @@ lazy_static::lazy_static! {
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
+    ).unwrap();
+
+    static ref SLOT_STATUS_EVENT_TIME: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("slot_status_event_time", "Lastest time received slot from Geyser,return microseconds unix timestamp"),
+        &["slot","status"]
+    ).unwrap();
+
+    static ref SLOT_STATUS_PLUGIN_EVENT_TIME: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("slot_status_plugin_event_time", "Latest time processed slot in the plugin to client queues,return microseconds unix timestamp"),
+        &["slot","status"]
+    ).unwrap();
+    // This metric measures the transmission delay from block production to the RPC node, in milliseconds.
+    // Possible values for mark_point:
+    // - to_node: Marked when the block meta information reaches the node
+    // - to_plugin: Marked when the block meta information reaches the Geyser plugin processing flow
+    // - to_client: Marked when the slot status is ready to be sent to the client
+    static ref BLOCK_RECEIVING_DELAY: HistogramVec = HistogramVec::new(
+        HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit milliseconds").buckets(vec![10.0,100.0,500.0,1000.0,1500.0,2000.0,2500.0,3000.0,4000.0,5000.0]),
+        &["slot","mark_point"]
     ).unwrap();
 }
 
@@ -199,6 +222,9 @@ impl PrometheusService {
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
+            register!(SLOT_STATUS_EVENT_TIME);
+            register!(SLOT_STATUS_PLUGIN_EVENT_TIME);
+            register!(BLOCK_RECEIVING_DELAY);
 
             VERSION
                 .with_label_values(&[
@@ -305,6 +331,7 @@ fn metrics_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         });
     Response::builder()
         .status(StatusCode::OK)
+        .header("Content-Type", TEXT_FORMAT)
         .body(BodyFull::new(Bytes::from(metrics)).boxed())
 }
 
@@ -369,4 +396,24 @@ pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
         .with_label_values(&[status.as_str()])
         .inc()
+}
+
+pub fn update_slot_status_event_time(slot: u64, status: &GeyserSlosStatus) {
+    SLOT_STATUS_EVENT_TIME
+        .with_label_values(&[slot.to_string().as_str(), status.as_str()])
+        .set(Utc::now().timestamp_micros());
+}
+
+pub fn update_slot_status_plugin_event_time(slot: u64, status: SlotStatus) {
+    SLOT_STATUS_PLUGIN_EVENT_TIME
+        .with_label_values(&[slot.to_string().as_str(), status.as_str()])
+        .set(Utc::now().timestamp_micros());
+}
+
+pub fn update_block_receiving_delay(slot: u64, point: &str, start_time: i64) {
+    let utc_start_datetime: DateTime<Utc> = DateTime::from_timestamp(start_time, 0).unwrap();
+    let d = (Utc::now() - utc_start_datetime).num_milliseconds();
+    BLOCK_RECEIVING_DELAY
+        .with_label_values(&[slot.to_string().as_str(), point])
+        .observe(d as f64);
 }
