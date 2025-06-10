@@ -1,7 +1,6 @@
 use {
     crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
-    chrono::{self, DateTime, Utc},
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
@@ -22,13 +21,16 @@ use {
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
         sync::{Arc, Once},
+        time::{SystemTime, UNIX_EPOCH},
     },
     tokio::{
         net::TcpListener,
         sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
-    yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
+    yellowstone_grpc_proto::plugin::{
+        filter::Filter, message::CommitmentLevel, message::SlotStatus,
+    },
 };
 
 lazy_static::lazy_static! {
@@ -71,24 +73,36 @@ lazy_static::lazy_static! {
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
     ).unwrap();
-
-    static ref SLOT_STATUS_EVENT_TIME: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("slot_status_event_time", "Lastest time received slot from Geyser,return microseconds unix timestamp"),
-        &["slot","status"]
-    ).unwrap();
-
-    static ref SLOT_STATUS_PLUGIN_EVENT_TIME: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("slot_status_plugin_event_time", "Latest time processed slot in the plugin to client queues,return microseconds unix timestamp"),
-        &["slot","status"]
-    ).unwrap();
     // This metric measures the transmission delay from block production to the RPC node, in milliseconds.
     // Possible values for mark_point:
-    // - to_node: Marked when the block meta information reaches the node
-    // - to_plugin: Marked when the block meta information reaches the Geyser plugin processing flow
-    // - to_client: Marked when the slot status is ready to be sent to the client
+    // - created: Marked when the block created
+    // - ready_to_send: Marked when the block is ready to be sent to the client
     static ref BLOCK_RECEIVING_DELAY: HistogramVec = HistogramVec::new(
         HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit milliseconds").buckets(vec![10.0,100.0,500.0,1000.0,1500.0,2000.0,2500.0,3000.0,4000.0,5000.0]),
-        &["slot","mark_point"]
+        &["commitment","mark_point"]
+    ).unwrap();
+    //  Total number of messages sent to the client
+    static ref MESSAGES_SENT_TOTAL: IntCounter = IntCounterVec::new(
+        Opts::new("geyser_messages_sent_total","Total number of messages sent to clients"),
+        &[]
+    ).unwrap();
+
+    // Total number of messages sent to the client
+    static ref CONNECTIONS_CLOSED_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("geyser_connections_closed_total","Total number of closed connections by reason"),
+        &["reason"]
+    ).unwrap();
+
+    // Client queue size
+    static ref CLIENT_QUEUE_SIZE: Histogram = IntGaugeVec::new(
+        Opts::new("geyser_client_queue_size","Size of client message queue"),
+        &[]
+    ).unwrap();
+
+    // The message size sent to the client
+    static ref MESSAGE_SIZE_BYTES: Histogram = IntGaugeVec::new(
+        Opts::new("geyser_message_size_bytes","Size of messages sent to clients in bytes"),
+        &[]
     ).unwrap();
 }
 
@@ -222,8 +236,6 @@ impl PrometheusService {
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
-            register!(SLOT_STATUS_EVENT_TIME);
-            register!(SLOT_STATUS_PLUGIN_EVENT_TIME);
             register!(BLOCK_RECEIVING_DELAY);
 
             VERSION
@@ -398,22 +410,35 @@ pub fn missed_status_message_inc(status: SlotStatus) {
         .inc()
 }
 
-pub fn update_slot_status_event_time(slot: u64, status: &GeyserSlosStatus) {
-    SLOT_STATUS_EVENT_TIME
-        .with_label_values(&[slot.to_string().as_str(), status.as_str()])
-        .set(Utc::now().timestamp_micros());
-}
-
-pub fn update_slot_status_plugin_event_time(slot: u64, status: SlotStatus) {
-    SLOT_STATUS_PLUGIN_EVENT_TIME
-        .with_label_values(&[slot.to_string().as_str(), status.as_str()])
-        .set(Utc::now().timestamp_micros());
-}
-
-pub fn update_block_receiving_delay(slot: u64, point: &str, start_time: i64) {
-    let utc_start_datetime: DateTime<Utc> = DateTime::from_timestamp(start_time, 0).unwrap();
-    let d = (Utc::now() - utc_start_datetime).num_milliseconds();
+pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, target_time: i64) {
+    let now = SystemTime::now();
+    let target_time = if timestamp_secs >= 0 {
+        UNIX_EPOCH + std::time::Duration::from_secs(timestamp_secs as u64)
+    } else {
+        let abs_secs = (-timestamp_secs) as u64;
+        UNIX_EPOCH - std::time::Duration::from_secs(abs_secs)
+    };
+    let d = match now.duration_since(target_time) {
+        Ok(duration) => duration.as_millis() as i64,
+        Err(e) => -(e.duration().as_millis() as i64),
+    };
     BLOCK_RECEIVING_DELAY
-        .with_label_values(&[slot.to_string().as_str(), point])
+        .with_label_values(&[commitment.as_str(), point])
         .observe(d as f64);
+}
+
+pub fn messages_sent_inc() {
+    MESSAGES_SENT_TOTAL.inc();
+}
+
+pub fn connection_closed_inc(reason: &str) {
+    CONNECTIONS_CLOSED_TOTAL.with_label_values(&[reason]).inc();
+}
+
+pub fn update_client_queue_size(size: usize) {
+    CLIENT_QUEUE_SIZE.set(size as i64);
+}
+
+pub fn update_message_size(size: usize) {
+    MESSAGE_SIZE_BYTES.set(size as i64);
 }

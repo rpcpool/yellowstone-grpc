@@ -191,7 +191,6 @@ impl GeyserPlugin for Plugin {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
             metrics::update_slot_status(status, slot);
-            metrics::update_slot_status_event_time(slot, status);
             Ok(())
         })
     }
@@ -248,11 +247,6 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
             let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
-            metrics::update_block_receiving_delay(
-                message.get_slot(),
-                "to_node",
-                blockinfo.block_time.unwrap_or(0),
-            );
             inner.send_message(message);
 
             Ok(())

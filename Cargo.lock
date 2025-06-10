@@ -6165,7 +6165,6 @@ dependencies = [
  "bincode",
  "bs58",
  "cargo-lock",
- "chrono",
  "clap",
  "crossbeam-channel",
  "futures",
