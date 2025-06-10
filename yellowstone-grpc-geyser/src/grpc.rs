@@ -26,7 +26,6 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        codec,
         service::interceptor::interceptor,
         transport::{
             server::{Server, TcpIncoming},
