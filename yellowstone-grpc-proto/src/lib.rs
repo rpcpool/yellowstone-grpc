@@ -44,18 +44,17 @@ pub mod plugin;
 pub mod convert_to {
     use {
         super::prelude as proto,
-        solana_sdk::{
-            clock::UnixTimestamp,
-            instruction::CompiledInstruction,
-            message::{
-                v0::{LoadedMessage, MessageAddressTableLookup},
-                LegacyMessage, MessageHeader, SanitizedMessage,
-            },
-            pubkey::Pubkey,
-            signature::Signature,
-            transaction::{SanitizedTransaction, TransactionError},
-            transaction_context::TransactionReturnData,
+        solana_clock::UnixTimestamp,
+        solana_message::{
+            compiled_instruction::CompiledInstruction,
+            v0::{LoadedMessage, MessageAddressTableLookup},
+            LegacyMessage, MessageHeader, SanitizedMessage,
         },
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        solana_transaction::sanitized::SanitizedTransaction,
+        solana_transaction_context::TransactionReturnData,
+        solana_transaction_error::TransactionError,
         solana_transaction_status::{
             InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
             TransactionTokenBalance,
@@ -301,20 +300,19 @@ pub mod convert_to {
 pub mod convert_from {
     use {
         super::prelude as proto,
+        solana_account::Account,
         solana_account_decoder::parse_token::UiTokenAmount,
-        solana_sdk::{
-            account::Account,
-            hash::{Hash, HASH_BYTES},
-            instruction::CompiledInstruction,
-            message::{
-                v0::{LoadedAddresses, Message as MessageV0, MessageAddressTableLookup},
-                Message, MessageHeader, VersionedMessage,
-            },
-            pubkey::Pubkey,
-            signature::Signature,
-            transaction::{TransactionError, VersionedTransaction},
-            transaction_context::TransactionReturnData,
+        solana_hash::{Hash, HASH_BYTES},
+        solana_message::{
+            compiled_instruction::CompiledInstruction,
+            v0::{LoadedAddresses, Message as MessageV0, MessageAddressTableLookup},
+            Message, MessageHeader, VersionedMessage,
         },
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        solana_transaction::versioned::VersionedTransaction,
+        solana_transaction_context::TransactionReturnData,
+        solana_transaction_error::TransactionError,
         solana_transaction_status::{
             ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
             RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
@@ -424,7 +422,9 @@ pub mod convert_from {
             VersionedMessage::V0(MessageV0 {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
-                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                recent_blockhash: Hash::new_from_array(
+                    <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
+                ),
                 instructions: create_message_instructions(message.instructions)?,
                 address_table_lookups,
             })
@@ -432,7 +432,9 @@ pub mod convert_from {
             VersionedMessage::Legacy(Message {
                 header,
                 account_keys: create_pubkey_vec(message.account_keys)?,
-                recent_blockhash: Hash::new(message.recent_blockhash.as_slice()),
+                recent_blockhash: Hash::new_from_array(
+                    <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
+                ),
                 instructions: create_message_instructions(message.instructions)?,
             })
         })

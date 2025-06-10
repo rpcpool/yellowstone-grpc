@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 4.3.0
-    "yellowstone-grpc-client", # 4.1.1
-    "yellowstone-grpc-geyser", # 4.2.3
-    "yellowstone-grpc-proto", # 4.1.1
+    "examples/rust", # 7.0.0
+    "yellowstone-grpc-client", # 7.0.0
+    "yellowstone-grpc-geyser", # 7.0.0
+    "yellowstone-grpc-proto", # 7.0.0
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -21,7 +21,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "~2.1.1"
+agave-geyser-plugin-interface = "~2.2.1"
 anyhow = "1.0.62"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -55,13 +55,23 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account-decoder = "~2.1.1"
-solana-logger = "~2.1.1"
-solana-sdk = "~2.1.1"
-solana-storage-proto = "~2.1.1"
-solana-transaction-status = "~2.1.1"
+solana-account = "~2.2.1"
+solana-account-decoder = "~2.2.1"
+solana-clock = "~2.2.1"
+solana-hash = "~2.2.1"
+solana-keypair = "~2.2.1"
+solana-logger = "~2.2.1"
+solana-message = "~2.2.1"
+solana-pubkey = "~2.2.1"
+solana-signature = "~2.2.1"
+solana-signer = "~2.2.1"
+solana-storage-proto = "~2.2.1"
+solana-transaction = "~2.2.1"
+solana-transaction-context = "~2.2.1"
+solana-transaction-error = "~2.2.1"
+solana-transaction-status = "~2.2.1"
 smallvec = "1.13.2"
-spl-token-2022 = "6.0.0"
+spl-token-2022 = "8.0.0"
 thiserror = "1.0.63"
 tokio = "1.21.2"
 tokio-stream = "0.1.11"
@@ -69,8 +79,8 @@ tonic = "0.12.1"
 tonic-build = "0.12.1"
 tonic-health = "0.12.1"
 vergen = "9.0.0"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "4.1.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "4.1.1", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "7.0.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "7.0.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

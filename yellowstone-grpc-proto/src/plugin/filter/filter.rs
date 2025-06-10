@@ -26,17 +26,15 @@ use {
             },
             message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
-                MessageEntry, MessageSlot, MessageTransaction,
+                MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
             },
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
     prost::encoding::{encode_key, encode_varint, WireType},
-    solana_sdk::{
-        pubkey::{ParsePubkeyError, Pubkey},
-        signature::{ParseSignatureError, Signature},
-    },
+    solana_pubkey::{ParsePubkeyError, Pubkey},
+    solana_signature::{ParseSignatureError, Signature},
     spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
     std::{
         collections::{HashMap, HashSet},
@@ -170,9 +168,19 @@ impl Filter {
 
     fn decode_commitment(commitment: Option<i32>) -> FilterResult<CommitmentLevel> {
         let commitment = commitment.unwrap_or(CommitmentLevelProto::Processed as i32);
-        CommitmentLevelProto::try_from(commitment)
+        let commitment = CommitmentLevelProto::try_from(commitment)
             .map(Into::into)
-            .map_err(|_error| FilterError::InvalidCommitment { commitment })
+            .map_err(|_error| FilterError::InvalidCommitment { commitment })?;
+        if !matches!(
+            commitment,
+            CommitmentLevel::Processed | CommitmentLevel::Confirmed | CommitmentLevel::Finalized
+        ) {
+            Err(FilterError::InvalidCommitment {
+                commitment: commitment as i32,
+            })
+        } else {
+            Ok(commitment)
+        }
     }
 
     fn decode_pubkeys<'a>(
@@ -581,12 +589,14 @@ impl<'a> FilterAccountsMatch<'a> {
 #[derive(Debug, Default, Clone, Copy)]
 struct FilterSlotsInner {
     filter_by_commitment: bool,
+    interslot_updates: bool,
 }
 
 impl FilterSlotsInner {
     fn new(filter: SubscribeRequestFilterSlots) -> Self {
         Self {
             filter_by_commitment: filter.filter_by_commitment.unwrap_or_default(),
+            interslot_updates: filter.interslot_updates.unwrap_or_default(),
         }
     }
 }
@@ -625,7 +635,16 @@ impl FilterSlots {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if !inner.filter_by_commitment || commitment == Some(message.status) {
+                if (!inner.filter_by_commitment
+                    || commitment
+                        .map(|commitment| commitment == message.status)
+                        .unwrap_or(false))
+                    && (inner.interslot_updates
+                        || matches!(
+                            message.status,
+                            SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
+                        ))
+                {
                     Some(name.clone())
                 } else {
                     None
@@ -1101,13 +1120,12 @@ mod tests {
             },
         },
         prost_types::Timestamp,
-        solana_sdk::{
-            hash::Hash,
-            message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
-            pubkey::Pubkey,
-            signer::{keypair::Keypair, Signer},
-            transaction::{SanitizedTransaction, Transaction},
-        },
+        solana_hash::Hash,
+        solana_keypair::Keypair,
+        solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
+        solana_pubkey::Pubkey,
+        solana_signer::Signer,
+        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,

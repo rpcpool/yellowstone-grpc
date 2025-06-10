@@ -7,14 +7,12 @@ use {
     anyhow::Context,
     log::{error, info},
     prost_types::Timestamp,
-    solana_sdk::{
-        clock::{Slot, MAX_RECENT_BLOCKHASHES},
-        pubkey::Pubkey,
-    },
+    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
         time::SystemTime,
@@ -46,7 +44,7 @@ use {
             },
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo,
+                MessageSlot, MessageTransactionInfo, SlotStatus,
             },
             proto::geyser_server::{Geyser, GeyserServer},
         },
@@ -54,7 +52,8 @@ use {
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
+            SubscribeReplayInfoResponse, SubscribeRequest,
         },
     },
 };
@@ -107,13 +106,13 @@ impl BlockMetaStorage {
                 match message {
                     Message::Slot(msg) => {
                         match msg.status {
-                            CommitmentLevel::Processed => {
+                            SlotStatus::Processed => {
                                 storage.processed.replace(msg.slot);
                             }
-                            CommitmentLevel::Confirmed => {
+                            SlotStatus::Confirmed => {
                                 storage.confirmed.replace(msg.slot);
                             }
-                            CommitmentLevel::Finalized => {
+                            SlotStatus::Finalized => {
                                 storage.finalized.replace(msg.slot);
                             }
                             _ => {}
@@ -130,20 +129,20 @@ impl BlockMetaStorage {
                                 .or_insert_with(|| BlockhashStatus::new(msg.slot));
 
                             match msg.status {
-                                CommitmentLevel::Processed => {
+                                SlotStatus::Processed => {
                                     entry.processed = true;
                                 }
-                                CommitmentLevel::Confirmed => {
+                                SlotStatus::Confirmed => {
                                     entry.confirmed = true;
                                 }
-                                CommitmentLevel::Finalized => {
+                                SlotStatus::Finalized => {
                                     entry.finalized = true;
                                 }
                                 _ => {}
                             }
                         }
 
-                        if msg.status == CommitmentLevel::Finalized {
+                        if msg.status == SlotStatus::Finalized {
                             if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
                                 storage.blocks.retain(|slot, _block| *slot >= keep_slot);
                             }
@@ -202,7 +201,6 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
-            _ => return Err(Status::internal("unreachable")),
         };
 
         match slot.and_then(|slot| storage.blocks.get(&slot)) {
@@ -231,7 +229,6 @@ impl BlockMetaStorage {
             CommitmentLevel::Processed => storage.processed,
             CommitmentLevel::Confirmed => storage.confirmed,
             CommitmentLevel::Finalized => storage.finalized,
-            _ => return Err(Status::internal("unreachable")),
         }
         .ok_or_else(|| Status::internal("startup"))?;
 
@@ -239,12 +236,10 @@ impl BlockMetaStorage {
             .blockhashes
             .get(blockhash)
             .map(|status| match commitment {
-                CommitmentLevel::Processed => Ok(status.processed),
-                CommitmentLevel::Confirmed => Ok(status.confirmed),
-                CommitmentLevel::Finalized => Ok(status.finalized),
-                _ => Err(Status::internal("unreachable")),
+                CommitmentLevel::Processed => status.processed,
+                CommitmentLevel::Confirmed => status.confirmed,
+                CommitmentLevel::Finalized => status.finalized,
             })
-            .transpose()?
             .unwrap_or(false);
 
         Ok(Response::new(IsBlockhashValidResponse { valid, slot }))
@@ -344,6 +339,7 @@ pub struct GrpcService {
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
+    replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
 }
@@ -389,12 +385,13 @@ impl GrpcService {
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         // attempt to prevent spam of geyser loop with capacity eq 1
-        let (replay_stored_slots_tx, replay_stored_slots_rx) = if config.replay_stored_slots == 0 {
-            (None, None)
-        } else {
-            let (tx, rx) = mpsc::channel(1);
-            (Some(tx), Some(rx))
-        };
+        let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
+            if config.replay_stored_slots == 0 {
+                (None, None, None)
+            } else {
+                let (tx, rx) = mpsc::channel(1);
+                (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
+            };
 
         // gRPC server builder with optional TLS
         let mut server_builder = Server::builder();
@@ -442,6 +439,7 @@ impl GrpcService {
             snapshot_rx: Mutex::new(snapshot_rx),
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
+            replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
             filter_names,
         })
@@ -475,6 +473,7 @@ impl GrpcService {
                     blocks_meta_tx,
                     broadcast_tx,
                     replay_stored_slots_rx,
+                    replay_first_available_slot,
                     config.replay_stored_slots,
                 ));
         });
@@ -524,6 +523,7 @@ impl GrpcService {
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
@@ -560,10 +560,10 @@ impl GrpcService {
                     match &message {
                         // On startup we can receive multiple Confirmed/Finalized slots without BlockMeta message
                         // With saved first Processed slot we can ignore errors caused by startup process
-                        Message::Slot(msg) if processed_first_slot.is_none() && msg.status == CommitmentLevel::Processed => {
+                        Message::Slot(msg) if processed_first_slot.is_none() && msg.status == SlotStatus::Processed => {
                             processed_first_slot = Some(msg.slot);
                         }
-                        Message::Slot(msg) if msg.status == CommitmentLevel::Finalized => {
+                        Message::Slot(msg) if msg.status == SlotStatus::Finalized => {
                             // keep extra 10 slots + slots for replay
                             if let Some(msg_slot) = msg.slot.checked_sub(10 + replay_stored_slots) {
                                 loop {
@@ -603,6 +603,11 @@ impl GrpcService {
                                         _ => break,
                                     }
                                 }
+                                if let Some(stored) = &replay_first_available_slot {
+                                    if let Some(slot) = messages.keys().next().copied() {
+                                        stored.store(slot, Ordering::Relaxed);
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -612,13 +617,13 @@ impl GrpcService {
                     let slot_messages = messages.entry(message.get_slot()).or_default();
                     if let Message::Slot(msg) = &message {
                         match msg.status {
-                            CommitmentLevel::Processed => {
+                            SlotStatus::Processed => {
                                 slot_messages.parent_slot = msg.parent;
                             },
-                            CommitmentLevel::Confirmed => {
+                            SlotStatus::Confirmed => {
                                 slot_messages.confirmed = true;
                             },
-                            CommitmentLevel::Finalized => {
+                            SlotStatus::Finalized => {
                                 slot_messages.finalized = true;
                             },
                             _ => {}
@@ -697,12 +702,12 @@ impl GrpcService {
                             .and_then(|entry| entry.parent_slot)
                             .map(|parent| (parent, messages.get_mut(&parent)))
                         {
-                            if (status == CommitmentLevel::Confirmed && !entry.confirmed) ||
-                                (status == CommitmentLevel::Finalized && !entry.finalized)
+                            if (status == SlotStatus::Confirmed && !entry.confirmed) ||
+                                (status == SlotStatus::Finalized && !entry.finalized)
                             {
-                                if status == CommitmentLevel::Confirmed {
+                                if status == SlotStatus::Confirmed {
                                     entry.confirmed = true;
-                                } else if status == CommitmentLevel::Finalized {
+                                } else if status == SlotStatus::Finalized {
                                     entry.finalized = true;
                                 }
 
@@ -723,10 +728,10 @@ impl GrpcService {
                     for message in messages_vec.into_iter().rev() {
                         if let Message::Slot(slot) = &message.1 {
                             let (mut confirmed_messages, mut finalized_messages) = match slot.status {
-                                CommitmentLevel::Processed | CommitmentLevel::FirstShredReceived | CommitmentLevel::Completed | CommitmentLevel::CreatedBank | CommitmentLevel::Dead => {
+                                SlotStatus::Processed | SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::CreatedBank | SlotStatus::Dead => {
                                     (Vec::with_capacity(1), Vec::with_capacity(1))
                                 }
-                                CommitmentLevel::Confirmed => {
+                                SlotStatus::Confirmed => {
                                     if let Some(slot_messages) = messages.get_mut(&slot.slot) {
                                         if !slot_messages.sealed {
                                             slot_messages.confirmed_at = Some(slot_messages.messages.len());
@@ -739,7 +744,7 @@ impl GrpcService {
                                         .unwrap_or_default();
                                     (vec, Vec::with_capacity(1))
                                 }
-                                CommitmentLevel::Finalized => {
+                                SlotStatus::Finalized => {
                                     if let Some(slot_messages) = messages.get_mut(&slot.slot) {
                                         if !slot_messages.sealed {
                                             slot_messages.finalized_at = Some(slot_messages.messages.len());
@@ -905,14 +910,6 @@ impl GrpcService {
 
                         match message {
                             Some(Some((from_slot, filter_new))) => {
-                                if let Some(msg) = filter_new.get_pong_msg() {
-                                    if stream_tx.send(Ok(msg)).await.is_err() {
-                                        error!("client #{id}: stream closed");
-                                        break 'outer;
-                                    }
-                                    continue;
-                                }
-
                                 metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
                                 filter = filter_new;
                                 DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
@@ -1177,9 +1174,20 @@ impl Geyser for GrpcService {
                             filter_names.try_clean();
 
                             if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
-                                Ok(filter) => match incoming_client_tx.send(Some((request.from_slot ,filter))) {
-                                    Ok(()) => Ok(()),
-                                    Err(error) => Err(error.to_string()),
+                                Ok(filter) => {
+                                    if let Some(msg) = filter.get_pong_msg() {
+                                        if incoming_stream_tx.send(Ok(msg)).await.is_err() {
+                                            error!("client #{id}: stream closed");
+                                            let _ = incoming_client_tx.send(None);
+                                            break;
+                                        }
+                                        continue;
+                                    }
+
+                                    match incoming_client_tx.send(Some((request.from_slot, filter))) {
+                                        Ok(()) => Ok(()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
                                 },
                                 Err(error) => Err(error.to_string()),
                             } {
@@ -1219,6 +1227,19 @@ impl Geyser for GrpcService {
         ));
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
+    }
+
+    async fn subscribe_first_available_slot(
+        &self,
+        _request: Request<SubscribeReplayInfoRequest>,
+    ) -> Result<Response<SubscribeReplayInfoResponse>, Status> {
+        let response = SubscribeReplayInfoResponse {
+            first_available: self
+                .replay_first_available_slot
+                .as_ref()
+                .map(|stored| stored.load(Ordering::Relaxed)),
+        };
+        Ok(Response::new(response))
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {

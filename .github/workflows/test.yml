@@ -12,6 +12,7 @@ on:
       - 'v1.18'
       - 'v2.0'
       - 'v2.1'
+      - 'v2.2'
   workflow_dispatch:
 
 env:
@@ -76,6 +77,7 @@ jobs:
       - name: cargo tree
         run: |
           cargo tree
+          git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
@@ -83,6 +85,7 @@ jobs:
         run: |
           cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
           cargo tree
+          git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
@@ -95,13 +98,16 @@ jobs:
           cargo +nightly fmt --all -- --check
 
       - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v1
+        uses: EmbarkStudios/cargo-deny-action@v2.0.1
         with:
           command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
+
       - name: cargo deny check advisories wasm
-        uses: EmbarkStudios/cargo-deny-action@v1
+        uses: EmbarkStudios/cargo-deny-action@v2.0.1
         with:
           command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
           manifest-path: ./yellowstone-grpc-client-nodejs/solana-encoding-wasm/Cargo.toml
 
       - name: cargo clippy

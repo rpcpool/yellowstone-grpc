@@ -16,7 +16,11 @@ fn main() -> anyhow::Result<()> {
     let lockfile = Lockfile::load("../Cargo.lock")?;
     println!(
         "cargo:rustc-env=SOLANA_SDK_VERSION={}",
-        get_pkg_version(&lockfile, "solana-sdk")
+        // this is used to set the solana version number
+        // this used to refer `solana-sdk`
+        // since it was deprecated
+        // this now referes `agave-geyser-plugin-interface`
+        get_pkg_version(&lockfile, "agave-geyser-plugin-interface")
     );
     println!(
         "cargo:rustc-env=YELLOWSTONE_GRPC_PROTO_VERSION={}",

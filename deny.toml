@@ -26,4 +26,20 @@ ignore = [
     # derivative 2.2.0
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0388
     "RUSTSEC-2024-0388",
+
+    # paste 1.0.15
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    "RUSTSEC-2024-0436",
+
+    # protobuf 2.28.0
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0437
+    "RUSTSEC-2024-0437",
+
+    # backoff 0.4.0
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0012
+    "RUSTSEC-2025-0012",
+
+    # openssl 0.10.71
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0022
+    "RUSTSEC-2025-0022",
 ]

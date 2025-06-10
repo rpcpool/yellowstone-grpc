@@ -1,10 +1,10 @@
 use {
     crate::{
         geyser::{
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus,
         },
         plugin::{
@@ -26,7 +26,7 @@ use {
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
-    solana_sdk::signature::Signature,
+    solana_signature::Signature,
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
@@ -36,7 +36,7 @@ use {
 };
 
 #[inline]
-pub fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
+pub const fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
     key_len(tag) + encoded_len_varint(len as u64) + len
 }
 
@@ -48,7 +48,7 @@ fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
 }
 
 #[inline]
-pub fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
+pub const fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
     prost_field_encoded_len(tag, value.len())
 }
 
@@ -565,14 +565,14 @@ impl DerefMut for FilteredUpdateSlot {
 
 impl prost::Message for FilteredUpdateSlot {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        let status = CommitmentLevelProto::from(self.status) as i32;
+        let status = SlotStatusProto::from(self.status) as i32;
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
         }
         if let ::core::option::Option::Some(ref value) = self.parent {
             ::prost::encoding::uint64::encode(2u32, value, buf);
         }
-        if status != CommitmentLevelProto::default() as i32 {
+        if status != SlotStatusProto::default() as i32 {
             ::prost::encoding::int32::encode(3u32, &status, buf);
         }
         if let Some(error) = &self.dead_error {
@@ -581,7 +581,7 @@ impl prost::Message for FilteredUpdateSlot {
     }
 
     fn encoded_len(&self) -> usize {
-        let status = CommitmentLevelProto::from(self.status) as i32;
+        let status = SlotStatusProto::from(self.status) as i32;
 
         (if self.slot != 0u64 {
             ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
@@ -589,7 +589,7 @@ impl prost::Message for FilteredUpdateSlot {
             0
         }) + self.parent.as_ref().map_or(0, |value| {
             ::prost::encoding::uint64::encoded_len(2u32, value)
-        }) + if status != CommitmentLevelProto::default() as i32 {
+        }) + if status != SlotStatusProto::default() as i32 {
             ::prost::encoding::int32::encoded_len(3u32, &status)
         } else {
             0
@@ -986,22 +986,20 @@ pub mod tests {
             plugin::{
                 filter::{name::FilterName, FilterAccountsDataSlice},
                 message::{
-                    CommitmentLevel, MessageAccount, MessageAccountInfo, MessageBlockMeta,
-                    MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo,
+                    MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                    MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
                 },
             },
         },
         prost::Message as _,
         prost_011::Message as _,
         prost_types::Timestamp,
-        solana_sdk::{
-            hash::Hash,
-            message::SimpleAddressLoader,
-            pubkey::Pubkey,
-            signature::Signature,
-            transaction::{MessageHash, SanitizedTransaction},
-        },
+        solana_hash::Hash,
+        solana_message::SimpleAddressLoader,
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
         solana_storage_proto::convert::generated,
+        solana_transaction::sanitized::{MessageHash, SanitizedTransaction},
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
             collections::{HashMap, HashSet},
@@ -1265,13 +1263,13 @@ pub mod tests {
         for slot in [0, 42] {
             for parent in [None, Some(0), Some(42)] {
                 for status in [
-                    CommitmentLevel::Processed,
-                    CommitmentLevel::Confirmed,
-                    CommitmentLevel::Finalized,
-                    CommitmentLevel::FirstShredReceived,
-                    CommitmentLevel::Completed,
-                    CommitmentLevel::CreatedBank,
-                    CommitmentLevel::Dead,
+                    SlotStatus::Processed,
+                    SlotStatus::Confirmed,
+                    SlotStatus::Finalized,
+                    SlotStatus::FirstShredReceived,
+                    SlotStatus::Completed,
+                    SlotStatus::CreatedBank,
+                    SlotStatus::Dead,
                 ] {
                     encode_decode_cmp(
                         &["123"],
@@ -1289,7 +1287,7 @@ pub mod tests {
                     FilteredUpdateOneof::slot(MessageSlot {
                         slot,
                         parent,
-                        status: CommitmentLevel::Dead,
+                        status: SlotStatus::Dead,
                         dead_error: Some("123".to_owned()),
                         created_at: Timestamp::from(SystemTime::now()),
                     }),
