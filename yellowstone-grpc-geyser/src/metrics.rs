@@ -237,6 +237,9 @@ impl PrometheusService {
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(BLOCK_RECEIVING_DELAY);
+            register!(MESSAGES_SENT_TOTAL);
+            register!(CLIENT_QUEUE_SIZE);
+            register!(MESSAGE_SIZE_BYTES);
 
             VERSION
                 .with_label_values(&[
