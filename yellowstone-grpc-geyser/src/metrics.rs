@@ -16,7 +16,7 @@ use {
         HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
         TextEncoder, TEXT_FORMAT,
     },
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
@@ -29,7 +29,8 @@ use {
         task::JoinHandle,
     },
     yellowstone_grpc_proto::plugin::{
-        filter::Filter, message::CommitmentLevel, message::SlotStatus,
+        filter::Filter,
+        message::{CommitmentLevel, SlotStatus},
     },
 };
 
@@ -82,9 +83,8 @@ lazy_static::lazy_static! {
         &["commitment","mark_point"]
     ).unwrap();
     //  Total number of messages sent to the client
-    static ref MESSAGES_SENT_TOTAL: IntCounter = IntCounterVec::new(
-        Opts::new("geyser_messages_sent_total","Total number of messages sent to clients"),
-        &[]
+    static ref MESSAGES_SENT_TOTAL: IntGauge = IntGauge::new(
+        "geyser_messages_sent_total","Total number of messages sent to clients"
     ).unwrap();
 
     // Total number of messages sent to the client
@@ -94,15 +94,13 @@ lazy_static::lazy_static! {
     ).unwrap();
 
     // Client queue size
-    static ref CLIENT_QUEUE_SIZE: Histogram = IntGaugeVec::new(
-        Opts::new("geyser_client_queue_size","Size of client message queue"),
-        &[]
+    static ref CLIENT_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "geyser_client_queue_size","Size of client message queue",
     ).unwrap();
 
     // The message size sent to the client
-    static ref MESSAGE_SIZE_BYTES: Histogram = IntGaugeVec::new(
-        Opts::new("geyser_message_size_bytes","Size of messages sent to clients in bytes"),
-        &[]
+    static ref MESSAGE_SIZE_BYTES: IntGauge = IntGauge::new(
+        "geyser_message_size_bytes","Size of messages sent to clients in bytes",
     ).unwrap();
 }
 
@@ -413,7 +411,7 @@ pub fn missed_status_message_inc(status: SlotStatus) {
         .inc()
 }
 
-pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, target_time: i64) {
+pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, timestamp_secs: i64) {
     let now = SystemTime::now();
     let target_time = if timestamp_secs >= 0 {
         UNIX_EPOCH + std::time::Duration::from_secs(timestamp_secs as u64)
