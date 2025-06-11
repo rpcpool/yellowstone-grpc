@@ -21,7 +21,7 @@ use {
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
         sync::{Arc, Once},
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tokio::{
         net::TcpListener,
@@ -79,7 +79,29 @@ lazy_static::lazy_static! {
     // - created: Marked when the block created
     // - ready_to_send: Marked when the block is ready to be sent to the client
     static ref BLOCK_RECEIVING_DELAY: HistogramVec = HistogramVec::new(
-        HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit milliseconds").buckets(vec![10.0,100.0,500.0,1000.0,1500.0,2000.0,2500.0,3000.0,4000.0,5000.0]),
+        HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit seconds").buckets(vec![
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            1.5,
+            2.0,
+            2.5,
+            3.0,
+            3.5,
+            4.0,
+            4.5,
+            5.0,
+            10.0,
+            20.0,
+            100.0,
+            500.0,
+            1000.0
+            ]),
         &["commitment","mark_point"]
     ).unwrap();
     //  Total number of messages sent to the client
@@ -414,10 +436,10 @@ pub fn missed_status_message_inc(status: SlotStatus) {
 pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, timestamp_secs: i64) {
     let now = SystemTime::now();
     let target_time = if timestamp_secs >= 0 {
-        UNIX_EPOCH + std::time::Duration::from_secs(timestamp_secs as u64)
+        UNIX_EPOCH + Duration::from_secs(timestamp_secs as u64)
     } else {
         let abs_secs = (-timestamp_secs) as u64;
-        UNIX_EPOCH - std::time::Duration::from_secs(abs_secs)
+        UNIX_EPOCH - Duration::from_secs(abs_secs)
     };
     let d = match now.duration_since(target_time) {
         Ok(duration) => duration.as_millis() as i64,
@@ -425,7 +447,7 @@ pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, ti
     };
     BLOCK_RECEIVING_DELAY
         .with_label_values(&[commitment.as_str(), point])
-        .observe(d as f64);
+        .observe(d as f64 / 1000.0);
 }
 
 pub fn messages_sent_inc() {
