@@ -55,6 +55,7 @@ use {
             IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
             SubscribeReplayInfoResponse, SubscribeRequest,
         },
+        prost::Message as ProtoMessage,
     },
 };
 
@@ -536,7 +537,6 @@ impl GrpcService {
                     if let Message::Slot(slot_message) = &message {
                         metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                     }
-
                     // Update blocks info
                     if let Some(blocks_meta_tx) = &blocks_meta_tx {
                         if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
@@ -668,7 +668,6 @@ impl GrpcService {
                         }
                         _ => {}
                     }
-
                     // Send messages to filter (and to clients)
                     let mut messages_vec = Vec::with_capacity(4);
                     if let Some(sealed_block_msg) = sealed_block_msg {
@@ -680,7 +679,20 @@ impl GrpcService {
                         None
                     };
                     messages_vec.push((msgid, message));
-
+                    if slot_messages.sealed {
+                        let mut commitment = CommitmentLevel::Processed;
+                        if slot_messages.confirmed{
+                            commitment = CommitmentLevel::Confirmed;
+                        }
+                        if slot_messages.finalized{
+                            commitment = CommitmentLevel::Finalized;
+                        }
+                        let block_time: i64 = slot_messages.block_meta.as_ref()
+                        .and_then(|meta_arc| meta_arc.block_meta.block_time.as_ref())
+                        .map(|unix_ts| unix_ts.timestamp)
+                        .unwrap_or(0);
+                        metrics::update_block_receiving_delay(commitment,"created",block_time);
+                    }
                     // sometimes we do not receive all statuses
                     if let Some((slot, status)) = slot_status {
                         let mut slots = vec![slot];
@@ -746,7 +758,6 @@ impl GrpcService {
                                     (Vec::with_capacity(1), vec)
                                 }
                             };
-
                             // processed
                             processed_messages.push(message.clone());
                             let _ =
@@ -966,6 +977,7 @@ impl GrpcService {
                         }
                     }
                     message = messages_rx.recv() => {
+                        metrics::update_client_queue_size(messages_rx.len());
                         let (commitment, messages) = match message {
                             Ok((commitment, messages)) => (commitment, messages),
                             Err(broadcast::error::RecvError::Closed) => {
@@ -973,6 +985,7 @@ impl GrpcService {
                             },
                             Err(broadcast::error::RecvError::Lagged(_)) => {
                                 info!("client #{id}: lagged to receive geyser messages");
+                                metrics::connection_closed_inc("send_lagged");
                                 tokio::spawn(async move {
                                     let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                                 });
@@ -982,11 +995,16 @@ impl GrpcService {
 
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
+                                if let Message::Block(msg) = &message {
+                                    metrics::update_block_receiving_delay(commitment,"ready_to_send",msg.meta.block_time.map_or(0, |t| t.timestamp));
+                                }
                                 for message in filter.get_updates(message, Some(commitment)) {
+                                    metrics::update_message_size(message.encoded_len());
                                     match stream_tx.try_send(Ok(message)) {
                                         Ok(()) => {}
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send an update");
+                                            metrics::connection_closed_inc("send_lagged");
                                             tokio::spawn(async move {
                                                 let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                             });
@@ -994,9 +1012,11 @@ impl GrpcService {
                                         }
                                         Err(mpsc::error::TrySendError::Closed(_)) => {
                                             error!("client #{id}: stream closed");
+                                            metrics::connection_closed_inc("stream_closed");
                                             break 'outer;
                                         }
                                     }
+                                    metrics::messages_sent_inc();
                                 }
                             }
                         }
@@ -1079,6 +1099,7 @@ impl GrpcService {
                     *is_alive = false;
                     break;
                 }
+                metrics::messages_sent_inc();
             }
         }
     }

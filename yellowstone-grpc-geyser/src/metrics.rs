@@ -12,19 +12,26 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{
+        HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder, TEXT_FORMAT,
+    },
     solana_clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
         sync::{Arc, Once},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tokio::{
         net::TcpListener,
         sync::{mpsc, oneshot, Notify},
         task::JoinHandle,
     },
-    yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
+    yellowstone_grpc_proto::plugin::{
+        filter::Filter,
+        message::{CommitmentLevel, SlotStatus},
+    },
 };
 
 lazy_static::lazy_static! {
@@ -66,6 +73,56 @@ lazy_static::lazy_static! {
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
+    ).unwrap();
+    // This metric measures the transmission delay from block production to the RPC node, in milliseconds.
+    // Possible values for mark_point:
+    // - created: Marked when the block created
+    // - ready_to_send: Marked when the block is ready to be sent to the client
+    static ref BLOCK_RECEIVING_DELAY: HistogramVec = HistogramVec::new(
+        HistogramOpts::new("block_receiving_delay", "Block propagation time: from block generation to plugin reception,unit seconds").buckets(vec![
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            1.5,
+            2.0,
+            2.5,
+            3.0,
+            3.5,
+            4.0,
+            4.5,
+            5.0,
+            10.0,
+            20.0,
+            100.0,
+            500.0,
+            1000.0
+            ]),
+        &["commitment","mark_point"]
+    ).unwrap();
+    //  Total number of messages sent to the client
+    static ref MESSAGES_SENT_TOTAL: IntGauge = IntGauge::new(
+        "geyser_messages_sent_total","Total number of messages sent to clients"
+    ).unwrap();
+
+    // Total number of messages sent to the client
+    static ref CONNECTIONS_CLOSED_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("geyser_connections_closed_total","Total number of closed connections by reason"),
+        &["reason"]
+    ).unwrap();
+
+    // Client queue size
+    static ref CLIENT_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "geyser_client_queue_size","Size of client message queue",
+    ).unwrap();
+
+    // The message size sent to the client
+    static ref MESSAGE_SIZE_BYTES: IntGauge = IntGauge::new(
+        "geyser_message_size_bytes","Size of messages sent to clients in bytes",
     ).unwrap();
 }
 
@@ -199,6 +256,10 @@ impl PrometheusService {
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
+            register!(BLOCK_RECEIVING_DELAY);
+            register!(MESSAGES_SENT_TOTAL);
+            register!(CLIENT_QUEUE_SIZE);
+            register!(MESSAGE_SIZE_BYTES);
 
             VERSION
                 .with_label_values(&[
@@ -305,6 +366,7 @@ fn metrics_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         });
     Response::builder()
         .status(StatusCode::OK)
+        .header("Content-Type", TEXT_FORMAT)
         .body(BodyFull::new(Bytes::from(metrics)).boxed())
 }
 
@@ -369,4 +431,37 @@ pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
         .with_label_values(&[status.as_str()])
         .inc()
+}
+
+pub fn update_block_receiving_delay(commitment: CommitmentLevel, point: &str, timestamp_secs: i64) {
+    let now = SystemTime::now();
+    let target_time = if timestamp_secs >= 0 {
+        UNIX_EPOCH + Duration::from_secs(timestamp_secs as u64)
+    } else {
+        let abs_secs = (-timestamp_secs) as u64;
+        UNIX_EPOCH - Duration::from_secs(abs_secs)
+    };
+    let d = match now.duration_since(target_time) {
+        Ok(duration) => duration.as_millis() as i64,
+        Err(e) => -(e.duration().as_millis() as i64),
+    };
+    BLOCK_RECEIVING_DELAY
+        .with_label_values(&[commitment.as_str(), point])
+        .observe(d as f64 / 1000.0);
+}
+
+pub fn messages_sent_inc() {
+    MESSAGES_SENT_TOTAL.inc();
+}
+
+pub fn connection_closed_inc(reason: &str) {
+    CONNECTIONS_CLOSED_TOTAL.with_label_values(&[reason]).inc();
+}
+
+pub fn update_client_queue_size(size: usize) {
+    CLIENT_QUEUE_SIZE.set(size as i64);
+}
+
+pub fn update_message_size(size: usize) {
+    MESSAGE_SIZE_BYTES.set(size as i64);
 }

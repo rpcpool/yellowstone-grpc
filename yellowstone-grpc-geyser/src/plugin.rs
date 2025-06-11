@@ -246,7 +246,6 @@ impl GeyserPlugin for Plugin {
                 }
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
-
             let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
             inner.send_message(message);
 
