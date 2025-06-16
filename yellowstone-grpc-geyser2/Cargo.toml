@@ -1,0 +1,73 @@
+[package]
+name = "yellowstone-grpc-geyser2"
+version = "0.1.0"
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Yellowstone gRPC Geyser Plugin"
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+publish = { workspace = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+affinity = { workspace = true }
+agave-geyser-plugin-interface = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bincode = { workspace = true }
+bs58 = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+crossbeam-channel = { workspace = true }
+futures = { workspace = true }
+hostname = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+lazy_static = { workspace = true }
+log = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+prost-codec = { workspace = true }
+prost-types = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+solana-clock = { workspace = true }
+solana-commitment-config = { workspace = true }
+solana-hash = { workspace = true }
+solana-logger = { workspace = true }
+solana-message = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-signature = { workspace = true, features = ["rand"]}
+solana-transaction = { workspace = true }
+solana-transaction-context = { workspace = true }
+solana-transaction-error = { workspace = true }
+solana-transaction-status = { workspace = true }
+spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio-stream = { workspace = true }
+tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots", "prost"] }
+tonic-health = { workspace = true }
+
+[dev-dependencies]
+solana-program-option = { workspace = true }
+solana-program-pack = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+cargo-lock = { workspace = true }
+git-version = { workspace = true }
+protobuf-src = { workspace = true }
+tonic-build = { workspace = true }
+vergen = { workspace = true, features = ["build", "rustc"] }
+
+[lints]
+workspace = true

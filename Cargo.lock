@@ -290,6 +290,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "asynchronous-codec"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4057f2c32adbb2fc158e22fb38433c8e9bbf76b75a4732c7c0cbaf695fb65568"
+dependencies = [
+ "bytes",
+ "futures-sink",
+ "futures-util",
+ "memchr",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2691,6 +2704,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-codec"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dc34979ff898b6e141106178981ce2596c387ea6e62533facfc61a37fc879c0"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "prost 0.11.9",
+ "thiserror 1.0.69",
+ "unsigned-varint",
+]
+
+[[package]]
 name = "prost-derive"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2798,6 +2824,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fbfd9d094a40bf3ae768db9361049ace4c0e04a4fd6b359518bd7b73a73dd97"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.3",
+]
+
+[[package]]
 name = "rand_chacha"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2818,6 +2854,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.3",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2833,6 +2879,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+dependencies = [
+ "getrandom 0.3.3",
 ]
 
 [[package]]
@@ -4222,6 +4277,7 @@ checksum = "47d251c8f3dc015f320b4161daac7f108156c837428e5a8cc61136d25beb11d6"
 dependencies = [
  "bs58",
  "ed25519-dalek",
+ "rand 0.8.5",
  "serde",
  "serde-big-array",
  "serde_derive",
@@ -5703,6 +5759,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "unsigned-varint"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6889a77d49f1f013504cec6bf97a2c730394adedaeb1deb5ea08949a50541105"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+]
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6189,6 +6255,61 @@ dependencies = [
  "tonic-health",
  "vergen",
  "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-geyser2"
+version = "0.1.0"
+dependencies = [
+ "affinity",
+ "agave-geyser-plugin-interface",
+ "anyhow",
+ "base64 0.22.1",
+ "bincode",
+ "bs58",
+ "bytes",
+ "cargo-lock",
+ "clap",
+ "crossbeam-channel",
+ "futures",
+ "git-version",
+ "hostname",
+ "http",
+ "http-body-util",
+ "humantime-serde",
+ "hyper",
+ "hyper-util",
+ "lazy_static",
+ "log",
+ "prometheus",
+ "prost 0.13.5",
+ "prost-codec",
+ "prost-types 0.13.5",
+ "protobuf-src",
+ "rand 0.9.1",
+ "serde",
+ "serde_json",
+ "solana-clock",
+ "solana-commitment-config",
+ "solana-hash",
+ "solana-logger",
+ "solana-message",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-pubkey",
+ "solana-signature",
+ "solana-transaction",
+ "solana-transaction-context",
+ "solana-transaction-error",
+ "solana-transaction-status",
+ "spl-token-2022 8.0.1",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build 0.12.3",
+ "tonic-health",
+ "vergen",
 ]
 
 [[package]]
