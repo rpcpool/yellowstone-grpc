@@ -26,12 +26,10 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        service::interceptor::interceptor,
-        transport::{
+        service::interceptor, transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
+        }, Request, Response, Result as TonicResult, Status, Streaming
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
@@ -357,12 +355,9 @@ impl GrpcService {
         Arc<Notify>,
     )> {
         // Bind service address
-        let incoming = TcpIncoming::new(
-            config.address,
-            true,                          // tcp_nodelay
-            Some(Duration::from_secs(20)), // tcp_keepalive
-        )
-        .map_err(|error| anyhow::anyhow!(error))?;
+        let incoming = TcpIncoming::bind(config.address)?
+            .with_nodelay(Some(true))
+            .with_keepalive(Some(Duration::from_secs(20)));
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -483,11 +478,11 @@ impl GrpcService {
         let shutdown_grpc = Arc::clone(&shutdown);
         tokio::spawn(async move {
             // gRPC Health check service
-            let (mut health_reporter, health_service) = health_reporter();
+            let (health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
             server_builder
-                .layer(interceptor(move |request: Request<()>| {
+                .layer(interceptor::InterceptorLayer::new(move |request: Request<()>| {
                     if let Some(x_token) = &config.x_token {
                         match request.metadata().get("x-token") {
                             Some(token) if x_token == token => Ok(request),
