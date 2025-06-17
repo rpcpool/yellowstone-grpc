@@ -67,7 +67,7 @@ pub struct ConfigTokio {
     /// Number of worker threads in Tokio runtime
     pub worker_threads: Option<usize>,
     /// Threads affinity
-    #[serde(deserialize_with = "ConfigTokio::deserialize_affinity")]
+    #[serde(default, deserialize_with = "ConfigTokio::deserialize_affinity")]
     pub affinity: Option<Vec<usize>>,
 }
 
@@ -319,5 +319,32 @@ where
             .map(Some)
             .map_err(de::Error::custom),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_tokio_config_parsing() {
+        let raw = r#"
+        {
+            "worker_threads": 4,
+            "affinity": "0-3,5,7-8"
+        }
+        "#;
+        let config: super::ConfigTokio = serde_json::from_str(raw).unwrap();
+        assert_eq!(config.worker_threads, Some(4));
+        assert_eq!(config.affinity, Some(vec![0, 1, 2, 3, 5, 7, 8]));
+
+        // It should work without affinity
+        let raw = r#"
+        {
+            "worker_threads": 4
+        }
+        "#;
+        let config: super::ConfigTokio = serde_json::from_str(raw).unwrap();
+        assert_eq!(config.worker_threads, Some(4));
+        assert!(config.affinity.is_none());
     }
 }
