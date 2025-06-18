@@ -16,7 +16,7 @@ use {
 /// Same layout [`SubscribeUpdate`] except it shares the underyling `UpdateOneof`.
 /// This struct is a big hack to circumvent tonic limitations with `Arc<T>` data types.
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ZeroCopySubscribeUpdate {
     pub filters: Vec<String>,
     pub created_at: Timestamp,

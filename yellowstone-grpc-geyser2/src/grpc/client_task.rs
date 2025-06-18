@@ -79,7 +79,6 @@ impl ClientTask {
                 self.compiled_filters
                     .get_updateoneof_matching(&message, &mut matches);
                 if matches.is_empty() {
-                    log::trace!("No filters matched for message: {:?}", message);
                     return Ok(());
                 }
 
@@ -98,6 +97,7 @@ impl ClientTask {
                     self.x_subscribe_id.as_str(),
                     self.remote_addr.as_str(),
                 );
+                log::trace!("Sent update to client: {:?}", self.remote_addr);
 
                 Ok(())
             }

@@ -786,8 +786,13 @@ async fn geyser_subscribe(
                         print_update("account", created_at, &filters, value);
                     }
                     Some(UpdateOneof::Slot(msg)) => {
-                        let status = SlotStatus::try_from(msg.status)
-                            .context("failed to decode commitment")?;
+                        let Ok(status) =
+                            SlotStatus::try_from(msg.status).context("failed to decode commitment")
+                        else {
+                            error!("invalid slot status: {}", msg.status);
+                            continue;
+                        };
+
                         print_update(
                             "slot",
                             created_at,

@@ -196,11 +196,10 @@ pub struct PluginInner {
 }
 
 impl PluginInner {
-    fn send_message(&self, message: UpdateOneof) -> PluginResult<()> {
-        self.broadcast_tx
-            .send(Arc::new(message))
-            .map(drop)
-            .map_err(|e| GeyserPluginError::Custom(Box::new(e)))
+    fn send_message(&self, message: UpdateOneof) {
+        // If there is not receiver, broadcast always fails, so we ignore the error
+        // even if the error is "channel is closed" it is not actually closed.
+        let _ = self.broadcast_tx.send(Arc::new(message)).map(drop);
     }
 }
 
@@ -314,7 +313,7 @@ impl GeyserPlugin for Plugin {
                 let message = UpdateOneof::Account(convert_to::create_account_update(
                     &account, slot, is_startup,
                 ));
-                inner.send_message(message)?;
+                inner.send_message(message);
             }
 
             Ok(())
@@ -337,7 +336,7 @@ impl GeyserPlugin for Plugin {
                 parent,
                 status.clone(),
             ));
-            inner.send_message(message)?;
+            inner.send_message(message);
             metrics::update_slot_status(status, slot);
             Ok(())
         })
@@ -358,7 +357,8 @@ impl GeyserPlugin for Plugin {
 
             let message =
                 UpdateOneof::Transaction(convert_to::create_transaction_update(transaction, slot));
-            inner.send_message(message)
+            inner.send_message(message);
+            Ok(())
         })
     }
 
@@ -373,7 +373,8 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = UpdateOneof::Entry(convert_to::create_entry_update(entry));
-            inner.send_message(message)
+            inner.send_message(message);
+            Ok(())
         })
     }
 
@@ -393,7 +394,8 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = UpdateOneof::BlockMeta(convert_to::create_blockmeta_update(blockinfo));
-            inner.send_message(message)
+            inner.send_message(message);
+            Ok(())
         })
     }
 
@@ -699,11 +701,11 @@ pub mod convert_to {
         match slot_status {
             SlotStatus::Processed => 0,
             SlotStatus::Confirmed => 1,
-            SlotStatus::FirstShredReceived => 2,
-            SlotStatus::Completed => 3,
+            SlotStatus::Rooted => 2,
+            SlotStatus::FirstShredReceived => 3,
+            SlotStatus::Completed => 4,
             SlotStatus::CreatedBank => 5,
             SlotStatus::Dead(_) => 6,
-            SlotStatus::Rooted => 7,
         }
     }
 
