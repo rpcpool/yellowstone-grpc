@@ -26,7 +26,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser, plugin, proto: add the new proto proto parameter `cost_units` ([#596](https://github.com/rpcpool/yellowstone-grpc/pull/596))
+- geyser, plugin, proto: add the new proto proto parameter `cost_units` ([#598](https://github.com/rpcpool/yellowstone-grpc/pull/598))
 
 ## 2025-06-01
 
