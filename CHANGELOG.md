@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-06-30
+
+- @triton-one/yellowstone-grpc@4.1.0
+- yellowstone-grpc-client-simple-8.0.0
+- yellowstone-grpc-client-8.0.0
+- yellowstone-grpc-geyser-8.0.0
+- yellowstone-grpc-proto-8.0.0
+
+### Features
+
+- geyser, plugin, proto: add the new proto proto parameter `cost_units` ([#598](https://github.com/rpcpool/yellowstone-grpc/pull/598))
+
 ## 2025-06-01
 
 - @triton-one/yellowstone-grpc@4.1.0
