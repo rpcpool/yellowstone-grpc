@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 7.0.0+solana.2.2.16
-    "yellowstone-grpc-client", # 7.0.0+solana.2.2.16
-    "yellowstone-grpc-geyser", # 7.0.0+solana.2.2.16
-    "yellowstone-grpc-proto", # 7.0.0+solana.2.2.16
+    "examples/rust", # 7.0.0+solana.2.2.19
+    "yellowstone-grpc-client", # 7.0.0+solana.2.2.19
+    "yellowstone-grpc-geyser", # 7.0.0+solana.2.2.19
+    "yellowstone-grpc-proto", # 7.0.0+solana.2.2.19
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -21,11 +21,11 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "=2.2.16"
-solana-transaction-status = "=2.2.16"
-solana-account-decoder = "=2.2.16"
-solana-storage-proto = "=2.2.16"
-solana-transaction-context = "=2.2.16"
+agave-geyser-plugin-interface = "=2.2.19"
+solana-transaction-status = "=2.2.19"
+solana-account-decoder = "=2.2.19"
+solana-storage-proto = "=2.2.19"
+solana-transaction-context = "=2.2.19"
 anyhow = "1.0.62"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -81,8 +81,8 @@ tonic = "0.12.1"
 tonic-build = "0.12.1"
 tonic-health = "0.12.1"
 vergen = "9.0.0"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "7.0.0+solana.2.2.16" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "7.0.0+solana.2.2.16", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "7.0.0+solana.2.2.19" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "7.0.0+solana.2.2.19", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
