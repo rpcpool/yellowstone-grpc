@@ -26,10 +26,12 @@ use {
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        service::interceptor, transport::{
+        service::interceptor,
+        transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
-        }, Request, Response, Result as TonicResult, Status, Streaming
+        },
+        Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
@@ -482,16 +484,18 @@ impl GrpcService {
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
             server_builder
-                .layer(interceptor::InterceptorLayer::new(move |request: Request<()>| {
-                    if let Some(x_token) = &config.x_token {
-                        match request.metadata().get("x-token") {
-                            Some(token) if x_token == token => Ok(request),
-                            _ => Err(Status::unauthenticated("No valid auth token")),
+                .layer(interceptor::InterceptorLayer::new(
+                    move |request: Request<()>| {
+                        if let Some(x_token) = &config.x_token {
+                            match request.metadata().get("x-token") {
+                                Some(token) if x_token == token => Ok(request),
+                                _ => Err(Status::unauthenticated("No valid auth token")),
+                            }
+                        } else {
+                            Ok(request)
                         }
-                    } else {
-                        Ok(request)
-                    }
-                }))
+                    },
+                ))
                 .add_service(health_service)
                 .add_service(service)
                 .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
