@@ -218,6 +218,7 @@ struct ActionSubscribe {
     accounts: bool,
 
     /// Filter by presence of field txn_signature
+    #[clap(long)]
     accounts_nonempty_txn_signature: Option<bool>,
 
     /// Filter by Account Pubkey
@@ -258,11 +259,11 @@ struct ActionSubscribe {
 
     /// Filter slots by commitment
     #[clap(long)]
-    slots_filter_by_commitment: bool,
+    slots_filter_by_commitment: Option<bool>,
 
     /// Subscribe on interslot slot updates
     #[clap(long)]
-    slots_interslot_updates: bool,
+    slots_interslot_updates: Option<bool>,
 
     /// Subscribe on transactions updates
     #[clap(long)]
@@ -445,10 +446,10 @@ impl Action {
                     accounts.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterAccounts {
-                            nonempty_txn_signature: args.accounts_nonempty_txn_signature,
                             account: accounts_account,
                             owner: args.accounts_owner.clone(),
                             filters,
+                            nonempty_txn_signature: args.accounts_nonempty_txn_signature,
                         },
                     );
                 }
@@ -458,8 +459,8 @@ impl Action {
                     slots.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterSlots {
-                            filter_by_commitment: Some(args.slots_filter_by_commitment),
-                            interslot_updates: Some(args.slots_interslot_updates),
+                            filter_by_commitment: args.slots_filter_by_commitment,
+                            interslot_updates: args.slots_interslot_updates,
                         },
                     );
                 }
