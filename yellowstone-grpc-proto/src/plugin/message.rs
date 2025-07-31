@@ -544,6 +544,7 @@ pub enum Message {
 }
 
 impl Message {
+    #[allow(clippy::missing_const_for_fn)]
     pub fn get_slot(&self) -> u64 {
         match self {
             Self::Slot(msg) => msg.slot,

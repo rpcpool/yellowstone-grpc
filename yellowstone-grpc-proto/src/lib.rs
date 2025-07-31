@@ -147,8 +147,9 @@ pub mod convert_to {
             rewards,
             loaded_addresses,
             return_data,
-            compute_units_consumed, 
-            cost_units } = meta;
+            compute_units_consumed,
+            cost_units,
+        } = meta;
         let err = create_transaction_error(status);
         let inner_instructions_none = inner_instructions.is_none();
         let inner_instructions = inner_instructions

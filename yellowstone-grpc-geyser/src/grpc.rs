@@ -252,7 +252,7 @@ struct MessageId {
 }
 
 impl MessageId {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         self.id = self.id.checked_add(1).expect("message id overflow");
         self.id
     }
