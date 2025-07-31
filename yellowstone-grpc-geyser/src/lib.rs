@@ -2,6 +2,7 @@ pub mod config;
 pub mod grpc;
 pub mod metrics;
 pub mod plugin;
+pub(crate) mod util;
 pub mod version;
 
 pub fn get_thread_name() -> String {
