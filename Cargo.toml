@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 8.0.0
-    "yellowstone-grpc-client", # 8.0.0
-    "yellowstone-grpc-geyser", # 8.0.0
-    "yellowstone-grpc-proto", # 8.0.0
+    "examples/rust", # 8.0.0+solana.2.3.6
+    "yellowstone-grpc-client", # 8.0.0+solana.2.3.6
+    "yellowstone-grpc-geyser", # 8.0.0+solana.2.3.6
+    "yellowstone-grpc-proto", # 8.0.0+solana.2.3.6
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -21,7 +21,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "~2.3.0"
+agave-geyser-plugin-interface = "=2.3.6"
 anyhow = "1.0.62"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -56,7 +56,7 @@ protobuf-src = "1.1.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
 solana-account = "~2.2.1"
-solana-account-decoder = "~2.3.0"
+solana-account-decoder = "=2.3.6"
 solana-clock = "~2.2.1"
 solana-hash = "~2.3.0"
 solana-keypair = "~2.2.1"
@@ -65,11 +65,11 @@ solana-message = "~2.4.0"
 solana-pubkey = "~2.4.0"
 solana-signature = "~2.3.0"
 solana-signer = "~2.2.1"
-solana-storage-proto = "~2.3.0"
+solana-storage-proto = "=2.3.6"
 solana-transaction = "~2.2.1"
-solana-transaction-context = "~2.3.0"
+solana-transaction-context = "=2.3.6"
 solana-transaction-error = "~2.2.1"
-solana-transaction-status = "~2.3.0"
+solana-transaction-status = "=2.3.6"
 smallvec = "1.13.2"
 spl-token-2022 = "8.0.0"
 thiserror = "1.0.63"
@@ -79,8 +79,8 @@ tonic = "0.12.1"
 tonic-build = "0.12.1"
 tonic-health = "0.12.1"
 vergen = "9.0.0"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "8.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "8.0.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "8.0.0+solana.2.3.6" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "8.0.0+solana.2.3.6", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
