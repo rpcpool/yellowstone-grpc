@@ -16,7 +16,7 @@ pub struct Ema {
     window: Duration,
     window_load: AtomicU64,
     current_load_ema: AtomicU64,
-    period: u64,
+    reactivity: EMAReactivity,
     last_update: RwLock<Instant>,
 }
 
@@ -71,6 +71,23 @@ impl EMAReactivity {
             EMAReactivity::LessReactive => 20,
         }
     }
+
+    ///
+    /// Precomputed table of effective memory usage for each reactivity level.
+    ///
+    /// This is how many steps in EMA before the data becomes "irrelevant" to current load computation.
+    /// Which is another way of saying after how many steps the last record will only contribute to 1% of the prediction.
+    /// 
+    /// Log_{alpha}(0.01)
+    /// 
+    const fn effective_memory(self) -> u64 {
+        match self {
+            EMAReactivity::VeryReactive => 7,
+            EMAReactivity::Reactive => 5,
+            EMAReactivity::ModeratelyReactive => 3,
+            EMAReactivity::LessReactive => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +127,7 @@ impl Ema {
         Self {
             window,
             window_load: AtomicU64::new(0),
-            period: reactivity.as_period(),
+            reactivity,
             last_update: RwLock::new(starting_time),
             current_load_ema: AtomicU64::new(0),
         }
@@ -118,7 +135,7 @@ impl Ema {
 
     #[inline]
     pub fn alpha(&self) -> f64 {
-        2.0 / (self.period as f64 + 1.0)
+        2.0 / (self.reactivity.as_period() as f64 + 1.0)
     }
 
     fn ema_function(&self, current_ema: u64, recent_load: u32) -> u64 {
@@ -133,7 +150,16 @@ impl Ema {
 
         // If the time since the last update is bigger than the window, we need to catch up and update the EMA
         // for each missed update.
-        let extra_updates = time_since_last_update.saturating_sub(1) / self.window.as_millis();
+        let missed_updates = time_since_last_update.saturating_sub(1) / self.window.as_millis();
+        
+        // Limit the number of extra updates to the effective memory of the reactivity level.
+        // This is to prevent excessive computation in case of long delays.
+        // This is a trade-off between accuracy and performance.
+        // EMA terms forms a geometric series, where each term contributes less and less to the final value.
+        // The contribution value of each decay exponentially decreases.
+        // after the effective memory steps, the contribution of the last record is less than 1% of the prediction.
+        let extra_updates = missed_updates.min(self.reactivity.effective_memory() as u128);
+
         let load_in_recent_window = self.window_load.swap(0, Ordering::Relaxed) as u32; // Cast to u32
 
         let mut updated_load_ema = self.ema_function(
@@ -273,7 +299,7 @@ mod tests {
         let window = Duration::from_secs(10);
         let ema = Ema::new(window, EMAReactivity::Reactive);
         assert_eq!(ema.window, window);
-        assert_eq!(ema.period, EMAReactivity::Reactive.as_period());
+        assert_eq!(ema.reactivity, EMAReactivity::Reactive);
         assert_eq!(ema.current_load_ema_in_native_unit(), 0);
     }
 
