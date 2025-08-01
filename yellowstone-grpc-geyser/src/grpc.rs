@@ -1082,6 +1082,9 @@ impl GrpcService {
                 }
             }
         }
+        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_pace(&subscriber_id, 0);
 
         metrics::connections_total_dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
