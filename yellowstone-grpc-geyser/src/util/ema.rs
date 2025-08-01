@@ -36,12 +36,12 @@ impl Default for EmaBuilder {
 }
 
 impl EmaBuilder {
-    pub fn window(mut self, window: Duration) -> Self {
+    pub const fn window(mut self, window: Duration) -> Self {
         self.window = window;
         self
     }
 
-    pub fn reactivity(mut self, reactivity: EmaReactivity) -> Self {
+    pub const fn reactivity(mut self, reactivity: EmaReactivity) -> Self {
         self.reactivity = reactivity;
         self
     }
