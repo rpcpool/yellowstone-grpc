@@ -11,12 +11,7 @@ use {
     solana_signature::Signature,
     solana_transaction_status::UiTransactionEncoding,
     std::{
-        collections::HashMap,
-        env,
-        fs::File,
-        path::PathBuf,
-        sync::Arc,
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        collections::HashMap, env, fs::File, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
     },
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
@@ -48,6 +43,24 @@ type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransac
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Compression {
+    Gzip,
+    Zstd,
+}
+
+impl FromStr for Compression {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "gzip" => Ok(Compression::Gzip),
+            "zstd" => Ok(Compression::Zstd),
+            _ => Err(anyhow::anyhow!("Unknown compression type: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Parser)]
 #[clap(author, version, about)]
@@ -117,6 +130,10 @@ struct Args {
 
     #[command(subcommand)]
     action: Action,
+
+    /// Compression default: NONE, [gzip, zstd]
+    #[clap(long)]
+    compression: Option<Compression>,
 }
 
 impl Args {
@@ -134,6 +151,13 @@ impl Args {
             .x_token(self.x_token.clone())?
             .tls_config(tls_config)?
             .max_decoding_message_size(self.max_decoding_message_size);
+
+        if let Some(compression) = self.compression {
+            match compression {
+                Compression::Gzip => builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Gzip),
+                Compression::Zstd => builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Zstd),
+            }
+        }
 
         if let Some(duration) = self.connect_timeout_ms {
             builder = builder.connect_timeout(Duration::from_millis(duration));
