@@ -1,10 +1,16 @@
 use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
-        metrics::{self, set_subscriber_pace, DebugClientMessage},
+        metrics::{
+            self, set_subscriber_pace, set_subscriber_recv_bandwidth_load,
+            set_subscriber_send_bandwidth_load, DebugClientMessage,
+        },
         util::{
             ema::{Ema, EmaReactivity, DEFAULT_EMA_WINDOW},
-            stream::TrafficWeighted,
+            stream::{
+                load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
+                TrafficWeighted,
+            },
         },
         version::GrpcVersionInfo,
     },
@@ -28,7 +34,6 @@ use {
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
     },
-    tokio_stream::wrappers::ReceiverStream,
     tonic::{
         service::interceptor::interceptor,
         transport::{
@@ -94,6 +99,13 @@ struct BlockMetaStorageInner {
 impl TrafficWeighted for FilteredUpdate {
     fn weight(&self) -> u32 {
         self.encoded_len() as u32
+    }
+}
+
+impl TrafficWeighted for Status {
+    fn weight(&self) -> u32 {
+        // Rough estimate of the size of a Status message, we don't really care about the exact size
+        self.message().len() as u32
     }
 }
 
@@ -872,7 +884,7 @@ impl GrpcService {
         id: usize,
         subscriber_id: Option<String>,
         endpoint: String,
-        stream_tx: mpsc::Sender<TonicResult<FilteredUpdate>>,
+        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
@@ -895,7 +907,7 @@ impl GrpcService {
             Self::client_loop_snapshot(
                 id,
                 &endpoint,
-                &stream_tx,
+                stream_tx.clone(),
                 &mut client_rx,
                 snapshot_rx,
                 &mut is_alive,
@@ -915,6 +927,17 @@ impl GrpcService {
                     &subscriber_id,
                     client_loop_pace.current_load().per_second() as i64,
                 );
+
+                set_subscriber_send_bandwidth_load(
+                    &subscriber_id,
+                    stream_tx.estimated_send_rate().per_second() as i64,
+                );
+
+                set_subscriber_recv_bandwidth_load(
+                    &subscriber_id,
+                    stream_tx.estimated_consuming_rate().per_second() as i64,
+                );
+
                 tokio::select! {
                     mut message = client_rx.recv() => {
                         // forward to latest filter
@@ -1024,8 +1047,12 @@ impl GrpcService {
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
                                 for message in filter.get_updates(message, Some(commitment)) {
+                                    let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                     match stream_tx.try_send(Ok(message)) {
-                                        Ok(()) => {}
+                                        Ok(()) => {
+                                            metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                            metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                        }
                                         Err(mpsc::error::TrySendError::Full(_)) => {
                                             error!("client #{id}: lagged to send an update");
                                             tokio::spawn(async move {
@@ -1040,6 +1067,8 @@ impl GrpcService {
                                     }
                                 }
                             }
+                        } else {
+                            stream_tx.no_load();
                         }
 
                         if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
@@ -1064,7 +1093,7 @@ impl GrpcService {
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
-        stream_tx: &mpsc::Sender<TonicResult<FilteredUpdate>>,
+        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         is_alive: &mut bool,
@@ -1127,7 +1156,7 @@ impl GrpcService {
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = ReceiverStream<TonicResult<FilteredUpdate>>;
+    type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
 
     async fn subscribe(
         &self,
@@ -1141,11 +1170,21 @@ impl Geyser for GrpcService {
         } else {
             None
         };
-        let (stream_tx, stream_rx) = mpsc::channel(if snapshot_rx.is_some() {
-            self.config_snapshot_client_channel_capacity
-        } else {
-            self.config_channel_capacity
-        });
+
+        let client_stats_settigns = StatsSettings::default()
+            .tx_ema_reactivity(EmaReactivity::Reactive)
+            .tx_ema_window(DEFAULT_EMA_WINDOW)
+            .rx_ema_reactivity(EmaReactivity::Reactive)
+            .rx_ema_window(DEFAULT_EMA_WINDOW);
+
+        let (stream_tx, stream_rx) = load_aware_channel(
+            if snapshot_rx.is_some() {
+                self.config_snapshot_client_channel_capacity
+            } else {
+                self.config_channel_capacity
+            },
+            client_stats_settigns,
+        );
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let notify_exit1 = Arc::new(Notify::new());
         let notify_exit2 = Arc::new(Notify::new());
@@ -1262,7 +1301,7 @@ impl Geyser for GrpcService {
             },
         ));
 
-        Ok(Response::new(ReceiverStream::new(stream_rx)))
+        Ok(Response::new(stream_rx))
     }
 
     async fn subscribe_first_available_slot(

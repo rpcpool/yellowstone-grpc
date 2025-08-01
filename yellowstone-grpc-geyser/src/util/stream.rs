@@ -1,14 +1,8 @@
 use {
-    crate::util::{
-        ema::{Ema, EmaCurrentLoad, EmaReactivity, DEFAULT_EMA_WINDOW},
-        rate::RateTracker,
-    },
+    crate::util::ema::{Ema, EmaCurrentLoad, EmaReactivity, DEFAULT_EMA_WINDOW},
     futures::Stream,
     std::{
-        sync::{
-            atomic::AtomicU64, // Removed AtomicU32
-            Arc,
-        },
+        sync::Arc,
         task::{Context, Poll},
         time::{Duration, Instant},
     },
@@ -32,17 +26,8 @@ pub trait TrafficWeighted {
 
 #[derive(Debug)]
 struct Shared {
-    size: AtomicU64,
-    weight: AtomicU64, // Reverted back to AtomicU64
     send_ema: Ema,
     rx_ema: Ema,
-    avg_weight_rate: RateTracker,
-}
-
-#[derive(Debug, Clone)]
-struct ChannelCapacities {
-    threshold_size: u64,
-    threshold_weight: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -60,24 +45,15 @@ impl Shared {
     #[inline]
     fn add_load(&self, weight: u32, now: Instant) {
         // Kept parameter type as u32
-        self.size.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.weight
-            .fetch_add(weight as u64, std::sync::atomic::Ordering::Relaxed); // Cast weight to u64
-        self.avg_weight_rate.record(now, weight); // Cast weight to u64 for compatibility
         self.send_ema.record_load(now, weight); // Cast weight to u64 for compatibility
     }
 
     #[inline]
     fn decr_load(&self, weight: u32, now: Instant) {
         // Kept parameter type as u32
-        self.size.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        self.weight
-            .fetch_sub(weight as u64, std::sync::atomic::Ordering::Relaxed); // Cast weight to u64
         self.rx_ema.record_load(now, weight); // Cast weight to u64 for compatibility
     }
 }
-
-pub const DEFAULT_AVG_TRAFFIC_RATE_WINDOW: Duration = Duration::from_secs(10 * 60); // 10 minutes
 
 ///
 /// Settings for the load-aware channel.
@@ -85,17 +61,37 @@ pub const DEFAULT_AVG_TRAFFIC_RATE_WINDOW: Duration = Duration::from_secs(10 * 6
 /// It allows customization of the channel's behavior regarding load tracking and traffic estimation.
 ///
 pub struct StatsSettings {
-    avg_traffic_rate_window: Duration,
     tx_ema_window: Duration,
     tx_ema_reactivity: EmaReactivity,
     rx_ema_window: Duration,
     rx_ema_reactivity: EmaReactivity,
 }
 
+impl StatsSettings {
+    pub fn tx_ema_window(mut self, window: Duration) -> Self {
+        self.tx_ema_window = window;
+        self
+    }
+
+    pub fn tx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
+        self.tx_ema_reactivity = reactivity;
+        self
+    }
+
+    pub fn rx_ema_window(mut self, window: Duration) -> Self {
+        self.rx_ema_window = window;
+        self
+    }
+
+    pub fn rx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
+        self.rx_ema_reactivity = reactivity;
+        self
+    }
+}
+
 impl Default for StatsSettings {
     fn default() -> Self {
         Self {
-            avg_traffic_rate_window: DEFAULT_AVG_TRAFFIC_RATE_WINDOW,
             tx_ema_window: DEFAULT_EMA_WINDOW,
             tx_ema_reactivity: EmaReactivity::Reactive,
             rx_ema_window: DEFAULT_EMA_WINDOW,
@@ -121,8 +117,6 @@ where
     let (inner_sender, inner_receiver) = tokio::sync::mpsc::channel(capacity);
 
     let shared = Arc::new(Shared {
-        size: AtomicU64::new(0),
-        weight: AtomicU64::new(0),
         send_ema: Ema::new(
             stats_settings.tx_ema_window,
             stats_settings.tx_ema_reactivity,
@@ -131,7 +125,6 @@ where
             stats_settings.rx_ema_window,
             stats_settings.rx_ema_reactivity,
         ),
-        avg_weight_rate: RateTracker::new(stats_settings.avg_traffic_rate_window),
     });
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
@@ -177,6 +170,20 @@ where
         self.inner.try_send(item)?;
         self.shared.add_load(entry_weight, now);
         Ok(())
+    }
+
+    ///
+    /// Updates the internal statistics of the sender with no "traffic" item.
+    /// This is to account for the fact that the sender is still active and should be considered in load calculations,
+    /// even if no items are being sent at the moment.
+    ///
+    /// This method is useful for maintaining the sender's load statistics without actually sending any items.
+    ///
+    /// We need this because some client subscribe to event that rarely send items.
+    ///
+    pub fn no_load(&self) {
+        self.shared.send_ema.record_no_load(Instant::now());
+        self.shared.rx_ema.record_no_load(Instant::now());
     }
 }
 
@@ -228,11 +235,7 @@ where
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::util::testkit,
-        log::LevelFilter,
-        std::sync::atomic::Ordering,
-        tokio::{sync::mpsc, task::yield_now},
+        super::*, crate::util::testkit, log::LevelFilter, tokio::task::yield_now,
         tokio_stream::StreamExt,
     };
 
@@ -258,14 +261,8 @@ mod tests {
     #[tokio::test]
     async fn test_load_tracking() {
         let (sender, mut receiver) = load_aware_channel(10, Default::default());
-
         sender.send(TestItem(5)).await.unwrap();
-        assert_eq!(sender.shared.size.load(Ordering::Relaxed), 1);
-        assert_eq!(sender.shared.weight.load(Ordering::Relaxed), 5);
-
         receiver.recv().await.unwrap();
-        assert_eq!(sender.shared.size.load(Ordering::Relaxed), 0);
-        assert_eq!(sender.shared.weight.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

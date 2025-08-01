@@ -1,7 +1,4 @@
-use {
-    core::panic,
-    log::{Level, Metadata, Record},
-};
+use log::{Metadata, Record};
 
 ///
 /// A simple logger that logs messages to the console.

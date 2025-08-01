@@ -251,6 +251,13 @@ impl Ema {
         self.window_load.fetch_add(load as u64, Ordering::Relaxed);
         self.update_ema_if_needed(now);
     }
+
+    ///
+    /// May trigger an EMA update if the last update was more than `window` ago.
+    ///
+    pub fn record_no_load(&self, now: Instant) {
+        self.update_ema_if_needed(now);
+    }
 }
 
 #[cfg(test)]

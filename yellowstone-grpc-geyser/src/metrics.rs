@@ -13,8 +13,7 @@ use {
     },
     log::{error, info},
     prometheus::{
-        Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
-        TextEncoder,
+        Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
     },
     solana_clock::Slot,
     std::{
@@ -88,6 +87,22 @@ lazy_static::lazy_static! {
         Opts::new(
             "grpc_subscriber_message_processing_pace_sec",
             "How many subscriber loop process incoming geyser message per second"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_send_bandwidth_load",
+            "Current Send load we send to subscriber channel (in bytes per second)"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBCRIBER_RX_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_recv_bandwidth_load",
+            "Current Receive load of subscriber channel (in bytes per second)"
         ),
         &["subscriber_id"]
     ).unwrap();
@@ -235,6 +250,9 @@ impl PrometheusService {
             register!(GRPC_BYTES_SENT);
             register!(GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE);
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
+            register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
+            register!(GRPC_SUBCRIBER_RX_LOAD);
+
             VERSION
                 .with_label_values(&[
                     VERSION_INFO.buildts,
@@ -426,4 +444,16 @@ pub fn set_subscriber_pace<S: AsRef<str>>(subscriber_id: S, pace: i64) {
 
 pub fn observe_geyser_account_update_received(data_bytesize: usize) {
     GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
+}
+
+pub fn set_subscriber_send_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
+}
+
+pub fn set_subscriber_recv_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBCRIBER_RX_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
 }
