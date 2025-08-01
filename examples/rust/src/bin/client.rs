@@ -11,7 +11,13 @@ use {
     solana_signature::Signature,
     solana_transaction_status::UiTransactionEncoding,
     std::{
-        collections::HashMap, env, fs::File, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+        collections::HashMap,
+        env,
+        fs::File,
+        path::PathBuf,
+        str::FromStr,
+        sync::Arc,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
@@ -154,8 +160,12 @@ impl Args {
 
         if let Some(compression) = self.compression {
             match compression {
-                Compression::Gzip => builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Gzip),
-                Compression::Zstd => builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Zstd),
+                Compression::Gzip => {
+                    builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Gzip)
+                }
+                Compression::Zstd => {
+                    builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Zstd)
+                }
             }
         }
 

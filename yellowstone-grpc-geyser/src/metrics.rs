@@ -99,6 +99,14 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_SUBSCRIBER_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_queue_size",
+            "Current size of subscriber channel queue"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
     static ref GRPC_SUBCRIBER_RX_LOAD: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "grpc_subscriber_recv_bandwidth_load",
@@ -252,6 +260,7 @@ impl PrometheusService {
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
+            register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
 
             VERSION
                 .with_label_values(&[
@@ -456,4 +465,10 @@ pub fn set_subscriber_recv_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load:
     GRPC_SUBCRIBER_RX_LOAD
         .with_label_values(&[subscriber_id.as_ref()])
         .set(load);
+}
+
+pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
+    GRPC_SUBSCRIBER_QUEUE_SIZE
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(size as i64);
 }

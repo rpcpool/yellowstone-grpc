@@ -2,8 +2,9 @@ use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
         metrics::{
-            self, set_subscriber_pace, set_subscriber_recv_bandwidth_load,
-            set_subscriber_send_bandwidth_load, DebugClientMessage,
+            self, set_subscriber_pace, set_subscriber_queue_size,
+            set_subscriber_recv_bandwidth_load, set_subscriber_send_bandwidth_load,
+            DebugClientMessage,
         },
         util::{
             ema::{Ema, EmaReactivity, DEFAULT_EMA_WINDOW},
@@ -938,6 +939,8 @@ impl GrpcService {
                     stream_tx.estimated_consuming_rate().per_second() as i64,
                 );
 
+                set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
+
                 tokio::select! {
                     mut message = client_rx.recv() => {
                         // forward to latest filter
@@ -1085,6 +1088,7 @@ impl GrpcService {
         set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
         set_subscriber_send_bandwidth_load(&subscriber_id, 0);
         set_subscriber_pace(&subscriber_id, 0);
+        set_subscriber_queue_size(&subscriber_id, 0);
 
         metrics::connections_total_dec();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });

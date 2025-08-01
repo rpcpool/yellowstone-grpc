@@ -2,7 +2,10 @@ use {
     crate::util::ema::{Ema, EmaCurrentLoad, EmaReactivity, DEFAULT_EMA_WINDOW},
     futures::Stream,
     std::{
-        sync::Arc,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
         task::{Context, Poll},
         time::{Duration, Instant},
     },
@@ -26,6 +29,7 @@ pub trait TrafficWeighted {
 
 #[derive(Debug)]
 struct Shared {
+    queue_size: AtomicU64,
     send_ema: Ema,
     rx_ema: Ema,
 }
@@ -46,12 +50,14 @@ impl Shared {
     fn add_load(&self, weight: u32, now: Instant) {
         // Kept parameter type as u32
         self.send_ema.record_load(now, weight); // Cast weight to u64 for compatibility
+        self.queue_size.fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
     fn decr_load(&self, weight: u32, now: Instant) {
         // Kept parameter type as u32
         self.rx_ema.record_load(now, weight); // Cast weight to u64 for compatibility
+        self.queue_size.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -125,6 +131,7 @@ where
             stats_settings.rx_ema_window,
             stats_settings.rx_ema_reactivity,
         ),
+        queue_size: AtomicU64::new(0), // Initialize queue size to 0
     });
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
@@ -184,6 +191,10 @@ where
     pub fn no_load(&self) {
         self.shared.send_ema.record_no_load(Instant::now());
         self.shared.rx_ema.record_no_load(Instant::now());
+    }
+
+    pub fn queue_size(&self) -> u64 {
+        self.shared.queue_size.load(Ordering::Relaxed)
     }
 }
 
@@ -253,16 +264,10 @@ mod tests {
         let (sender, mut receiver) = load_aware_channel(10, Default::default());
 
         sender.send(TestItem(5)).await.unwrap();
+        assert_eq!(sender.queue_size(), 1);
         let received = receiver.recv().await.unwrap();
-
+        assert_eq!(sender.queue_size(), 0);
         assert_eq!(received.0, 5);
-    }
-
-    #[tokio::test]
-    async fn test_load_tracking() {
-        let (sender, mut receiver) = load_aware_channel(10, Default::default());
-        sender.send(TestItem(5)).await.unwrap();
-        receiver.recv().await.unwrap();
     }
 
     #[tokio::test]
@@ -273,6 +278,7 @@ mod tests {
         sender.send(TestItem(2)).await.unwrap();
         sender.send(TestItem(3)).await.unwrap();
 
+        assert_eq!(sender.queue_size(), 3);
         drop(sender);
         let mut stream = receiver;
 
