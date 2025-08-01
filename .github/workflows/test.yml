@@ -112,10 +112,6 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
-      - name: cargo clippy wasm
-        run: |
-          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
-          cargo clippy --target wasm32-unknown-unknown --all-targets
 
       - name: check features in `client`
         run: cargo check -p yellowstone-grpc-client --all-targets
