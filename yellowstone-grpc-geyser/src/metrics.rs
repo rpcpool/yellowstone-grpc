@@ -67,6 +67,14 @@ lazy_static::lazy_static! {
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
     ).unwrap();
+
+    static ref GRPC_MESSAGE_SENT: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "grpc_message_sent_count",
+            "Number of message sent over grpc to downstream client",
+        ),
+        &["remote_id"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -199,6 +207,7 @@ impl PrometheusService {
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
+            register!(GRPC_MESSAGE_SENT);
 
             VERSION
                 .with_label_values(&[
@@ -312,6 +321,12 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
+    GRPC_MESSAGE_SENT
+        .with_label_values(&[remote_id.as_ref()])
+        .inc();
 }
 
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {

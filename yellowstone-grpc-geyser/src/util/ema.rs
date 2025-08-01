@@ -77,9 +77,9 @@ impl EMAReactivity {
     ///
     /// This is how many steps in EMA before the data becomes "irrelevant" to current load computation.
     /// Which is another way of saying after how many steps the last record will only contribute to 1% of the prediction.
-    /// 
+    ///
     /// Log_{alpha}(0.01)
-    /// 
+    ///
     const fn effective_memory(self) -> u64 {
         match self {
             EMAReactivity::VeryReactive => 7,
@@ -151,7 +151,7 @@ impl Ema {
         // If the time since the last update is bigger than the window, we need to catch up and update the EMA
         // for each missed update.
         let missed_updates = time_since_last_update.saturating_sub(1) / self.window.as_millis();
-        
+
         // Limit the number of extra updates to the effective memory of the reactivity level.
         // This is to prevent excessive computation in case of long delays.
         // This is a trade-off between accuracy and performance.

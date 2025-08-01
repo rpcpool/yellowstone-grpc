@@ -845,6 +845,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
+        subscriber_id: Option<String>,
         endpoint: String,
         stream_tx: mpsc::Sender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
@@ -856,7 +857,7 @@ impl GrpcService {
     ) {
         let mut filter = Filter::default();
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
-
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
@@ -947,7 +948,9 @@ impl GrpcService {
                                     for (_msgid, message) in messages.iter() {
                                         for message in filter.get_updates(message, Some(commitment)) {
                                             match stream_tx.send(Ok(message)).await {
-                                                Ok(()) => {}
+                                                Ok(()) => {
+                                                    metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                                }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
                                                     break 'outer;
@@ -1142,6 +1145,12 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
+        let subscriber_id = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.to_string()));
+
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
@@ -1201,6 +1210,7 @@ impl Geyser for GrpcService {
 
         tokio::spawn(Self::client_loop(
             id,
+            subscriber_id,
             endpoint,
             stream_tx,
             client_rx,
