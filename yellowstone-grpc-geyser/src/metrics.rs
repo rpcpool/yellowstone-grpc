@@ -102,7 +102,7 @@ lazy_static::lazy_static! {
     static ref GRPC_SUBCRIBER_RX_LOAD: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "grpc_subscriber_recv_bandwidth_load",
-            "Current Receive load of subscriber channel (in bytes per second)"
+            "Current Receiver rate of subscriber channel (in bytes per second)"
         ),
         &["subscriber_id"]
     ).unwrap();
