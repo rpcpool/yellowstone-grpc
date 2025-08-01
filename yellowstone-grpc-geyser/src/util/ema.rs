@@ -16,8 +16,38 @@ pub struct Ema {
     window: Duration,
     window_load: AtomicU64,
     current_load_ema: AtomicU64,
-    reactivity: EMAReactivity,
+    reactivity: EmaReactivity,
     last_update: RwLock<Instant>,
+}
+
+pub struct EmaBuilder {
+    window: Duration,
+    reactivity: EmaReactivity,
+}
+
+impl Default for EmaBuilder {
+    fn default() -> Self {
+        Self {
+            window: DEFAULT_EMA_WINDOW,
+            reactivity: Default::default(),
+        }
+    }
+}
+
+impl EmaBuilder {
+    pub fn window(mut self, window: Duration) -> Self {
+        self.window = window;
+        self
+    }
+
+    pub fn reactivity(mut self, reactivity: EmaReactivity) -> Self {
+        self.reactivity = reactivity;
+        self
+    }
+
+    pub fn build(self) -> Ema {
+        Ema::new(self.window, self.reactivity)
+    }
 }
 
 ///
@@ -25,7 +55,7 @@ pub struct Ema {
 ///
 /// These categories define how much weight the EMA gives to recent values compared to older ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum EMAReactivity {
+pub enum EmaReactivity {
     /// Very reactive, attribute 50% weight to the most recent value.
     VeryReactive,
     /// Reactive, attribute 33% weight to the most recent value.
@@ -37,38 +67,38 @@ pub enum EMAReactivity {
     LessReactive,
 }
 
-impl fmt::Display for EMAReactivity {
+impl fmt::Display for EmaReactivity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EMAReactivity::VeryReactive => write!(f, "Very Reactive"),
-            EMAReactivity::Reactive => write!(f, "Reactive"),
-            EMAReactivity::ModeratelyReactive => write!(f, "Moderately Reactive"),
-            EMAReactivity::LessReactive => write!(f, "Less Reactive"),
+            EmaReactivity::VeryReactive => write!(f, "Very Reactive"),
+            EmaReactivity::Reactive => write!(f, "Reactive"),
+            EmaReactivity::ModeratelyReactive => write!(f, "Moderately Reactive"),
+            EmaReactivity::LessReactive => write!(f, "Less Reactive"),
         }
     }
 }
 
-impl FromStr for EMAReactivity {
+impl FromStr for EmaReactivity {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "very reactive" => Ok(EMAReactivity::VeryReactive),
-            "reactive" => Ok(EMAReactivity::Reactive),
-            "moderately reactive" => Ok(EMAReactivity::ModeratelyReactive),
-            "less reactive" => Ok(EMAReactivity::LessReactive),
+            "very reactive" => Ok(EmaReactivity::VeryReactive),
+            "reactive" => Ok(EmaReactivity::Reactive),
+            "moderately reactive" => Ok(EmaReactivity::ModeratelyReactive),
+            "less reactive" => Ok(EmaReactivity::LessReactive),
             _ => Err("Invalid EMA reactivity"),
         }
     }
 }
 
-impl EMAReactivity {
+impl EmaReactivity {
     const fn as_period(self) -> u64 {
         match self {
-            EMAReactivity::VeryReactive => 3,
-            EMAReactivity::Reactive => 5,
-            EMAReactivity::ModeratelyReactive => 10,
-            EMAReactivity::LessReactive => 20,
+            EmaReactivity::VeryReactive => 3,
+            EmaReactivity::Reactive => 5,
+            EmaReactivity::ModeratelyReactive => 10,
+            EmaReactivity::LessReactive => 20,
         }
     }
 
@@ -82,27 +112,27 @@ impl EMAReactivity {
     ///
     const fn effective_memory(self) -> u64 {
         match self {
-            EMAReactivity::VeryReactive => 7,
-            EMAReactivity::Reactive => 5,
-            EMAReactivity::ModeratelyReactive => 3,
-            EMAReactivity::LessReactive => 2,
+            EmaReactivity::VeryReactive => 7,
+            EmaReactivity::Reactive => 5,
+            EmaReactivity::ModeratelyReactive => 3,
+            EmaReactivity::LessReactive => 2,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct EMACurrentLoad {
+pub struct EmaCurrentLoad {
     ema_load: u64,
     unit: Duration,
 }
 
-impl Display for EMACurrentLoad {
+impl Display for EmaCurrentLoad {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} / {}ms", self.ema_load, self.unit.as_millis())
     }
 }
 
-impl EMACurrentLoad {
+impl EmaCurrentLoad {
     ///
     /// Converts the current traffic load native unit to taffic per seconds.
     ///
@@ -115,13 +145,17 @@ impl EMACurrentLoad {
 pub const DEFAULT_EMA_WINDOW: Duration = Duration::from_millis(10);
 
 impl Ema {
-    pub fn new(window: Duration, reactivity: EMAReactivity) -> Self {
+    pub fn new(window: Duration, reactivity: EmaReactivity) -> Self {
         Self::with_starting_time(window, reactivity, Instant::now())
+    }
+
+    pub fn builder() -> EmaBuilder {
+        EmaBuilder::default()
     }
 
     pub const fn with_starting_time(
         window: Duration,
-        reactivity: EMAReactivity,
+        reactivity: EmaReactivity,
         starting_time: Instant,
     ) -> Self {
         Self {
@@ -188,10 +222,10 @@ impl Ema {
         self.current_load_ema.load(Ordering::Relaxed)
     }
 
-    pub fn current_load(&self) -> EMACurrentLoad {
+    pub fn current_load(&self) -> EmaCurrentLoad {
         let ema_load = self.current_load_ema_in_native_unit();
         let unit = self.window;
-        EMACurrentLoad { ema_load, unit }
+        EmaCurrentLoad { ema_load, unit }
     }
 
     fn update_ema_if_needed(&self, now: Instant) {
@@ -226,55 +260,55 @@ mod tests {
     #[test]
     fn test_emareactivity_from_str() {
         assert_eq!(
-            EMAReactivity::from_str("Very Reactive").unwrap(),
-            EMAReactivity::VeryReactive
+            EmaReactivity::from_str("Very Reactive").unwrap(),
+            EmaReactivity::VeryReactive
         );
         assert_eq!(
-            EMAReactivity::from_str("Reactive").unwrap(),
-            EMAReactivity::Reactive
+            EmaReactivity::from_str("Reactive").unwrap(),
+            EmaReactivity::Reactive
         );
         assert_eq!(
-            EMAReactivity::from_str("Moderately Reactive").unwrap(),
-            EMAReactivity::ModeratelyReactive
+            EmaReactivity::from_str("Moderately Reactive").unwrap(),
+            EmaReactivity::ModeratelyReactive
         );
         assert_eq!(
-            EMAReactivity::from_str("Less Reactive").unwrap(),
-            EMAReactivity::LessReactive
+            EmaReactivity::from_str("Less Reactive").unwrap(),
+            EmaReactivity::LessReactive
         );
-        assert!(EMAReactivity::from_str("invalid").is_err());
+        assert!(EmaReactivity::from_str("invalid").is_err());
     }
 
     #[test]
     fn test_emareactivity_display() {
         let mut s = String::new();
-        write!(&mut s, "{}", EMAReactivity::VeryReactive).unwrap();
+        write!(&mut s, "{}", EmaReactivity::VeryReactive).unwrap();
         assert_eq!(s, "Very Reactive");
         s.clear();
-        write!(&mut s, "{}", EMAReactivity::Reactive).unwrap();
+        write!(&mut s, "{}", EmaReactivity::Reactive).unwrap();
         assert_eq!(s, "Reactive");
         s.clear();
-        write!(&mut s, "{}", EMAReactivity::ModeratelyReactive).unwrap();
+        write!(&mut s, "{}", EmaReactivity::ModeratelyReactive).unwrap();
         assert_eq!(s, "Moderately Reactive");
         s.clear();
-        write!(&mut s, "{}", EMAReactivity::LessReactive).unwrap();
+        write!(&mut s, "{}", EmaReactivity::LessReactive).unwrap();
         assert_eq!(s, "Less Reactive");
     }
 
     #[test]
     fn test_emareactivity_as_period() {
-        assert_eq!(EMAReactivity::VeryReactive.as_period(), 3);
-        assert_eq!(EMAReactivity::Reactive.as_period(), 5);
-        assert_eq!(EMAReactivity::ModeratelyReactive.as_period(), 10);
-        assert_eq!(EMAReactivity::LessReactive.as_period(), 20);
+        assert_eq!(EmaReactivity::VeryReactive.as_period(), 3);
+        assert_eq!(EmaReactivity::Reactive.as_period(), 5);
+        assert_eq!(EmaReactivity::ModeratelyReactive.as_period(), 10);
+        assert_eq!(EmaReactivity::LessReactive.as_period(), 20);
     }
 
     #[test]
     fn test_ema_alpha_for_all_reactivities() {
         let window = Duration::from_secs(10);
-        let very = Ema::new(window, EMAReactivity::VeryReactive);
-        let reactive = Ema::new(window, EMAReactivity::Reactive);
-        let moderate = Ema::new(window, EMAReactivity::ModeratelyReactive);
-        let less = Ema::new(window, EMAReactivity::LessReactive);
+        let very = Ema::new(window, EmaReactivity::VeryReactive);
+        let reactive = Ema::new(window, EmaReactivity::Reactive);
+        let moderate = Ema::new(window, EmaReactivity::ModeratelyReactive);
+        let less = Ema::new(window, EmaReactivity::LessReactive);
         assert!((very.alpha() - 0.5).abs() < 1e-6);
         assert!((reactive.alpha() - 0.3333333).abs() < 1e-6);
         assert!((moderate.alpha() - 0.1818181).abs() < 1e-6);
@@ -284,7 +318,7 @@ mod tests {
     #[test]
     fn test_ema_function_computation() {
         let window = Duration::from_secs(10);
-        let ema = Ema::new(window, EMAReactivity::Reactive); // period = 5, alpha = 0.333...
+        let ema = Ema::new(window, EmaReactivity::Reactive); // period = 5, alpha = 0.333...
                                                              // current_ema = 6, recent_load = 12
                                                              // expected = alpha * recent_load + (1-alpha) * current_ema
         let expected = (0.33333333333 * 12.0 + 0.6666667 * 6.0) as u64;
@@ -297,9 +331,9 @@ mod tests {
     #[test]
     fn test_ema_new_initializes_fields() {
         let window = Duration::from_secs(10);
-        let ema = Ema::new(window, EMAReactivity::Reactive);
+        let ema = Ema::new(window, EmaReactivity::Reactive);
         assert_eq!(ema.window, window);
-        assert_eq!(ema.reactivity, EMAReactivity::Reactive);
+        assert_eq!(ema.reactivity, EmaReactivity::Reactive);
         assert_eq!(ema.current_load_ema_in_native_unit(), 0);
     }
 
@@ -307,7 +341,7 @@ mod tests {
     fn test_record_load_increments_and_updates_ema_after_window() {
         let now = Instant::now();
         const WINDOW: Duration = Duration::from_millis(1);
-        let ema = Ema::with_starting_time(WINDOW, EMAReactivity::VeryReactive, now);
+        let ema = Ema::with_starting_time(WINDOW, EmaReactivity::VeryReactive, now);
         let now_1w = now + WINDOW;
         ema.record_load(now, 1);
         ema.record_load(now, 1);
@@ -319,7 +353,7 @@ mod tests {
     fn recent_load_change_should_not_change_last_ema() {
         let now = Instant::now();
         const WINDOW: Duration = Duration::from_millis(1);
-        let ema = Ema::with_starting_time(WINDOW, EMAReactivity::VeryReactive, now);
+        let ema = Ema::with_starting_time(WINDOW, EmaReactivity::VeryReactive, now);
         // Add 3 load in the current EMA window.
         ema.record_load(now, 1);
         ema.record_load(now, 1);
@@ -340,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_alpha_calculation() {
-        let ema = Ema::new(Duration::from_secs(10), EMAReactivity::VeryReactive);
+        let ema = Ema::new(Duration::from_secs(10), EmaReactivity::VeryReactive);
         let alpha = ema.alpha();
         assert!(alpha > 0.0 && alpha < 1.0);
     }

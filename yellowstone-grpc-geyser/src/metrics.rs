@@ -12,7 +12,10 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{
+        Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder,
+    },
     solana_clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
@@ -73,7 +76,28 @@ lazy_static::lazy_static! {
             "grpc_message_sent_count",
             "Number of message sent over grpc to downstream client",
         ),
-        &["remote_id"]
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_BYTES_SENT: IntCounterVec = IntCounterVec::new(
+        Opts::new("grpc_bytes_sent", "Number of bytes sent over grpc to downstream client"),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_message_processing_pace_sec",
+            "How many subscriber loop process incoming geyser message per second"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "geyser_account_update_data_size_kib",
+            "Histogram of all account update data (kib) received from Geyser plugin"
+        )
+        .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
 }
 
@@ -208,7 +232,9 @@ impl PrometheusService {
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
-
+            register!(GRPC_BYTES_SENT);
+            register!(GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE);
+            register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             VERSION
                 .with_label_values(&[
                     VERSION_INFO.buildts,
@@ -323,6 +349,12 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         .body(BodyEmpty::new().boxed())
 }
 
+pub fn incr_grpc_bytes_sent<S: AsRef<str>>(remote_id: S, byte_sent: u32) {
+    GRPC_BYTES_SENT
+        .with_label_values(&[remote_id.as_ref()])
+        .inc_by(byte_sent as u64);
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
@@ -384,4 +416,14 @@ pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
         .with_label_values(&[status.as_str()])
         .inc()
+}
+
+pub fn set_subscriber_pace<S: AsRef<str>>(subscriber_id: S, pace: i64) {
+    GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(pace);
+}
+
+pub fn observe_geyser_account_update_received(data_bytesize: usize) {
+    GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
 }

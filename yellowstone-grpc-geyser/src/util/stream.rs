@@ -1,6 +1,6 @@
 use {
     crate::util::{
-        ema::{EMACurrentLoad, EMAReactivity, Ema, DEFAULT_EMA_WINDOW},
+        ema::{Ema, EmaCurrentLoad, EmaReactivity, DEFAULT_EMA_WINDOW},
         rate::RateTracker,
     },
     futures::Stream,
@@ -18,7 +18,15 @@ use {
     },
 };
 
-pub trait Weighted {
+///
+/// Basic trait for items that can be sent through a load-aware channel.
+/// It requires the item to implement the `weight` method, which returns a `u32` representing the "traffic" weight of the item.
+/// This weight is used to track the load on the channel.
+///
+/// The term "traffic" is used here to indicate the load or weight of the item being.
+/// Its up to the application code to interpret the meaning of "traffic" in the context of the items being sent.
+///
+pub trait TrafficWeighted {
     fn weight(&self) -> u32;
 }
 
@@ -79,9 +87,9 @@ pub const DEFAULT_AVG_TRAFFIC_RATE_WINDOW: Duration = Duration::from_secs(10 * 6
 pub struct StatsSettings {
     avg_traffic_rate_window: Duration,
     tx_ema_window: Duration,
-    tx_ema_reactivity: EMAReactivity,
+    tx_ema_reactivity: EmaReactivity,
     rx_ema_window: Duration,
-    rx_ema_reactivity: EMAReactivity,
+    rx_ema_reactivity: EmaReactivity,
 }
 
 impl Default for StatsSettings {
@@ -89,9 +97,9 @@ impl Default for StatsSettings {
         Self {
             avg_traffic_rate_window: DEFAULT_AVG_TRAFFIC_RATE_WINDOW,
             tx_ema_window: DEFAULT_EMA_WINDOW,
-            tx_ema_reactivity: EMAReactivity::Reactive,
+            tx_ema_reactivity: EmaReactivity::Reactive,
             rx_ema_window: DEFAULT_EMA_WINDOW,
-            rx_ema_reactivity: EMAReactivity::LessReactive, // Less reactive for receiving end -> closer to an all-time average
+            rx_ema_reactivity: EmaReactivity::LessReactive, // Less reactive for receiving end -> closer to an all-time average
         }
     }
 }
@@ -108,7 +116,7 @@ pub fn load_aware_channel<T>(
     stats_settings: StatsSettings,
 ) -> (LoadAwareSender<T>, LoadAwareReceiver<T>)
 where
-    T: Weighted,
+    T: TrafficWeighted,
 {
     let (inner_sender, inner_receiver) = tokio::sync::mpsc::channel(capacity);
 
@@ -145,13 +153,13 @@ where
 ///
 impl<T> LoadAwareSender<T>
 where
-    T: Weighted,
+    T: TrafficWeighted,
 {
-    pub fn estimated_send_rate(&self) -> EMACurrentLoad {
+    pub fn estimated_send_rate(&self) -> EmaCurrentLoad {
         self.shared.send_ema.current_load()
     }
 
-    pub fn estimated_consuming_rate(&self) -> EMACurrentLoad {
+    pub fn estimated_consuming_rate(&self) -> EmaCurrentLoad {
         self.shared.rx_ema.current_load()
     }
 
@@ -179,7 +187,7 @@ where
 ///
 impl<T> LoadAwareReceiver<T>
 where
-    T: Weighted,
+    T: TrafficWeighted,
 {
     pub async fn recv(&mut self) -> Option<T> {
         use std::future::poll_fn;
@@ -197,14 +205,14 @@ where
         })
     }
 
-    pub fn estimated_rx_rate(&self) -> EMACurrentLoad {
+    pub fn estimated_rx_rate(&self) -> EmaCurrentLoad {
         self.shared.rx_ema.current_load()
     }
 }
 
 impl<T> Stream for LoadAwareReceiver<T>
 where
-    T: Weighted,
+    T: TrafficWeighted,
 {
     type Item = T;
 
@@ -231,7 +239,7 @@ mod tests {
     #[derive(Debug)]
     struct TestItem(u32);
 
-    impl Weighted for TestItem {
+    impl TrafficWeighted for TestItem {
         fn weight(&self) -> u32 {
             self.0
         }

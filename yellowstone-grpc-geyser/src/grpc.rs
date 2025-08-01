@@ -1,7 +1,11 @@
 use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
-        metrics::{self, DebugClientMessage},
+        metrics::{self, set_subscriber_pace, DebugClientMessage},
+        util::{
+            ema::{Ema, EmaReactivity, DEFAULT_EMA_WINDOW},
+            stream::TrafficWeighted,
+        },
         version::GrpcVersionInfo,
     },
     anyhow::Context,
@@ -55,6 +59,7 @@ use {
             IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
             SubscribeReplayInfoResponse, SubscribeRequest,
         },
+        prost::Message as ProstMessage,
     },
 };
 
@@ -84,6 +89,25 @@ struct BlockMetaStorageInner {
     processed: Option<u64>,
     confirmed: Option<u64>,
     finalized: Option<u64>,
+}
+
+impl TrafficWeighted for FilteredUpdate {
+    fn weight(&self) -> u32 {
+        self.encoded_len() as u32
+    }
+}
+
+impl<T, E> TrafficWeighted for Result<T, E>
+where
+    T: TrafficWeighted,
+    E: TrafficWeighted,
+{
+    fn weight(&self) -> u32 {
+        match self {
+            Ok(item) => item.weight(),
+            Err(err) => err.weight(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -650,6 +674,7 @@ impl GrpcService {
                         }
                         // Dedup accounts by max write_version
                         Message::Account(msg) => {
+                            metrics::observe_geyser_account_update_received(msg.account.data.len());
                             let write_version = msg.account.write_version;
                             let msg_index = slot_messages.messages.len() - 1;
                             if let Some(entry) = slot_messages.accounts_dedup.get_mut(&msg.account.pubkey) {
@@ -879,8 +904,17 @@ impl GrpcService {
             .await;
         }
 
+        let client_loop_pace = Ema::builder()
+            .window(DEFAULT_EMA_WINDOW)
+            .reactivity(EmaReactivity::Reactive)
+            .build();
+
         if is_alive {
             'outer: loop {
+                set_subscriber_pace(
+                    &subscriber_id,
+                    client_loop_pace.current_load().per_second() as i64,
+                );
                 tokio::select! {
                     mut message = client_rx.recv() => {
                         // forward to latest filter
@@ -947,9 +981,11 @@ impl GrpcService {
                                     messages.sort_by_key(|msg| msg.0);
                                     for (_msgid, message) in messages.iter() {
                                         for message in filter.get_updates(message, Some(commitment)) {
+                                            let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                             match stream_tx.send(Ok(message)).await {
                                                 Ok(()) => {
                                                     metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                                    metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
                                                 }
                                                 Err(mpsc::error::SendError(_)) => {
                                                     error!("client #{id}: stream closed");
@@ -982,6 +1018,8 @@ impl GrpcService {
                                 break 'outer;
                             }
                         };
+
+                        client_loop_pace.record_load(Instant::now().into(), messages.len() as u32);
 
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
