@@ -68,22 +68,22 @@ pub struct StatsSettings {
 }
 
 impl StatsSettings {
-    pub fn tx_ema_window(mut self, window: Duration) -> Self {
+    pub const fn tx_ema_window(mut self, window: Duration) -> Self {
         self.tx_ema_window = window;
         self
     }
 
-    pub fn tx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
+    pub const fn tx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
         self.tx_ema_reactivity = reactivity;
         self
     }
 
-    pub fn rx_ema_window(mut self, window: Duration) -> Self {
+    pub const fn rx_ema_window(mut self, window: Duration) -> Self {
         self.rx_ema_window = window;
         self
     }
 
-    pub fn rx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
+    pub const fn rx_ema_reactivity(mut self, reactivity: EmaReactivity) -> Self {
         self.rx_ema_reactivity = reactivity;
         self
     }

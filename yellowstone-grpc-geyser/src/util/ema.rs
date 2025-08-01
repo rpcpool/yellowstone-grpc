@@ -190,7 +190,7 @@ impl Ema {
         // This is to prevent excessive computation in case of long delays.
         // This is a trade-off between accuracy and performance.
         // EMA terms forms a geometric series, where each term contributes less and less to the final value.
-        // The contribution value of each decay exponentially decreases.
+        // The contribution value of each term decay exponentially.
         // after the effective memory steps, the contribution of the last record is less than 1% of the prediction.
         let extra_updates = missed_updates.min(self.reactivity.effective_memory() as u128);
 
