@@ -10,6 +10,7 @@ use std::{
 
 ///
 /// Exponential Moving Average (EMA) for load tracking.
+/// The implementation is based off Anza stream-throttle module: https://github.com/anza-xyz/agave/blob/v2.3/streamer/src/nonblocking/stream_throttle.rs
 ///
 #[derive(Debug)]
 pub struct Ema {
