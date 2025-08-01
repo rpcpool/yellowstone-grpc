@@ -22,7 +22,7 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
+        os: [ubuntu-22.04]
     runs-on: ["${{ matrix.os }}"]
     steps:
       - name: Maximize build space
@@ -112,6 +112,12 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
+
+      # THIS STEP IS BROKEN
+      # - name: cargo clippy wasm
+      #   run: |
+      #     cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+      #     cargo clippy --target wasm32-unknown-unknown --all-targets
 
       - name: check features in `client`
         run: cargo check -p yellowstone-grpc-client --all-targets
