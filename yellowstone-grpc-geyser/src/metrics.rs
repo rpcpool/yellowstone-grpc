@@ -13,7 +13,8 @@ use {
     },
     log::{error, info},
     prometheus::{
-        Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
+        Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+        TextEncoder,
     },
     solana_clock::Slot,
     std::{
@@ -45,6 +46,20 @@ lazy_static::lazy_static! {
     static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
         Opts::new("slot_status_plugin", "Latest processed slot in the plugin to client queues"),
         &["status"]
+    ).unwrap();
+
+    ///
+    /// First shred received from agave tells us at which rate this rpc receives the latest slot.
+    ///
+    static ref SLOT_FIRST_SHRED_RECEIVED_COUNTER: IntCounter = IntCounter::new(
+        "slot_first_shred_received_counter", "Counter of first shred received from agave",
+    ).unwrap();
+
+    ///
+    /// Slot completed is equivalent to fully downloaded by agave, using `rate()` to calculate the rate of downlaoded slots.
+    ///
+    static ref SLOT_COMPLETED_COUNTER: IntCounter = IntCounter::new(
+        "slot_completed_counter", "Counter of completed slots",
     ).unwrap();
 
     static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
@@ -261,6 +276,8 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(SLOT_FIRST_SHRED_RECEIVED_COUNTER);
+            register!(SLOT_COMPLETED_COUNTER);
 
             VERSION
                 .with_label_values(&[
@@ -471,4 +488,12 @@ pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
     GRPC_SUBSCRIBER_QUEUE_SIZE
         .with_label_values(&[subscriber_id.as_ref()])
         .set(size as i64);
+}
+
+pub fn incr_slot_first_shred_received_counter() {
+    SLOT_FIRST_SHRED_RECEIVED_COUNTER.inc();
+}
+
+pub fn incr_slot_completed_counter() {
+    SLOT_COMPLETED_COUNTER.inc();
 }

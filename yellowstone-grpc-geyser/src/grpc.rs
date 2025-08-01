@@ -572,6 +572,16 @@ impl GrpcService {
                     // Update metrics
                     if let Message::Slot(slot_message) = &message {
                         metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                        match slot_message.status {
+                            SlotStatus::FirstShredReceived => {
+                                metrics::incr_slot_first_shred_received_counter();
+                            }
+                            SlotStatus::Completed => {
+                                // Completed is similar to slow fully downloaded by agave.
+                                metrics::incr_slot_completed_counter();
+                            }
+                            _ => {}
+                        }
                     }
 
                     // Update blocks info
