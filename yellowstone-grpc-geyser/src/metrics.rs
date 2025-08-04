@@ -12,7 +12,9 @@ use {
         server::conn::auto::Builder as ServerBuilder,
     },
     log::{error, info},
-    prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
+    prometheus::{
+        Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
+    },
     solana_clock::Slot,
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
@@ -66,6 +68,51 @@ lazy_static::lazy_static! {
     static ref MISSED_STATUS_MESSAGE: IntCounterVec = IntCounterVec::new(
         Opts::new("missed_status_message_total", "Number of missed messages by commitment"),
         &["status"]
+    ).unwrap();
+
+    static ref GRPC_MESSAGE_SENT: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "grpc_message_sent_count",
+            "Number of message sent over grpc to downstream client",
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_BYTES_SENT: IntCounterVec = IntCounterVec::new(
+        Opts::new("grpc_bytes_sent", "Number of bytes sent over grpc to downstream client"),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_send_bandwidth_load",
+            "Current Send load we send to subscriber channel (in bytes per second)"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBSCRIBER_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_queue_size",
+            "Current size of subscriber channel queue"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBCRIBER_RX_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_recv_bandwidth_load",
+            "Current Receiver rate of subscriber channel (in bytes per second)"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "geyser_account_update_data_size_kib",
+            "Histogram of all account update data (kib) received from Geyser plugin"
+        )
+        .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
 }
 
@@ -199,6 +246,12 @@ impl PrometheusService {
             register!(CONNECTIONS_TOTAL);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
+            register!(GRPC_MESSAGE_SENT);
+            register!(GRPC_BYTES_SENT);
+            register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
+            register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
+            register!(GRPC_SUBCRIBER_RX_LOAD);
+            register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
 
             VERSION
                 .with_label_values(&[
@@ -314,6 +367,18 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
         .body(BodyEmpty::new().boxed())
 }
 
+pub fn incr_grpc_bytes_sent<S: AsRef<str>>(remote_id: S, byte_sent: u32) {
+    GRPC_BYTES_SENT
+        .with_label_values(&[remote_id.as_ref()])
+        .inc_by(byte_sent as u64);
+}
+
+pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
+    GRPC_MESSAGE_SENT
+        .with_label_values(&[remote_id.as_ref()])
+        .inc();
+}
+
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
     SLOT_STATUS
         .with_label_values(&[status.as_str()])
@@ -369,4 +434,26 @@ pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
         .with_label_values(&[status.as_str()])
         .inc()
+}
+
+pub fn observe_geyser_account_update_received(data_bytesize: usize) {
+    GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
+}
+
+pub fn set_subscriber_send_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
+}
+
+pub fn set_subscriber_recv_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBCRIBER_RX_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
+}
+
+pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
+    GRPC_SUBSCRIBER_QUEUE_SIZE
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(size as i64);
 }
