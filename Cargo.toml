@@ -49,8 +49,8 @@ local-ip-address = "~0.6.1"
 log = "~0.4.17"
 maplit = "1.0.2"
 prometheus = "0.13.2"
-prost = "~0.13.1"
-prost-types = "0.13.3"
+prost = "~0.14.0"
+prost-types = "~0.14.0"
 prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
@@ -75,12 +75,14 @@ spl-token-2022 = "8.0.0"
 thiserror = "1"
 tokio = "1"
 tokio-stream = "0.1.11"
-tonic = "~0.13.1"
-tonic-build = "~0.13.1"
-tonic-health = "~0.13.1"
+tonic = "~0.14.0"
+tonic-build = "~0.14.0"
+tonic-prost = "~0.14.0"
+tonic-prost-build = "~0.14.0"
+tonic-health = "~0.14.0"
 vergen = "9"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "8.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "8.0.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "9.0.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "9.0.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
