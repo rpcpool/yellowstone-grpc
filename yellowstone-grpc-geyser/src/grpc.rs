@@ -2,12 +2,11 @@ use {
     crate::{
         config::{ConfigGrpc, ConfigTokio},
         metrics::{
-            self, set_subscriber_pace, set_subscriber_queue_size,
-            set_subscriber_recv_bandwidth_load, set_subscriber_send_bandwidth_load,
-            DebugClientMessage,
+            self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
+            set_subscriber_send_bandwidth_load, DebugClientMessage,
         },
         util::{
-            ema::{Ema, EmaReactivity, DEFAULT_EMA_WINDOW},
+            ema::{EmaReactivity, DEFAULT_EMA_WINDOW},
             stream::{
                 load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
                 TrafficWeighted,
@@ -916,19 +915,8 @@ impl GrpcService {
             )
             .await;
         }
-
-        let client_loop_pace = Ema::builder()
-            .window(DEFAULT_EMA_WINDOW)
-            .reactivity(EmaReactivity::Reactive)
-            .build();
-
         if is_alive {
             'outer: loop {
-                set_subscriber_pace(
-                    &subscriber_id,
-                    client_loop_pace.current_load().per_second() as i64,
-                );
-
                 set_subscriber_send_bandwidth_load(
                     &subscriber_id,
                     stream_tx.estimated_send_rate().per_second() as i64,
@@ -1045,8 +1033,6 @@ impl GrpcService {
                             }
                         };
 
-                        client_loop_pace.record_load(Instant::now().into(), messages.len() as u32);
-
                         if commitment == filter.get_commitment_level() {
                             for (_msgid, message) in messages.iter() {
                                 for message in filter.get_updates(message, Some(commitment)) {
@@ -1087,7 +1073,6 @@ impl GrpcService {
         }
         set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
         set_subscriber_send_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_pace(&subscriber_id, 0);
         set_subscriber_queue_size(&subscriber_id, 0);
 
         metrics::connections_total_dec();

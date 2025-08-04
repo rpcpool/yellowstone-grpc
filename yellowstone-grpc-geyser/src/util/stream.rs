@@ -122,15 +122,18 @@ where
 {
     let (inner_sender, inner_receiver) = tokio::sync::mpsc::channel(capacity);
 
+    let send_ema = Ema::builder()
+        .window(stats_settings.tx_ema_window)
+        .reactivity(stats_settings.tx_ema_reactivity)
+        .build();
+    let rx_ema = Ema::builder()
+        .window(stats_settings.rx_ema_window)
+        .reactivity(stats_settings.rx_ema_reactivity)
+        .build();
+
     let shared = Arc::new(Shared {
-        send_ema: Ema::new(
-            stats_settings.tx_ema_window,
-            stats_settings.tx_ema_reactivity,
-        ),
-        rx_ema: Ema::new(
-            stats_settings.rx_ema_window,
-            stats_settings.rx_ema_reactivity,
-        ),
+        send_ema,
+        rx_ema,
         queue_size: AtomicU64::new(0), // Initialize queue size to 0
     });
     let sender = LoadAwareSender {

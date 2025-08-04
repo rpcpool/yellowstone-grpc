@@ -83,14 +83,6 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
-    static ref GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE: IntGaugeVec = IntGaugeVec::new(
-        Opts::new(
-            "grpc_subscriber_message_processing_pace_sec",
-            "How many subscriber loop process incoming geyser message per second"
-        ),
-        &["subscriber_id"]
-    ).unwrap();
-
     static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "grpc_subscriber_send_bandwidth_load",
@@ -256,7 +248,6 @@ impl PrometheusService {
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
             register!(GRPC_BYTES_SENT);
-            register!(GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE);
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
@@ -443,12 +434,6 @@ pub fn missed_status_message_inc(status: SlotStatus) {
     MISSED_STATUS_MESSAGE
         .with_label_values(&[status.as_str()])
         .inc()
-}
-
-pub fn set_subscriber_pace<S: AsRef<str>>(subscriber_id: S, pace: i64) {
-    GRPC_SUBSCRIBER_MESSAGE_PROCESSING_PACE
-        .with_label_values(&[subscriber_id.as_ref()])
-        .set(pace);
 }
 
 pub fn observe_geyser_account_update_received(data_bytesize: usize) {
