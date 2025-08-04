@@ -31,7 +31,7 @@ solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["zstd", "gzip"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
 
