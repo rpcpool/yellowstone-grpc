@@ -3,13 +3,18 @@ syntax = "proto3";
 import "google/protobuf/timestamp.proto";
 import public "solana-storage.proto";
 
-option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
+// option go_package = "github.com/rpcpool/yellowstone-grpc/examples/golang/proto";
 
 package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
+  rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
+  rpc GetBlockHeight(GetBlockHeightRequest) returns (GetBlockHeightResponse) {}
+  rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
+  rpc IsBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
 }
 

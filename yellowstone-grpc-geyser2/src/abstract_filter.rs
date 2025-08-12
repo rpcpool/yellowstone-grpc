@@ -29,6 +29,26 @@ use {
     std::{collections::HashSet, sync::Arc},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReducerDecision {
+    Stop,
+    Continue,
+}
+
+impl ReducerDecision {
+    pub fn to_result(self) -> Result<(), ReducerDecision> {
+        match self {
+            ReducerDecision::Stop => Err(ReducerDecision::Stop),
+            ReducerDecision::Continue => Ok(()),
+        }
+    }
+}
+
+pub trait PubkeyReducer {
+    fn accept(&mut self, pubkey: Pubkey) -> ReducerDecision;
+}
+
+
 pub trait AbstractBlockMeta {}
 
 pub trait BlockMetaFilter {
@@ -372,25 +392,7 @@ pub trait AbstractTx {
     fn signature(&self) -> Signature;
     fn is_vote(&self) -> bool;
     fn is_failed(&self) -> bool;
-    fn account_keys(&self) -> Vec<Pubkey>;
-
-    fn any_account_key_match(&self, f: &dyn Fn(&Pubkey) -> bool) -> bool {
-        for key in self.account_keys() {
-            if f(&key) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    fn all_account_keys_match(&self, f: &dyn Fn(&Pubkey) -> bool) -> bool {
-        for key in self.account_keys() {
-            if !f(&key) {
-                return false;
-            }
-        }
-        return true;
-    }
+    fn account_keys(&self, reducer: &mut dyn PubkeyReducer);
 }
 
 pub trait TxFilter {
@@ -492,7 +494,33 @@ impl TxFilter for TxSignatureFilter {
 
 impl TxFilter for TxIncludeAccountFilter {
     fn filter(&self, tx: &dyn AbstractTx) -> bool {
-        tx.any_account_key_match(&|account| self.pubkeys.contains(account))
+        if self.pubkeys.is_empty() {
+            return true; // If no pubkeys are specified, all txs match
+        }
+
+        struct Reducer<'pk> {
+            pubkeys: &'pk HashSet<Pubkey>,
+            result: bool,
+        }
+
+        impl PubkeyReducer for Reducer<'_> {
+            fn accept(&mut self, account: Pubkey) -> ReducerDecision {
+                if self.pubkeys.contains(&account) {
+                    self.result = true;
+                    ReducerDecision::Stop
+                } else {
+                    ReducerDecision::Continue
+                }
+            }
+        }
+
+        let mut reducer = Reducer {
+            pubkeys: &self.pubkeys,
+            result: false,
+        };
+
+        tx.account_keys(&mut reducer);
+        reducer.result
     }
 
     fn complexity_score(&self) -> usize {
@@ -502,7 +530,31 @@ impl TxFilter for TxIncludeAccountFilter {
 
 impl TxFilter for TxExcludeAccountFilter {
     fn filter(&self, tx: &dyn AbstractTx) -> bool {
-        tx.all_account_keys_match(&|account| !self.pubkeys.contains(account))
+        if self.pubkeys.is_empty() {
+            return true; // If no pubkeys are specified, all txs match
+        }
+
+        struct Reducer<'pk> {
+            pubkeys: &'pk HashSet<Pubkey>,
+            result: bool,
+        }
+        impl PubkeyReducer for Reducer<'_> {
+            fn accept(&mut self, account: Pubkey) -> ReducerDecision {
+                if self.pubkeys.contains(&account) {
+                    self.result = false;
+                    ReducerDecision::Stop
+                } else {
+                    ReducerDecision::Continue
+                }
+            }
+        }
+
+        let mut reducer = Reducer {
+            pubkeys: &self.pubkeys,
+            result: true,
+        };
+        tx.account_keys(&mut reducer);
+        reducer.result
     }
 
     fn complexity_score(&self) -> usize {
@@ -512,8 +564,33 @@ impl TxFilter for TxExcludeAccountFilter {
 
 impl TxFilter for TxRequiredAccountFilter {
     fn filter(&self, tx: &dyn AbstractTx) -> bool {
-        let keys = tx.account_keys();
-        self.pubkeys.iter().all(|account| keys.contains(account))
+        if self.pubkeys.is_empty() {
+            return true; // If no pubkeys are specified, all txs match
+        }
+        struct Reducer<'pk> {
+            pubkeys: &'pk HashSet<Pubkey>,
+            matches: usize,
+        }
+
+        impl PubkeyReducer for Reducer<'_> {
+            fn accept(&mut self, account: Pubkey) -> ReducerDecision {
+                if self.pubkeys.contains(&account) {
+                    self.matches += 1;
+                }
+                if self.matches == self.pubkeys.len() {
+                    return ReducerDecision::Stop;
+                }
+                ReducerDecision::Continue
+            }
+        }
+
+        let mut reducer = Reducer {
+            pubkeys: &self.pubkeys,
+            matches: 0,
+        };
+
+        tx.account_keys(&mut reducer);
+        reducer.matches == reducer.pubkeys.len()
     }
 
     fn complexity_score(&self) -> usize {
@@ -525,7 +602,7 @@ impl TxFilter for TxRequiredAccountFilter {
 mod tests {
     use {
         super::{AbstractAccount, AbstractTx, AccountPubkeyFilter, AndAccountFilter, TxFilter},
-        crate::abstract_filter::{AccountFilter, AccountOwnerFilter, TrueFilter},
+        crate::abstract_filter::{AccountFilter, AccountOwnerFilter, PubkeyReducer, ReducerDecision, TrueFilter},
         base64::{prelude::BASE64_STANDARD, Engine},
         solana_program_option::COption,
         solana_program_pack::Pack,
@@ -620,8 +697,12 @@ mod tests {
             self.is_failed
         }
 
-        fn account_keys(&self) -> Vec<Pubkey> {
-            self.account_keys.clone()
+        fn account_keys(&self, reducer: &mut dyn PubkeyReducer) {
+            for account in &self.account_keys {
+                if reducer.accept(*account) == ReducerDecision::Stop {
+                    break;
+                }
+            }
         }
     }
 

@@ -534,6 +534,7 @@ pub mod convert_to {
             loaded_addresses,
             return_data,
             compute_units_consumed,
+            cost_units,
         } = meta;
         let err = create_transaction_error(status);
         let inner_instructions_none = inner_instructions.is_none();
@@ -572,6 +573,7 @@ pub mod convert_to {
             return_data: return_data.as_ref().map(create_return_data),
             return_data_none: return_data.is_none(),
             compute_units_consumed: *compute_units_consumed,
+            cost_units: *cost_units,
         }
     }
 

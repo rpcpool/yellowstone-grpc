@@ -1,7 +1,7 @@
 use {
     cargo_lock::Lockfile,
     std::collections::HashSet,
-    tonic_build::manual::{Builder, Method, Service},
+    tonic_prost_build::manual::{Builder, Method, Service},
 };
 
 fn main() -> anyhow::Result<()> {
@@ -33,8 +33,8 @@ fn main() -> anyhow::Result<()> {
         get_pkg_version(&lockfile, "yellowstone-grpc-proto")
     );
 
-    tonic_build::configure()
-        .bytes(&[".geyser.SubscribeUpdateAccountInfo.data"])
+    tonic_prost_build::configure()
+        .bytes(".geyser.SubscribeUpdateAccountInfo.data")
         .build_server(false)
         .build_client(false)
         .compile_protos(&["proto/geyser.proto"], &["proto"])?;
@@ -48,7 +48,7 @@ fn main() -> anyhow::Result<()> {
                 .route_name("Subscribe")
                 .input_type("super::super::geyser::SubscribeRequest")
                 .output_type("crate::grpc::proto::ZeroCopySubscribeUpdate")
-                .codec_path("tonic::codec::ProstCodec")
+                .codec_path("tonic_prost::ProstCodec")
                 .client_streaming()
                 .server_streaming()
                 .build(),
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
                 .route_name("GetVersion")
                 .input_type("super::super::geyser::GetVersionRequest")
                 .output_type("super::super::geyser::GetVersionResponse")
-                .codec_path("tonic::codec::ProstCodec")
+                .codec_path("tonic_prost::ProstCodec")
                 .build(),
         )
         .build();

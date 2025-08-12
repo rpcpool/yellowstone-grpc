@@ -34,7 +34,6 @@ lazy_static = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
-prost-codec = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
@@ -45,7 +44,7 @@ solana-hash = { workspace = true }
 solana-logger = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
-solana-signature = { workspace = true, features = ["rand"]}
+solana-signature = { workspace = true, features = ["rand"] }
 solana-transaction = { workspace = true }
 solana-transaction-context = { workspace = true }
 solana-transaction-error = { workspace = true }
@@ -54,7 +53,8 @@ spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-stream = { workspace = true }
-tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots", "prost"] }
+tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
+tonic-prost = { workspace = true }
 tonic-health = { workspace = true }
 
 [dev-dependencies]
@@ -67,6 +67,7 @@ cargo-lock = { workspace = true }
 git-version = { workspace = true }
 protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
 
 [lints]

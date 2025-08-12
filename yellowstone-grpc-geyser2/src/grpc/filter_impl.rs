@@ -1,13 +1,7 @@
 use {
     crate::{
         abstract_filter::{
-            AbstractAccount, AbstractBlockMeta, AbstractEntry, AbstractSlotStatus, AbstractTx,
-            AccountDataLenFilter, AccountFilter, AccountFilterRef, AccountLamportFilter,
-            AccountMemcmpFilter, AccountMemcmpOp, AccountOwnerFilter, AccountPubkeyFilter,
-            AndAccountFilter, BlockMetaFilter, BlockMetaFilterRef, EntryFilter, EntryFilterRef,
-            IsTokenAccountFilter, NonEmptyTxSignature, SlotStatusFilter, SlotStatusFilterRef,
-            TrueFilter, TxAndFilter, TxExcludeAccountFilter, TxFailedFilter, TxFilter, TxFilterRef,
-            TxIncludeAccountFilter, TxRequiredAccountFilter, TxSignatureFilter, TxVoteFilter,
+            AbstractAccount, AbstractBlockMeta, AbstractEntry, AbstractSlotStatus, AbstractTx, AccountDataLenFilter, AccountFilter, AccountFilterRef, AccountLamportFilter, AccountMemcmpFilter, AccountMemcmpOp, AccountOwnerFilter, AccountPubkeyFilter, AndAccountFilter, BlockMetaFilter, BlockMetaFilterRef, EntryFilter, EntryFilterRef, IsTokenAccountFilter, NonEmptyTxSignature, PubkeyReducer, ReducerDecision, SlotStatusFilter, SlotStatusFilterRef, TrueFilter, TxAndFilter, TxExcludeAccountFilter, TxFailedFilter, TxFilter, TxFilterRef, TxIncludeAccountFilter, TxRequiredAccountFilter, TxSignatureFilter, TxVoteFilter
         },
         plugin::{MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction},
         proto::geyser::{
@@ -18,14 +12,11 @@ use {
             SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateBlockMeta,
             SubscribeUpdateEntry, SubscribeUpdateSlot, SubscribeUpdateTransaction,
         },
-    },
-    solana_pubkey::{ParsePubkeyError, Pubkey},
-    solana_signature::{ParseSignatureError, Signature},
-    std::{
+    }, solana_pubkey::{ParsePubkeyError, Pubkey}, solana_signature::{ParseSignatureError, Signature}, std::{
         collections::{HashMap, HashSet},
         str::FromStr,
         sync::Arc,
-    },
+    }
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -296,8 +287,19 @@ impl AbstractTx for MessageTransaction {
         self.transaction.meta.err.is_some()
     }
 
-    fn account_keys(&self) -> Vec<Pubkey> {
-        self.transaction.account_keys.iter().cloned().collect()
+    fn account_keys(&self, reducer: &mut dyn PubkeyReducer) {
+
+        let readonly = self.transaction.meta.loaded_readonly_addresses.iter()
+            .flat_map(|k| Pubkey::try_from(k.as_slice()));
+        let writable = self.transaction.meta.loaded_writable_addresses.iter()
+            .flat_map(|k| Pubkey::try_from(k.as_slice()));
+        let _result = self.transaction
+            .account_keys
+            .iter()
+            .cloned()
+            .chain(readonly)
+            .chain(writable)
+            .try_for_each(|pk| reducer.accept(pk).to_result());
     }
 }
 
@@ -391,53 +393,28 @@ impl AbstractTx for SubscribeUpdateTransaction {
             .map_or(false, |meta| meta.err.is_some())
     }
 
-    fn account_keys(&self) -> Vec<Pubkey> {
-        let tx_info = self
-            .transaction
-            .as_ref()
-            .expect("Transaction info is missing");
-        let tx = tx_info
-            .transaction
-            .as_ref()
-            .expect("Transaction data is missing");
-        let message = tx.message.as_ref().expect("Message is missing");
-        message
-            .account_keys
-            .iter()
-            .map(|key| Pubkey::try_from(key.as_slice()).expect("Failed to parse account key"))
-            .collect()
-    }
+    fn account_keys(&self, reducer: &mut dyn PubkeyReducer) {
+        let Some(msg) = self.transaction.as_ref()
+            .and_then(|tx| tx.transaction.as_ref())
+            .and_then(|tx| tx.message.as_ref()) 
+        else {
+            return;
+        };
+        let Some(meta) = self.transaction.as_ref().and_then(|tx| tx.meta.as_ref()) else {
+            return;
+        };
 
-    fn all_account_keys_match(&self, f: &dyn Fn(&Pubkey) -> bool) -> bool {
-        let tx_info = self
-            .transaction
-            .as_ref()
-            .expect("Transaction info is missing");
-        let tx = tx_info
-            .transaction
-            .as_ref()
-            .expect("Transaction data is missing");
-        let message = tx.message.as_ref().expect("Message is missing");
-        message
-            .account_keys
+        let it = msg.account_keys
             .iter()
-            .all(|key| f(&Pubkey::try_from(key.as_slice()).expect("Failed to parse account key")))
-    }
+            .chain(meta.loaded_readonly_addresses.iter())
+            .chain(meta.loaded_writable_addresses.iter())
+            .flat_map(|k| Pubkey::try_from(k.as_slice()));
 
-    fn any_account_key_match(&self, f: &dyn Fn(&Pubkey) -> bool) -> bool {
-        let tx_info = self
-            .transaction
-            .as_ref()
-            .expect("Transaction info is missing");
-        let tx = tx_info
-            .transaction
-            .as_ref()
-            .expect("Transaction data is missing");
-        let message = tx.message.as_ref().expect("Message is missing");
-        message
-            .account_keys
-            .iter()
-            .any(|key| f(&Pubkey::try_from(key.as_slice()).expect("Failed to parse account key")))
+        for pk in it {
+            if reducer.accept(pk) == ReducerDecision::Stop {
+                break;
+            }
+        }
     }
 }
 

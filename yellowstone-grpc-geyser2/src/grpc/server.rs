@@ -6,26 +6,21 @@ use {
             proto::ZeroCopySubscribeUpdate,
         },
         proto::{
-            gen::geyser_server::Geyser,
-            geyser::{
+            gen::geyser_server::Geyser, r#gen::geyser_server::GeyserServer, geyser::{
                 subscribe_update::UpdateOneof, GetVersionRequest, GetVersionResponse,
                 SubscribeRequest,
-            },
-            r#gen::geyser_server::GeyserServer,
+            }
         },
     },
     futures::{stream::BoxStream, StreamExt},
-    std::{collections::HashMap, fs, future::Future, sync::Arc},
+    std::{collections::HashMap, fs, future::Future, io, sync::Arc},
     tokio::{
         sync::{broadcast, mpsc, oneshot},
         task::{Id, JoinError, JoinHandle, JoinSet},
     },
     tokio_stream::wrappers::ReceiverStream,
     tonic::{
-        async_trait,
-        service::interceptor,
-        transport::{server::TcpIncoming, Identity, Server, ServerTlsConfig},
-        Request, Status,
+        async_trait, service::interceptor, transport::{server::TcpIncoming, Identity, Server, ServerTlsConfig}, Request, Status
     },
     tonic_health::server::health_reporter,
 };
@@ -235,7 +230,7 @@ pub enum TrySpawnGrpcServerError {
     #[error(transparent)]
     InvalidTlsConffig(tonic::transport::Error),
     #[error(transparent)]
-    TcpBindError(Box<dyn std::error::Error + Send + Sync>),
+    TcpBindError(#[from] io::Error),
 }
 
 pub async fn spawn_grpc_server<S>(
@@ -288,16 +283,17 @@ where
         svc = svc.send_compressed(send);
     }
 
-    let (mut health_reporter, health_service) = health_reporter();
+    let (health_reporter, health_service) = health_reporter();
     health_reporter
         .set_serving::<GeyserServer<GeyserV2GrpcServer>>()
         .await;
 
-    let incoming = TcpIncoming::new(config.address, true, config.server_http2_keepalive_interval)
-        .map_err(|e| TrySpawnGrpcServerError::TcpBindError(e))?;
+    let incoming = TcpIncoming::bind(config.address)?
+        .with_nodelay(Some(true))
+        .with_keepalive_interval(config.server_http2_keepalive_interval);
 
     let fut = server_builder
-        .layer(interceptor(move |request: Request<()>| {
+        .layer(interceptor::InterceptorLayer::new(move |request: Request<()>| {
             if let Some(x_token) = &config.x_token {
                 match request.metadata().get("x-token") {
                     Some(token) if x_token == token => Ok(request),
