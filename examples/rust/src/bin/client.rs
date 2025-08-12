@@ -15,6 +15,7 @@ use {
         env,
         fs::File,
         path::PathBuf,
+        str::FromStr,
         sync::Arc,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
@@ -48,6 +49,24 @@ type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransac
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Compression {
+    Gzip,
+    Zstd,
+}
+
+impl FromStr for Compression {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "gzip" => Ok(Compression::Gzip),
+            "zstd" => Ok(Compression::Zstd),
+            _ => Err(anyhow::anyhow!("Unknown compression type: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Parser)]
 #[clap(author, version, about)]
@@ -117,6 +136,10 @@ struct Args {
 
     #[command(subcommand)]
     action: Action,
+
+    /// Compression default: NONE, [gzip, zstd]
+    #[clap(long)]
+    compression: Option<Compression>,
 }
 
 impl Args {
@@ -134,6 +157,17 @@ impl Args {
             .x_token(self.x_token.clone())?
             .tls_config(tls_config)?
             .max_decoding_message_size(self.max_decoding_message_size);
+
+        if let Some(compression) = self.compression {
+            match compression {
+                Compression::Gzip => {
+                    builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Gzip)
+                }
+                Compression::Zstd => {
+                    builder = builder.accept_compressed(tonic::codec::CompressionEncoding::Zstd)
+                }
+            }
+        }
 
         if let Some(duration) = self.connect_timeout_ms {
             builder = builder.connect_timeout(Duration::from_millis(duration));
@@ -218,6 +252,7 @@ struct ActionSubscribe {
     accounts: bool,
 
     /// Filter by presence of field txn_signature
+    #[clap(long)]
     accounts_nonempty_txn_signature: Option<bool>,
 
     /// Filter by Account Pubkey
@@ -258,11 +293,11 @@ struct ActionSubscribe {
 
     /// Filter slots by commitment
     #[clap(long)]
-    slots_filter_by_commitment: bool,
+    slots_filter_by_commitment: Option<bool>,
 
     /// Subscribe on interslot slot updates
     #[clap(long)]
-    slots_interslot_updates: bool,
+    slots_interslot_updates: Option<bool>,
 
     /// Subscribe on transactions updates
     #[clap(long)]
@@ -445,10 +480,10 @@ impl Action {
                     accounts.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterAccounts {
-                            nonempty_txn_signature: args.accounts_nonempty_txn_signature,
                             account: accounts_account,
                             owner: args.accounts_owner.clone(),
                             filters,
+                            nonempty_txn_signature: args.accounts_nonempty_txn_signature,
                         },
                     );
                 }
@@ -458,8 +493,8 @@ impl Action {
                     slots.insert(
                         "client".to_owned(),
                         SubscribeRequestFilterSlots {
-                            filter_by_commitment: Some(args.slots_filter_by_commitment),
-                            interslot_updates: Some(args.slots_interslot_updates),
+                            filter_by_commitment: args.slots_filter_by_commitment,
+                            interslot_updates: args.slots_interslot_updates,
                         },
                     );
                 }
@@ -650,7 +685,6 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|error| error!("failed to connect: {error}"))
     })
     .await
-    .map_err(Into::into)
 }
 
 async fn geyser_health_watch(mut client: GeyserGrpcClient<impl Interceptor>) -> anyhow::Result<()> {

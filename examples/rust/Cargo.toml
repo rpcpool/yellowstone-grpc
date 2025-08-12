@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "7.0.0"
+version = "9.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -31,7 +31,7 @@ solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["zstd", "gzip", "tls-native-roots", "tls-ring"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
 
