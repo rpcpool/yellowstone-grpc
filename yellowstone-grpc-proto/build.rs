@@ -4,6 +4,8 @@ use {
 };
 
 fn main() -> anyhow::Result<()> {
+    // Windows compilation issues for protobuf-src
+    #[cfg(not(windows))]
     std::env::set_var("PROTOC", protobuf_src::protoc());
 
     // build protos
