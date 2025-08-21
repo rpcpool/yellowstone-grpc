@@ -693,6 +693,10 @@ impl GrpcService {
                                     // We can replace the message, but in this case we will lose the order
                                     slot_messages.messages[entry.1] = None;
                                     *entry = (write_version, msg_index);
+                                } else {
+                                    // If the new write_version is lower than the latest one, we need to drop this message
+                                    // because we would have more than 1 image in slot_messages.messages
+                                    slot_messages.messages[msg_index] = None;
                                 }
                             } else {
                                 slot_messages.accounts_dedup.insert(msg.account.pubkey, (write_version, msg_index));
