@@ -113,7 +113,7 @@ jobs:
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
 
-      - name: Rename lib for ubuntu22 release
+      - name: Rename lib for ubuntu24 release
         if: matrix.os == 'ubuntu-24.04'
         run: |
           mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release24-x86_64-unknown-linux-gnu.tar.bz2
