@@ -1126,7 +1126,7 @@ mod tests {
         solana_pubkey::Pubkey,
         solana_signer::Signer,
         solana_transaction::{
-            sanitized::SanitizedTransaction, versioned::VersionedTransaction, Transaction,
+            sanitized::SanitizedTransaction, Transaction,
         },
         solana_transaction_status::TransactionStatusMeta,
         std::{

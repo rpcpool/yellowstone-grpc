@@ -995,14 +995,9 @@ pub mod tests {
         prost_011::Message as _,
         prost_types::Timestamp,
         solana_hash::Hash,
-        solana_message::SimpleAddressLoader,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         solana_storage_proto::convert::generated,
-        solana_transaction::{
-            sanitized::{MessageHash, SanitizedTransaction},
-            versioned::VersionedTransaction,
-        },
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
             collections::{HashMap, HashSet},
