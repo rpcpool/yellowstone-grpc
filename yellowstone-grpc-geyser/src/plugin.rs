@@ -205,9 +205,9 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaTransactionInfoVersions::V0_0_2(info) => {
+                ReplicaTransactionInfoVersions::V0_0_2(_info) => {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
-                },
+                }
                 ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 

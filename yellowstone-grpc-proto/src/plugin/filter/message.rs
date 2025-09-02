@@ -999,7 +999,10 @@ pub mod tests {
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         solana_storage_proto::convert::generated,
-        solana_transaction::{sanitized::{MessageHash, SanitizedTransaction}, versioned::VersionedTransaction},
+        solana_transaction::{
+            sanitized::{MessageHash, SanitizedTransaction},
+            versioned::VersionedTransaction,
+        },
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
             collections::{HashMap, HashSet},

@@ -46,9 +46,8 @@ pub mod convert_to {
         super::prelude as proto,
         solana_clock::UnixTimestamp,
         solana_message::{
-            compiled_instruction::CompiledInstruction,
-            v0::{LoadedMessage, MessageAddressTableLookup},
-            LegacyMessage, MessageHeader, SanitizedMessage, VersionedMessage,
+            compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup,
+            MessageHeader, VersionedMessage,
         },
         solana_pubkey::Pubkey,
         solana_signature::Signature,

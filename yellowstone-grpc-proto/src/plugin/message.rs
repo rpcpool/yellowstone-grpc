@@ -10,7 +10,8 @@ use {
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+        SlotStatus as GeyserSlotStatus,
     },
     prost_types::Timestamp,
     solana_clock::Slot,
