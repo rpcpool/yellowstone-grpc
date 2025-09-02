@@ -98,13 +98,13 @@ jobs:
           cargo +nightly fmt --all -- --check
 
       - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.0.1
+        uses: EmbarkStudios/cargo-deny-action@v2.0.13
         with:
           command: check advisories
           rust-version: ${{ env.RUST_STABLE }}
 
       - name: cargo deny check advisories wasm
-        uses: EmbarkStudios/cargo-deny-action@v2.0.1
+        uses: EmbarkStudios/cargo-deny-action@v2.0.13
         with:
           command: check advisories
           rust-version: ${{ env.RUST_STABLE }}
