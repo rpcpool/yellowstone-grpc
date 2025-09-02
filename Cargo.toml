@@ -61,7 +61,7 @@ solana-clock = "3"
 solana-hash = "3"
 solana-keypair = "3"
 solana-logger = "3"
-solana-message = "3"
+solana-message = { version = "3", features = ["bincode", "blake3"] }
 solana-pubkey = "3"
 solana-signature = "3"
 solana-signer = "3"
