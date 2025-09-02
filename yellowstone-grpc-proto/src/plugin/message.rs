@@ -10,8 +10,7 @@ use {
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus
     },
     prost_types::Timestamp,
     solana_clock::Slot,
@@ -272,11 +271,11 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
         let account_keys = info
             .transaction
-            .message()
-            .account_keys()
+            .message
+            .static_account_keys()
             .iter()
             .copied()
             .collect();
@@ -345,7 +344,7 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>, slot: Slot) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot) -> Self {
         Self {
             transaction: Arc::new(MessageTransactionInfo::from_geyser(info)),
             slot,

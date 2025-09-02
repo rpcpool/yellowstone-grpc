@@ -1125,7 +1125,7 @@ mod tests {
         solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
         solana_pubkey::Pubkey,
         solana_signer::Signer,
-        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
+        solana_transaction::{sanitized::SanitizedTransaction, versioned::VersionedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
@@ -1180,7 +1180,7 @@ mod tests {
             transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
-                transaction: convert_to::create_transaction(&sanitized_transaction),
+                transaction: convert_to::create_transaction(&sanitized_transaction.to_versioned_transaction()),
                 meta,
                 index: 1,
                 account_keys,
