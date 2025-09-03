@@ -73,7 +73,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev protobuf-compiler
-          cargo install wasm-bindgen-cli --force
+          if ! command -v wasm-bindgen-cli &> /dev/null
+          then
+              echo "wasm-bindgen-cli not found, installing"
+              cargo install wasm-bindgen-cli --force
+          else
+              echo "wasm-bindgen-cli is already installed"
+          fi
 
       - name: cargo tree
         run: |
