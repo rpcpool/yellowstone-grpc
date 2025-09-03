@@ -75,64 +75,64 @@ jobs:
           sudo apt-get install -y libsasl2-dev protobuf-compiler
           cargo install wasm-bindgen-cli
 
-      # - name: cargo tree
-      #   run: |
-      #     cargo tree
-      #     git diff Cargo.lock
-      #     git checkout Cargo.lock
-      #     cargo tree --frozen
+      - name: cargo tree
+        run: |
+          cargo tree
+          git diff Cargo.lock
+          git checkout Cargo.lock
+          cargo tree --frozen
 
-      # - name: cargo tree wasm
-      #   run: |
-      #     cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
-      #     cargo tree
-      #     git diff Cargo.lock
-      #     git checkout Cargo.lock
-      #     cargo tree --frozen
+      - name: cargo tree wasm
+        run: |
+          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cargo tree
+          git diff Cargo.lock
+          git checkout Cargo.lock
+          cargo tree --frozen
 
-      # - name: cargo fmt
-      #   run: cargo +nightly fmt --all -- --check
+      - name: cargo fmt
+        run: cargo +nightly fmt --all -- --check
 
-      # - name: cargo fmt wasm
-      #   run: |
-      #     cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
-      #     cargo +nightly fmt --all -- --check
+      - name: cargo fmt wasm
+        run: |
+          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cargo +nightly fmt --all -- --check
 
-      # - name: cargo deny check advisories
-      #   uses: EmbarkStudios/cargo-deny-action@v2.0.13
-      #   with:
-      #     command: check advisories
-      #     rust-version: ${{ env.RUST_STABLE }}
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v2.0.13
+        with:
+          command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
 
-      # - name: cargo deny check advisories wasm
-      #   uses: EmbarkStudios/cargo-deny-action@v2.0.13
-      #   with:
-      #     command: check advisories
-      #     rust-version: ${{ env.RUST_STABLE }}
-      #     manifest-path: ./yellowstone-grpc-client-nodejs/solana-encoding-wasm/Cargo.toml
+      - name: cargo deny check advisories wasm
+        uses: EmbarkStudios/cargo-deny-action@v2.0.13
+        with:
+          command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
+          manifest-path: ./yellowstone-grpc-client-nodejs/solana-encoding-wasm/Cargo.toml
 
-      # - name: cargo clippy
-      #   run: cargo clippy --workspace --all-targets
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets
 
-      # - name: cargo clippy wasm
-      #   run: make solana-encoding-wasm-clippy
+      - name: cargo clippy wasm
+        run: make solana-encoding-wasm-clippy
 
-      # - name: check features in `client`
-      #   run: cargo check -p yellowstone-grpc-client --all-targets
-      # - name: check features in `client-simple`
-      #   run: cargo check -p yellowstone-grpc-client-simple --all-targets
-      # - name: check features in `geyser`
-      #   run: cargo check -p yellowstone-grpc-geyser --all-targets
-      # - name: check features in `proto`
-      #   run: cargo check -p yellowstone-grpc-proto --all-targets
-      # - name: check features in `proto`
-      #   run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
+      - name: check features in `client`
+        run: cargo check -p yellowstone-grpc-client --all-targets
+      - name: check features in `client-simple`
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets
+      - name: check features in `geyser`
+        run: cargo check -p yellowstone-grpc-geyser --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
 
-      # - name: cargo test
-      #   run: cargo test --all-features
+      - name: cargo test
+        run: cargo test --all-features
 
       - name: make solana-encoding-wasm-build
         run: make solana-encoding-wasm-build
 
-      # - name: Build
-      #   run: ./ci/cargo-build-test.sh
+      - name: Build
+        run: ./ci/cargo-build-test.sh
