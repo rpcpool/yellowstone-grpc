@@ -1125,7 +1125,7 @@ mod tests {
         solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
         solana_pubkey::Pubkey,
         solana_signer::Signer,
-        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
+        solana_transaction::{versioned::VersionedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
@@ -1151,7 +1151,7 @@ mod tests {
             ..SolMessage::default()
         };
         let recent_blockhash = Hash::default();
-        let sanitized_transaction = SanitizedTransaction::from_transaction_for_tests(
+        let versioned_transaction = VersionedTransaction::from(
             Transaction::new(&[keypair], message, recent_blockhash),
         );
         let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
@@ -1169,10 +1169,10 @@ mod tests {
             compute_units_consumed: None,
             cost_units: None,
         });
-        let sig = sanitized_transaction.signature();
-        let account_keys = sanitized_transaction
-            .message()
-            .account_keys()
+        let sig = versioned_transaction.signatures.first().expect("No signature found");
+        let account_keys = versioned_transaction
+            .message
+            .static_account_keys()
             .iter()
             .copied()
             .collect();
@@ -1181,7 +1181,7 @@ mod tests {
                 signature: *sig,
                 is_vote: true,
                 transaction: convert_to::create_transaction(
-                    &sanitized_transaction.to_versioned_transaction(),
+                    &versioned_transaction,
                 ),
                 meta,
                 index: 1,
