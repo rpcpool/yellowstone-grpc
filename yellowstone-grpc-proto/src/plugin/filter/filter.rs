@@ -1151,9 +1151,8 @@ mod tests {
             ..SolMessage::default()
         };
         let recent_blockhash = Hash::default();
-        let versioned_transaction = VersionedTransaction::from(
-            Transaction::new(&[keypair], message, recent_blockhash),
-        );
+        let versioned_transaction =
+            VersionedTransaction::from(Transaction::new(&[keypair], message, recent_blockhash));
         let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
             status: Ok(()),
             fee: 0,
@@ -1169,7 +1168,10 @@ mod tests {
             compute_units_consumed: None,
             cost_units: None,
         });
-        let sig = versioned_transaction.signatures.first().expect("No signature found");
+        let sig = versioned_transaction
+            .signatures
+            .first()
+            .expect("No signature found");
         let account_keys = versioned_transaction
             .message
             .static_account_keys()
@@ -1180,9 +1182,7 @@ mod tests {
             transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
-                transaction: convert_to::create_transaction(
-                    &versioned_transaction,
-                ),
+                transaction: convert_to::create_transaction(&versioned_transaction),
                 meta,
                 index: 1,
                 account_keys,
