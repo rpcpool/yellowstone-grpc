@@ -995,11 +995,9 @@ pub mod tests {
         prost_011::Message as _,
         prost_types::Timestamp,
         solana_hash::Hash,
-        solana_message::SimpleAddressLoader,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         solana_storage_proto::convert::generated,
-        solana_transaction::sanitized::{MessageHash, SanitizedTransaction},
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
             collections::{HashMap, HashSet},
@@ -1158,18 +1156,10 @@ pub mod tests {
                         let TransactionWithStatusMeta::Complete(tx) = tx else {
                             panic!("tx with missed meta");
                         };
-                        let transaction = SanitizedTransaction::try_create(
-                            tx.transaction.clone(),
-                            MessageHash::Compute,
-                            None,
-                            SimpleAddressLoader::Disabled,
-                            &HashSet::new(),
-                        )
-                        .expect("failed to create tx");
                         MessageTransactionInfo {
                             signature: tx.transaction.signatures[0],
                             is_vote: true,
-                            transaction: convert_to::create_transaction(&transaction),
+                            transaction: convert_to::create_transaction(&tx.transaction),
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
