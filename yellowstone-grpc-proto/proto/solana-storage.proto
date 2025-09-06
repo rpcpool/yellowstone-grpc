@@ -23,6 +23,7 @@ message ConfirmedTransaction {
 message Transaction {
     repeated bytes signatures = 1;
     Message message = 2;
+    string message_hash = 3;
 }
 
 message Message {

@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-09-02
+
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-client-simple-10.0.0
+- yellowstone-grpc-client-10.0.0
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-proto-10.0.0
+
+### Breaking
+
+- Upgraded solana/agave dependencies to agave 3. solana-storage.proto file updates adds a new `message_hash` field
 
 ## 2025-08-04
 
