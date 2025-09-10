@@ -140,7 +140,9 @@ impl GeyserPlugin for Plugin {
                 log::error!("timed out waiting for plugin tasks to shut down");
             }
             let remaining_shutdown_time = SHUTDOWN_TIMEOUT.saturating_sub(now.elapsed());
-            inner.runtime.shutdown_timeout(remaining_shutdown_time.max(Duration::from_secs(1)));
+            inner
+                .runtime
+                .shutdown_timeout(remaining_shutdown_time.max(Duration::from_secs(1)));
         }
     }
 

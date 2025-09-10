@@ -8,7 +8,7 @@ pub struct OnDrop<F: FnOnce()> {
 }
 
 impl<F: FnOnce()> OnDrop<F> {
-    pub fn new(f: F) -> Self {
+    pub const fn new(f: F) -> Self {
         Self { f: Some(f) }
     }
 }
