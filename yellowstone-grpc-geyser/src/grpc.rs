@@ -26,7 +26,7 @@ use {
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
-    }, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
+    }, tokio_util::{sync::CancellationToken, task::{task_tracker, TaskTracker}}, tonic::{
         service::interceptor,
         transport::{
             server::{Server, TcpIncoming},
@@ -897,6 +897,7 @@ impl GrpcService {
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
     ) 
     {
         let mut filter = Filter::default();
@@ -990,7 +991,7 @@ impl GrpcService {
                             if let Some(from_slot) = from_slot {
                                 let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
                                     info!("client #{id}: from_slot is not supported");
-                                    tokio::spawn(async move {
+                                    task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                     });
                                     break 'outer;
@@ -1000,7 +1001,7 @@ impl GrpcService {
                                 let commitment = filter.get_commitment_level();
                                 if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
                                     error!("client #{id}: failed to send from_slot request");
-                                    tokio::spawn(async move {
+                                    task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
                                     });
                                     break 'outer;
@@ -1010,7 +1011,7 @@ impl GrpcService {
                                     Ok(ReplayedResponse::Messages(messages)) => messages,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{id}: broadcast from {from_slot} is not available");
-                                        tokio::spawn(async move {
+                                        task_tracker.spawn(async move {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
                                             );
@@ -1020,7 +1021,7 @@ impl GrpcService {
                                     },
                                     Err(_error) => {
                                         error!("client #{id}: failed to get replay response");
-                                        tokio::spawn(async move {
+                                        task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                         });
                                         break 'outer;
@@ -1061,7 +1062,7 @@ impl GrpcService {
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             info!("client #{id}: lagged to receive geyser messages");
-                            tokio::spawn(async move {
+                            task_tracker.spawn(async move {
                                 let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                             });
                             break 'outer;
@@ -1079,7 +1080,7 @@ impl GrpcService {
                                     }
                                     Err(mpsc::error::TrySendError::Full(_)) => {
                                         error!("client #{id}: lagged to send an update");
-                                        tokio::spawn(async move {
+                                        task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                         });
                                         break 'outer;
@@ -1235,7 +1236,7 @@ impl Geyser for GrpcService {
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
         let ping_cancellation_token = client_cancelation_token.child_token();
-        tokio::spawn(async move {
+        self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
                     _ = ping_cancellation_token.cancelled() => {
@@ -1274,7 +1275,7 @@ impl Geyser for GrpcService {
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancelation_token.child_token();
         
-        let _subscribe_req_update_jh = tokio::spawn(async move {
+        self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
                     _ = incoming_cancellation_token.cancelled() => {
@@ -1323,7 +1324,7 @@ impl Geyser for GrpcService {
             }
         });
 
-        let _client_loop_jh = tokio::spawn(Self::client_loop(
+        self.task_tracker.spawn(Self::client_loop(
             id,
             subscriber_id,
             endpoint,
@@ -1334,6 +1335,7 @@ impl Geyser for GrpcService {
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
             client_cancelation_token,
+            self.task_tracker.clone(),
         ));
 
         Ok(Response::new(stream_rx))
