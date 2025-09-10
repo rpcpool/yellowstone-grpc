@@ -380,8 +380,11 @@ enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
+#[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
+    #[error("gRPC connection closed")]
     ClientGrpcConnectionClosed,
+    #[error("client session is cancelled by plugin")]
     Cancelled,
 }
 
