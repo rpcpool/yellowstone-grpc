@@ -94,9 +94,9 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (snapshot_channel, grpc_channel, grpc_shutdown) = runtime.block_on(async move {
+        let (snapshot_channel, grpc_channel) = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
-            let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
+            let (snapshot_channel, grpc_channel) = GrpcService::create(
                 config.tokio,
                 config.grpc,
                 config.debug_clients_http.then_some(debug_client_tx),
@@ -114,14 +114,14 @@ impl GeyserPlugin for Plugin {
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel, grpc_shutdown))
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
         })?;
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
-            plugin_cancellation_token: grpc_shutdown,
+            plugin_cancellation_token,
             plugin_task_tracker,
         });
 

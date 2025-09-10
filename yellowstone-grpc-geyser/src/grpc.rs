@@ -414,7 +414,6 @@ impl GrpcService {
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
-        CancellationToken,
     )> {
         // Bind service address
         let incoming = TcpIncoming::bind(config.address)?
@@ -566,7 +565,7 @@ impl GrpcService {
                 .await
         });
 
-        Ok((snapshot_tx, messages_tx, service_cancellation_token))
+        Ok((snapshot_tx, messages_tx))
     }
 
     async fn geyser_loop(
