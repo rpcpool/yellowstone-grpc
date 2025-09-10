@@ -23,9 +23,10 @@ use {
     },
     tokio::{
         net::TcpListener,
-        sync::{mpsc, oneshot, Notify},
+        sync::{mpsc, oneshot},
         task::JoinHandle,
     },
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
     yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
 };
 
@@ -150,40 +151,51 @@ impl Drop for DebugClientStatuses {
 }
 
 impl DebugClientStatuses {
-    fn new(clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>) -> Arc<Self> {
+    fn new(
+        clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) -> Arc<Self> {
         let (requests_tx, requests_rx) = mpsc::unbounded_channel();
-        let jh = tokio::spawn(Self::run(clients_rx, requests_rx));
+        let jh = task_tracker.spawn(Self::run(clients_rx, requests_rx, cancellation_token));
         Arc::new(Self { requests_tx, jh })
     }
 
     async fn run(
         mut clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>,
         mut requests_rx: mpsc::UnboundedReceiver<oneshot::Sender<String>>,
+        cancellation_token: CancellationToken,
     ) {
         let mut clients = HashMap::<usize, DebugClientStatus>::new();
         loop {
             tokio::select! {
-                Some(message) = clients_rx.recv() => match message {
-                    DebugClientMessage::UpdateFilter { id, filter } => {
-                        match clients.entry(id) {
-                            HashMapEntry::Occupied(mut entry) => {
-                                entry.get_mut().filter = filter;
-                            }
-                            HashMapEntry::Vacant(entry) => {
-                                entry.insert(DebugClientStatus {
-                                    filter,
-                                    processed_slot: 0,
-                                });
+                () = cancellation_token.cancelled() => break,
+                maybe = clients_rx.recv() => {
+                    let Some(message) = maybe else {
+                        break;
+                    };
+                    match message {
+                        DebugClientMessage::UpdateFilter { id, filter } => {
+                            match clients.entry(id) {
+                                HashMapEntry::Occupied(mut entry) => {
+                                    entry.get_mut().filter = filter;
+                                }
+                                HashMapEntry::Vacant(entry) => {
+                                    entry.insert(DebugClientStatus {
+                                        filter,
+                                        processed_slot: 0,
+                                    });
+                                }
                             }
                         }
-                    }
-                    DebugClientMessage::UpdateSlot { id, slot } => {
-                        if let Some(status) = clients.get_mut(&id) {
-                            status.processed_slot = slot;
+                        DebugClientMessage::UpdateSlot { id, slot } => {
+                            if let Some(status) = clients.get_mut(&id) {
+                                status.processed_slot = slot;
+                            }
                         }
-                    }
-                    DebugClientMessage::Removed { id } => {
-                        clients.remove(&id);
+                        DebugClientMessage::Removed { id } => {
+                            clients.remove(&id);
+                        }
                     }
                 },
                 Some(tx) = requests_rx.recv() => {
@@ -220,14 +232,16 @@ impl DebugClientStatuses {
 
 #[derive(Debug)]
 pub struct PrometheusService {
+    #[allow(dead_code)]
     debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
-    shutdown: Arc<Notify>,
 }
 
 impl PrometheusService {
     pub async fn new(
         config: Option<ConfigPrometheus>,
         debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
     ) -> std::io::Result<Self> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
@@ -266,21 +280,24 @@ impl PrometheusService {
                 .inc();
         });
 
-        let shutdown = Arc::new(Notify::new());
         let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
             if let Some(debug_clients_rx) = debug_clients_rx {
-                debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
+                debug_clients_statuses = Some(DebugClientStatuses::new(
+                    debug_clients_rx,
+                    cancellation_token.child_token(),
+                    task_tracker.clone(),
+                ));
             }
             let debug_clients_statuses2 = debug_clients_statuses.clone();
 
-            let shutdown = Arc::clone(&shutdown);
             let listener = TcpListener::bind(&address).await?;
             info!("start prometheus server: {address}");
-            tokio::spawn(async move {
+            let task_tracker_clone = task_tracker.clone();
+            task_tracker.spawn(async move {
                 loop {
                     let stream = tokio::select! {
-                        () = shutdown.notified() => break,
+                        () = cancellation_token.cancelled() => break,
                         maybe_conn = listener.accept() => {
                             match maybe_conn {
                                 Ok((stream, _addr)) => stream,
@@ -292,7 +309,7 @@ impl PrometheusService {
                         }
                     };
                     let debug_clients_statuses = debug_clients_statuses2.clone();
-                    tokio::spawn(async move {
+                    task_tracker_clone.spawn(async move {
                         if let Err(error) = ServerBuilder::new(TokioExecutor::new())
                             .serve_connection(
                                 TokioIo::new(stream),
@@ -339,13 +356,7 @@ impl PrometheusService {
 
         Ok(PrometheusService {
             debug_clients_statuses,
-            shutdown,
         })
-    }
-
-    pub fn shutdown(self) {
-        drop(self.debug_clients_statuses);
-        self.shutdown.notify_one();
     }
 }
 

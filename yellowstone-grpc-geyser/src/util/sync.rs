@@ -1,9 +1,8 @@
-
 ///
 /// A utility that runs a closure when dropped.
 /// This is useful for ensuring cleanup code runs when a scope is exited,
 /// even if it is exited via a panic.
-/// 
+///
 pub struct OnDrop<F: FnOnce()> {
     f: Option<F>,
 }
@@ -28,11 +27,12 @@ impl<F: FnOnce()> std::fmt::Debug for OnDrop<F> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::OnDrop;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use {
+        super::OnDrop,
+        std::sync::atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn test_on_drop() {

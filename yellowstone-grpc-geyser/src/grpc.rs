@@ -10,29 +10,41 @@ use {
             stream::{
                 load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
                 TrafficWeighted,
-            }, sync::OnDrop,
+            },
+            sync::OnDrop,
         },
         version::GrpcVersionInfo,
-    }, anyhow::Context, log::{error, info}, prost_types::Timestamp, solana_clock::{Slot, MAX_RECENT_BLOCKHASHES}, solana_pubkey::Pubkey, std::{
+    },
+    anyhow::Context,
+    log::{error, info},
+    prost_types::Timestamp,
+    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_pubkey::Pubkey,
+    std::{
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
         time::SystemTime,
-    }, tokio::{
+    },
+    tokio::{
         fs,
         runtime::Builder,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
-    }, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
+    },
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    tonic::{
         service::interceptor,
         transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
-    }, tonic_health::server::health_reporter, yellowstone_grpc_proto::{
+    },
+    tonic_health::server::health_reporter,
+    yellowstone_grpc_proto::{
         plugin::{
             filter::{
                 limits::FilterLimits,
@@ -54,7 +66,7 @@ use {
             SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
-    }
+    },
 };
 
 #[derive(Debug)]
@@ -368,7 +380,6 @@ enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
-
 enum ClientSnapshotReplayError {
     ClientGrpcConnectionClosed,
     Cancelled,
@@ -398,15 +409,13 @@ impl GrpcService {
         config: ConfigGrpc,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
+        service_cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
         CancellationToken,
     )> {
-
-        let task_tracker = TaskTracker::new();
-        let service_cancellation_token = CancellationToken::new();
-
         // Bind service address
         let incoming = TcpIncoming::bind(config.address)?
             .with_nodelay(Some(true))
@@ -425,12 +434,11 @@ impl GrpcService {
         let (blocks_meta, blocks_meta_tx) = if config.unary_disabled {
             (None, None)
         } else {
-            let (blocks_meta, blocks_meta_tx) =
-                BlockMetaStorage::new(
-                    config.unary_concurrency_limit, 
-                    service_cancellation_token.child_token(),
-                    task_tracker.clone(),
-                );
+            let (blocks_meta, blocks_meta_tx) = BlockMetaStorage::new(
+                config.unary_concurrency_limit,
+                service_cancellation_token.child_token(),
+                task_tracker.clone(),
+            );
             (Some(blocks_meta), Some(blocks_meta_tx))
         };
 
@@ -915,8 +923,7 @@ impl GrpcService {
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) 
-    {
+    ) {
         let mut filter = Filter::default();
 
         // Ensure cancellation_token is cancelled on exit even if we panic
@@ -953,7 +960,9 @@ impl GrpcService {
                 }
                 Err(ClientSnapshotReplayError::Cancelled) => {
                     let _ = stream_tx
-                        .send(Err(Status::internal("server is shutting down try again later")))
+                        .send(Err(Status::internal(
+                            "server is shutting down try again later",
+                        )))
                         .await;
                     return;
                 }
@@ -963,7 +972,7 @@ impl GrpcService {
                 }
             }
         }
-        
+
         'outer: loop {
             set_subscriber_send_bandwidth_load(
                 &subscriber_id,
@@ -1141,7 +1150,7 @@ impl GrpcService {
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         filter: &mut Filter,
-        cancellation_token: CancellationToken
+        cancellation_token: CancellationToken,
     ) -> Result<(), ClientSnapshotReplayError> {
         info!("client #{id}: going to receive snapshot data");
 
@@ -1291,7 +1300,7 @@ impl Geyser for GrpcService {
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancelation_token.child_token();
-        
+
         self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
