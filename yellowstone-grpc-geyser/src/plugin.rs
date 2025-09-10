@@ -132,12 +132,15 @@ impl GeyserPlugin for Plugin {
         if let Some(inner) = self.inner.take() {
             inner.plugin_cancellation_token.cancel();
             drop(inner.grpc_channel);
+            const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+            let now = std::time::Instant::now();
             let shutdown_fut =
                 tokio::time::timeout(Duration::from_secs(20), inner.plugin_task_tracker.wait());
             if inner.runtime.block_on(shutdown_fut).is_err() {
                 log::error!("timed out waiting for plugin tasks to shut down");
             }
-            inner.runtime.shutdown_timeout(Duration::from_secs(10));
+            let remaining_shutdown_time = SHUTDOWN_TIMEOUT.saturating_sub(now.elapsed());
+            inner.runtime.shutdown_timeout(remaining_shutdown_time.max(Duration::from_secs(1)));
         }
     }
 
