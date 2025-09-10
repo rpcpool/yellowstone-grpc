@@ -10,40 +10,30 @@ use {
             stream::{
                 load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
                 TrafficWeighted,
-            },
+            }, sync::OnDrop,
         },
         version::GrpcVersionInfo,
-    },
-    anyhow::Context,
-    log::{error, info},
-    prost_types::Timestamp,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
-    solana_pubkey::Pubkey,
-    std::{
+    }, anyhow::Context, log::{error, info}, prost_types::Timestamp, solana_clock::{Slot, MAX_RECENT_BLOCKHASHES}, solana_pubkey::Pubkey, std::{
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
         time::SystemTime,
-    },
-    tokio::{
+    }, tokio::{
         fs,
         runtime::Builder,
-        sync::{broadcast, mpsc, oneshot, Mutex, Notify, RwLock, Semaphore},
+        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         task::spawn_blocking,
         time::{sleep, Duration, Instant},
-    },
-    tonic::{
+    }, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
         service::interceptor,
         transport::{
             server::{Server, TcpIncoming},
             Identity, ServerTlsConfig,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
-    },
-    tonic_health::server::health_reporter,
-    yellowstone_grpc_proto::{
+    }, tonic_health::server::health_reporter, yellowstone_grpc_proto::{
         plugin::{
             filter::{
                 limits::FilterLimits,
@@ -65,7 +55,7 @@ use {
             SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
-    },
+    }
 };
 
 #[derive(Debug)]
@@ -365,6 +355,12 @@ enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
+
+enum ClientSnapshotReplayError {
+    ClientGrpcConnectionClosed,
+    Cancelled,
+}
+
 #[derive(Debug)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
@@ -378,6 +374,8 @@ pub struct GrpcService {
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     filter_names: Arc<Mutex<FilterNames>>,
+    cancellation_token: CancellationToken,
+    task_tracker: TaskTracker,
 }
 
 impl GrpcService {
@@ -390,8 +388,12 @@ impl GrpcService {
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
-        Arc<Notify>,
+        CancellationToken,
     )> {
+
+        let task_tracker = TaskTracker::new();
+        let service_cancellation_token = CancellationToken::new();
+
         // Bind service address
         let incoming = TcpIncoming::bind(config.address)?
             .with_nodelay(Some(true))
@@ -475,6 +477,8 @@ impl GrpcService {
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
             filter_names,
+            cancellation_token: service_cancellation_token.clone(),
+            task_tracker: task_tracker.clone(),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -486,7 +490,7 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        spawn_blocking(move || {
+        task_tracker.spawn_blocking(move || {
             let mut builder = Builder::new_multi_thread();
             if let Some(worker_threads) = config_tokio.worker_threads {
                 builder.worker_threads(worker_threads);
@@ -512,9 +516,8 @@ impl GrpcService {
         });
 
         // Run Server
-        let shutdown = Arc::new(Notify::new());
-        let shutdown_grpc = Arc::clone(&shutdown);
-        tokio::spawn(async move {
+        let shutdown_grpc = service_cancellation_token.child_token();
+        task_tracker.spawn(async move {
             // gRPC Health check service
             let (health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
@@ -534,11 +537,11 @@ impl GrpcService {
                 ))
                 .add_service(health_service)
                 .add_service(service)
-                .serve_with_incoming_shutdown(incoming, shutdown_grpc.notified())
+                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled_owned())
                 .await
         });
 
-        Ok((snapshot_tx, messages_tx, shutdown))
+        Ok((snapshot_tx, messages_tx, service_cancellation_token))
     }
 
     async fn geyser_loop(
@@ -893,9 +896,19 @@ impl GrpcService {
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
-        drop_client: impl FnOnce(),
-    ) {
+        cancellation_token: CancellationToken,
+    ) 
+    {
         let mut filter = Filter::default();
+
+        // Ensure cancellation_token is cancelled on exit even if we panic
+        let on_drop = OnDrop::new({
+            let cancellation_token = cancellation_token.clone();
+            move || {
+                cancellation_token.cancel();
+            }
+        });
+
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         metrics::connections_total_inc();
@@ -905,169 +918,187 @@ impl GrpcService {
         });
         info!("client #{id}: new");
 
-        let mut is_alive = true;
         if let Some(snapshot_rx) = snapshot_rx.take() {
-            Self::client_loop_snapshot(
+            let result = Self::client_loop_snapshot(
                 id,
                 &endpoint,
                 stream_tx.clone(),
                 &mut client_rx,
                 snapshot_rx,
-                &mut is_alive,
                 &mut filter,
+                cancellation_token.clone(),
             )
             .await;
+            match result {
+                Ok(()) => {
+                    info!("client #{id}: snapshot stream ended");
+                }
+                Err(ClientSnapshotReplayError::Cancelled) => {
+                    let _ = stream_tx
+                        .send(Err(Status::internal("server is shutting down try again later")))
+                        .await;
+                    return;
+                }
+                Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
+                    info!("client #{id}: grpc connection closed");
+                    return;
+                }
+            }
         }
-        if is_alive {
-            'outer: loop {
-                set_subscriber_send_bandwidth_load(
-                    &subscriber_id,
-                    stream_tx.estimated_send_rate().per_second() as i64,
-                );
+        
+        'outer: loop {
+            set_subscriber_send_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_send_rate().per_second() as i64,
+            );
 
-                set_subscriber_recv_bandwidth_load(
-                    &subscriber_id,
-                    stream_tx.estimated_consuming_rate().per_second() as i64,
-                );
+            set_subscriber_recv_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_consuming_rate().per_second() as i64,
+            );
 
-                set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
+            set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
 
-                tokio::select! {
-                    mut message = client_rx.recv() => {
-                        // forward to latest filter
-                        loop {
-                            match client_rx.try_recv() {
-                                Ok(message_new) => {
-                                    message = Some(message_new);
-                                }
-                                Err(mpsc::error::TryRecvError::Empty) => break,
-                                Err(mpsc::error::TryRecvError::Disconnected) => {
-                                    message = None;
-                                    break;
-                                }
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("client #{id}: cancelled");
+                    stream_tx.send(Err(Status::unavailable("server is shutting down try again later"))).await.ok();
+                    break 'outer;
+                }
+                mut message = client_rx.recv() => {
+                    // forward to latest filter
+                    loop {
+                        match client_rx.try_recv() {
+                            Ok(message_new) => {
+                                message = Some(message_new);
+                            }
+                            Err(mpsc::error::TryRecvError::Empty) => break,
+                            Err(mpsc::error::TryRecvError::Disconnected) => {
+                                message = None;
+                                break;
                             }
                         }
+                    }
 
-                        match message {
-                            Some(Some((from_slot, filter_new))) => {
-                                metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
-                                filter = filter_new;
-                                DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
-                                info!("client #{id}: filter updated");
+                    match message {
+                        Some(Some((from_slot, filter_new))) => {
+                            metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                            filter = filter_new;
+                            DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
+                            info!("client #{id}: filter updated");
 
-                                if let Some(from_slot) = from_slot {
-                                    let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
-                                        info!("client #{id}: from_slot is not supported");
+                            if let Some(from_slot) = from_slot {
+                                let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
+                                    info!("client #{id}: from_slot is not supported");
+                                    tokio::spawn(async move {
+                                        let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
+                                    });
+                                    break 'outer;
+                                };
+
+                                let (tx, rx) = oneshot::channel();
+                                let commitment = filter.get_commitment_level();
+                                if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
+                                    error!("client #{id}: failed to send from_slot request");
+                                    tokio::spawn(async move {
+                                        let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
+                                    });
+                                    break 'outer;
+                                }
+
+                                let mut messages = match rx.await {
+                                    Ok(ReplayedResponse::Messages(messages)) => messages,
+                                    Ok(ReplayedResponse::Lagged(slot)) => {
+                                        info!("client #{id}: broadcast from {from_slot} is not available");
                                         tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
+                                            let message = format!(
+                                                "broadcast from {from_slot} is not available, last available: {slot}"
+                                            );
+                                            let _ = stream_tx.send(Err(Status::internal(message))).await;
                                         });
                                         break 'outer;
-                                    };
-
-                                    let (tx, rx) = oneshot::channel();
-                                    let commitment = filter.get_commitment_level();
-                                    if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
-                                        error!("client #{id}: failed to send from_slot request");
+                                    },
+                                    Err(_error) => {
+                                        error!("client #{id}: failed to get replay response");
                                         tokio::spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
+                                            let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                         });
                                         break 'outer;
                                     }
+                                };
 
-                                    let mut messages = match rx.await {
-                                        Ok(ReplayedResponse::Messages(messages)) => messages,
-                                        Ok(ReplayedResponse::Lagged(slot)) => {
-                                            info!("client #{id}: broadcast from {from_slot} is not available");
-                                            tokio::spawn(async move {
-                                                let message = format!(
-                                                    "broadcast from {from_slot} is not available, last available: {slot}"
-                                                );
-                                                let _ = stream_tx.send(Err(Status::internal(message))).await;
-                                            });
-                                            break 'outer;
-                                        },
-                                        Err(_error) => {
-                                            error!("client #{id}: failed to get replay response");
-                                            tokio::spawn(async move {
-                                                let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
-                                            });
-                                            break 'outer;
-                                        }
-                                    };
-
-                                    messages.sort_by_key(|msg| msg.0);
-                                    for (_msgid, message) in messages.iter() {
-                                        for message in filter.get_updates(message, Some(commitment)) {
-                                            let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
-                                            match stream_tx.send(Ok(message)).await {
-                                                Ok(()) => {
-                                                    metrics::incr_grpc_message_sent_counter(&subscriber_id);
-                                                    metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
-                                                }
-                                                Err(mpsc::error::SendError(_)) => {
-                                                    error!("client #{id}: stream closed");
-                                                    break 'outer;
-                                                }
+                                messages.sort_by_key(|msg| msg.0);
+                                for (_msgid, message) in messages.iter() {
+                                    for message in filter.get_updates(message, Some(commitment)) {
+                                        let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
+                                        match stream_tx.send(Ok(message)).await {
+                                            Ok(()) => {
+                                                metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                                metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                            }
+                                            Err(mpsc::error::SendError(_)) => {
+                                                error!("client #{id}: stream closed");
+                                                break 'outer;
                                             }
                                         }
                                     }
                                 }
                             }
-                            Some(None) => {
-                                break 'outer;
-                            },
-                            None => {
-                                break 'outer;
-                            }
+                        }
+                        Some(None) => {
+                            break 'outer;
+                        },
+                        None => {
+                            break 'outer;
                         }
                     }
-                    message = messages_rx.recv() => {
-                        let (commitment, messages) = match message {
-                            Ok((commitment, messages)) => (commitment, messages),
-                            Err(broadcast::error::RecvError::Closed) => {
-                                break 'outer;
-                            },
-                            Err(broadcast::error::RecvError::Lagged(_)) => {
-                                info!("client #{id}: lagged to receive geyser messages");
-                                tokio::spawn(async move {
-                                    let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
-                                });
-                                break 'outer;
-                            }
-                        };
+                }
+                message = messages_rx.recv() => {
+                    let (commitment, messages) = match message {
+                        Ok((commitment, messages)) => (commitment, messages),
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break 'outer;
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            info!("client #{id}: lagged to receive geyser messages");
+                            tokio::spawn(async move {
+                                let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
+                            });
+                            break 'outer;
+                        }
+                    };
 
-                        if commitment == filter.get_commitment_level() {
-                            for (_msgid, message) in messages.iter() {
-                                for message in filter.get_updates(message, Some(commitment)) {
-                                    let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
-                                    match stream_tx.try_send(Ok(message)) {
-                                        Ok(()) => {
-                                            metrics::incr_grpc_message_sent_counter(&subscriber_id);
-                                            metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
-                                        }
-                                        Err(mpsc::error::TrySendError::Full(_)) => {
-                                            error!("client #{id}: lagged to send an update");
-                                            tokio::spawn(async move {
-                                                let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                            });
-                                            break 'outer;
-                                        }
-                                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                                            error!("client #{id}: stream closed");
-                                            break 'outer;
-                                        }
+                    if commitment == filter.get_commitment_level() {
+                        for (_msgid, message) in messages.iter() {
+                            for message in filter.get_updates(message, Some(commitment)) {
+                                let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
+                                match stream_tx.try_send(Ok(message)) {
+                                    Ok(()) => {
+                                        metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                        metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                    }
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        error!("client #{id}: lagged to send an update");
+                                        tokio::spawn(async move {
+                                            let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                        });
+                                        break 'outer;
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("client #{id}: stream closed");
+                                        break 'outer;
                                     }
                                 }
                             }
-                        } else {
-                            stream_tx.no_load();
                         }
+                    } else {
+                        stream_tx.no_load();
+                    }
 
-                        if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
-                            for message in messages.iter() {
-                                if let Message::Slot(slot_message) = &message.1 {
-                                    DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
-                                }
+                    if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
+                        for message in messages.iter() {
+                            if let Message::Slot(slot_message) = &message.1 {
+                                DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
                             }
                         }
                     }
@@ -1082,7 +1113,7 @@ impl GrpcService {
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
         metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
-        drop_client();
+        drop(on_drop);
     }
 
     async fn client_loop_snapshot(
@@ -1091,38 +1122,51 @@ impl GrpcService {
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
-        is_alive: &mut bool,
         filter: &mut Filter,
-    ) {
+        cancellation_token: CancellationToken
+    ) -> Result<(), ClientSnapshotReplayError> {
         info!("client #{id}: going to receive snapshot data");
 
         // we start with default filter, for snapshot we need wait actual filter first
-        while *is_alive {
-            match client_rx.recv().await {
-                Some(Some((_from_slot, filter_new))) => {
-                    if let Some(msg) = filter_new.get_pong_msg() {
-                        if stream_tx.send(Ok(msg)).await.is_err() {
-                            error!("client #{id}: stream closed");
-                            *is_alive = false;
-                        }
-                        continue;
-                    }
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("client #{id}: cancelled");
+                    return Err(ClientSnapshotReplayError::Cancelled);
+                }
+                maybe = client_rx.recv() => {
+                    match maybe {
+                        Some(Some((_from_slot, filter_new))) => {
+                            if let Some(msg) = filter_new.get_pong_msg() {
+                                if stream_tx.send(Ok(msg)).await.is_err() {
+                                    error!("client #{id}: stream closed");
+                                    return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                                }
+                                continue;
+                            }
 
-                    metrics::update_subscriptions(endpoint, Some(filter), Some(&filter_new));
-                    *filter = filter_new;
-                    info!("client #{id}: filter updated");
-                    break;
+                            metrics::update_subscriptions(endpoint, Some(filter), Some(&filter_new));
+                            *filter = filter_new;
+                            info!("client #{id}: filter updated");
+                            break;
+                        }
+                        Some(None) => {
+                            return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                        }
+                        None => {
+                            return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                        }
+                    }
                 }
-                Some(None) => {
-                    *is_alive = false;
-                }
-                None => {
-                    *is_alive = false;
-                }
-            };
+
+            }
         }
 
-        while *is_alive {
+        loop {
+            if cancellation_token.is_cancelled() {
+                info!("client #{id}: cancelled");
+                return Err(ClientSnapshotReplayError::Cancelled);
+            }
             let message = match snapshot_rx.try_recv() {
                 Ok(message) => {
                     metrics::message_queue_size_dec();
@@ -1141,11 +1185,12 @@ impl GrpcService {
             for message in filter.get_updates(&message, None) {
                 if stream_tx.send(Ok(message)).await.is_err() {
                     error!("client #{id}: stream closed");
-                    *is_alive = false;
-                    break;
+                    return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
                 }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -1158,6 +1203,11 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+
+        let client_cancelation_token = self.cancellation_token.child_token();
+        if client_cancelation_token.is_cancelled() {
+            return Err(Status::unavailable("server is shutting down"));
+        }
 
         let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
         let snapshot_rx = if x_request_snapshot {
@@ -1181,19 +1231,14 @@ impl Geyser for GrpcService {
             client_stats_settigns,
         );
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let notify_exit1 = Arc::new(Notify::new());
-        let notify_exit2 = Arc::new(Notify::new());
 
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
-        let ping_exit = Arc::clone(&notify_exit1);
+        let ping_cancellation_token = client_cancelation_token.child_token();
         tokio::spawn(async move {
-            let exit = ping_exit.notified();
-            tokio::pin!(exit);
-
             loop {
                 tokio::select! {
-                    _ = &mut exit => {
+                    _ = ping_cancellation_token.cancelled() => {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
@@ -1227,14 +1272,12 @@ impl Geyser for GrpcService {
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
-        let incoming_exit = Arc::clone(&notify_exit2);
-        tokio::spawn(async move {
-            let exit = incoming_exit.notified();
-            tokio::pin!(exit);
-
+        let incoming_cancellation_token = client_cancelation_token.child_token();
+        
+        let _subscribe_req_update_jh = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = &mut exit => {
+                    _ = incoming_cancellation_token.cancelled() => {
                         break;
                     }
                     message = request.get_mut().message() => match message {
@@ -1280,7 +1323,7 @@ impl Geyser for GrpcService {
             }
         });
 
-        tokio::spawn(Self::client_loop(
+        let _client_loop_jh = tokio::spawn(Self::client_loop(
             id,
             subscriber_id,
             endpoint,
@@ -1290,10 +1333,7 @@ impl Geyser for GrpcService {
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
-            move || {
-                notify_exit1.notify_one();
-                notify_exit2.notify_one();
-            },
+            client_cancelation_token,
         ));
 
         Ok(Response::new(stream_rx))

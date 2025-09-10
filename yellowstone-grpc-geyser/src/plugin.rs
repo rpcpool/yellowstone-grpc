@@ -3,27 +3,23 @@ use {
         config::Config,
         grpc::GrpcService,
         metrics::{self, PrometheusService},
-    },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
+    }, agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
-    },
-    std::{
+    }, std::{
         concat, env,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Mutex,
         },
         time::Duration,
-    },
-    tokio::{
+    }, tokio::{
         runtime::{Builder, Runtime},
-        sync::{mpsc, Notify},
-    },
-    yellowstone_grpc_proto::plugin::message::{
+        sync::mpsc,
+    }, tokio_util::sync::CancellationToken, yellowstone_grpc_proto::plugin::message::{
         Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
-    },
+    }
 };
 
 #[derive(Debug)]
@@ -32,7 +28,7 @@ pub struct PluginInner {
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Message>,
-    grpc_shutdown: Arc<Notify>,
+    grpc_shutdown: CancellationToken,
     prometheus: PrometheusService,
 }
 
@@ -125,7 +121,7 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
-            inner.grpc_shutdown.notify_one();
+            inner.grpc_shutdown.cancel();
             drop(inner.grpc_channel);
             inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
