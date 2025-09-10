@@ -24,9 +24,8 @@ use {
         fs,
         runtime::Builder,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        task::spawn_blocking,
         time::{sleep, Duration, Instant},
-    }, tokio_util::{sync::CancellationToken, task::{task_tracker, TaskTracker}}, tonic::{
+    }, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
         service::interceptor,
         transport::{
             server::{Server, TcpIncoming},
@@ -119,74 +118,88 @@ struct BlockMetaStorage {
 }
 
 impl BlockMetaStorage {
-    fn new(unary_concurrency_limit: usize) -> (Self, mpsc::UnboundedSender<Message>) {
+    fn new(
+        unary_concurrency_limit: usize,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) -> (Self, mpsc::UnboundedSender<Message>) {
         let inner = Arc::new(RwLock::new(BlockMetaStorageInner::default()));
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         let storage = Arc::clone(&inner);
-        tokio::spawn(async move {
+        task_tracker.spawn(async move {
             const KEEP_SLOTS: u64 = 3;
 
-            while let Some(message) = rx.recv().await {
-                let mut storage = storage.write().await;
-                match message {
-                    Message::Slot(msg) => {
-                        match msg.status {
-                            SlotStatus::Processed => {
-                                storage.processed.replace(msg.slot);
-                            }
-                            SlotStatus::Confirmed => {
-                                storage.confirmed.replace(msg.slot);
-                            }
-                            SlotStatus::Finalized => {
-                                storage.finalized.replace(msg.slot);
-                            }
-                            _ => {}
-                        }
-
-                        if let Some(blockhash) = storage
-                            .blocks
-                            .get(&msg.slot)
-                            .map(|block| block.blockhash.clone())
-                        {
-                            let entry = storage
-                                .blockhashes
-                                .entry(blockhash)
-                                .or_insert_with(|| BlockhashStatus::new(msg.slot));
-
-                            match msg.status {
-                                SlotStatus::Processed => {
-                                    entry.processed = true;
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        break;
+                    },
+                    maybe = rx.recv() => {
+                        let Some(message) = maybe else {
+                            break;
+                        };
+                        let mut storage = storage.write().await;
+                        match message {
+                            Message::Slot(msg) => {
+                                match msg.status {
+                                    SlotStatus::Processed => {
+                                        storage.processed.replace(msg.slot);
+                                    }
+                                    SlotStatus::Confirmed => {
+                                        storage.confirmed.replace(msg.slot);
+                                    }
+                                    SlotStatus::Finalized => {
+                                        storage.finalized.replace(msg.slot);
+                                    }
+                                    _ => {}
                                 }
-                                SlotStatus::Confirmed => {
-                                    entry.confirmed = true;
+
+                                if let Some(blockhash) = storage
+                                    .blocks
+                                    .get(&msg.slot)
+                                    .map(|block| block.blockhash.clone())
+                                {
+                                    let entry = storage
+                                        .blockhashes
+                                        .entry(blockhash)
+                                        .or_insert_with(|| BlockhashStatus::new(msg.slot));
+
+                                    match msg.status {
+                                        SlotStatus::Processed => {
+                                            entry.processed = true;
+                                        }
+                                        SlotStatus::Confirmed => {
+                                            entry.confirmed = true;
+                                        }
+                                        SlotStatus::Finalized => {
+                                            entry.finalized = true;
+                                        }
+                                        _ => {}
+                                    }
                                 }
-                                SlotStatus::Finalized => {
-                                    entry.finalized = true;
+
+                                if msg.status == SlotStatus::Finalized {
+                                    if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
+                                        storage.blocks.retain(|slot, _block| *slot >= keep_slot);
+                                    }
+
+                                    if let Some(keep_slot) =
+                                        msg.slot.checked_sub(MAX_RECENT_BLOCKHASHES as u64 + 32)
+                                    {
+                                        storage
+                                            .blockhashes
+                                            .retain(|_blockhash, status| status.slot >= keep_slot);
+                                    }
                                 }
-                                _ => {}
+                            }
+                            Message::BlockMeta(msg) => {
+                                storage.blocks.insert(msg.slot, msg);
+                            }
+                            msg => {
+                                error!("invalid message in BlockMetaStorage: {msg:?}");
                             }
                         }
-
-                        if msg.status == SlotStatus::Finalized {
-                            if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
-                                storage.blocks.retain(|slot, _block| *slot >= keep_slot);
-                            }
-
-                            if let Some(keep_slot) =
-                                msg.slot.checked_sub(MAX_RECENT_BLOCKHASHES as u64 + 32)
-                            {
-                                storage
-                                    .blockhashes
-                                    .retain(|_blockhash, status| status.slot >= keep_slot);
-                            }
-                        }
-                    }
-                    Message::BlockMeta(msg) => {
-                        storage.blocks.insert(msg.slot, msg);
-                    }
-                    msg => {
-                        error!("invalid message in BlockMetaStorage: {msg:?}");
                     }
                 }
             }
@@ -413,7 +426,11 @@ impl GrpcService {
             (None, None)
         } else {
             let (blocks_meta, blocks_meta_tx) =
-                BlockMetaStorage::new(config.unary_concurrency_limit);
+                BlockMetaStorage::new(
+                    config.unary_concurrency_limit, 
+                    service_cancellation_token.child_token(),
+                    task_tracker.clone(),
+                );
             (Some(blocks_meta), Some(blocks_meta_tx))
         };
 
