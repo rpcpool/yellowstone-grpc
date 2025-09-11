@@ -145,10 +145,12 @@ impl BlockMetaStorage {
             loop {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
+                        info!("BlockMetaStorage task cancelled");
                         break;
                     },
                     maybe = rx.recv() => {
                         let Some(message) = maybe else {
+                            info!("BlockMetaStorage channel closed");
                             break;
                         };
                         let mut storage = storage.write().await;
@@ -215,6 +217,7 @@ impl BlockMetaStorage {
                     }
                 }
             }
+            info!("BlockMetaStorage task exiting");
         });
 
         (
@@ -549,7 +552,7 @@ impl GrpcService {
             let (health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            server_builder
+            let result = server_builder
                 .layer(interceptor::InterceptorLayer::new(
                     move |request: Request<()>| {
                         if let Some(x_token) = &config.x_token {
@@ -564,8 +567,9 @@ impl GrpcService {
                 ))
                 .add_service(health_service)
                 .add_service(service)
-                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled_owned())
-                .await
+                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
+                .await;
+            info!("gRPC server shut down with result: {result:?}");
         });
 
         Ok((snapshot_tx, messages_tx))
@@ -593,7 +597,11 @@ impl GrpcService {
 
         loop {
             tokio::select! {
-                Some(message) = messages_rx.recv() => {
+                maybe = messages_rx.recv() => {
+                    let Some(message) = maybe else {
+                        info!("Geyser loop: messages channel closed");
+                        break;
+                    };
                     metrics::message_queue_size_dec();
                     let msgid = msgid_gen.next();
 
@@ -910,6 +918,8 @@ impl GrpcService {
                 else => break,
             }
         }
+
+        info!("Geyser loop exiting");
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -946,6 +956,7 @@ impl GrpcService {
         info!("client #{id}: new");
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
+            info!("client #{id}: snapshot requested");
             let result = Self::client_loop_snapshot(
                 id,
                 &endpoint,
@@ -973,6 +984,8 @@ impl GrpcService {
                     return;
                 }
             }
+        } else {
+            info!("client #{id}: no snapshot requested");
         }
 
         'outer: loop {
@@ -991,7 +1004,7 @@ impl GrpcService {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("client #{id}: cancelled");
-                    stream_tx.send(Err(Status::unavailable("server is shutting down try again later"))).await.ok();
+                    let _ = stream_tx.send(Err(Status::unavailable("server is shutting down try again later"))).await;
                     break 'outer;
                 }
                 mut message = client_rx.recv() => {

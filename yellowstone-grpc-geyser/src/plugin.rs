@@ -141,11 +141,21 @@ impl GeyserPlugin for Plugin {
             let number_of_tasks = inner.plugin_task_tracker.len();
             log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
             inner.plugin_cancellation_token.cancel();
+            let plugin_task_tracker = inner.plugin_task_tracker.clone();
+            plugin_task_tracker.close();
             drop(inner.grpc_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();
-            let shutdown_fut =
-                tokio::time::timeout(Duration::from_secs(20), inner.plugin_task_tracker.wait());
+            log::info!(
+                "waiting up to {:?} for plugin tasks to shut down",
+                SHUTDOWN_TIMEOUT
+            );
+            // WARNING: Make sure to move `tokio::time::timeout` inside `async move`, otherwise it will panic.
+            // this is beacuse timeout needs to be done in async context even if we don't schedule it immediately.
+            let shutdown_fut = async move {
+                tokio::time::timeout(Duration::from_secs(20), inner.plugin_task_tracker.wait())
+                    .await
+            };
             if inner.runtime.block_on(shutdown_fut).is_err() {
                 log::error!("timed out waiting for plugin tasks to shut down");
             } else {
@@ -161,7 +171,11 @@ impl GeyserPlugin for Plugin {
 
             let now = std::time::Instant::now();
             inner.runtime.shutdown_timeout(remaining_shutdown_time);
-            log::info!("tokio runtime shut down in {:?}", now.elapsed());
+            let num_orphan_tasks = plugin_task_tracker.len();
+            log::info!(
+                "tokio runtime shut down in {:?}, {num_orphan_tasks} orphan tasks remaining",
+                now.elapsed()
+            );
         }
     }
 
