@@ -130,6 +130,8 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
+            let number_of_tasks = inner.plugin_task_tracker.len();
+            log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
             inner.plugin_cancellation_token.cancel();
             drop(inner.grpc_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -138,11 +140,20 @@ impl GeyserPlugin for Plugin {
                 tokio::time::timeout(Duration::from_secs(20), inner.plugin_task_tracker.wait());
             if inner.runtime.block_on(shutdown_fut).is_err() {
                 log::error!("timed out waiting for plugin tasks to shut down");
+            } else {
+                log::info!("all plugin tasks have shut down in {:?}", now.elapsed());
             }
-            let remaining_shutdown_time = SHUTDOWN_TIMEOUT.saturating_sub(now.elapsed());
-            inner
-                .runtime
-                .shutdown_timeout(remaining_shutdown_time.max(Duration::from_secs(1)));
+            let remaining_shutdown_time = SHUTDOWN_TIMEOUT
+                .saturating_sub(now.elapsed())
+                .max(Duration::from_secs(1));
+            log::info!(
+                "shutting down tokio runtime, remaining shutdown time: {:?}",
+                remaining_shutdown_time
+            );
+
+            let now = std::time::Instant::now();
+            inner.runtime.shutdown_timeout(remaining_shutdown_time);
+            log::info!("tokio runtime shut down in {:?}", now.elapsed());
         }
     }
 

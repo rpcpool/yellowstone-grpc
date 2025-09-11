@@ -16,6 +16,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-09-11
+
+- yellowstone-grpc-geyser-9.0.1
+
+### Fixes
+
+- Fixed unload in grpc geyser plugin.
 
 ## 2025-08-04
 
