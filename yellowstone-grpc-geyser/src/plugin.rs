@@ -62,7 +62,13 @@ impl Plugin {
 
 impl GeyserPlugin for Plugin {
     fn name(&self) -> &'static str {
-        concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"))
+        concat!(
+            env!("CARGO_PKG_NAME"),
+            "-",
+            env!("CARGO_PKG_VERSION"),
+            "+",
+            env!("GIT_VERSION")
+        )
     }
 
     fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
@@ -70,6 +76,8 @@ impl GeyserPlugin for Plugin {
 
         // Setup logger
         solana_logger::setup_with_default(&config.log.level);
+
+        log::info!("loading plugin: {}", self.name());
 
         // Create inner
         let mut builder = Builder::new_multi_thread();
