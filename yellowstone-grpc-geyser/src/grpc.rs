@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::{ConfigGrpc, ConfigTokio},
+        config::ConfigGrpc,
         metrics::{
             self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
             set_subscriber_send_bandwidth_load, DebugClientMessage,
@@ -30,7 +30,6 @@ use {
     },
     tokio::{
         fs,
-        runtime::Builder,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
@@ -411,7 +410,6 @@ pub struct GrpcService {
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
-        config_tokio: ConfigTokio,
         config: ConfigGrpc,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
@@ -958,10 +956,9 @@ impl GrpcService {
                 }
                 Err(ClientSnapshotReplayError::Cancelled) => {
                     let _ = stream_tx
-                        .send(Err(Status::internal(
+                        .try_send(Err(Status::internal(
                             "server is shutting down try again later",
-                        )))
-                        .await;
+                        )));
                     return;
                 }
                 Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
@@ -989,7 +986,7 @@ impl GrpcService {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("client #{id}: cancelled");
-                    let _ = stream_tx.send(Err(Status::unavailable("server is shutting down try again later"))).await;
+                    let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
                     break 'outer;
                 }
                 mut message = client_rx.recv() => {
@@ -1266,6 +1263,7 @@ impl Geyser for GrpcService {
             loop {
                 tokio::select! {
                     _ = ping_cancellation_token.cancelled() => {
+                        info!("client #{id}: ping cancelled");
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
@@ -1281,6 +1279,7 @@ impl Geyser for GrpcService {
                     }
                 }
             }
+            info!("client #{id}: ping task exiting");
         });
 
         let endpoint = request
@@ -1305,6 +1304,7 @@ impl Geyser for GrpcService {
             loop {
                 tokio::select! {
                     _ = incoming_cancellation_token.cancelled() => {
+                        info!("client #{id}: filter receiver cancelled");
                         break;
                     }
                     message = request.get_mut().message() => match message {
@@ -1322,7 +1322,6 @@ impl Geyser for GrpcService {
                                         }
                                         continue;
                                     }
-
                                     match incoming_client_tx.send(Some((request.from_slot, filter))) {
                                         Ok(()) => Ok(()),
                                         Err(error) => Err(error.to_string()),

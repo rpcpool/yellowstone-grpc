@@ -102,11 +102,19 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-
-        let (snapshot_channel, grpc_channel) = runtime.block_on(async move {
+        let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
+            // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
+            PrometheusService::spawn(
+                config.prometheus,
+                config.debug_clients_http.then_some(debug_client_rx),
+                prometheus_cancellation_token,
+                prometheus_task_tracker,
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+
             let (snapshot_channel, grpc_channel) = GrpcService::create(
-                config.tokio,
                 config.grpc,
                 config.debug_clients_http.then_some(debug_client_tx),
                 is_reload,
@@ -115,16 +123,15 @@ impl GeyserPlugin for Plugin {
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-            let _prometheus = PrometheusService::new(
-                config.prometheus,
-                config.debug_clients_http.then_some(debug_client_rx),
-                prometheus_cancellation_token,
-                prometheus_task_tracker,
-            )
-            .await
-            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
             Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
-        })?;
+        });
+
+        let (snapshot_channel, grpc_channel) = result
+            .inspect_err(|e| {
+                log::error!("failed to start plugin services: {e}");
+                plugin_cancellation_token.cancel();
+            })?;
+
         self.inner = Some(PluginInner {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
@@ -142,8 +149,7 @@ impl GeyserPlugin for Plugin {
             let number_of_tasks = inner.plugin_task_tracker.len();
             log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
             inner.plugin_cancellation_token.cancel();
-            let plugin_task_tracker = inner.plugin_task_tracker.clone();
-            plugin_task_tracker.close();
+            inner.plugin_task_tracker.close();
             drop(inner.grpc_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();
@@ -151,32 +157,8 @@ impl GeyserPlugin for Plugin {
                 "waiting up to {:?} for plugin tasks to shut down",
                 SHUTDOWN_TIMEOUT
             );
-            // WARNING: Make sure to move `tokio::time::timeout` inside `async move`, otherwise it will panic.
-            // this is beacuse timeout needs to be done in async context even if we don't schedule it immediately.
-            let shutdown_fut = async move {
-                tokio::time::timeout(Duration::from_secs(20), inner.plugin_task_tracker.wait())
-                    .await
-            };
-            if inner.runtime.block_on(shutdown_fut).is_err() {
-                log::error!("timed out waiting for plugin tasks to shut down");
-            } else {
-                log::info!("all plugin tasks have shut down in {:?}", now.elapsed());
-            }
-            let remaining_shutdown_time = SHUTDOWN_TIMEOUT
-                .saturating_sub(now.elapsed())
-                .max(Duration::from_secs(1));
-            log::info!(
-                "shutting down tokio runtime, remaining shutdown time: {:?}",
-                remaining_shutdown_time
-            );
-
-            let now = std::time::Instant::now();
-            inner.runtime.shutdown_timeout(remaining_shutdown_time);
-            let num_orphan_tasks = plugin_task_tracker.len();
-            log::info!(
-                "tokio runtime shut down in {:?}, {num_orphan_tasks} orphan tasks remaining",
-                now.elapsed()
-            );
+            inner.runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+            log::info!("tokio runtime shut down in {:?}", now.elapsed());
         }
     }
 

@@ -11,7 +11,7 @@ use {
         rt::tokio::{TokioExecutor, TokioIo},
         server::conn::auto::Builder as ServerBuilder,
     },
-    log::{error, info},
+    log::{debug, error, info},
     prometheus::{
         Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
     },
@@ -234,19 +234,15 @@ impl DebugClientStatuses {
     }
 }
 
-#[derive(Debug)]
-pub struct PrometheusService {
-    #[allow(dead_code)]
-    debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
-}
+pub struct PrometheusService;
 
 impl PrometheusService {
-    pub async fn new(
+    pub async fn spawn(
         config: Option<ConfigPrometheus>,
         debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) -> std::io::Result<Self> {
+    ) -> std::io::Result<()> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             macro_rules! register {
@@ -300,6 +296,7 @@ impl PrometheusService {
             info!("start prometheus server: {address}");
             let task_tracker_clone = task_tracker.clone();
             task_tracker.spawn(async move {
+                debug!("Prometheus server listening on {}", address);
                 loop {
                     let stream = tokio::select! {
                         () = cancellation_token.cancelled() => {
@@ -318,6 +315,8 @@ impl PrometheusService {
                     };
                     let debug_clients_statuses = debug_clients_statuses2.clone();
                     task_tracker_clone.spawn(async move {
+                        let peer_addr =  stream.peer_addr().ok();
+                        debug!("Prometheus server accepted new connection from {:?}", peer_addr);
                         if let Err(error) = ServerBuilder::new(TokioExecutor::new())
                             .serve_connection(
                                 TokioIo::new(stream),
@@ -357,15 +356,13 @@ impl PrometheusService {
                         {
                             error!("failed to handle request: {error}");
                         }
+                        debug!("Prometheus server finished connection from {:?}", peer_addr);
                     });
                 }
                 info!("Prometheus server exiting");
             });
         }
-
-        Ok(PrometheusService {
-            debug_clients_statuses,
-        })
+        Ok(())
     }
 }
 
