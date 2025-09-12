@@ -169,7 +169,10 @@ impl DebugClientStatuses {
         let mut clients = HashMap::<usize, DebugClientStatus>::new();
         loop {
             tokio::select! {
-                () = cancellation_token.cancelled() => break,
+                () = cancellation_token.cancelled() => {
+                    info!("DebugClientStatuses received cancellation");
+                    break
+                },
                 maybe = clients_rx.recv() => {
                     let Some(message) = maybe else {
                         break;
@@ -218,6 +221,7 @@ impl DebugClientStatuses {
                 },
             }
         }
+        info!("DebugClientStatuses exiting");
     }
 
     async fn get_statuses(&self) -> anyhow::Result<String> {
@@ -283,6 +287,7 @@ impl PrometheusService {
         let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
             if let Some(debug_clients_rx) = debug_clients_rx {
+                info!("starting DebugClientStatuses");
                 debug_clients_statuses = Some(DebugClientStatuses::new(
                     debug_clients_rx,
                     cancellation_token.child_token(),
@@ -297,7 +302,10 @@ impl PrometheusService {
             task_tracker.spawn(async move {
                 loop {
                     let stream = tokio::select! {
-                        () = cancellation_token.cancelled() => break,
+                        () = cancellation_token.cancelled() => {
+                            info!("Prometheus server received cancellation");
+                            break
+                        },
                         maybe_conn = listener.accept() => {
                             match maybe_conn {
                                 Ok((stream, _addr)) => stream,
@@ -351,6 +359,7 @@ impl PrometheusService {
                         }
                     });
                 }
+                info!("Prometheus server exiting");
             });
         }
 

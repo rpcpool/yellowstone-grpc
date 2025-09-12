@@ -520,29 +520,15 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        task_tracker.spawn_blocking(move || {
-            let mut builder = Builder::new_multi_thread();
-            if let Some(worker_threads) = config_tokio.worker_threads {
-                builder.worker_threads(worker_threads);
-            }
-            if let Some(tokio_cpus) = config_tokio.affinity.clone() {
-                builder.on_thread_start(move || {
-                    affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
-                });
-            }
-            builder
-                .thread_name_fn(crate::get_thread_name)
-                .enable_all()
-                .build()
-                .expect("Failed to create a new runtime for geyser loop")
-                .block_on(Self::geyser_loop(
-                    messages_rx,
-                    blocks_meta_tx,
-                    broadcast_tx,
-                    replay_stored_slots_rx,
-                    replay_first_available_slot,
-                    config.replay_stored_slots,
-                ));
+        task_tracker.spawn(async move {
+            Self::geyser_loop(
+                messages_rx,
+                blocks_meta_tx,
+                broadcast_tx,
+                replay_stored_slots_rx,
+                replay_first_available_slot,
+                config.replay_stored_slots,
+            ).await;
         });
 
         // Run Server
@@ -585,7 +571,6 @@ impl GrpcService {
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
-
         let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);

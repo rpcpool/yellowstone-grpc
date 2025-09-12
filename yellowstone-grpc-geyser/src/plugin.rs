@@ -102,6 +102,7 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
+
         let (snapshot_channel, grpc_channel) = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             let (snapshot_channel, grpc_channel) = GrpcService::create(
