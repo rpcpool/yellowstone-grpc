@@ -402,7 +402,6 @@ pub trait TxFilter {
     {
         Box::new(self)
     }
-
     fn complexity_score(&self) -> usize;
 }
 

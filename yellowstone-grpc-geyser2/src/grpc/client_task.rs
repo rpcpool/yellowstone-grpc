@@ -6,12 +6,17 @@ use {
         },
         proto::geyser::{subscribe_update::UpdateOneof, SubscribeRequest},
     },
-    futures::stream::BoxStream,
-    std::{collections::HashSet, sync::Arc},
-    tokio::sync::{broadcast, mpsc},
+    futures::{Sink, SinkExt},
+    std::{collections::HashSet, pin::Pin, sync::Arc},
+    tokio::sync::broadcast,
     tokio_stream::StreamExt,
     tokio_util::sync::CancellationToken,
+    tonic::Streaming,
 };
+
+#[derive(Debug, thiserror::Error)]
+#[error("disconnected")]
+pub struct ClientSinkError;
 
 pub struct ClientTask {
     pub x_subscribe_id: String,
@@ -21,11 +26,12 @@ pub struct ClientTask {
     ///
     /// Channel for receiving subscribe requests from the client.
     ///
-    pub grpc_in: BoxStream<'static, Result<SubscribeRequest, tonic::Status>>,
+    pub grpc_in: Streaming<SubscribeRequest>,
     ///
     /// Channel for sending updates to the client.
     ///
-    pub grpc_out: mpsc::Sender<Result<ZeroCopySubscribeUpdate, tonic::Status>>,
+    pub grpc_out:
+        Pin<Box<dyn Sink<ZeroCopySubscribeUpdate, Error = ClientSinkError> + Send + Unpin>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,7 +39,7 @@ pub enum ClientTaskError {
     #[error("client gRPC channel outlet disconnected")]
     ClientOutletDisconnected,
     #[error("invalid subscribe request received from client")]
-    InvalidSubscribeRequest,
+    InvalidSubscribeRequest(#[from] TryFromSubscribeRequestError),
     #[error("Got disconnected from geyser source")]
     GeyserDisconnected,
     #[error("client lagged behind too much")]
@@ -63,7 +69,12 @@ impl CompiledFilters {
             UpdateOneof::Transaction(tx) => self.get_tx_matching(tx, matches),
             UpdateOneof::Entry(entry) => self.get_entry_matching(entry, matches),
             UpdateOneof::BlockMeta(block_meta) => self.get_blockmeta_matching(block_meta, matches),
-            _ => {}
+            _ => {
+                log::warn!(
+                    "Received unsupported update type in gRPC client: {:?}",
+                    update
+                );
+            }
         }
     }
 }
@@ -76,7 +87,6 @@ impl ClientTask {
         match result {
             Ok(message) => {
                 let mut matches = HashSet::new();
-
                 self.compiled_filters
                     .get_updateoneof_matching(&message, &mut matches);
                 if matches.is_empty() {
@@ -90,7 +100,7 @@ impl ClientTask {
                 };
 
                 self.grpc_out
-                    .send(Ok(zc_update))
+                    .send(zc_update)
                     .await
                     .map_err(|_| ClientTaskError::ClientOutletDisconnected)?;
 
@@ -98,51 +108,30 @@ impl ClientTask {
                     self.x_subscribe_id.as_str(),
                     self.remote_addr.as_str(),
                 );
-                log::trace!("Sent update to client: {:?}", self.remote_addr);
-
                 Ok(())
             }
             Err(e) => match e {
                 broadcast::error::RecvError::Closed => {
-                    let _ = self
-                        .grpc_out
-                        .send(Err(tonic::Status::unavailable(
-                            "geyser source disconnected",
-                        )))
-                        .await;
-
                     return Err(ClientTaskError::GeyserDisconnected);
                 }
                 broadcast::error::RecvError::Lagged(_) => {
-                    let _ = self
-                        .grpc_out
-                        .send(Err(tonic::Status::unauthenticated(
-                            "client lagged behind too much",
-                        )))
-                        .await;
-
                     return Err(ClientTaskError::ClientLagged);
                 }
             },
         }
     }
 
-    pub async fn handle_subscribe_request(
+    pub fn handle_subscribe_request(
         &mut self,
         subscribe_request: SubscribeRequest,
     ) -> Result<(), ClientTaskError> {
-        match CompiledFilters::try_from(&subscribe_request) {
-            Ok(compiled_filters) => {
-                log::trace!("Compiled filters from subscribe request");
-                self.compiled_filters = compiled_filters;
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("Failed to compile filters from subscribe request: {:?}", e);
-                let _ = self.grpc_out.send(Err(e.into())).await;
-                Err(ClientTaskError::InvalidSubscribeRequest)
-            }
-        }
+        self.compiled_filters = CompiledFilters::try_from(&subscribe_request)?;
+        log::debug!(
+            "Client {} updated filters -- {} complexity",
+            self.remote_addr,
+            self.compiled_filters.complexity_score()
+        );
+        Ok(())
     }
 
     pub async fn run(
@@ -155,36 +144,32 @@ impl ClientTask {
             .await
             .ok_or(ClientTaskError::ClientOutletDisconnected)??;
 
-        let result = CompiledFilters::try_from(&initial_subscribe_request);
+        self.handle_subscribe_request(initial_subscribe_request)?;
 
-        match result {
-            Ok(compiled_filters) => {
-                log::trace!("Compiled filters");
-                self.compiled_filters = compiled_filters;
-            }
-            Err(e) => {
-                self.grpc_out
-                    .send(Err(e.into()))
-                    .await
-                    .map_err(|_| ClientTaskError::ClientOutletDisconnected)?;
-
-                return Err(ClientTaskError::InvalidSubscribeRequest);
-            }
-        };
-
+        let mut grpc_in_is_dead = false;
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    log::info!("Client task cancelled: {}", self.remote_addr);
-                    let _ = self.grpc_out.try_send(Err(tonic::Status::internal("server is shutting down")));
                     return Ok(());
                 }
                 result = self.geyser_source.recv() => {
-                    self.handle_geyser_source_event(result).await?;
+                    self.handle_geyser_source_event(result).await.inspect_err(|e| {
+                        log::warn!("Error handling geyser source event for client {}: {}", self.remote_addr, e);
+                    })?;
                 }
-                Some(subscribe_request) = self.grpc_in.next() => {
-                    log::trace!("Received new subscribe request: {:?}", subscribe_request);
-                    self.handle_subscribe_request(subscribe_request?).await?;
+                // It safe to ignore other branch since the grpc_input stream is not mandatory to keep alive by the client.
+                maybe = self.grpc_in.next(), if !grpc_in_is_dead  => {
+                    let Some(result) = maybe else {
+                        grpc_in_is_dead = true;
+                        log::debug!("gRPC input stream closed by client: {}", self.remote_addr);
+                        continue;
+                    };
+                    let Ok(filters) = result else {
+                        grpc_in_is_dead = true;
+                        log::warn!("gRPC input stream error from client: {}", self.remote_addr);
+                        continue;
+                    };
+                    self.handle_subscribe_request(filters)?;
                 }
             }
         }

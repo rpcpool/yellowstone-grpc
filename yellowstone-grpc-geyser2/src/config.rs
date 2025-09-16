@@ -206,7 +206,7 @@ impl ConfigGrpc {
     }
 
     const fn channel_capacity_default() -> usize {
-        250_000
+        1_000_000
     }
 
     const fn default_filter_name_size_limit() -> usize {

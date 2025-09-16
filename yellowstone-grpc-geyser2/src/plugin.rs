@@ -228,6 +228,7 @@ impl GeyserPlugin for Plugin {
         // Setup logger
         solana_logger::setup_with_default(&config.log.level);
 
+        log::info!("Loading plugin: {}", self.name());
         // Create inner
         let mut builder = Builder::new_multi_thread();
         if let Some(worker_threads) = config.tokio.worker_threads {

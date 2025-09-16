@@ -380,6 +380,33 @@ impl CompiledFilters {
                 matches.insert(id.clone());
             });
     }
+
+    pub fn complexity_score(&self) -> usize {
+        self.account_filters
+            .iter()
+            .map(|(_id, filter)| filter.complexity_score())
+            .chain(
+                self.tx_filters
+                    .iter()
+                    .map(|(_id, filter)| filter.complexity_score()),
+            )
+            .chain(
+                self.slot_status
+                    .iter()
+                    .map(|(_id, filter)| filter.complexity_score()),
+            )
+            .chain(
+                self.entry
+                    .iter()
+                    .map(|(_id, filter)| filter.complexity_score()),
+            )
+            .chain(
+                self.blockmeta
+                    .iter()
+                    .map(|(_id, filter)| filter.complexity_score()),
+            )
+            .sum()
+    }
 }
 
 impl AbstractTx for SubscribeUpdateTransaction {

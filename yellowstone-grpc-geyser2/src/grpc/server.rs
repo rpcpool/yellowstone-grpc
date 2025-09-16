@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigGrpc,
         grpc::{
-            client_task::{ClientTask, ClientTaskError},
+            client_task::{ClientSinkError, ClientTask, ClientTaskError},
             proto::ZeroCopySubscribeUpdate,
         },
         proto::{
@@ -14,14 +14,17 @@ use {
             r#gen::geyser_server::GeyserServer,
         },
     },
-    futures::{stream::BoxStream, StreamExt},
-    std::{collections::HashMap, fs, io, sync::Arc, time::Duration},
+    futures::{stream::BoxStream, Sink, StreamExt},
+    std::{collections::HashMap, fs, io, pin::Pin, sync::Arc, time::Duration},
     tokio::{
         sync::{broadcast, mpsc, oneshot},
         task::{Id, JoinError, JoinHandle, JoinSet},
     },
     tokio_stream::wrappers::ReceiverStream,
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    tokio_util::{
+        sync::{CancellationToken, PollSender},
+        task::TaskTracker,
+    },
     tonic::{
         async_trait,
         service::interceptor,
@@ -36,6 +39,53 @@ pub struct GeyserV2GrpcServer {
     pub ev_loop_cnc_tx: mpsc::Sender<EvLoopCommand>,
     pub client_channel_capacity: usize,
     pub cancellation_token: CancellationToken,
+}
+
+///
+/// Adapter to [`ZeroCopySubscribeUpdate`] to [`Result<ZeroCopySubscribeUpdate, tonic::Status>`]
+///
+struct GrpcClientSinkAdapter {
+    inner: PollSender<Result<ZeroCopySubscribeUpdate, tonic::Status>>,
+}
+
+impl Sink<ZeroCopySubscribeUpdate> for GrpcClientSinkAdapter {
+    type Error = ClientSinkError;
+
+    fn poll_ready(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner)
+            .poll_ready(cx)
+            .map_err(|_| ClientSinkError)
+    }
+
+    fn start_send(
+        mut self: std::pin::Pin<&mut Self>,
+        item: ZeroCopySubscribeUpdate,
+    ) -> Result<(), Self::Error> {
+        Pin::new(&mut self.inner)
+            .start_send(Ok(item))
+            .map_err(|_| ClientSinkError)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner)
+            .poll_flush(cx)
+            .map_err(|_| ClientSinkError)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner)
+            .poll_close(cx)
+            .map_err(|_| ClientSinkError)
+    }
 }
 
 #[async_trait]
@@ -59,9 +109,9 @@ impl Geyser for GeyserV2GrpcServer {
         );
 
         let (client_tx, client_rx) = mpsc::channel(self.client_channel_capacity);
-
+        let client_sink = PollSender::new(client_tx.clone());
+        let client_task_sink_adapter = GrpcClientSinkAdapter { inner: client_sink };
         let grpc_in = request.into_inner();
-        let grpc_in = grpc_in.boxed();
         let client_task = ClientTask {
             x_subscribe_id: x_subscribe_id.unwrap_or("unknown".to_string()),
             remote_addr: remote_addr
@@ -70,7 +120,7 @@ impl Geyser for GeyserV2GrpcServer {
             compiled_filters: Default::default(),
             geyser_source: self.geyser_broadcast.subscribe(),
             grpc_in,
-            grpc_out: client_tx,
+            grpc_out: std::pin::Pin::new(Box::new(client_task_sink_adapter)),
         };
 
         if self.cancellation_token.is_cancelled() {
@@ -81,6 +131,7 @@ impl Geyser for GeyserV2GrpcServer {
         let command = EvLoopCommand::AddClientTask(AddClientTaskCommand {
             client_task,
             callback: callback_tx,
+            grpc_out: client_tx,
         });
         if self.ev_loop_cnc_tx.send(command).await.is_err() {
             return Err(tonic::Status::internal("failed to spawn client session"));
@@ -118,11 +169,13 @@ pub struct GeyserV2GrpcServerEvLoop {
 
 pub struct AddClientTaskCommand {
     client_task: ClientTask,
+    grpc_out: mpsc::Sender<Result<ZeroCopySubscribeUpdate, tonic::Status>>,
     callback: oneshot::Sender<()>,
 }
 
 struct ClientTaskMeta {
     x_subscription_id: String,
+    grpc_out: mpsc::Sender<Result<ZeroCopySubscribeUpdate, tonic::Status>>,
 }
 
 pub enum EvLoopCommand {
@@ -171,6 +224,7 @@ impl GeyserV2GrpcServerEvLoop {
                 let AddClientTaskCommand {
                     client_task,
                     callback,
+                    grpc_out,
                 } = command;
                 let x_subscription_id = client_task.x_subscribe_id.clone();
                 let client_session_cancellation_token = self.cancellation_token.child_token();
@@ -189,13 +243,18 @@ impl GeyserV2GrpcServerEvLoop {
                     ah.id()
                 );
 
-                self.client_task_map
-                    .insert(ah.id(), ClientTaskMeta { x_subscription_id });
+                self.client_task_map.insert(
+                    ah.id(),
+                    ClientTaskMeta {
+                        x_subscription_id,
+                        grpc_out,
+                    },
+                );
             }
         }
     }
 
-    fn handle_client_task_result(
+    async fn handle_client_task_result(
         &mut self,
         result: Result<(Id, Result<(), ClientTaskError>), JoinError>,
     ) {
@@ -219,10 +278,45 @@ impl GeyserV2GrpcServerEvLoop {
                     log::trace!("Client task with id: {:?} completed successfully", id);
                 }
                 Err(e) => {
-                    log::error!("Client task with id: {:?} failed with error: {:?}", id, e);
+                    match e {
+                        ClientTaskError::ClientOutletDisconnected => {
+                            // Nothing to do...
+                        }
+                        ClientTaskError::InvalidSubscribeRequest(e2) => {
+                            let _ = meta.grpc_out.send(Err(e2.into())).await;
+                        }
+                        ClientTaskError::GeyserDisconnected => {
+                            let _ = meta
+                                .grpc_out
+                                .send(Err(Status::unavailable("server is shutting down")));
+                        }
+                        ClientTaskError::ClientLagged => {
+                            let _ = meta
+                                .grpc_out
+                                .send(Err(Status::resource_exhausted(
+                                    "client is too slow and has been disconnected",
+                                )))
+                                .await;
+                        }
+                        ClientTaskError::GrpcInputStreamError(status) => {
+                            log::info!(
+                                "Client task with id: {:?} input stream error: {:?}",
+                                id,
+                                status
+                            );
+                            let _ = meta
+                                .grpc_out
+                                .send(Err(Status::cancelled("canceled by client")))
+                                .await;
+                        }
+                    }
                 }
             },
             Err(e) => {
+                let _ = meta
+                    .grpc_out
+                    .send(Err(Status::internal("internal server error")))
+                    .await;
                 log::error!("Client task with id: {:?} failed with error: {:?}", id, e);
             }
         }
@@ -237,7 +331,7 @@ impl GeyserV2GrpcServerEvLoop {
                     break;
                 }
                 Some(result) = self.client_joinset.join_next_with_id() => {
-                    self.handle_client_task_result(result);
+                    self.handle_client_task_result(result).await;
                 },
                 maybe = self.cnc_rx.recv() => {
                     match maybe {

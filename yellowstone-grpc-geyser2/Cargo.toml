@@ -1,5 +1,5 @@
 [package]
-name = "yellowstone-grpc-geyser2"
+name = "yellowstone-grpc-geyserV2"
 version = "0.1.0"
 authors = { workspace = true }
 edition = { workspace = true }
