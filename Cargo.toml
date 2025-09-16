@@ -21,7 +21,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "~0.1.2"
-agave-geyser-plugin-interface = "~2.3.0"
+agave-geyser-plugin-interface = "=2.3.6"
 anyhow = "1"
 backoff = "~0.4.0"
 base64 = "~0.22.1"
