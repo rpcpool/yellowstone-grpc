@@ -6,17 +6,29 @@ use {
             proto::ZeroCopySubscribeUpdate,
         },
         proto::{
-            gen::geyser_server::Geyser, r#gen::geyser_server::GeyserServer, geyser::{
+            gen::geyser_server::Geyser,
+            geyser::{
                 subscribe_update::UpdateOneof, GetVersionRequest, GetVersionResponse,
                 SubscribeRequest,
-            }
+            },
+            r#gen::geyser_server::GeyserServer,
         },
-    }, futures::{stream::BoxStream, StreamExt}, std::{collections::HashMap, fs, io, sync::Arc, time::Duration}, tokio::{
+    },
+    futures::{stream::BoxStream, StreamExt},
+    std::{collections::HashMap, fs, io, sync::Arc, time::Duration},
+    tokio::{
         sync::{broadcast, mpsc, oneshot},
         task::{Id, JoinError, JoinHandle, JoinSet},
-    }, tokio_stream::wrappers::ReceiverStream, tokio_util::sync::CancellationToken, tonic::{
-        async_trait, service::interceptor, transport::{server::TcpIncoming, Identity, Server, ServerTlsConfig}, Request, Status
-    }, tonic_health::server::health_reporter
+    },
+    tokio_stream::wrappers::ReceiverStream,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    tonic::{
+        async_trait,
+        service::interceptor,
+        transport::{server::TcpIncoming, Identity, Server, ServerTlsConfig},
+        Request, Status,
+    },
+    tonic_health::server::health_reporter,
 };
 
 pub struct GeyserV2GrpcServer {
@@ -34,7 +46,6 @@ impl Geyser for GeyserV2GrpcServer {
         &self,
         request: tonic::Request<tonic::Streaming<SubscribeRequest>>,
     ) -> std::result::Result<tonic::Response<Self::SubscribeStream>, tonic::Status> {
-
         let x_subscribe_id = request
             .metadata()
             .get("x-subscribe-id")
@@ -133,8 +144,9 @@ impl Default for GeyserV2GrpcServerEvLoopConfig {
 
 impl GeyserV2GrpcServerEvLoop {
     pub fn spawn(
+        config: GeyserV2GrpcServerEvLoopConfig,
+        task_tracker: TaskTracker,
         cancellation_token: CancellationToken,
-        config: GeyserV2GrpcServerEvLoopConfig
     ) -> (mpsc::Sender<EvLoopCommand>, JoinHandle<()>) {
         let (cnc_tx, cnc_rx) = mpsc::channel(100);
         let ev_loop = Self {
@@ -145,7 +157,7 @@ impl GeyserV2GrpcServerEvLoop {
             shutdown_grace_period: config.shutdown_grace_period,
         };
 
-        let jh = tokio::spawn(async move {
+        let jh = task_tracker.spawn(async move {
             ev_loop.run().await;
         });
 
@@ -289,9 +301,9 @@ pub enum TrySpawnGrpcServerError {
 pub async fn spawn_grpc_server(
     geyser_broadcast: broadcast::Sender<Arc<UpdateOneof>>,
     config: ConfigGrpc,
-    cancellation_token: CancellationToken
-) -> Result<JoinHandle<Result<(), tonic::transport::Error>>, TrySpawnGrpcServerError>
-{
+    task_tracker: TaskTracker,
+    cancellation_token: CancellationToken,
+) -> Result<JoinHandle<Result<(), tonic::transport::Error>>, TrySpawnGrpcServerError> {
     let mut server_builder = Server::builder();
 
     if let Some(tls_config) = config.tls_config {
@@ -315,7 +327,11 @@ pub async fn spawn_grpc_server(
         .initial_stream_window_size(config.server_initial_stream_window_size)
         .tcp_nodelay(true);
 
-    let (ev_loop, _) = GeyserV2GrpcServerEvLoop::spawn(cancellation_token.child_token(), Default::default());
+    let (ev_loop, _) = GeyserV2GrpcServerEvLoop::spawn(
+        Default::default(),
+        task_tracker.clone(),
+        cancellation_token.child_token(),
+    );
 
     let service = GeyserV2GrpcServer {
         geyser_broadcast,
@@ -345,19 +361,21 @@ pub async fn spawn_grpc_server(
         .with_keepalive_interval(config.server_http2_keepalive_interval);
 
     let fut = server_builder
-        .layer(interceptor::InterceptorLayer::new(move |request: Request<()>| {
-            if let Some(x_token) = &config.x_token {
-                match request.metadata().get("x-token") {
-                    Some(token) if x_token == token => Ok(request),
-                    _ => Err(Status::unauthenticated("No valid auth token")),
+        .layer(interceptor::InterceptorLayer::new(
+            move |request: Request<()>| {
+                if let Some(x_token) = &config.x_token {
+                    match request.metadata().get("x-token") {
+                        Some(token) if x_token == token => Ok(request),
+                        _ => Err(Status::unauthenticated("No valid auth token")),
+                    }
+                } else {
+                    Ok(request)
                 }
-            } else {
-                Ok(request)
-            }
-        }))
+            },
+        ))
         .add_service(health_service)
         .add_service(svc)
         .serve_with_incoming_shutdown(incoming, cancellation_token.cancelled_owned());
 
-    Ok(tokio::spawn(fut))
+    Ok(task_tracker.spawn(fut))
 }

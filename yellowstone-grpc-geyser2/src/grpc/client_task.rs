@@ -9,7 +9,8 @@ use {
     futures::stream::BoxStream,
     std::{collections::HashSet, sync::Arc},
     tokio::sync::{broadcast, mpsc},
-    tokio_stream::StreamExt, tokio_util::sync::CancellationToken,
+    tokio_stream::StreamExt,
+    tokio_util::sync::CancellationToken,
 };
 
 pub struct ClientTask {
@@ -144,7 +145,10 @@ impl ClientTask {
         }
     }
 
-    pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientTaskError> {
+    pub async fn run(
+        mut self,
+        cancellation_token: CancellationToken,
+    ) -> Result<(), ClientTaskError> {
         let initial_subscribe_request = self
             .grpc_in
             .next()

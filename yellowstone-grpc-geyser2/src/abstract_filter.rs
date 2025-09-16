@@ -48,7 +48,6 @@ pub trait PubkeyReducer {
     fn accept(&mut self, pubkey: Pubkey) -> ReducerDecision;
 }
 
-
 pub trait AbstractBlockMeta {}
 
 pub trait BlockMetaFilter {
@@ -602,7 +601,9 @@ impl TxFilter for TxRequiredAccountFilter {
 mod tests {
     use {
         super::{AbstractAccount, AbstractTx, AccountPubkeyFilter, AndAccountFilter, TxFilter},
-        crate::abstract_filter::{AccountFilter, AccountOwnerFilter, PubkeyReducer, ReducerDecision, TrueFilter},
+        crate::abstract_filter::{
+            AccountFilter, AccountOwnerFilter, PubkeyReducer, ReducerDecision, TrueFilter,
+        },
         base64::{prelude::BASE64_STANDARD, Engine},
         solana_program_option::COption,
         solana_program_pack::Pack,

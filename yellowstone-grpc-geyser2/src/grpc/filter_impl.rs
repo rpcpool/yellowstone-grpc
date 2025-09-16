@@ -1,7 +1,14 @@
 use {
     crate::{
         abstract_filter::{
-            AbstractAccount, AbstractBlockMeta, AbstractEntry, AbstractSlotStatus, AbstractTx, AccountDataLenFilter, AccountFilter, AccountFilterRef, AccountLamportFilter, AccountMemcmpFilter, AccountMemcmpOp, AccountOwnerFilter, AccountPubkeyFilter, AndAccountFilter, BlockMetaFilter, BlockMetaFilterRef, EntryFilter, EntryFilterRef, IsTokenAccountFilter, NonEmptyTxSignature, PubkeyReducer, ReducerDecision, SlotStatusFilter, SlotStatusFilterRef, TrueFilter, TxAndFilter, TxExcludeAccountFilter, TxFailedFilter, TxFilter, TxFilterRef, TxIncludeAccountFilter, TxRequiredAccountFilter, TxSignatureFilter, TxVoteFilter
+            AbstractAccount, AbstractBlockMeta, AbstractEntry, AbstractSlotStatus, AbstractTx,
+            AccountDataLenFilter, AccountFilter, AccountFilterRef, AccountLamportFilter,
+            AccountMemcmpFilter, AccountMemcmpOp, AccountOwnerFilter, AccountPubkeyFilter,
+            AndAccountFilter, BlockMetaFilter, BlockMetaFilterRef, EntryFilter, EntryFilterRef,
+            IsTokenAccountFilter, NonEmptyTxSignature, PubkeyReducer, ReducerDecision,
+            SlotStatusFilter, SlotStatusFilterRef, TrueFilter, TxAndFilter, TxExcludeAccountFilter,
+            TxFailedFilter, TxFilter, TxFilterRef, TxIncludeAccountFilter, TxRequiredAccountFilter,
+            TxSignatureFilter, TxVoteFilter,
         },
         plugin::{MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction},
         proto::geyser::{
@@ -12,11 +19,14 @@ use {
             SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateBlockMeta,
             SubscribeUpdateEntry, SubscribeUpdateSlot, SubscribeUpdateTransaction,
         },
-    }, solana_pubkey::{ParsePubkeyError, Pubkey}, solana_signature::{ParseSignatureError, Signature}, std::{
+    },
+    solana_pubkey::{ParsePubkeyError, Pubkey},
+    solana_signature::{ParseSignatureError, Signature},
+    std::{
         collections::{HashMap, HashSet},
         str::FromStr,
         sync::Arc,
-    }
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -288,12 +298,20 @@ impl AbstractTx for MessageTransaction {
     }
 
     fn account_keys(&self, reducer: &mut dyn PubkeyReducer) {
-
-        let readonly = self.transaction.meta.loaded_readonly_addresses.iter()
+        let readonly = self
+            .transaction
+            .meta
+            .loaded_readonly_addresses
+            .iter()
             .flat_map(|k| Pubkey::try_from(k.as_slice()));
-        let writable = self.transaction.meta.loaded_writable_addresses.iter()
+        let writable = self
+            .transaction
+            .meta
+            .loaded_writable_addresses
+            .iter()
             .flat_map(|k| Pubkey::try_from(k.as_slice()));
-        let _result = self.transaction
+        let _result = self
+            .transaction
             .account_keys
             .iter()
             .cloned()
@@ -394,9 +412,11 @@ impl AbstractTx for SubscribeUpdateTransaction {
     }
 
     fn account_keys(&self, reducer: &mut dyn PubkeyReducer) {
-        let Some(msg) = self.transaction.as_ref()
+        let Some(msg) = self
+            .transaction
+            .as_ref()
             .and_then(|tx| tx.transaction.as_ref())
-            .and_then(|tx| tx.message.as_ref()) 
+            .and_then(|tx| tx.message.as_ref())
         else {
             return;
         };
@@ -404,7 +424,8 @@ impl AbstractTx for SubscribeUpdateTransaction {
             return;
         };
 
-        let it = msg.account_keys
+        let it = msg
+            .account_keys
             .iter()
             .chain(meta.loaded_readonly_addresses.iter())
             .chain(meta.loaded_writable_addresses.iter())

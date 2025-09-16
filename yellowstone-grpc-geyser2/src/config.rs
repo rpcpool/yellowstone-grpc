@@ -347,6 +347,5 @@ mod tests {
         let config: super::ConfigTokio = serde_json::from_str(raw).unwrap();
         assert_eq!(config.worker_threads, Some(4));
         assert!(config.affinity.is_none());
-        
     }
 }

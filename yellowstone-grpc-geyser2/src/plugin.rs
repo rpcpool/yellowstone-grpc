@@ -10,15 +10,25 @@ use {
             },
             solana::storage::confirmed_block,
         },
-    }, agave_geyser_plugin_interface::geyser_plugin_interface::{
+    },
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoV3, ReplicaAccountInfoVersions,
         ReplicaBlockInfoV4, ReplicaBlockInfoVersions, ReplicaEntryInfoV2, ReplicaEntryInfoVersions,
         ReplicaTransactionInfoV2, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
-    }, bytes::Bytes, futures::channel::oneshot::Cancellation, solana_clock::{Slot, UnixTimestamp}, solana_hash::Hash, solana_pubkey::Pubkey, solana_signature::Signature, solana_transaction_status::RewardsAndNumPartitions, std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration}, tokio::{
+    },
+    bytes::Bytes,
+    solana_clock::{Slot, UnixTimestamp},
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_signature::Signature,
+    solana_transaction_status::RewardsAndNumPartitions,
+    std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration},
+    tokio::{
         runtime::{Builder, Runtime},
-        sync::{broadcast, Notify},
-    }, tokio_util::sync::CancellationToken
+        sync::broadcast,
+    },
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,6 +191,7 @@ pub struct PluginInner {
     runtime: Runtime,
     plugin_cancellation_token: CancellationToken,
     broadcast_tx: broadcast::Sender<Arc<UpdateOneof>>,
+    task_tracker: TaskTracker,
 }
 
 impl PluginInner {
@@ -203,15 +214,6 @@ impl Plugin {
     {
         let inner = self.inner.as_ref().expect("initialized");
         f(inner)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct OnDropNotify(Arc<Notify>);
-
-impl Drop for OnDropNotify {
-    fn drop(&mut self) {
-        self.0.notify_one();
     }
 }
 
@@ -244,27 +246,44 @@ impl GeyserPlugin for Plugin {
 
         let prom_config = config.prometheus.clone();
 
-        let (broadcast_tx, _) = broadcast::channel(1_000_000);
+        let (broadcast_tx, _) = broadcast::channel(config.grpc.channel_capacity);
         let plugin_cancellation_token = CancellationToken::new();
         let tokio_broadcast_tx = broadcast_tx.clone();
         let grpc_cancellation_token = plugin_cancellation_token.child_token();
         let prometheus_cancellation_token = plugin_cancellation_token.child_token();
-        runtime.block_on(async move {
-            if let Some(prom_config) = prom_config {
-                PrometheusService::spawn(prom_config, prometheus_cancellation_token)
+        let task_tracker = TaskTracker::new();
+        let prometheus_task_tracker = task_tracker.clone();
+        let grpc_task_tracker = task_tracker.clone();
+        runtime
+            .block_on(async move {
+                if let Some(prom_config) = prom_config {
+                    PrometheusService::spawn(
+                        prom_config,
+                        prometheus_task_tracker,
+                        prometheus_cancellation_token,
+                    )
                     .await
                     .map_err(|e| GeyserPluginError::Custom(Box::new(e)))?;
-            };
-            let _jh = spawn_grpc_server(tokio_broadcast_tx, config.grpc.clone(), grpc_cancellation_token)
+                };
+                let _jh = spawn_grpc_server(
+                    tokio_broadcast_tx,
+                    config.grpc.clone(),
+                    grpc_task_tracker,
+                    grpc_cancellation_token,
+                )
                 .await
                 .map_err(|e| GeyserPluginError::Custom(Box::new(e)))?;
-            Ok::<_, GeyserPluginError>(())
-        })?;
+                Ok::<_, GeyserPluginError>(())
+            })
+            .inspect_err(|_e| {
+                plugin_cancellation_token.cancel();
+            })?;
 
         self.inner = Some(PluginInner {
             runtime,
             plugin_cancellation_token,
             broadcast_tx,
+            task_tracker,
         });
 
         Ok(())
@@ -272,9 +291,19 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
+            let running_tasks = inner.task_tracker.len();
+            log::info!("Unloading plugin, waiting for {running_tasks} tasks to finish");
+            inner.task_tracker.close();
             inner.plugin_cancellation_token.cancel();
             drop(inner.broadcast_tx);
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
+            let remaining_tasks = inner.task_tracker.len();
+            if remaining_tasks > 0 {
+                log::info!(
+                    "Geyser plugin {} leaked {remaining_tasks} tasks",
+                    self.name()
+                );
+            }
         }
     }
 

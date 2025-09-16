@@ -15,11 +15,9 @@ use {
     },
     log::{error, info},
     prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder},
-    std::{
-        convert::Infallible,
-        sync::Once,
-    },
-    tokio::net::TcpListener, tokio_util::sync::CancellationToken,
+    std::{convert::Infallible, sync::Once},
+    tokio::net::TcpListener,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 lazy_static::lazy_static! {
@@ -69,8 +67,9 @@ pub struct PrometheusService;
 
 impl PrometheusService {
     pub async fn spawn(
-        config: ConfigPrometheus, 
-        cancellation_token: CancellationToken
+        config: ConfigPrometheus,
+        task_tracker: TaskTracker,
+        cancellation_token: CancellationToken,
     ) -> std::io::Result<()> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
@@ -107,7 +106,8 @@ impl PrometheusService {
         let ConfigPrometheus { address } = config;
         let listener = TcpListener::bind(&address).await?;
         info!("start prometheus server: {address}");
-        tokio::spawn(async move {
+        let task_tracker2 = task_tracker.clone();
+        task_tracker.spawn(async move {
             loop {
                 let stream = tokio::select! {
                     () = cancellation_token.cancelled() => break,
@@ -121,7 +121,7 @@ impl PrometheusService {
                         }
                     }
                 };
-                tokio::spawn(async move {
+                task_tracker2.spawn(async move {
                     if let Err(error) = ServerBuilder::new(TokioExecutor::new())
                         .serve_connection(
                             TokioIo::new(stream),
