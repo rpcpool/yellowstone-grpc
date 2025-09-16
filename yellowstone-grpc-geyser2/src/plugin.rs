@@ -10,24 +10,15 @@ use {
             },
             solana::storage::confirmed_block,
         },
-    },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
+    }, agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoV3, ReplicaAccountInfoVersions,
         ReplicaBlockInfoV4, ReplicaBlockInfoVersions, ReplicaEntryInfoV2, ReplicaEntryInfoVersions,
         ReplicaTransactionInfoV2, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
-    },
-    bytes::Bytes,
-    solana_clock::{Slot, UnixTimestamp},
-    solana_hash::Hash,
-    solana_pubkey::Pubkey,
-    solana_signature::Signature,
-    solana_transaction_status::RewardsAndNumPartitions,
-    std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration},
-    tokio::{
+    }, bytes::Bytes, futures::channel::oneshot::Cancellation, solana_clock::{Slot, UnixTimestamp}, solana_hash::Hash, solana_pubkey::Pubkey, solana_signature::Signature, solana_transaction_status::RewardsAndNumPartitions, std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration}, tokio::{
         runtime::{Builder, Runtime},
         sync::{broadcast, Notify},
-    },
+    }, tokio_util::sync::CancellationToken
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,11 +179,8 @@ pub enum Message {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
-    // grpc_channel: mpsc::UnboundedSender<Message>,
-    prometheus: PrometheusService,
-
+    plugin_cancellation_token: CancellationToken,
     broadcast_tx: broadcast::Sender<Arc<UpdateOneof>>,
-    grpc_server_shutdown: OnDropNotify,
 }
 
 impl PluginInner {
@@ -257,26 +245,25 @@ impl GeyserPlugin for Plugin {
         let prom_config = config.prometheus.clone();
 
         let (broadcast_tx, _) = broadcast::channel(1_000_000);
-
+        let plugin_cancellation_token = CancellationToken::new();
         let tokio_broadcast_tx = broadcast_tx.clone();
-        let grpc_shutdown = Arc::new(Notify::new());
-        let grpc_shutdown2 = Arc::clone(&grpc_shutdown);
-        let prometheus = runtime.block_on(async move {
-            let grpc_shutdown = async move { grpc_shutdown2.notified().await };
-            let prometheus = PrometheusService::new(prom_config)
+        let grpc_cancellation_token = plugin_cancellation_token.child_token();
+        let prometheus_cancellation_token = plugin_cancellation_token.child_token();
+        runtime.block_on(async move {
+            if let Some(prom_config) = prom_config {
+                PrometheusService::spawn(prom_config, prometheus_cancellation_token)
+                    .await
+                    .map_err(|e| GeyserPluginError::Custom(Box::new(e)))?;
+            };
+            let _jh = spawn_grpc_server(tokio_broadcast_tx, config.grpc.clone(), grpc_cancellation_token)
                 .await
                 .map_err(|e| GeyserPluginError::Custom(Box::new(e)))?;
-            let _jh = spawn_grpc_server(tokio_broadcast_tx, config.grpc.clone(), grpc_shutdown)
-                .await
-                .map_err(|e| GeyserPluginError::Custom(Box::new(e)))?;
-            Ok::<_, GeyserPluginError>(prometheus)
+            Ok::<_, GeyserPluginError>(())
         })?;
 
         self.inner = Some(PluginInner {
             runtime,
-            // grpc_channel: grpc_channel_tx,
-            grpc_server_shutdown: OnDropNotify(grpc_shutdown),
-            prometheus,
+            plugin_cancellation_token,
             broadcast_tx,
         });
 
@@ -285,9 +272,8 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
+            inner.plugin_cancellation_token.cancel();
             drop(inner.broadcast_tx);
-            inner.grpc_server_shutdown.0.notify_one();
-            inner.prometheus.shutdown();
             inner.runtime.shutdown_timeout(Duration::from_secs(30));
         }
     }

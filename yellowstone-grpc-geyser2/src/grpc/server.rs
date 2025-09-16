@@ -11,24 +11,19 @@ use {
                 SubscribeRequest,
             }
         },
-    },
-    futures::{stream::BoxStream, StreamExt},
-    std::{collections::HashMap, fs, future::Future, io, sync::Arc},
-    tokio::{
+    }, futures::{stream::BoxStream, StreamExt}, std::{collections::HashMap, fs, io, sync::Arc, time::Duration}, tokio::{
         sync::{broadcast, mpsc, oneshot},
         task::{Id, JoinError, JoinHandle, JoinSet},
-    },
-    tokio_stream::wrappers::ReceiverStream,
-    tonic::{
+    }, tokio_stream::wrappers::ReceiverStream, tokio_util::sync::CancellationToken, tonic::{
         async_trait, service::interceptor, transport::{server::TcpIncoming, Identity, Server, ServerTlsConfig}, Request, Status
-    },
-    tonic_health::server::health_reporter,
+    }, tonic_health::server::health_reporter
 };
 
 pub struct GeyserV2GrpcServer {
     pub geyser_broadcast: broadcast::Sender<Arc<UpdateOneof>>,
     pub ev_loop_cnc_tx: mpsc::Sender<EvLoopCommand>,
     pub client_channel_capacity: usize,
+    pub cancellation_token: CancellationToken,
 }
 
 #[async_trait]
@@ -39,6 +34,7 @@ impl Geyser for GeyserV2GrpcServer {
         &self,
         request: tonic::Request<tonic::Streaming<SubscribeRequest>>,
     ) -> std::result::Result<tonic::Response<Self::SubscribeStream>, tonic::Status> {
+
         let x_subscribe_id = request
             .metadata()
             .get("x-subscribe-id")
@@ -65,6 +61,10 @@ impl Geyser for GeyserV2GrpcServer {
             grpc_in,
             grpc_out: client_tx,
         };
+
+        if self.cancellation_token.is_cancelled() {
+            return Err(tonic::Status::unavailable("server is shutting down"));
+        }
 
         let (callback_tx, callback_rx) = oneshot::channel();
         let command = EvLoopCommand::AddClientTask(AddClientTaskCommand {
@@ -101,6 +101,8 @@ pub struct GeyserV2GrpcServerEvLoop {
     client_joinset: JoinSet<Result<(), ClientTaskError>>,
     client_task_map: HashMap<Id, ClientTaskMeta>,
     cnc_rx: mpsc::Receiver<EvLoopCommand>,
+    cancellation_token: CancellationToken,
+    shutdown_grace_period: Duration,
 }
 
 pub struct AddClientTaskCommand {
@@ -116,13 +118,31 @@ pub enum EvLoopCommand {
     AddClientTask(AddClientTaskCommand),
 }
 
+#[derive(Debug, Clone)]
+pub struct GeyserV2GrpcServerEvLoopConfig {
+    pub shutdown_grace_period: Duration,
+}
+
+impl Default for GeyserV2GrpcServerEvLoopConfig {
+    fn default() -> Self {
+        Self {
+            shutdown_grace_period: Duration::from_secs(5),
+        }
+    }
+}
+
 impl GeyserV2GrpcServerEvLoop {
-    pub fn spawn() -> (mpsc::Sender<EvLoopCommand>, JoinHandle<()>) {
+    pub fn spawn(
+        cancellation_token: CancellationToken,
+        config: GeyserV2GrpcServerEvLoopConfig
+    ) -> (mpsc::Sender<EvLoopCommand>, JoinHandle<()>) {
         let (cnc_tx, cnc_rx) = mpsc::channel(100);
         let ev_loop = Self {
             client_joinset: JoinSet::new(),
             client_task_map: Default::default(),
             cnc_rx,
+            cancellation_token,
+            shutdown_grace_period: config.shutdown_grace_period,
         };
 
         let jh = tokio::spawn(async move {
@@ -141,9 +161,10 @@ impl GeyserV2GrpcServerEvLoop {
                     callback,
                 } = command;
                 let x_subscription_id = client_task.x_subscribe_id.clone();
+                let client_session_cancellation_token = self.cancellation_token.child_token();
                 let ah = self
                     .client_joinset
-                    .spawn(async move { client_task.run().await });
+                    .spawn(async move { client_task.run(client_session_cancellation_token).await });
 
                 if callback.send(()).is_err() {
                     log::error!("client canceled the task before it could be added");
@@ -199,6 +220,10 @@ impl GeyserV2GrpcServerEvLoop {
     pub async fn run(mut self) {
         loop {
             tokio::select! {
+                _ = self.cancellation_token.cancelled() => {
+                    log::info!("Event loop cancellation requested, shutting down");
+                    break;
+                }
                 Some(result) = self.client_joinset.join_next_with_id() => {
                     self.handle_client_task_result(result);
                 },
@@ -216,8 +241,36 @@ impl GeyserV2GrpcServerEvLoop {
             }
             super::metrics::set_total_client_connected(self.client_joinset.len());
         }
+        self.cancellation_token.cancel();
+        log::info!("Event loop is shutting down, aborting all client tasks");
+        shutdown_joinset(self.shutdown_grace_period, &mut self.client_joinset).await;
         self.client_joinset.abort_all();
         log::info!("Event loop exited, all client tasks aborted");
+    }
+}
+
+async fn shutdown_joinset(timeout: Duration, joinset: &mut JoinSet<Result<(), ClientTaskError>>) {
+    let shutdown_deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = tokio::time::sleep_until(shutdown_deadline) => {
+                log::warn!("Timeout reached while waiting for client tasks to shut down, aborting remaining tasks");
+                joinset.abort_all();
+                break;
+            }
+
+            maybe = joinset.join_next() => {
+                match maybe {
+                    Some(_) => {
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -233,13 +286,11 @@ pub enum TrySpawnGrpcServerError {
     TcpBindError(#[from] io::Error),
 }
 
-pub async fn spawn_grpc_server<S>(
+pub async fn spawn_grpc_server(
     geyser_broadcast: broadcast::Sender<Arc<UpdateOneof>>,
     config: ConfigGrpc,
-    shutdown: S,
+    cancellation_token: CancellationToken
 ) -> Result<JoinHandle<Result<(), tonic::transport::Error>>, TrySpawnGrpcServerError>
-where
-    S: Future<Output = ()> + Send + 'static,
 {
     let mut server_builder = Server::builder();
 
@@ -264,12 +315,13 @@ where
         .initial_stream_window_size(config.server_initial_stream_window_size)
         .tcp_nodelay(true);
 
-    let (ev_loop, _) = GeyserV2GrpcServerEvLoop::spawn();
+    let (ev_loop, _) = GeyserV2GrpcServerEvLoop::spawn(cancellation_token.child_token(), Default::default());
 
     let service = GeyserV2GrpcServer {
         geyser_broadcast,
         ev_loop_cnc_tx: ev_loop,
         client_channel_capacity: config.channel_capacity,
+        cancellation_token: cancellation_token.clone(),
     };
 
     let mut svc =
@@ -305,7 +357,7 @@ where
         }))
         .add_service(health_service)
         .add_service(svc)
-        .serve_with_incoming_shutdown(incoming, shutdown);
+        .serve_with_incoming_shutdown(incoming, cancellation_token.cancelled_owned());
 
     Ok(tokio::spawn(fut))
 }

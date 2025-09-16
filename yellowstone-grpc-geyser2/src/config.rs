@@ -65,6 +65,7 @@ impl ConfigLog {
 #[serde(deny_unknown_fields)]
 pub struct ConfigTokio {
     /// Number of worker threads in Tokio runtime
+    #[serde(default)]
     pub worker_threads: Option<usize>,
     /// Threads affinity
     #[serde(default, deserialize_with = "ConfigTokio::deserialize_affinity")]
@@ -346,5 +347,6 @@ mod tests {
         let config: super::ConfigTokio = serde_json::from_str(raw).unwrap();
         assert_eq!(config.worker_threads, Some(4));
         assert!(config.affinity.is_none());
+        
     }
 }

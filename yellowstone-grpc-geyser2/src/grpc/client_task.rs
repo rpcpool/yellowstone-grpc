@@ -9,7 +9,7 @@ use {
     futures::stream::BoxStream,
     std::{collections::HashSet, sync::Arc},
     tokio::sync::{broadcast, mpsc},
-    tokio_stream::StreamExt,
+    tokio_stream::StreamExt, tokio_util::sync::CancellationToken,
 };
 
 pub struct ClientTask {
@@ -144,7 +144,7 @@ impl ClientTask {
         }
     }
 
-    pub async fn run(mut self) -> Result<(), ClientTaskError> {
+    pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientTaskError> {
         let initial_subscribe_request = self
             .grpc_in
             .next()
@@ -170,10 +170,14 @@ impl ClientTask {
 
         loop {
             tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    log::info!("Client task cancelled: {}", self.remote_addr);
+                    let _ = self.grpc_out.try_send(Err(tonic::Status::internal("server is shutting down")));
+                    return Ok(());
+                }
                 result = self.geyser_source.recv() => {
                     self.handle_geyser_source_event(result).await?;
                 }
-
                 Some(subscribe_request) = self.grpc_in.next() => {
                     log::trace!("Received new subscribe request: {:?}", subscribe_request);
                     self.handle_subscribe_request(subscribe_request?).await?;

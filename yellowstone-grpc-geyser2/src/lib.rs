@@ -5,6 +5,7 @@ pub mod metrics;
 pub mod plugin;
 pub mod proto;
 pub mod version;
+pub mod util;
 
 pub fn get_thread_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
