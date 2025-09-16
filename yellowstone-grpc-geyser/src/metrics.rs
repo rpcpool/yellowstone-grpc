@@ -11,7 +11,7 @@ use {
         rt::tokio::{TokioExecutor, TokioIo},
         server::conn::auto::Builder as ServerBuilder,
     },
-    log::{error, info},
+    log::{debug, error, info},
     prometheus::{
         Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
     },
@@ -23,9 +23,10 @@ use {
     },
     tokio::{
         net::TcpListener,
-        sync::{mpsc, oneshot, Notify},
+        sync::{mpsc, oneshot},
         task::JoinHandle,
     },
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
     yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
 };
 
@@ -150,40 +151,54 @@ impl Drop for DebugClientStatuses {
 }
 
 impl DebugClientStatuses {
-    fn new(clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>) -> Arc<Self> {
+    fn new(
+        clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) -> Arc<Self> {
         let (requests_tx, requests_rx) = mpsc::unbounded_channel();
-        let jh = tokio::spawn(Self::run(clients_rx, requests_rx));
+        let jh = task_tracker.spawn(Self::run(clients_rx, requests_rx, cancellation_token));
         Arc::new(Self { requests_tx, jh })
     }
 
     async fn run(
         mut clients_rx: mpsc::UnboundedReceiver<DebugClientMessage>,
         mut requests_rx: mpsc::UnboundedReceiver<oneshot::Sender<String>>,
+        cancellation_token: CancellationToken,
     ) {
         let mut clients = HashMap::<usize, DebugClientStatus>::new();
         loop {
             tokio::select! {
-                Some(message) = clients_rx.recv() => match message {
-                    DebugClientMessage::UpdateFilter { id, filter } => {
-                        match clients.entry(id) {
-                            HashMapEntry::Occupied(mut entry) => {
-                                entry.get_mut().filter = filter;
-                            }
-                            HashMapEntry::Vacant(entry) => {
-                                entry.insert(DebugClientStatus {
-                                    filter,
-                                    processed_slot: 0,
-                                });
+                () = cancellation_token.cancelled() => {
+                    info!("DebugClientStatuses received cancellation");
+                    break
+                },
+                maybe = clients_rx.recv() => {
+                    let Some(message) = maybe else {
+                        break;
+                    };
+                    match message {
+                        DebugClientMessage::UpdateFilter { id, filter } => {
+                            match clients.entry(id) {
+                                HashMapEntry::Occupied(mut entry) => {
+                                    entry.get_mut().filter = filter;
+                                }
+                                HashMapEntry::Vacant(entry) => {
+                                    entry.insert(DebugClientStatus {
+                                        filter,
+                                        processed_slot: 0,
+                                    });
+                                }
                             }
                         }
-                    }
-                    DebugClientMessage::UpdateSlot { id, slot } => {
-                        if let Some(status) = clients.get_mut(&id) {
-                            status.processed_slot = slot;
+                        DebugClientMessage::UpdateSlot { id, slot } => {
+                            if let Some(status) = clients.get_mut(&id) {
+                                status.processed_slot = slot;
+                            }
                         }
-                    }
-                    DebugClientMessage::Removed { id } => {
-                        clients.remove(&id);
+                        DebugClientMessage::Removed { id } => {
+                            clients.remove(&id);
+                        }
                     }
                 },
                 Some(tx) = requests_rx.recv() => {
@@ -206,6 +221,7 @@ impl DebugClientStatuses {
                 },
             }
         }
+        info!("DebugClientStatuses exiting");
     }
 
     async fn get_statuses(&self) -> anyhow::Result<String> {
@@ -218,17 +234,15 @@ impl DebugClientStatuses {
     }
 }
 
-#[derive(Debug)]
-pub struct PrometheusService {
-    debug_clients_statuses: Option<Arc<DebugClientStatuses>>,
-    shutdown: Arc<Notify>,
-}
+pub struct PrometheusService;
 
 impl PrometheusService {
-    pub async fn new(
+    pub async fn spawn(
         config: Option<ConfigPrometheus>,
         debug_clients_rx: Option<mpsc::UnboundedReceiver<DebugClientMessage>>,
-    ) -> std::io::Result<Self> {
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) -> std::io::Result<()> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             macro_rules! register {
@@ -266,21 +280,29 @@ impl PrometheusService {
                 .inc();
         });
 
-        let shutdown = Arc::new(Notify::new());
         let mut debug_clients_statuses = None;
         if let Some(ConfigPrometheus { address }) = config {
             if let Some(debug_clients_rx) = debug_clients_rx {
-                debug_clients_statuses = Some(DebugClientStatuses::new(debug_clients_rx));
+                info!("starting DebugClientStatuses");
+                debug_clients_statuses = Some(DebugClientStatuses::new(
+                    debug_clients_rx,
+                    cancellation_token.child_token(),
+                    task_tracker.clone(),
+                ));
             }
             let debug_clients_statuses2 = debug_clients_statuses.clone();
 
-            let shutdown = Arc::clone(&shutdown);
             let listener = TcpListener::bind(&address).await?;
             info!("start prometheus server: {address}");
-            tokio::spawn(async move {
+            let task_tracker_clone = task_tracker.clone();
+            task_tracker.spawn(async move {
+                debug!("Prometheus server listening on {}", address);
                 loop {
                     let stream = tokio::select! {
-                        () = shutdown.notified() => break,
+                        () = cancellation_token.cancelled() => {
+                            info!("Prometheus server received cancellation");
+                            break
+                        },
                         maybe_conn = listener.accept() => {
                             match maybe_conn {
                                 Ok((stream, _addr)) => stream,
@@ -292,7 +314,9 @@ impl PrometheusService {
                         }
                     };
                     let debug_clients_statuses = debug_clients_statuses2.clone();
-                    tokio::spawn(async move {
+                    task_tracker_clone.spawn(async move {
+                        let peer_addr =  stream.peer_addr().ok();
+                        debug!("Prometheus server accepted new connection from {:?}", peer_addr);
                         if let Err(error) = ServerBuilder::new(TokioExecutor::new())
                             .serve_connection(
                                 TokioIo::new(stream),
@@ -332,20 +356,13 @@ impl PrometheusService {
                         {
                             error!("failed to handle request: {error}");
                         }
+                        debug!("Prometheus server finished connection from {:?}", peer_addr);
                     });
                 }
+                info!("Prometheus server exiting");
             });
         }
-
-        Ok(PrometheusService {
-            debug_clients_statuses,
-            shutdown,
-        })
-    }
-
-    pub fn shutdown(self) {
-        drop(self.debug_clients_statuses);
-        self.shutdown.notify_one();
+        Ok(())
     }
 }
 

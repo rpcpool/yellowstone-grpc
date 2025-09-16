@@ -5659,7 +5659,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "9.0.0"
+version = "9.0.1"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5693,6 +5693,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "vergen",
