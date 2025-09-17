@@ -53,9 +53,11 @@ solana-transaction = { workspace = true, features = ["blake3"] }
 
 [build-dependencies]
 anyhow = { workspace = true }
-protobuf-src = { workspace = true }
 tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
+
+[target.'cfg(not(windows))'.build-dependencies]
+protobuf-src = "1.1.0"
 
 [features]
 default = ["convert", "tonic", "tonic-compression"]
