@@ -46,6 +46,7 @@ solana-transaction-status = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }

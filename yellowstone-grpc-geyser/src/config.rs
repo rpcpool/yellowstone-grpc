@@ -67,9 +67,10 @@ impl ConfigLog {
 #[serde(deny_unknown_fields)]
 pub struct ConfigTokio {
     /// Number of worker threads in Tokio runtime
+    #[serde(default)]
     pub worker_threads: Option<usize>,
     /// Threads affinity
-    #[serde(deserialize_with = "ConfigTokio::deserialize_affinity")]
+    #[serde(default, deserialize_with = "ConfigTokio::deserialize_affinity")]
     pub affinity: Option<Vec<usize>>,
 }
 
@@ -346,5 +347,35 @@ where
             .map(Some)
             .map_err(de::Error::custom),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_deser_config_tokio() {
+        let json = r#"{
+            "worker_threads": 4,
+            "affinity": "0-3,5,7-8"
+        }"#;
+        let config: super::ConfigTokio = serde_json::from_str(json).unwrap();
+        assert_eq!(config.worker_threads, Some(4));
+        assert_eq!(config.affinity, Some(vec![0, 1, 2, 3, 5, 7, 8]));
+
+        let json_without_affinity = r#"{
+            "worker_threads": 4
+        }"#;
+        let config: super::ConfigTokio = serde_json::from_str(json_without_affinity).unwrap();
+        assert_eq!(config.worker_threads, Some(4));
+        assert_eq!(config.affinity, None);
+
+        let json_with_null_affinity = r#"{
+            "worker_threads": 4,
+            "affinity": null
+        }"#;
+        let config: super::ConfigTokio = serde_json::from_str(json_with_null_affinity).unwrap();
+        assert_eq!(config.worker_threads, Some(4));
+        assert_eq!(config.affinity, None);
     }
 }

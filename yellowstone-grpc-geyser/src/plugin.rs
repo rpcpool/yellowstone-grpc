@@ -19,8 +19,9 @@ use {
     },
     tokio::{
         runtime::{Builder, Runtime},
-        sync::{mpsc, Notify},
+        sync::mpsc,
     },
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
     yellowstone_grpc_proto::plugin::message::{
         Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
     },
@@ -32,8 +33,8 @@ pub struct PluginInner {
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     grpc_channel: mpsc::UnboundedSender<Message>,
-    grpc_shutdown: Arc<Notify>,
-    prometheus: PrometheusService,
+    plugin_cancellation_token: CancellationToken,
+    plugin_task_tracker: TaskTracker,
 }
 
 impl PluginInner {
@@ -61,7 +62,13 @@ impl Plugin {
 
 impl GeyserPlugin for Plugin {
     fn name(&self) -> &'static str {
-        concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"))
+        concat!(
+            env!("CARGO_PKG_NAME"),
+            "-",
+            env!("CARGO_PKG_VERSION"),
+            "+",
+            env!("GIT_VERSION")
+        )
     }
 
     fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
@@ -69,6 +76,8 @@ impl GeyserPlugin for Plugin {
 
         // Setup logger
         solana_logger::setup_with_default(&config.log.level);
+
+        log::info!("loading plugin: {}", self.name());
 
         // Create inner
         let mut builder = Builder::new_multi_thread();
@@ -80,35 +89,47 @@ impl GeyserPlugin for Plugin {
                 affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
             });
         }
+        let plugin_cancellation_token = CancellationToken::new();
+        let plugin_task_tracker = TaskTracker::new();
+        let prometheus_cancellation_token = plugin_cancellation_token.child_token();
+        let prometheus_task_tracker = plugin_task_tracker.clone();
+        let grpc_cancellation_token = plugin_cancellation_token.child_token();
+        let grpc_task_tracker = plugin_task_tracker.clone();
+
         let runtime = builder
             .thread_name_fn(crate::get_thread_name)
             .enable_all()
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let (snapshot_channel, grpc_channel, grpc_shutdown, prometheus) =
-            runtime.block_on(async move {
-                let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
-                let (snapshot_channel, grpc_channel, grpc_shutdown) = GrpcService::create(
-                    config.tokio,
-                    config.grpc,
-                    config.debug_clients_http.then_some(debug_client_tx),
-                    is_reload,
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-                let prometheus = PrometheusService::new(
-                    config.prometheus,
-                    config.debug_clients_http.then_some(debug_client_rx),
-                )
-                .await
-                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-                Ok::<_, GeyserPluginError>((
-                    snapshot_channel,
-                    grpc_channel,
-                    grpc_shutdown,
-                    prometheus,
-                ))
+        let result = runtime.block_on(async move {
+            let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
+            // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
+            PrometheusService::spawn(
+                config.prometheus,
+                config.debug_clients_http.then_some(debug_client_rx),
+                prometheus_cancellation_token,
+                prometheus_task_tracker,
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+
+            let (snapshot_channel, grpc_channel) = GrpcService::create(
+                config.grpc,
+                config.debug_clients_http.then_some(debug_client_tx),
+                is_reload,
+                grpc_cancellation_token,
+                grpc_task_tracker,
+            )
+            .await
+            .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
+        });
+
+        let (snapshot_channel, grpc_channel) = result
+            .inspect_err(|e| {
+                log::error!("failed to start plugin services: {e}");
+                plugin_cancellation_token.cancel();
             })?;
 
         self.inner = Some(PluginInner {
@@ -116,8 +137,8 @@ impl GeyserPlugin for Plugin {
             snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
             grpc_channel,
-            grpc_shutdown,
-            prometheus,
+            plugin_cancellation_token,
+            plugin_task_tracker,
         });
 
         Ok(())
@@ -125,10 +146,19 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
-            inner.grpc_shutdown.notify_one();
+            let number_of_tasks = inner.plugin_task_tracker.len();
+            log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
+            inner.plugin_cancellation_token.cancel();
+            inner.plugin_task_tracker.close();
             drop(inner.grpc_channel);
-            inner.prometheus.shutdown();
-            inner.runtime.shutdown_timeout(Duration::from_secs(30));
+            const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+            let now = std::time::Instant::now();
+            log::info!(
+                "waiting up to {:?} for plugin tasks to shut down",
+                SHUTDOWN_TIMEOUT
+            );
+            inner.runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+            log::info!("tokio runtime shut down in {:?}", now.elapsed());
         }
     }
 
