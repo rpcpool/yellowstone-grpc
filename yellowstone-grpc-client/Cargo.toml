@@ -13,7 +13,7 @@ publish = true
 [dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
-thiserror ={ workspace = true }
+thiserror = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
