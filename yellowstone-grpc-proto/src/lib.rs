@@ -68,7 +68,6 @@ pub mod convert_to {
                 .map(|signature| <Signature as AsRef<[u8]>>::as_ref(signature).into())
                 .collect(),
             message: Some(create_message(&tx.message)),
-            message_hash: tx.message.hash().to_string(),
         }
     }
 
