@@ -315,8 +315,11 @@ impl PrometheusService {
                     };
                     let debug_clients_statuses = debug_clients_statuses2.clone();
                     task_tracker_clone.spawn(async move {
-                        let peer_addr =  stream.peer_addr().ok();
-                        debug!("Prometheus server accepted new connection from {:?}", peer_addr);
+                        let peer_addr = stream.peer_addr().ok();
+                        debug!(
+                            "Prometheus server accepted new connection from {:?}",
+                            peer_addr
+                        );
                         if let Err(error) = ServerBuilder::new(TokioExecutor::new())
                             .serve_connection(
                                 TokioIo::new(stream),
