@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "9.0.0"
+version = "9.0.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -13,7 +13,7 @@ publish = true
 [dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
-thiserror ={ workspace = true }
+thiserror = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }

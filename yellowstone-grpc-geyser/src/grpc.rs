@@ -526,7 +526,8 @@ impl GrpcService {
                 replay_stored_slots_rx,
                 replay_first_available_slot,
                 config.replay_stored_slots,
-            ).await;
+            )
+            .await;
         });
 
         // Run Server
@@ -955,10 +956,9 @@ impl GrpcService {
                     info!("client #{id}: snapshot stream ended");
                 }
                 Err(ClientSnapshotReplayError::Cancelled) => {
-                    let _ = stream_tx
-                        .try_send(Err(Status::internal(
-                            "server is shutting down try again later",
-                        )));
+                    let _ = stream_tx.try_send(Err(Status::internal(
+                        "server is shutting down try again later",
+                    )));
                     return;
                 }
                 Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
