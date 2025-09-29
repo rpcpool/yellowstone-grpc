@@ -126,11 +126,10 @@ impl GeyserPlugin for Plugin {
             Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
         });
 
-        let (snapshot_channel, grpc_channel) = result
-            .inspect_err(|e| {
-                log::error!("failed to start plugin services: {e}");
-                plugin_cancellation_token.cancel();
-            })?;
+        let (snapshot_channel, grpc_channel) = result.inspect_err(|e| {
+            log::error!("failed to start plugin services: {e}");
+            plugin_cancellation_token.cancel();
+        })?;
 
         self.inner = Some(PluginInner {
             runtime,
