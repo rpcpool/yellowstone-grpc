@@ -5582,7 +5582,7 @@ checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "9.1.0-rc1"
+version = "9.1.0"
 dependencies = [
  "bytes",
  "futures",
@@ -5622,7 +5622,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "9.1.0-rc1"
+version = "9.1.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5665,7 +5665,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "10.0.0-rc1"
+version = "10.0.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",
