@@ -1009,7 +1009,7 @@ impl FilterBlocksMeta {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct FilterAccountsDataSlice(Arc<Vec<Range<usize>>>);
+pub struct FilterAccountsDataSlice(Arc<[Range<usize>]>);
 
 impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {
     #[inline]
@@ -1046,10 +1046,10 @@ impl FilterAccountsDataSlice {
             }
         }
 
-        Ok(Self::new_unchecked(Arc::new(slices)))
+        Ok(Self::new_unchecked(Arc::from(slices.into_boxed_slice())))
     }
 
-    pub const fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
+    pub const fn new_unchecked(slices: Arc<[Range<usize>]>) -> Self {
         Self(slices)
     }
 
@@ -1057,7 +1057,15 @@ impl FilterAccountsDataSlice {
         if self.0.is_empty() {
             source.to_vec()
         } else {
-            let mut data = Vec::with_capacity(self.0.iter().map(|ds| ds.end - ds.start).sum());
+            // Make sure the vec capacity fit exaclty the data we want to copy
+            // Why: fitting capacity to length avoid reallocation if we ever need to promote the vector to `Bytes`.
+            let mut data = Vec::with_capacity(
+                self.0
+                    .iter()
+                    .filter(|range| source.len() > range.end)
+                    .map(|ds| ds.end - ds.start)
+                    .sum(),
+            );
             for data_slice in self.0.iter() {
                 if source.len() >= data_slice.end {
                     data.extend_from_slice(&source[data_slice.start..data_slice.end]);

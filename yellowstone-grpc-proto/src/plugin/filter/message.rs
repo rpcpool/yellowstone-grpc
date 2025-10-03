@@ -1,3 +1,5 @@
+#[cfg(feature = "account-data-as-bytes")]
+use bytes::Bytes;
 use {
     crate::{
         geyser::{
@@ -129,13 +131,17 @@ impl FilteredUpdate {
         message: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
+        let data_slice = data_slice.get_slice(message.data.iter().as_slice());
         SubscribeUpdateAccountInfo {
             pubkey: message.pubkey.as_ref().into(),
             lamports: message.lamports,
             owner: message.owner.as_ref().into(),
             executable: message.executable,
             rent_epoch: message.rent_epoch,
-            data: data_slice.get_slice(&message.data),
+            #[cfg(feature = "account-data-as-bytes")]
+            data: Bytes::from(data_slice),
+            #[cfg(not(feature = "account-data-as-bytes"))]
+            data: data_slice,
             write_version: message.write_version,
             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
         }
@@ -991,6 +997,7 @@ pub mod tests {
                 },
             },
         },
+        bytes::Bytes,
         prost::Message as _,
         prost_011::Message as _,
         prost_types::Timestamp,
@@ -1027,7 +1034,8 @@ pub mod tests {
             vec![Range { start: 1, end: 3 }, Range { start: 5, end: 10 }],
         ]
         .into_iter()
-        .map(Arc::new)
+        .map(Vec::into_boxed_slice)
+        .map(Arc::from)
         .map(FilterAccountsDataSlice::new_unchecked)
         .collect()
     }
@@ -1055,7 +1063,7 @@ pub mod tests {
                                     owner,
                                     executable,
                                     rent_epoch,
-                                    data: data.clone(),
+                                    data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
                                 }));
