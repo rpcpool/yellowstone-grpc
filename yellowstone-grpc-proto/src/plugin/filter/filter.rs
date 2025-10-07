@@ -73,24 +73,24 @@ pub enum FilterError {
 pub type FilterResult<T> = Result<T, FilterError>;
 
 macro_rules! filtered_updates_once_owned {
-    ($filters:ident, $message:expr, $created_at:expr) => {{
+    ($filters:ident, $message:expr) => {{
         let mut messages = FilteredUpdates::new();
         if !$filters.is_empty() {
-            messages.push(FilteredUpdate::new($filters, $message, $created_at));
+            messages.push(FilteredUpdate::new($filters, $message));
         }
         messages
     }};
 }
 
 macro_rules! filtered_updates_once_ref {
-    ($filters:ident, $message:expr, $created_at:expr) => {{
+    ($filters:ident, $message:expr) => {{
         let mut messages = FilteredUpdates::new();
         if !$filters.is_empty() {
             let mut message_filters = FilteredUpdateFilters::new();
             for filter in $filters {
                 message_filters.push(filter.clone());
             }
-            messages.push(FilteredUpdate::new(message_filters, $message, $created_at));
+            messages.push(FilteredUpdate::new(message_filters, $message));
         }
         messages
     }};
@@ -347,8 +347,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::account(message, accounts_data_slice.clone()),
-            message.created_at
+            FilteredUpdateOneof::account(message, accounts_data_slice.clone())
         )
     }
 }
@@ -653,8 +652,7 @@ impl FilterSlots {
             .collect::<FilteredUpdateFilters>();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::slot(message.clone()),
-            message.created_at
+            FilteredUpdateOneof::slot(message.clone())
         )
     }
 }
@@ -809,8 +807,7 @@ impl FilterTransactions {
                 FilterTransactionsType::TransactionStatus => {
                     FilteredUpdateOneof::transaction_status(message)
                 }
-            },
-            message.created_at
+            }
         )
     }
 }
@@ -840,8 +837,7 @@ impl FilterEntries {
         let filters = self.filters.as_slice();
         filtered_updates_once_ref!(
             filters,
-            FilteredUpdateOneof::entry(Arc::clone(message)),
-            message.created_at
+            FilteredUpdateOneof::entry(Arc::clone(message))
         )
     }
 }
@@ -969,8 +965,7 @@ impl FilterBlocks {
                     accounts_data_slice: accounts_data_slice.clone(),
                     accounts,
                     entries,
-                })),
-                message.created_at,
+                }))
             ));
         }
         updates
@@ -1002,8 +997,7 @@ impl FilterBlocksMeta {
         let filters = self.filters.as_slice();
         filtered_updates_once_ref!(
             filters,
-            FilteredUpdateOneof::block_meta(Arc::clone(message)),
-            message.created_at
+            FilteredUpdateOneof::block_meta(Arc::clone(message))
         )
     }
 }
@@ -1119,7 +1113,6 @@ mod tests {
                 message::{Message, MessageTransaction, MessageTransactionInfo},
             },
         },
-        prost_types::Timestamp,
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
@@ -1130,7 +1123,7 @@ mod tests {
         std::{
             collections::HashMap,
             sync::Arc,
-            time::{Duration, SystemTime},
+            time::Duration,
         },
     };
 
@@ -1185,8 +1178,7 @@ mod tests {
                 index: 1,
                 account_keys,
             }),
-            slot: 100,
-            created_at: Timestamp::from(SystemTime::now()),
+            slot: 100
         }
     }
 

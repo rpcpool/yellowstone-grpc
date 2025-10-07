@@ -129,7 +129,6 @@ message SubscribeUpdate {
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
   }
-  google.protobuf.Timestamp created_at = 11;
 }
 
 message SubscribeUpdateAccount {
