@@ -1027,11 +1027,5 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
 }
 
 fn print_update(kind: &str, filters: &[String], value: Value) {
-    info!(
-        "{kind} ({}) at {}: {}",
-        filters.join(","),
-        unix_since.as_secs(),
-        unix_since.subsec_micros(),
-        serde_json::to_string(&value).expect("json serialization failed")
-    );
+    // nothing
 }
