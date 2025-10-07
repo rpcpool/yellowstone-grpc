@@ -767,7 +767,6 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
                                 });
                                 messages_vec.push((msgid_gen.next(), message_slot));
                                 metrics::missed_status_message_inc(status);
