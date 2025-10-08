@@ -26,7 +26,7 @@ use {
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
-        time::{SystemTime, UNIX_EPOCH},
+        time::SystemTime,
     },
     tokio::{
         fs,
@@ -767,6 +767,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
+                                    created_at: Timestamp::from(SystemTime::now()),
                                 });
                                 messages_vec.push((msgid_gen.next(), message_slot));
                                 metrics::missed_status_message_inc(status);
@@ -844,7 +845,7 @@ impl GrpcService {
                                 }
                             }
                             if let Message::Account(account) = &message.1 {
-                                let proto_to_systime = SystemTime::try_from(timestamp).expect("invalid system time");
+                                let proto_to_systime = SystemTime::try_from(account.created_at).expect("invalid system time");
                                 let elapsed = SystemTime::now()
                                     .duration_since(proto_to_systime)
                                     .unwrap_or_default();
