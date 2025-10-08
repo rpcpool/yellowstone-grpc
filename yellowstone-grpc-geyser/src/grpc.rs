@@ -26,7 +26,7 @@ use {
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
-        time::SystemTime,
+        time::{SystemTime, UNIX_EPOCH},
     },
     tokio::{
         fs,
@@ -844,12 +844,9 @@ impl GrpcService {
                                 }
                             }
                             if let Message::Account(account) = &message.1 {
-                                let proto_timestamp_to_systemtime = Duration::new(
-                                    account.created_at.seconds as u64,
-                                    account.created_at.nanos as u32,
-                                ) + UNIX_EPOCH;
+                                let proto_to_systime = SystemTime::try_from(timestamp).expect("invalid system time");
                                 let elapsed = SystemTime::now()
-                                    .duration_since(proto_timestamp_to_systemtime)
+                                    .duration_since(proto_to_systime)
                                     .unwrap_or_default();
                                 metrics::observe_account_client_loop_update_duration(elapsed);
                             }
