@@ -15,7 +15,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Mutex,
         },
-        time::Duration,
+        time::{Duration, Instant},
     },
     tokio::{
         runtime::{Builder, Runtime},
@@ -194,8 +194,10 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
+                let start = Instant::now();
                 let message =
                     Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                metrics::observe_account_serialization_duration(start.elapsed());
                 inner.send_message(message);
             }
 

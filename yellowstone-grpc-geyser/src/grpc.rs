@@ -767,7 +767,6 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
                                 });
                                 messages_vec.push((msgid_gen.next(), message_slot));
                                 metrics::missed_status_message_inc(status);
@@ -843,6 +842,16 @@ impl GrpcService {
                                         );
                                     }
                                 }
+                            }
+                            if let Message::Account(account) = &message.1 {
+                                let proto_timestamp_to_systemtime = Duration::new(
+                                    account.created_at.seconds as u64,
+                                    account.created_at.nanos as u32,
+                                ) + UNIX_EPOCH;
+                                let elapsed = SystemTime::now()
+                                    .duration_since(proto_timestamp_to_systemtime)
+                                    .unwrap_or_default();
+                                metrics::observe_account_client_loop_update_duration(elapsed);
                             }
 
                             processed_messages.push(message);
