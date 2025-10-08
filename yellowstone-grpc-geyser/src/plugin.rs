@@ -197,7 +197,7 @@ impl GeyserPlugin for Plugin {
                 let start = Instant::now();
                 let message =
                     Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
-                metrics::observe_account_serialization_duration(start.elapsed());
+                metrics::observe_account_message_creation_duration(start.elapsed());
                 inner.send_message(message);
             }
 

@@ -849,7 +849,7 @@ impl GrpcService {
                                 let elapsed = SystemTime::now()
                                     .duration_since(proto_to_systime)
                                     .unwrap_or_default();
-                                metrics::observe_account_client_loop_update_duration(elapsed);
+                                metrics::observe_account_geyser_loop_update_duration(elapsed);
                             }
 
                             processed_messages.push(message);
