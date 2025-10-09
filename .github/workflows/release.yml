@@ -12,6 +12,11 @@ on:
   push:
     branches:
       - 'master'
+      - 'v1.16'
+      - 'v1.17'
+      - 'v1.18'
+      - 'v2.0'
+      - 'v2.1'
       - 'v2.2'
     tags:
       - 'v*'
@@ -74,7 +79,6 @@ jobs:
         run: |
           echo "CI_TAG=$(ci/getTag.sh)" >> "$GITHUB_ENV"
           echo "CI_OS_NAME=linux" >> "$GITHUB_ENV"
-          echo "CI_OS_VERSION=$(echo "${{ matrix.os }}" | sed 's/ubuntu-//' | sed 's/\.04//')" >> "$GITHUB_ENV"
 
           SOLANA_VERSION="$(./ci/solana-version.sh)"
           echo "SOLANA_VERSION=$SOLANA_VERSION" >> "$GITHUB_ENV"
@@ -103,10 +107,17 @@ jobs:
           mv target/release/client target/release/client-${{ matrix.os }}
           mv target/release/config-check target/release/config-check-${{ matrix.os }}
 
-      - name: Add os version to release name
+      - name: Rename lib for ubuntu22 release
+        if: matrix.os == 'ubuntu-22.04'
         run: |
-          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release${{ env.CI_OS_VERSION }}-x86_64-unknown-linux-gnu.tar.bz2
-          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release${{ env.CI_OS_VERSION }}-x86_64-unknown-linux-gnu.yml
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.tar.bz2
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release22-x86_64-unknown-linux-gnu.yml
+
+      - name: Rename lib for ubuntu24 release
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.tar.bz2 ${{ env.GEYSER_PLUGIN_NAME }}-release24-x86_64-unknown-linux-gnu.tar.bz2
+          mv ${{ env.GEYSER_PLUGIN_NAME }}-release-x86_64-unknown-linux-gnu.yml ${{ env.GEYSER_PLUGIN_NAME }}-release24-x86_64-unknown-linux-gnu.yml
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
