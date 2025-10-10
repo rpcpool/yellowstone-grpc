@@ -23,6 +23,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
+bytesize = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
