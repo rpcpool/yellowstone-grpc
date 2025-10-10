@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 10.0.0+solana.3.0.4
-    "yellowstone-grpc-client", # 10.0.0+solana.3.0.4
-    "yellowstone-grpc-geyser", # 10.0.0+solana.3.0.4
-    "yellowstone-grpc-proto", # 10.0.0+solana.3.0.4
+    "examples/rust", # 10.0.0+solana.3.0.6
+    "yellowstone-grpc-client", # 10.0.0+solana.3.0.6
+    "yellowstone-grpc-geyser", # 10.0.0+solana.3.0.6
+    "yellowstone-grpc-proto", # 10.0.0+solana.3.0.6
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -21,7 +21,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "^0.1.2"
-agave-geyser-plugin-interface = "=3.0.4"
+agave-geyser-plugin-interface = "=3.0.6"
 anyhow = "^1.0.0"
 backoff = "^0.4.0"
 base64 = "^0.22.1"
@@ -56,7 +56,7 @@ protobuf-src = "^1.1.0"
 serde = "^1.0.145"
 serde_json = "^1.0.86"
 solana-account = "^3.0.0"
-solana-account-decoder = "=3.0.4"
+solana-account-decoder = "=3.0.6"
 solana-clock = "^3.0.0"
 solana-hash = "^3.0.0"
 solana-keypair = "^3.0.0"
@@ -65,11 +65,11 @@ solana-message = { version = "^3.0.0", features = ["bincode", "blake3"] }
 solana-pubkey = "^3.0.0"
 solana-signature = "^3.0.0"
 solana-signer = "^3.0.0"
-solana-storage-proto = "=3.0.4"
+solana-storage-proto = "=3.0.6"
 solana-transaction = "^3.0.0"
-solana-transaction-context = "=3.0.4"
+solana-transaction-context = "=3.0.6"
 solana-transaction-error = "^3.0.0"
-solana-transaction-status = "=3.0.4"
+solana-transaction-status = "=3.0.6"
 smallvec = "^1.0.0"
 spl-token-2022 = "^8.0.0"
 thiserror = "^1.0.0"
@@ -82,8 +82,8 @@ tonic-prost = "^0.14.0"
 tonic-prost-build = "^0.14.0"
 tonic-health = "^0.14.0"
 vergen = "9"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.0.0+solana.3.0.4" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.0.0+solana.3.0.4", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.0.0+solana.3.0.6" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.0.0+solana.3.0.6", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
