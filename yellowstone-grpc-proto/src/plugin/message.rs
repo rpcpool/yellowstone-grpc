@@ -273,11 +273,23 @@ pub struct MessageTransactionInfo {
 
 impl MessageTransactionInfo {
     pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
-        let account_keys = info
+        let account_keys: HashSet<Pubkey> = info
             .transaction
             .message
-            .static_account_keys()
+            .static_account_keys() // Since V3, dynamic account are only available in `loaded_addresses`
             .iter()
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .writable
+                    .iter(),
+            )
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .readonly
+                    .iter(),
+            )
             .copied()
             .collect();
 
