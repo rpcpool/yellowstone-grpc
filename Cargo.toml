@@ -82,8 +82,8 @@ tonic-prost = "^0.14.0"
 tonic-prost-build = "^0.14.0"
 tonic-health = "^0.14.0"
 vergen = "9"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.0.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.1.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.1.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
