@@ -144,13 +144,7 @@ impl FilteredUpdate {
     fn as_subscribe_update_transaction(
         message: &MessageTransactionInfo,
     ) -> SubscribeUpdateTransactionInfo {
-        SubscribeUpdateTransactionInfo {
-            signature: message.signature.as_ref().into(),
-            is_vote: message.is_vote,
-            transaction: Some(message.transaction.clone()),
-            meta: Some(message.meta.clone()),
-            index: message.index as u64,
-        }
+        message.into()
     }
 
     fn as_subscribe_update_entry(message: &MessageEntry) -> SubscribeUpdateEntry {
@@ -282,6 +276,8 @@ impl FilteredUpdate {
                         },
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
+                        pre_transaction_accounts: Vec::new(),
+                        post_transaction_accounts: Vec::new(),
                     }),
                     slot: msg.slot,
                 })
@@ -974,6 +970,43 @@ impl FilteredUpdateEntry {
     }
 }
 
+impl From<&MessageAccountInfo> for SubscribeUpdateAccountInfo {
+    fn from(account: &MessageAccountInfo) -> Self {
+        Self {
+            pubkey: account.pubkey.as_ref().into(),
+            lamports: account.lamports,
+            owner: account.owner.as_ref().into(),
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: account.data.clone(),
+            write_version: account.write_version,
+            txn_signature: account.txn_signature.map(|s| s.as_ref().into()),
+        }
+    }
+}
+
+impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
+    fn from(message: &MessageTransactionInfo) -> Self {
+        Self {
+            signature: message.signature.as_ref().into(),
+            is_vote: message.is_vote,
+            transaction: Some(message.transaction.clone()),
+            meta: Some(message.meta.clone()),
+            index: message.index as u64,
+            pre_transaction_accounts: message
+                .pre_transaction_accounts
+                .iter()
+                .map(Into::into)
+                .collect(),
+            post_transaction_accounts: message
+                .post_transaction_accounts
+                .iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
 #[cfg(any(test, feature = "plugin-bench"))]
 pub mod tests {
     #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
@@ -1163,6 +1196,8 @@ pub mod tests {
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
+                            pre_transaction_accounts: Vec::new(),
+                            post_transaction_accounts: Vec::new(),
                         }
                     })
                     .map(Arc::new)

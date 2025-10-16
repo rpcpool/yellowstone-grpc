@@ -269,6 +269,8 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
+    pub pre_transaction_accounts: Vec<MessageAccountInfo>,
+    pub post_transaction_accounts: Vec<MessageAccountInfo>,
 }
 
 impl MessageTransactionInfo {
@@ -300,10 +302,24 @@ impl MessageTransactionInfo {
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
+            pre_transaction_accounts: Vec::new(),
+            post_transaction_accounts: Vec::new(),
         }
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
+        let pre_transaction_accounts = msg
+            .pre_transaction_accounts
+            .into_iter()
+            .map(MessageAccountInfo::from_update_oneof)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let post_transaction_accounts = msg
+            .post_transaction_accounts
+            .into_iter()
+            .map(MessageAccountInfo::from_update_oneof)
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             signature: Signature::try_from(msg.signature.as_slice())
                 .map_err(|_| "invalid signature length")?,
@@ -314,6 +330,8 @@ impl MessageTransactionInfo {
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
             account_keys: HashSet::new(),
+            pre_transaction_accounts,
+            post_transaction_accounts,
         })
     }
 

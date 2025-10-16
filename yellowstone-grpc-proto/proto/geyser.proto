@@ -167,6 +167,8 @@ message SubscribeUpdateTransactionInfo {
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   solana.storage.ConfirmedBlock.TransactionStatusMeta meta = 4;
   uint64 index = 5;
+  repeated SubscribeUpdateAccountInfo pre_transaction_accounts = 6;
+  repeated SubscribeUpdateAccountInfo post_transaction_accounts = 7;
 }
 
 message SubscribeUpdateTransactionStatus {
