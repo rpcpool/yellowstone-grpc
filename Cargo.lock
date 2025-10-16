@@ -5665,7 +5665,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "10.0.0"
+version = "9.1.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",
