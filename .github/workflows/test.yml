@@ -137,6 +137,9 @@ jobs:
       - name: cargo test
         run: cargo test --all-features
 
+      - name: install wasm dependencies
+        run: make solana-encoding-wasm-install-dependencies
+
       - name: make solana-encoding-wasm-build
         run: make solana-encoding-wasm-build
 
