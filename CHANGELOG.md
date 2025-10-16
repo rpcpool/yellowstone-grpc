@@ -16,6 +16,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+
+## 2025-10-16
+
+- yellowstone-grpc-geyser-10.0.1
+
+### Fixes
+
+- Added missing dynamic address in Message::Transaction's account keys. Since V3 there is not unified `account_keys` field in the transaction info message.
+
 ## 2025-10-16
 
 - yellowstone-grpc-geyser-10.0.0
