@@ -17,6 +17,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Breaking
 
 
+## 2025-10-18
+
+- yellowstone-grpc-proto-10.0.1+agave-pr-5114
+- yellowstone-grpc-geyser-10.0.1+agave-pr-5114
+
+### Features
+
+- Add support for pre/post account states on `MessageTransactionInfo`.
+
+
 ## 2025-10-16
 
 - yellowstone-grpc-proto-10.0.1
