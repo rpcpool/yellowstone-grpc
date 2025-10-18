@@ -14,6 +14,7 @@ use {
         SlotStatus as GeyserSlotStatus,
     },
     prost_types::Timestamp,
+    solana_account::{AccountSharedData, ReadableAccount},
     solana_clock::Slot,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
@@ -228,6 +229,23 @@ impl MessageAccountInfo {
     }
 }
 
+impl From<(&Pubkey, &AccountSharedData, Option<Signature>)> for MessageAccountInfo {
+    fn from(
+        (pubkey, account, txn_signature): (&Pubkey, &AccountSharedData, Option<Signature>),
+    ) -> Self {
+        Self {
+            pubkey: *pubkey,
+            lamports: account.lamports(),
+            owner: *account.owner(),
+            executable: account.executable(),
+            rent_epoch: account.rent_epoch(),
+            data: account.data().to_vec(),
+            write_version: 0,
+            txn_signature,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageAccount {
     pub account: Arc<MessageAccountInfo>,
@@ -269,8 +287,8 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
-    pub pre_transaction_accounts: Vec<MessageAccountInfo>,
-    pub post_transaction_accounts: Vec<MessageAccountInfo>,
+    pub pre_accounts_states: Vec<MessageAccountInfo>,
+    pub post_accounts_states: Vec<MessageAccountInfo>,
 }
 
 impl MessageTransactionInfo {
@@ -295,6 +313,18 @@ impl MessageTransactionInfo {
             .copied()
             .collect();
 
+        let pre_accounts_states: Vec<MessageAccountInfo> = info
+            .pre_accounts_states
+            .iter()
+            .map(|(pubkey, account)| (pubkey, account, Some(*info.signature)).into())
+            .collect();
+
+        let post_accounts_states: Vec<MessageAccountInfo> = info
+            .post_accounts_states
+            .iter()
+            .map(|(pubkey, account)| (pubkey, account, Some(*info.signature)).into())
+            .collect();
+
         Self {
             signature: *info.signature,
             is_vote: info.is_vote,
@@ -302,20 +332,20 @@ impl MessageTransactionInfo {
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
-            pre_transaction_accounts: Vec::new(),
-            post_transaction_accounts: Vec::new(),
+            pre_accounts_states,
+            post_accounts_states,
         }
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
-        let pre_transaction_accounts = msg
-            .pre_transaction_accounts
+        let pre_accounts_states = msg
+            .pre_accounts_states
             .into_iter()
             .map(MessageAccountInfo::from_update_oneof)
             .collect::<Result<Vec<_>, _>>()?;
 
-        let post_transaction_accounts = msg
-            .post_transaction_accounts
+        let post_accounts_states = msg
+            .post_accounts_states
             .into_iter()
             .map(MessageAccountInfo::from_update_oneof)
             .collect::<Result<Vec<_>, _>>()?;
@@ -330,8 +360,8 @@ impl MessageTransactionInfo {
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
             account_keys: HashSet::new(),
-            pre_transaction_accounts,
-            post_transaction_accounts,
+            pre_accounts_states,
+            post_accounts_states,
         })
     }
 

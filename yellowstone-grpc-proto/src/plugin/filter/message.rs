@@ -276,8 +276,8 @@ impl FilteredUpdate {
                         },
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
-                        pre_transaction_accounts: Vec::new(),
-                        post_transaction_accounts: Vec::new(),
+                        pre_accounts_states: Vec::new(),
+                        post_accounts_states: Vec::new(),
                     }),
                     slot: msg.slot,
                 })
@@ -665,10 +665,36 @@ impl FilteredUpdateTransaction {
         if index != 0u64 {
             ::prost::encoding::uint64::encode(5u32, &index, buf);
         }
+        for account in &tx.pre_accounts_states {
+            let account_info: SubscribeUpdateAccountInfo = account.into();
+            message::encode(6u32, &account_info, buf);
+        }
+        for account in &tx.post_accounts_states {
+            let account_info: SubscribeUpdateAccountInfo = account.into();
+            message::encode(7u32, &account_info, buf);
+        }
     }
 
     fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
         let index = tx.index as u64;
+
+        let pre_accounts_len: usize = tx
+            .pre_accounts_states
+            .iter()
+            .map(|account| {
+                let account_info: SubscribeUpdateAccountInfo = account.into();
+                message::encoded_len(6u32, &account_info)
+            })
+            .sum();
+
+        let post_accounts_len: usize = tx
+            .post_accounts_states
+            .iter()
+            .map(|account| {
+                let account_info: SubscribeUpdateAccountInfo = account.into();
+                message::encoded_len(7u32, &account_info)
+            })
+            .sum();
 
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
             + if tx.is_vote {
@@ -683,6 +709,8 @@ impl FilteredUpdateTransaction {
             } else {
                 0
             }
+            + pre_accounts_len
+            + post_accounts_len
     }
 }
 
@@ -993,13 +1021,9 @@ impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
             transaction: Some(message.transaction.clone()),
             meta: Some(message.meta.clone()),
             index: message.index as u64,
-            pre_transaction_accounts: message
-                .pre_transaction_accounts
-                .iter()
-                .map(Into::into)
-                .collect(),
-            post_transaction_accounts: message
-                .post_transaction_accounts
+            pre_accounts_states: message.pre_accounts_states.iter().map(Into::into).collect(),
+            post_accounts_states: message
+                .post_accounts_states
                 .iter()
                 .map(Into::into)
                 .collect(),
@@ -1196,8 +1220,8 @@ pub mod tests {
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
-                            pre_transaction_accounts: Vec::new(),
-                            post_transaction_accounts: Vec::new(),
+                            pre_accounts_states: Vec::new(),
+                            post_accounts_states: Vec::new(),
                         }
                     })
                     .map(Arc::new)
