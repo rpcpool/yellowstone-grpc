@@ -673,6 +673,7 @@ struct FilterTransactionsInner {
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
     account_required: HashSet<Pubkey>,
+    include_pre_post_accounts: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -737,6 +738,7 @@ impl FilterTransactions {
                         &filter.account_required,
                         &HashSet::new(),
                     )?,
+                    include_pre_post_accounts: filter.include_pre_post_accounts.unwrap_or(false),
                 },
             );
         }
@@ -747,6 +749,8 @@ impl FilterTransactions {
     }
 
     pub fn get_updates(&self, message: &MessageTransaction) -> FilteredUpdates {
+        let mut include_pre_post_accounts = false;
+
         let filters = self
             .filters
             .iter()
@@ -798,6 +802,11 @@ impl FilterTransactions {
                     return None;
                 }
 
+                // Check if this matching filter requests pre/post accounts
+                if inner.include_pre_post_accounts {
+                    include_pre_post_accounts = true;
+                }
+
                 Some(name.clone())
             })
             .collect::<FilteredUpdateFilters>();
@@ -805,7 +814,7 @@ impl FilterTransactions {
         filtered_updates_once_owned!(
             filters,
             match self.filter_type {
-                FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
+                FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message, include_pre_post_accounts),
                 FilterTransactionsType::TransactionStatus => {
                     FilteredUpdateOneof::transaction_status(message)
                 }
@@ -1262,6 +1271,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1297,6 +1307,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1338,6 +1349,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1403,6 +1415,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1468,6 +1481,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude,
                 account_required: vec![],
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1519,6 +1533,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                include_pre_post_accounts: None,
             },
         );
 
@@ -1592,6 +1607,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                include_pre_post_accounts: None,
             },
         );
 

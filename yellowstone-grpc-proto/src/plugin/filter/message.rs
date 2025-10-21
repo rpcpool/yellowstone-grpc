@@ -257,10 +257,14 @@ impl FilteredUpdate {
                 FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
             }
             UpdateOneof::Transaction(msg) => {
+                let include_pre_post_accounts = msg.transaction.as_ref()
+                    .and_then(|t| t.pre_post_account_states.as_ref())
+                    .is_some();
                 let tx = MessageTransaction::from_update_oneof(msg, created_at)?;
                 FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
                     transaction: tx.transaction,
                     slot: tx.slot,
+                    include_pre_post_accounts,
                 })
             }
             UpdateOneof::TransactionStatus(msg) => {
@@ -342,10 +346,11 @@ impl FilteredUpdateOneof {
         Self::Slot(FilteredUpdateSlot(message))
     }
 
-    pub fn transaction(message: &MessageTransaction) -> Self {
+    pub fn transaction(message: &MessageTransaction, include_pre_post_accounts: bool) -> Self {
         Self::Transaction(FilteredUpdateTransaction {
             transaction: Arc::clone(&message.transaction),
             slot: message.slot,
+            include_pre_post_accounts,
         })
     }
 
@@ -615,18 +620,19 @@ impl prost::Message for FilteredUpdateSlot {
 pub struct FilteredUpdateTransaction {
     pub transaction: Arc<MessageTransactionInfo>,
     pub slot: u64,
+    pub include_pre_post_accounts: bool,
 }
 
 impl prost::Message for FilteredUpdateTransaction {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::tx_encode_raw(1u32, &self.transaction, buf);
+        Self::tx_encode_raw(1u32, &self.transaction, self.include_pre_post_accounts, buf);
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
     }
 
     fn encoded_len(&self) -> usize {
-        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction))
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction, self.include_pre_post_accounts))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
             } else {
@@ -650,9 +656,9 @@ impl prost::Message for FilteredUpdateTransaction {
 }
 
 impl FilteredUpdateTransaction {
-    fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
+    fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, include_pre_post: bool, buf: &mut impl BufMut) {
         encode_key(tag, WireType::LengthDelimited, buf);
-        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+        encode_varint(Self::tx_encoded_len(tx, include_pre_post) as u64, buf);
 
         let index = tx.index as u64;
 
@@ -665,36 +671,45 @@ impl FilteredUpdateTransaction {
         if index != 0u64 {
             ::prost::encoding::uint64::encode(5u32, &index, buf);
         }
-        for account in &tx.pre_accounts_states {
-            let account_info: SubscribeUpdateAccountInfo = account.into();
-            message::encode(6u32, &account_info, buf);
-        }
-        for account in &tx.post_accounts_states {
-            let account_info: SubscribeUpdateAccountInfo = account.into();
-            message::encode(7u32, &account_info, buf);
+
+        // Encode pre_post_account_states only if requested
+        if include_pre_post {
+            let pre_post_states = crate::geyser::PrePostAccountStates {
+                pre_account_states: tx
+                    .pre_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+                post_account_states: tx
+                    .post_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            };
+            message::encode(6u32, &pre_post_states, buf);
         }
     }
 
-    fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
+    fn tx_encoded_len(tx: &MessageTransactionInfo, include_pre_post: bool) -> usize {
         let index = tx.index as u64;
 
-        let pre_accounts_len: usize = tx
-            .pre_accounts_states
-            .iter()
-            .map(|account| {
-                let account_info: SubscribeUpdateAccountInfo = account.into();
-                message::encoded_len(6u32, &account_info)
-            })
-            .sum();
-
-        let post_accounts_len: usize = tx
-            .post_accounts_states
-            .iter()
-            .map(|account| {
-                let account_info: SubscribeUpdateAccountInfo = account.into();
-                message::encoded_len(7u32, &account_info)
-            })
-            .sum();
+        let pre_post_states_len = if include_pre_post {
+            let pre_post_states = crate::geyser::PrePostAccountStates {
+                pre_account_states: tx
+                    .pre_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+                post_account_states: tx
+                    .post_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            };
+            message::encoded_len(6u32, &pre_post_states)
+        } else {
+            0
+        };
 
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
             + if tx.is_vote {
@@ -709,8 +724,7 @@ impl FilteredUpdateTransaction {
             } else {
                 0
             }
-            + pre_accounts_len
-            + post_accounts_len
+            + pre_post_states_len
     }
 }
 
@@ -807,7 +821,7 @@ impl prost::Message for FilteredUpdateBlock {
             message::encode(5u32, msg, buf);
         }
         for tx in &self.transactions {
-            FilteredUpdateTransaction::tx_encode_raw(6u32, tx.as_ref(), buf);
+            FilteredUpdateTransaction::tx_encode_raw(6u32, tx.as_ref(), false, buf);
         }
         if self.meta.parent_slot != 0u64 {
             ::prost::encoding::uint64::encode(7u32, &self.meta.parent_slot, buf);
@@ -867,7 +881,7 @@ impl prost::Message for FilteredUpdateBlock {
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
             + prost_repeated_encoded_len_map!(6u32, self.transactions, |tx| {
-                FilteredUpdateTransaction::tx_encoded_len(tx.as_ref())
+                FilteredUpdateTransaction::tx_encoded_len(tx.as_ref(), false)
             })
             + if self.meta.parent_slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(7u32, &self.meta.parent_slot)
@@ -1015,18 +1029,32 @@ impl From<&MessageAccountInfo> for SubscribeUpdateAccountInfo {
 
 impl From<&MessageTransactionInfo> for SubscribeUpdateTransactionInfo {
     fn from(message: &MessageTransactionInfo) -> Self {
+        let pre_post_account_states = if !message.pre_accounts_states.is_empty()
+            || !message.post_accounts_states.is_empty()
+        {
+            Some(crate::geyser::PrePostAccountStates {
+                pre_account_states: message
+                    .pre_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+                post_account_states: message
+                    .post_accounts_states
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            })
+        } else {
+            None
+        };
+
         Self {
             signature: message.signature.as_ref().into(),
             is_vote: message.is_vote,
             transaction: Some(message.transaction.clone()),
             meta: Some(message.meta.clone()),
             index: message.index as u64,
-            pre_accounts_states: message.pre_accounts_states.iter().map(Into::into).collect(),
-            post_accounts_states: message
-                .post_accounts_states
-                .iter()
-                .map(Into::into)
-                .collect(),
+            pre_post_account_states,
         }
     }
 }

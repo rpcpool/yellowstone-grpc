@@ -338,17 +338,23 @@ impl MessageTransactionInfo {
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
-        let pre_accounts_states = msg
-            .pre_accounts_states
-            .into_iter()
-            .map(MessageAccountInfo::from_update_oneof)
-            .collect::<Result<Vec<_>, _>>()?;
+        let (pre_accounts_states, post_accounts_states) = if let Some(pre_post) = msg.pre_post_account_states {
+            let pre = pre_post
+                .pre_account_states
+                .into_iter()
+                .map(MessageAccountInfo::from_update_oneof)
+                .collect::<Result<Vec<_>, _>>()?;
 
-        let post_accounts_states = msg
-            .post_accounts_states
-            .into_iter()
-            .map(MessageAccountInfo::from_update_oneof)
-            .collect::<Result<Vec<_>, _>>()?;
+            let post = pre_post
+                .post_account_states
+                .into_iter()
+                .map(MessageAccountInfo::from_update_oneof)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            (pre, post)
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         Ok(Self {
             signature: Signature::try_from(msg.signature.as_slice())

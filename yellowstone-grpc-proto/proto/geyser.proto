@@ -94,6 +94,7 @@ message SubscribeRequestFilterTransactions {
   repeated string account_include = 3;
   repeated string account_exclude = 4;
   repeated string account_required = 6;
+  optional bool include_pre_post_accounts = 7;
 }
 
 message SubscribeRequestFilterBlocks {
@@ -167,8 +168,12 @@ message SubscribeUpdateTransactionInfo {
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   solana.storage.ConfirmedBlock.TransactionStatusMeta meta = 4;
   uint64 index = 5;
-  repeated SubscribeUpdateAccountInfo pre_accounts_states = 6;
-  repeated SubscribeUpdateAccountInfo post_accounts_states = 7;
+  optional PrePostAccountStates pre_post_account_states = 6;
+}
+
+message PrePostAccountStates {
+  repeated SubscribeUpdateAccountInfo pre_account_states = 1;
+  repeated SubscribeUpdateAccountInfo post_account_states = 2;
 }
 
 message SubscribeUpdateTransactionStatus {
