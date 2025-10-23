@@ -18,9 +18,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2025-10-16
 
-- yellowstone-grpc-proto-10.0.0
-- yellowstone-grpc-geyser-10.0.0
-- yellowstone-grpc-client-10.0.0
+- yellowstone-grpc-proto-10.1.0
+- yellowstone-grpc-geyser-10.1.0
+- yellowstone-grpc-client-10.1.0
 
 ### Features
 
@@ -28,7 +28,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2025-10-16
 
-- yellowstone-grpc-proto-10.0.0
+- yellowstone-grpc-proto-10.0.1
 - yellowstone-grpc-geyser-10.0.1
 
 ### Fixes
