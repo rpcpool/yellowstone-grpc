@@ -16,6 +16,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-10-16
+
+- yellowstone-grpc-proto-10.1.0
+- yellowstone-grpc-geyser-10.1.0
+- yellowstone-grpc-client-10.1.0
+
+### Features
+
+- Imported patch from 9.1.0 to support Bytes Account data field.
 
 ## 2025-10-16
 
@@ -37,6 +46,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Breaking
 
 - Upgraded solana/agave dependencies to agave 3
+
+## 2025-10-03
+
+- yellowstone-grpc-proto 9.1.0
+- yellowstone-grpc-client 9.1.0
+- yellowstone-grpc-geyser 9.1.0
+
+### Features
+
+- Added optional feature-flag for `yellowstone-grpc-client` and `yellowstone-grpc-proto` to change `SubscribeUpdateAccountInfo::data` field from `Vec<u8>` to `Bytes`.
+This feature will eventually become the default and then always `Bytes` as it offers better flexibility for client-side code.
 
 ## 2025-09-28
 

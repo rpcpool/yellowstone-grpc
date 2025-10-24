@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "10.0.1"
+version = "10.1.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -50,7 +50,7 @@ tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
-yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic"] }
+yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }
 
 [build-dependencies]
 anyhow = { workspace = true }
