@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "10.1.0"
+version = "10.1.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -43,7 +43,6 @@ solana-clock = { workspace = true }
 solana-logger = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-transaction-status = { workspace = true }
-spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-util = { workspace = true, features = ["rt"]}
