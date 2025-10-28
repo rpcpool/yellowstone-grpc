@@ -35,7 +35,9 @@ use {
     prost::encoding::{encode_key, encode_varint, WireType},
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
-    spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
+    spl_token_2022_interface::{
+        generic_token_account::GenericTokenAccount, state::Account as TokenAccount,
+    },
     std::{
         collections::{HashMap, HashSet},
         ops::Range,
