@@ -13,14 +13,18 @@ clean-rust:
 	rm -rf target
 	rm -rf yellowstone-grpc-client-nodejs/solana-encoding-wasm/target
 
+solana-encoding-wasm-install-dependencies:
+	rustup target add wasm32-unknown-unknown
+	cargo install -f wasm-bindgen-cli --version 0.2.100
+
 solana-encoding-wasm-clippy:
 	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
-		cargo clippy --target wasm32-unknown-unknown --all-targets
+		RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo clippy --target wasm32-unknown-unknown --all-targets
 
 solana-encoding-wasm-build:
 	# RUSTFLAGS to disable `mold`
 	cd yellowstone-grpc-client-nodejs/solana-encoding-wasm && \
-		RUSTFLAGS="" cargo build \
+		RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build \
 			--target wasm32-unknown-unknown \
 			--release
 

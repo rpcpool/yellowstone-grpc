@@ -35,7 +35,9 @@ use {
     prost::encoding::{encode_key, encode_varint, WireType},
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
-    spl_token_2022::{generic_token_account::GenericTokenAccount, state::Account as TokenAccount},
+    spl_token_2022_interface::{
+        generic_token_account::GenericTokenAccount, state::Account as TokenAccount,
+    },
     std::{
         collections::{HashMap, HashSet},
         ops::Range,
@@ -1009,7 +1011,7 @@ impl FilterBlocksMeta {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct FilterAccountsDataSlice(Arc<Vec<Range<usize>>>);
+pub struct FilterAccountsDataSlice(Arc<[Range<usize>]>);
 
 impl AsRef<[Range<usize>]> for FilterAccountsDataSlice {
     #[inline]
@@ -1046,10 +1048,10 @@ impl FilterAccountsDataSlice {
             }
         }
 
-        Ok(Self::new_unchecked(Arc::new(slices)))
+        Ok(Self::new_unchecked(Arc::from(slices.into_boxed_slice())))
     }
 
-    pub const fn new_unchecked(slices: Arc<Vec<Range<usize>>>) -> Self {
+    pub const fn new_unchecked(slices: Arc<[Range<usize>]>) -> Self {
         Self(slices)
     }
 
@@ -1057,7 +1059,15 @@ impl FilterAccountsDataSlice {
         if self.0.is_empty() {
             source.to_vec()
         } else {
-            let mut data = Vec::with_capacity(self.0.iter().map(|ds| ds.end - ds.start).sum());
+            // Make sure the vec capacity fit exaclty the data we want to copy
+            // Why: fitting capacity to length avoid reallocation if we ever need to promote the vector to `Bytes`.
+            let mut data = Vec::with_capacity(
+                self.0
+                    .iter()
+                    .filter(|range| source.len() > range.end)
+                    .map(|ds| ds.end - ds.start)
+                    .sum(),
+            );
             for data_slice in self.0.iter() {
                 if source.len() >= data_slice.end {
                     data.extend_from_slice(&source[data_slice.start..data_slice.end]);
@@ -1125,7 +1135,7 @@ mod tests {
         solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
         solana_pubkey::Pubkey,
         solana_signer::Signer,
-        solana_transaction::{sanitized::SanitizedTransaction, Transaction},
+        solana_transaction::{versioned::VersionedTransaction, Transaction},
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
@@ -1151,9 +1161,8 @@ mod tests {
             ..SolMessage::default()
         };
         let recent_blockhash = Hash::default();
-        let sanitized_transaction = SanitizedTransaction::from_transaction_for_tests(
-            Transaction::new(&[keypair], message, recent_blockhash),
-        );
+        let versioned_transaction =
+            VersionedTransaction::from(Transaction::new(&[keypair], message, recent_blockhash));
         let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
             status: Ok(()),
             fee: 0,
@@ -1169,10 +1178,13 @@ mod tests {
             compute_units_consumed: None,
             cost_units: None,
         });
-        let sig = sanitized_transaction.signature();
-        let account_keys = sanitized_transaction
-            .message()
-            .account_keys()
+        let sig = versioned_transaction
+            .signatures
+            .first()
+            .expect("No signature found");
+        let account_keys = versioned_transaction
+            .message
+            .static_account_keys()
             .iter()
             .copied()
             .collect();
@@ -1180,7 +1192,7 @@ mod tests {
             transaction: Arc::new(MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
-                transaction: convert_to::create_transaction(&sanitized_transaction),
+                transaction: convert_to::create_transaction(&versioned_transaction),
                 meta,
                 index: 1,
                 account_keys,

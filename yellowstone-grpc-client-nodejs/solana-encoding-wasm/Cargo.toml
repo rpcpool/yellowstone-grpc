@@ -13,10 +13,13 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+# getrandom is used by a dependency which does not enable the wasm_js feature and causes compilation for wasm to fail.
+# thus, this needs to be added as a dependency with the feature enabled. Refer the Makefile in root for the build commands
+getrandom = { version = "0.3", features = ["wasm_js"] }
 serde_json = "1.0.86"
-solana-transaction-status = "~2.3.0"
+solana-transaction-status = "3"
 wasm-bindgen = "0.2.100"
-yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "9.0.0", default-features = false, features = ["convert"] }
+yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "10.0.0", default-features = false, features = ["convert"] }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

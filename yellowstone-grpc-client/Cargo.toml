@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "9.0.0"
+version = "10.1.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -10,10 +10,15 @@ license = "Apache-2.0"
 keywords = { workspace = true }
 publish = true
 
+[features]
+account-data-as-bytes = [
+    "yellowstone-grpc-proto/account-data-as-bytes"
+]
+
 [dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
-thiserror ={ workspace = true }
+thiserror = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }

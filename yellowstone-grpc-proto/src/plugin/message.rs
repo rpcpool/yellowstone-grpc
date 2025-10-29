@@ -10,9 +10,10 @@ use {
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
         SlotStatus as GeyserSlotStatus,
     },
+    bytes::Bytes,
     prost_types::Timestamp,
     solana_clock::Slot,
     solana_hash::{Hash, HASH_BYTES},
@@ -190,20 +191,22 @@ pub struct MessageAccountInfo {
     pub owner: Pubkey,
     pub executable: bool,
     pub rent_epoch: u64,
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
 }
 
 impl MessageAccountInfo {
     pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
+        let shared = info.data.to_vec();
+        let data = Bytes::from(shared);
         Self {
             pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
             lamports: info.lamports,
             owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
             executable: info.executable,
             rent_epoch: info.rent_epoch,
-            data: info.data.into(),
+            data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
         }
@@ -216,7 +219,10 @@ impl MessageAccountInfo {
             owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
             executable: msg.executable,
             rent_epoch: msg.rent_epoch,
+            #[cfg(feature = "account-data-as-bytes")]
             data: msg.data,
+            #[cfg(not(feature = "account-data-as-bytes"))]
+            data: Bytes::from(msg.data),
             write_version: msg.write_version,
             txn_signature: msg
                 .txn_signature
@@ -272,12 +278,24 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>) -> Self {
-        let account_keys = info
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
+        let account_keys: HashSet<Pubkey> = info
             .transaction
-            .message()
-            .account_keys()
+            .message
+            .static_account_keys() // Since V3, dynamic account are only available in `loaded_addresses`
             .iter()
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .writable
+                    .iter(),
+            )
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .readonly
+                    .iter(),
+            )
             .copied()
             .collect();
 
@@ -345,7 +363,7 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>, slot: Slot) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot) -> Self {
         Self {
             transaction: Arc::new(MessageTransactionInfo::from_geyser(info)),
             slot,

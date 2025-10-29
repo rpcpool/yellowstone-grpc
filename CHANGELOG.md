@@ -16,6 +16,68 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-10-25
+
+- yellowstone-grpc-client-simple-10.1.1
+- yellowstone-grpc-client-10.1.1
+- yellowstone-grpc-geyser-10.1.1
+- yellowstone-grpc-proto-10.1.1
+
+### Fixes
+
+- deps: use spl-token-2022-interface instead of spl-token-2022
+
+## 2025-10-16
+
+- yellowstone-grpc-proto-10.1.0
+- yellowstone-grpc-geyser-10.1.0
+- yellowstone-grpc-client-10.1.0
+
+### Features
+
+- Imported patch from 9.1.0 to support Bytes Account data field.
+
+## 2025-10-16
+
+- yellowstone-grpc-proto-10.0.1
+- yellowstone-grpc-geyser-10.0.1
+
+### Fixes
+
+- Added missing dynamic address in Message::Transaction's account keys. Since V3 there is not unified `account_keys` field in the transaction info message.
+
+## 2025-10-16
+
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-client-simple-10.0.0
+- yellowstone-grpc-client-10.0.0
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-proto-10.0.0
+
+### Breaking
+
+- Upgraded solana/agave dependencies to agave 3
+
+## 2025-10-03
+
+- yellowstone-grpc-proto 9.1.0
+- yellowstone-grpc-client 9.1.0
+- yellowstone-grpc-geyser 9.1.0
+
+### Features
+
+- Added optional feature-flag for `yellowstone-grpc-client` and `yellowstone-grpc-proto` to change `SubscribeUpdateAccountInfo::data` field from `Vec<u8>` to `Bytes`.
+This feature will eventually become the default and then always `Bytes` as it offers better flexibility for client-side code.
+
+## 2025-09-28
+
+- yellowstone-grpc-proto 9.0.1
+- yellowstone-grpc-client 9.0.1
+
+### Fixes
+
+- Removed all dependency version pinning at the workspace level for greater flexibility for users.
+
 ## 2025-09-11
 
 - yellowstone-grpc-geyser-9.0.1

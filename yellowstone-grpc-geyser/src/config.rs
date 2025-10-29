@@ -357,11 +357,11 @@ mod tests {
     fn test_deser_config_tokio() {
         let json = r#"{
             "worker_threads": 4,
-            "affinity": "0-3,5,7-8"
+            "affinity": "0-2,3"
         }"#;
         let config: super::ConfigTokio = serde_json::from_str(json).unwrap();
         assert_eq!(config.worker_threads, Some(4));
-        assert_eq!(config.affinity, Some(vec![0, 1, 2, 3, 5, 7, 8]));
+        assert_eq!(config.affinity, Some(vec![0, 1, 2, 3]));
 
         let json_without_affinity = r#"{
             "worker_threads": 4

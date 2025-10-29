@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "9.0.0"
+version = "10.1.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -38,7 +38,7 @@ solana-transaction-context = { workspace = true, optional = true }
 solana-transaction-error = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
-spl-token-2022 = { workspace = true, optional = true }
+spl-token-2022-interface = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
@@ -81,7 +81,7 @@ plugin = [
     "dep:bytes",
     "dep:serde",
     "dep:smallvec",
-    "dep:spl-token-2022",
+    "dep:spl-token-2022-interface",
     "dep:thiserror",
     "dep:tonic"
 ]
@@ -93,6 +93,9 @@ plugin-bench = [
 ]
 tonic = ["dep:tonic", "dep:tonic-prost"]
 tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
+account-data-as-bytes = [
+    "dep:bytes"
+]
 
 [lints]
 workspace = true

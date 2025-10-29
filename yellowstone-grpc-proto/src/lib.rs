@@ -46,13 +46,12 @@ pub mod convert_to {
         super::prelude as proto,
         solana_clock::UnixTimestamp,
         solana_message::{
-            compiled_instruction::CompiledInstruction,
-            v0::{LoadedMessage, MessageAddressTableLookup},
-            LegacyMessage, MessageHeader, SanitizedMessage,
+            compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup,
+            MessageHeader, VersionedMessage,
         },
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        solana_transaction::sanitized::SanitizedTransaction,
+        solana_transaction::versioned::VersionedTransaction,
         solana_transaction_context::TransactionReturnData,
         solana_transaction_error::TransactionError,
         solana_transaction_status::{
@@ -61,20 +60,20 @@ pub mod convert_to {
         },
     };
 
-    pub fn create_transaction(tx: &SanitizedTransaction) -> proto::Transaction {
+    pub fn create_transaction(tx: &VersionedTransaction) -> proto::Transaction {
         proto::Transaction {
             signatures: tx
-                .signatures()
+                .signatures
                 .iter()
                 .map(|signature| <Signature as AsRef<[u8]>>::as_ref(signature).into())
                 .collect(),
-            message: Some(create_message(tx.message())),
+            message: Some(create_message(&tx.message)),
         }
     }
 
-    pub fn create_message(message: &SanitizedMessage) -> proto::Message {
+    pub fn create_message(message: &VersionedMessage) -> proto::Message {
         match message {
-            SanitizedMessage::Legacy(LegacyMessage { message, .. }) => proto::Message {
+            VersionedMessage::Legacy(message) => proto::Message {
                 header: Some(create_header(&message.header)),
                 account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
@@ -82,7 +81,7 @@ pub mod convert_to {
                 versioned: false,
                 address_table_lookups: vec![],
             },
-            SanitizedMessage::V0(LoadedMessage { message, .. }) => proto::Message {
+            VersionedMessage::V0(message) => proto::Message {
                 header: Some(create_header(&message.header)),
                 account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
@@ -632,13 +631,28 @@ pub mod convert_from {
         Pubkey::try_from(pubkey).map_err(|_| "failed to parse Pubkey")
     }
 
+    #[cfg(feature = "account-data-as-bytes")]
+    fn take_account_data(account: &mut proto::SubscribeUpdateAccountInfo) -> Vec<u8> {
+        // By taking the data, we make sure the reference count goes quicker to 1.
+        // If only one reference remains (say this instance), during `into()`, it won't copy the vector
+        // Compared to `Bytes:to_vec`, it should not allocate new memory.
+        let bytes = std::mem::take(&mut account.data);
+        bytes.into()
+    }
+
+    #[cfg(not(feature = "account-data-as-bytes"))]
+    fn take_account_data(account: &mut proto::SubscribeUpdateAccountInfo) -> Vec<u8> {
+        std::mem::take(&mut account.data)
+    }
+
     pub fn create_account(
-        account: proto::SubscribeUpdateAccountInfo,
+        mut account: proto::SubscribeUpdateAccountInfo,
     ) -> CreateResult<(Pubkey, Account)> {
         let pubkey = create_pubkey(&account.pubkey)?;
+        let account_data = take_account_data(&mut account);
         let account = Account {
             lamports: account.lamports,
-            data: account.data,
+            data: account_data,
             owner: create_pubkey(&account.owner)?,
             executable: account.executable,
             rent_epoch: account.rent_epoch,
