@@ -25,7 +25,7 @@ use {
     base64::{prelude::BASE64_STANDARD, Engine},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
-    spl_token_2022::generic_token_account::GenericTokenAccount,
+    spl_token_2022_interface::generic_token_account::GenericTokenAccount,
     std::{collections::HashSet, sync::Arc},
 };
 
@@ -343,7 +343,9 @@ impl AccountFilter for AccountPubkeyFilter {
 
 impl AccountFilter for IsTokenAccountFilter {
     fn filter(&self, account: &dyn AbstractAccount) -> bool {
-        spl_token_2022::state::Account::valid_account_data(account.data())
+        <spl_token_2022_interface::state::Account as GenericTokenAccount>::valid_account_data(
+            account.data(),
+        )
     }
 
     fn complexity_score(&self) -> usize {
@@ -608,7 +610,7 @@ mod tests {
         solana_program_pack::Pack,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        spl_token_2022::state::{Account, AccountState},
+        spl_token_2022_interface::state::{Account, AccountState},
         std::collections::HashSet,
     };
 

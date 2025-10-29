@@ -14,7 +14,7 @@ use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoV3, ReplicaAccountInfoVersions,
         ReplicaBlockInfoV4, ReplicaBlockInfoVersions, ReplicaEntryInfoV2, ReplicaEntryInfoVersions,
-        ReplicaTransactionInfoV2, ReplicaTransactionInfoVersions, Result as PluginResult,
+        ReplicaTransactionInfoV3, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
     bytes::Bytes,
@@ -144,12 +144,24 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV2<'_>, slot: u64) -> Self {
-        let account_keys = info
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: u64) -> Self {
+        let account_keys: HashSet<Pubkey> = info
             .transaction
-            .message()
-            .account_keys()
+            .message
+            .static_account_keys() // Since V3, dynamic account are only available in `loaded_addresses`
             .iter()
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .writable
+                    .iter(),
+            )
+            .chain(
+                info.transaction_status_meta
+                    .loaded_addresses
+                    .readonly
+                    .iter(),
+            )
             .copied()
             .collect();
 
@@ -368,7 +380,10 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_1(_info) => {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
                 }
-                ReplicaTransactionInfoVersions::V0_0_2(info) => info,
+                ReplicaTransactionInfoVersions::V0_0_2(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
+                }
+                ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 
             let message =
@@ -442,19 +457,18 @@ pub mod convert_to {
             prelude::{self as proto},
         },
         agave_geyser_plugin_interface::geyser_plugin_interface::{
-            ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV2,
+            ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
             SlotStatus,
         },
         bytes::Bytes,
         solana_clock::UnixTimestamp,
         solana_message::{
-            compiled_instruction::CompiledInstruction,
-            v0::{LoadedMessage, MessageAddressTableLookup},
-            LegacyMessage, MessageHeader, SanitizedMessage,
+            compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup,
+            MessageHeader, VersionedMessage,
         },
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        solana_transaction::sanitized::SanitizedTransaction,
+        solana_transaction::versioned::VersionedTransaction,
         solana_transaction_context::TransactionReturnData,
         solana_transaction_error::TransactionError,
         solana_transaction_status::{
@@ -463,20 +477,20 @@ pub mod convert_to {
         },
     };
 
-    pub fn create_transaction(tx: &SanitizedTransaction) -> proto::Transaction {
+    pub fn create_transaction(tx: &VersionedTransaction) -> proto::Transaction {
         proto::Transaction {
             signatures: tx
-                .signatures()
+                .signatures
                 .iter()
                 .map(|signature| <Signature as AsRef<[u8]>>::as_ref(signature).into())
                 .collect(),
-            message: Some(create_message(tx.message())),
+            message: Some(create_message(&tx.message)),
         }
     }
 
-    pub fn create_message(message: &SanitizedMessage) -> proto::Message {
+    pub fn create_message(message: &VersionedMessage) -> proto::Message {
         match message {
-            SanitizedMessage::Legacy(LegacyMessage { message, .. }) => proto::Message {
+            VersionedMessage::Legacy(message) => proto::Message {
                 header: Some(create_header(&message.header)),
                 account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
@@ -484,7 +498,7 @@ pub mod convert_to {
                 versioned: false,
                 address_table_lookups: vec![],
             },
-            SanitizedMessage::V0(LoadedMessage { message, .. }) => proto::Message {
+            VersionedMessage::V0(message) => proto::Message {
                 header: Some(create_header(&message.header)),
                 account_keys: create_pubkeys(&message.account_keys),
                 recent_blockhash: message.recent_blockhash.to_bytes().into(),
@@ -755,7 +769,7 @@ pub mod convert_to {
     }
 
     pub fn create_transaction_info_update(
-        transaction: &ReplicaTransactionInfoV2<'_>,
+        transaction: &ReplicaTransactionInfoV3<'_>,
     ) -> proto::SubscribeUpdateTransactionInfo {
         proto::SubscribeUpdateTransactionInfo {
             signature: transaction.signature.as_ref().to_vec(),
@@ -767,7 +781,7 @@ pub mod convert_to {
     }
 
     pub fn create_transaction_update(
-        transaction: &ReplicaTransactionInfoV2<'_>,
+        transaction: &ReplicaTransactionInfoV3<'_>,
         slot: u64,
     ) -> SubscribeUpdateTransaction {
         SubscribeUpdateTransaction {
