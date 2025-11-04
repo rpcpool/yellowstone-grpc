@@ -1,6 +1,6 @@
 # Yellowstone Dragon's Mouth - a Geyser based gRPC interface for Solana
 
-This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo we have the plugin as well as sample clients for multiple languages.
+This repo contains a fully functional gRPC interface for Solana. It is built around Solana's Geyser interface. In this repo, we have the plugin and sample clients for multiple languages.
 
 It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path.
 
@@ -8,23 +8,23 @@ For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc
 
 #### Known bugs
 
-Block reconstruction inside gRPC plugin based on information provided by BlockMeta, unfortunately number of entries for blocks generated on validators always equal to zero. These blocks always will have zero entries. See issue on GitHub: https://github.com/solana-labs/solana/issues/33823
+Block reconstruction inside gRPC plugin is based on information provided by BlockMeta, unfortunately, the number of entries for blocks generated on validators is always equal to zero. These blocks will always have zero entries. See issue on GitHub: https://github.com/solana-labs/solana/issues/33823
 
 ### Validator
 
 ```bash
-$ solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
+solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 ```
 
 ### Plugin config check
 
-```
+```bash
 cargo-fmt && cargo run --bin config-check -- --config yellowstone-grpc-geyser/config.json
 ```
 
 ### Block reconstruction
 
-Geyser interface on block update do not provide detailed information about transactions and accounts updates. To provide this information with block message we need to collect all messages and expect specified order. By default if we failed to reconstruct full block we log error message and increase `invalid_full_blocks_total` counter in prometheus metrics. If you want to panic on invalid reconstruction you can change option `block_fail_action` in config to `panic` (default value is `log`).
+Geyser interface on block update does not provide detailed information about transactions and account updates. To provide this information with a block message, we must collect all messages and expect a specified order. By default, if we failed to reconstruct full block, we log an error message and increase the `invalid_full_blocks_total` counter in prometheus metrics. If you want to panic on invalid reconstruction, change the option `block_fail_action` in config to `panic` (default value is `log`).
 
 ### Filters for streamed data
 
@@ -32,11 +32,11 @@ Please check [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/
 
    - `commitment` — commitment level: `processed` / `confirmed` / `finalized`
    - `accounts_data_slice` — array of objects `{ offset: uint64, length: uint64 }`, allow to receive only required data from accounts
-   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if client doesn't send anything during some time. As workaround you can send same filter every N seconds, but this would be not optimal since you need to keep this filter. Instead, you can send subscribe request with `ping` field set to `true` and ignore rest of the fields in the request. Since we sent `Ping` message every 15s from the server, you can send subscribe request with `ping` as reply and receive `Pong` message.
+   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if the client doesn't send anything during some time. You can send the same filter every N seconds as a workaround, but this would not be optimal since you need to keep this filter. Instead, you can send a subscribe request with `ping` field set to `true` and ignore the rest of the fields in the request. Since we sent a `Ping` message every 15s from the server, you can send a subscribe request with `ping` as a reply and receive a `Pong` message.
 
 #### Slots
 
-   - `filter_by_commitment` — by default slots sent for all commitment levels, but with this filter you can receive only selected commitment level
+   - `filter_by_commitment` — by default, slots are sent for all commitment levels, but with this filter, you can receive only the selected commitment level
 
 #### Account
 
@@ -46,7 +46,7 @@ Accounts can be filtered by:
    - `owner` — account owner Pubkey, match to any Pubkey from the array
    - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
-If all fields are empty then all accounts are broadcasted. Otherwise fields work as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
+If all fields are empty, then all accounts are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
 
 #### Transactions
 
@@ -55,13 +55,13 @@ If all fields are empty then all accounts are broadcasted. Otherwise fields work
    - `signature` — match only specified transaction
    - `account_include` — filter transactions that use any account from the list
    - `account_exclude` — opposite to `account_include`
-   - `account_required` — require all accounts from the list to be used in transaction
+   - `account_required` — require all accounts from the list to be used in the transaction
 
-If all fields are empty then all transactions are broadcasted. Otherwise fields works as logical `AND` and values in arrays as logical `OR`.
+If all fields are empty, then all transactions are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR`.
 
 #### Entries
 
-Currently we do not have filters for the entries, all entries broadcasted.
+Currently, we do not have filters for the entries, all entries are broadcast.
 
 #### Blocks
 
@@ -72,11 +72,11 @@ Currently we do not have filters for the entries, all entries broadcasted.
 
 #### Blocks meta
 
-Same as `Blocks` but without `transactions`, `accounts` and entries. Currently we do not have filters for block meta, all messages are broadcasted.
+Same as `Blocks` but without `transactions`, `accounts`, and entries. Currently, we do not have filters for block meta, all messages are broadcast.
 
 ### Limit filters
 
-It's possible to add limits for filters in the config. If `filters` field is omitted then filters don't have any limits.
+It's possible to add limits for filters in the config. If the `filters` field is omitted, then filters don't have any limits.
 
 ```json
 "grpc": {
@@ -139,9 +139,10 @@ It's possible to add limits for filters in the config. If `filters` field is omi
    - [Rust](examples/rust)
    - [TypeScript](examples/typescript)
 
-**NOTE**: Some load balancers will terminate gRPC connections if there are no messages sent from the client for a period of time.
-In order to mitigate this you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.
-The gRPC server already sends pings to the client, so you can simply reply with a ping and your connection will remain open.
+> [!NOTE]
+> Some load balancers will terminate gRPC connections if no messages are sent from the client for a period of time.
+In order to mitigate this, you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.
+The gRPC server already sends pings to the client, so you can reply with a ping, and your connection will remain open.
 You can see in the rust example how to reply to the ping from the server with the client.
 
 ### Projects based on Geyser gRPC
