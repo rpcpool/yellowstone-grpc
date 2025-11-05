@@ -16,6 +16,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-11-05
+
+- yellowstone-grpc-geyser-10.2.0
+
+### Features
+
+- geyser: optimize account processing latency by removing 10ms timeout and reducing batch size to 8 for better CPU cache alignment
+- geyser: add histogram metrics for account processing visibility (account_message_creation_duration_us, account_geyser_loop_update_duration_us)
+
 ## 2025-10-25
 
 - yellowstone-grpc-client-simple-10.1.1

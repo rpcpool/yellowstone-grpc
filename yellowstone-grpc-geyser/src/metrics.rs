@@ -115,6 +115,22 @@ lazy_static::lazy_static! {
         )
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
+
+    static ref ACCOUNT_MESSAGE_CREATION_DURATION_US: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "account_message_creation_duration_us",
+            "Duration of account message creation"
+        )
+        .buckets(vec![0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
+    ).unwrap();
+
+    static ref ACCOUNT_GEYSER_LOOP_UPDATE_DURATION_US: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "account_geyser_loop_update_duration_us",
+            "Duration of account geyser loop update"
+        )
+        .buckets(vec![0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -266,6 +282,8 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(ACCOUNT_MESSAGE_CREATION_DURATION_US);
+            register!(ACCOUNT_GEYSER_LOOP_UPDATE_DURATION_US);
 
             VERSION
                 .with_label_values(&[
@@ -476,4 +494,12 @@ pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
     GRPC_SUBSCRIBER_QUEUE_SIZE
         .with_label_values(&[subscriber_id.as_ref()])
         .set(size as i64);
+}
+
+pub fn observe_account_message_creation_duration(duration: std::time::Duration) {
+    ACCOUNT_MESSAGE_CREATION_DURATION_US.observe(duration.as_micros() as f64);
+}
+
+pub fn observe_account_geyser_loop_update_duration(duration: std::time::Duration) {
+    ACCOUNT_GEYSER_LOOP_UPDATE_DURATION_US.observe(duration.as_micros() as f64);
 }

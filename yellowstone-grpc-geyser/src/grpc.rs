@@ -31,7 +31,7 @@ use {
     tokio::{
         fs,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration, Instant},
+        time::{sleep, Duration},
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
@@ -568,14 +568,11 @@ impl GrpcService {
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
     ) {
-        const PROCESSED_MESSAGES_MAX: usize = 31;
-        const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
+        const PROCESSED_MESSAGES_MAX: usize = 8;
         let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_first_slot = None;
-        let processed_sleep = sleep(PROCESSED_MESSAGES_SLEEP);
-        tokio::pin!(processed_sleep);
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
@@ -584,6 +581,10 @@ impl GrpcService {
                 maybe = messages_rx.recv() => {
                     let Some(message) = maybe else {
                         info!("Geyser loop: messages channel closed");
+                        // Send any remaining processed messages before exiting
+                        if !processed_messages.is_empty() {
+                            let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                        }
                         break;
                     };
                     metrics::message_queue_size_dec();
@@ -767,7 +768,7 @@ impl GrpcService {
                                     parent: entry.parent_slot,
                                     status,
                                     dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
+                                    created_at: Timestamp::from(SystemTime::now()),
                                 });
                                 messages_vec.push((msgid_gen.next(), message_slot));
                                 metrics::missed_status_message_inc(status);
@@ -809,14 +810,11 @@ impl GrpcService {
                                 }
                             };
 
-                            // processed
+                            // processed - always send immediately when we have slot messages
                             processed_messages.push(message.clone());
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                            processed_sleep
-                                .as_mut()
-                                .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
 
                             // confirmed
                             confirmed_messages.push(message.clone());
@@ -844,6 +842,13 @@ impl GrpcService {
                                     }
                                 }
                             }
+                            if let Message::Account(account) = &message.1 {
+                                let proto_to_systime = SystemTime::try_from(account.created_at).expect("invalid system time");
+                                let elapsed = SystemTime::now()
+                                    .duration_since(proto_to_systime)
+                                    .unwrap_or_default();
+                                metrics::observe_account_geyser_loop_update_duration(elapsed);
+                            }
 
                             processed_messages.push(message);
                             if processed_messages.len() >= PROCESSED_MESSAGES_MAX
@@ -853,9 +858,6 @@ impl GrpcService {
                                 let _ = broadcast_tx
                                     .send((CommitmentLevel::Processed, processed_messages.into()));
                                 processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                                processed_sleep
-                                    .as_mut()
-                                    .reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                             }
 
                             if !confirmed_messages.is_empty() {
@@ -869,13 +871,6 @@ impl GrpcService {
                             }
                         }
                     }
-                }
-                () = &mut processed_sleep => {
-                    if !processed_messages.is_empty() {
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
-                    processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
                 }
                 Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
                     if let Some((slot, _)) = messages.first_key_value() {
