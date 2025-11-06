@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscriberUnconfirmed(stream SubscribeUnconfirmedRequest) returns (stream SubscribeUncomfiredUpdate) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -218,6 +219,20 @@ message SubscribeUpdatePing {}
 
 message SubscribeUpdatePong {
   int32 id = 1;
+}
+
+// Subscriptions to unconfirmed transactions
+message SubscribeUnconfirmedRequest {
+  map<string, SubscribeUnconfirmedRequestFilterTransactions> transactions = 3;
+
+} 
+
+message SubscribeUnconfirmedRequestFilterTransactions {
+  optional bool vote = 1;
+  optional string signature = 5;
+  repeated string account_include = 3;
+  repeated string account_exclude = 4;
+  repeated string account_required = 6;
 }
 
 // non-streaming methods
