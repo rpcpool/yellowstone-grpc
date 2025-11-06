@@ -229,20 +229,20 @@ message SubscribeUnconfirmedRequest {
 
 message SubscribeUnconfirmedRequestFilterTransactions {
   optional bool vote = 1;
-  optional string signature = 5;
-  repeated string account_include = 3;
-  repeated string account_exclude = 4;
-  repeated string account_required = 6;
+  optional string signature = 4;
+  repeated string account_include = 2;
+  repeated string account_exclude = 3;
+  repeated string account_required = 5;
 }
 
 message SubscribeUncomfiredUpdate {
   repeated string filters = 1;
   oneof update_oneof {
-    SubscribeUnconfirmedTransaction transaction = 4;
-    SubscribeUpdatePing ping = 6;
-    SubscribeUpdatePong pong = 9;
+    SubscribeUnconfirmedTransaction transaction = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
   }
-  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message SubscribeUnconfirmedTransaction {
