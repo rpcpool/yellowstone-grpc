@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscriberUnconfirmed(stream SubscribeUnconfirmedRequest) returns (stream SubscribeUncomfiredUpdate) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -219,6 +220,45 @@ message SubscribeUpdatePing {}
 message SubscribeUpdatePong {
   int32 id = 1;
 }
+
+// Subscriptions to unconfirmed transactions
+message SubscribeUnconfirmedRequest {
+  map<string, SubscribeUnconfirmedRequestFilterTransactions> transactions = 3;
+
+}
+
+message SubscribeUnconfirmedRequestFilterTransactions {
+  optional bool vote = 1;
+  optional string signature = 4;
+  repeated string account_include = 2;
+  repeated string account_exclude = 3;
+  repeated string account_required = 5;
+}
+
+message SubscribeUncomfiredUpdate {
+  repeated string filters = 1;
+  oneof update_oneof {
+    // Add Entries? 
+    SubscribeUnconfirmedTransaction transaction = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+  }
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message SubscribeUnconfirmedTransaction {
+  SubscribeUnconfirmedTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUnconfirmedTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  // This is really strange naming for this type
+  // should we just remove this type here and add a separate Transaction type?
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
+}
+
 
 // non-streaming methods
 
