@@ -225,7 +225,7 @@ message SubscribeUpdatePong {
 message SubscribeUnconfirmedRequest {
   map<string, SubscribeUnconfirmedRequestFilterTransactions> transactions = 3;
 
-} 
+}
 
 message SubscribeUnconfirmedRequestFilterTransactions {
   optional bool vote = 1;
@@ -234,6 +234,30 @@ message SubscribeUnconfirmedRequestFilterTransactions {
   repeated string account_exclude = 4;
   repeated string account_required = 6;
 }
+
+message SubscribeUncomfiredUpdate {
+  repeated string filters = 1;
+  oneof update_oneof {
+    SubscribeUnconfirmedTransaction transaction = 4;
+    SubscribeUpdatePing ping = 6;
+    SubscribeUpdatePong pong = 9;
+  }
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message SubscribeUnconfirmedTransaction {
+  SubscribeUnconfirmedTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUnconfirmedTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  // This is really strange naming for this type
+  // should we just remove this type here and add a separate Transaction type?
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
+}
+
 
 // non-streaming methods
 
