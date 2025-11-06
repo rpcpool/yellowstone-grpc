@@ -238,6 +238,7 @@ message SubscribeUnconfirmedRequestFilterTransactions {
 message SubscribeUncomfiredUpdate {
   repeated string filters = 1;
   oneof update_oneof {
+    // Add Entries? 
     SubscribeUnconfirmedTransaction transaction = 2;
     SubscribeUpdatePing ping = 3;
     SubscribeUpdatePong pong = 4;
