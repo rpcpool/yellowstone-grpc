@@ -79,6 +79,9 @@ impl GeyserPlugin for Plugin {
 
         log::info!("loading plugin: {}", self.name());
 
+        // Reset metrics to prevent accumulation across plugin reload cycles
+        metrics::reset_metrics();
+
         // Create inner
         let mut builder = Builder::new_multi_thread();
         if let Some(worker_threads) = config.tokio.worker_threads {
