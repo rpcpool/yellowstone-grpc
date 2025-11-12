@@ -477,3 +477,28 @@ pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
         .with_label_values(&[subscriber_id.as_ref()])
         .set(size as i64);
 }
+
+/// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
+pub fn reset_metrics() {
+    // Reset gauge metrics to 0
+    CONNECTIONS_TOTAL.set(0);
+    MESSAGE_QUEUE_SIZE.set(0);
+
+    // Reset gauge vectors (clears all label combinations)
+    SUBSCRIPTIONS_TOTAL.reset();
+    SLOT_STATUS.reset();
+    SLOT_STATUS_PLUGIN.reset();
+    INVALID_FULL_BLOCKS.reset();
+    GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD.reset();
+    GRPC_SUBSCRIBER_QUEUE_SIZE.reset();
+    GRPC_SUBCRIBER_RX_LOAD.reset();
+
+    // Reset counter vectors (clears all label combinations)
+    MISSED_STATUS_MESSAGE.reset();
+    GRPC_MESSAGE_SENT.reset();
+    GRPC_BYTES_SENT.reset();
+
+    // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
+    // - VERSION contains build info set once on startup
+    // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()
+}
