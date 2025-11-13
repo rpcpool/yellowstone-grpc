@@ -21,6 +21,8 @@ futures = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
+
+# Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
 
 [dev-dependencies]

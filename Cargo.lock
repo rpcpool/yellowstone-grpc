@@ -5064,7 +5064,6 @@ dependencies = [
  "solana-clock",
  "solana-logger",
  "solana-pubkey",
- "solana-transaction-status",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
