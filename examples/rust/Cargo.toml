@@ -26,12 +26,19 @@ indicatif = { workspace = true }
 log = { workspace = true }
 maplit = { workspace = true }
 serde_json = { workspace = true }
-solana-hash = { workspace = true }
-solana-pubkey = { workspace = true }
-solana-signature = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
 tonic = { workspace = true, features = ["zstd", "gzip", "tls-native-roots", "tls-ring"] }
+
+# Agave Monorepo
+# empty
+
+# Solana SDK
+solana-hash = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-signature = { workspace = true }
+
+# Yellowstone
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
 
