@@ -112,8 +112,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         &mut self,
         request: Option<SubscribeRequest>,
     ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>>,
+        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
     )> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
