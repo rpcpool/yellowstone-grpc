@@ -123,7 +123,7 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
             None => return Err("failed to get core IDs".to_owned()),
         };
 
-        let max_index = core_ids.len().checked_sub(1).unwrap_or(0);
+        let max_index = core_ids.len().saturating_sub(1);
 
         if set_max_index > max_index {
             return Err(format!("core index must be in the range [0, {max_index}]"));
