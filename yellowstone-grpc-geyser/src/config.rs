@@ -118,9 +118,10 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     vec.sort();
 
     if let Some(set_max_index) = vec.last().copied() {
-        let max_index = affinity::get_thread_affinity()
-            .map_err(|_err| "failed to get affinity".to_owned())?
+        let max_index = core_affinity::get_core_ids()
+            .unwrap_or_else(|| panic!("failed to get affinity"))
             .into_iter()
+            .map(|core_id| core_id.id)
             .max()
             .unwrap_or(0);
 

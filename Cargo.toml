@@ -20,7 +20,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
-affinity = "0.1.2"
+core_affinity = "0.8.3"
 agave-geyser-plugin-interface = "3.0.0"
 anyhow = "1.0.98"
 backoff = "0.4.0"
