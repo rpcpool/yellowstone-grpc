@@ -118,12 +118,12 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     vec.sort();
 
     if let Some(set_max_index) = vec.last().copied() {
-        let core_ids = match core_affinity::get_core_ids() {
-            Some(ids) => ids,
-            None => return Err("failed to get core IDs".to_owned()),
-        };
-
-        let max_index = core_ids.len().saturating_sub(1);
+        let max_index = core_affinity::get_core_ids()
+            .unwrap_or_else(|| panic!("failed to get affinity"))
+            .into_iter()
+            .map(|core_id| core_id.id)
+            .max()
+            .unwrap_or(0);
 
         if set_max_index > max_index {
             return Err(format!("core index must be in the range [0, {max_index}]"));

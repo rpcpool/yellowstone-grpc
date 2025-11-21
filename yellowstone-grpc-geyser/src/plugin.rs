@@ -12,8 +12,7 @@ use {
     std::{
         concat, env,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     },
@@ -87,6 +86,7 @@ impl GeyserPlugin for Plugin {
         if let Some(worker_threads) = config.tokio.worker_threads {
             builder.worker_threads(worker_threads);
         }
+        let (tx_err, rx_err) = std::sync::mpsc::channel::<Result<(), String>>();
         if let Some(tokio_cpus) = config.tokio.affinity.clone() {
             // Use atomic counter to distribute threads across configured cores in round-robin fashion
             let thread_counter = Arc::new(AtomicUsize::new(0));
@@ -97,16 +97,19 @@ impl GeyserPlugin for Plugin {
                     id: tokio_cpus[core_idx],
                 };
 
-                // Try to set affinity, just warn if it fails
+                // Try to set affinity, return error if it fails
                 if !core_affinity::set_for_current(core_id) {
-                    log::warn!(
-                        "Failed to set affinity for thread {} to core {}",
-                        thread_idx,
-                        tokio_cpus[core_idx]
-                    );
+                    let _ = tx_err.send(Err(format!("Failed to set affinity for core: {}", core_id.id)));
                 }
             });
         }
+
+        for _ in 0..config.tokio.worker_threads.unwrap_or(1) {
+            if let Ok(err) = rx_err.try_recv() {
+                return Err(GeyserPluginError::Custom(format!("{err:?}").into()));
+            }
+        }
+
         let plugin_cancellation_token = CancellationToken::new();
         let plugin_task_tracker = TaskTracker::new();
         let prometheus_cancellation_token = plugin_cancellation_token.child_token();
