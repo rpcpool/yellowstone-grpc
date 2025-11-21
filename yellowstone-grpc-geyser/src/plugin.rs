@@ -12,7 +12,8 @@ use {
     std::{
         concat, env,
         sync::{
-            Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Mutex,
         },
         time::Duration,
     },
@@ -99,7 +100,10 @@ impl GeyserPlugin for Plugin {
 
                 // Try to set affinity, return error if it fails
                 if !core_affinity::set_for_current(core_id) {
-                    let _ = tx_err.send(Err(format!("Failed to set affinity for core: {}", core_id.id)));
+                    let _ = tx_err.send(Err(format!(
+                        "Failed to set affinity for core: {}",
+                        core_id.id
+                    )));
                 }
             });
         }
