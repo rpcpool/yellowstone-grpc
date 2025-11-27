@@ -175,6 +175,12 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub channel_capacity: usize,
+    /// Capacity of the channel per connection for preprocessed requests
+    #[serde(
+        default = "ConfigGrpc::subscribe_preprocessed_channel_capacity_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub subscribe_preprocessed_channel_capacity: usize,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -233,6 +239,10 @@ impl ConfigGrpc {
     }
 
     const fn channel_capacity_default() -> usize {
+        250_000
+    }
+
+    const fn subscribe_preprocessed_channel_capacity_default() -> usize {
         250_000
     }
 
