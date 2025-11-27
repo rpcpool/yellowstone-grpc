@@ -23,9 +23,17 @@ pub struct Config {
     pub grpc: ConfigGrpc,
     #[serde(default)]
     pub prometheus: Option<ConfigPrometheus>,
+    #[serde(default)]
+    pub shredstream: ConfigShredstream,
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
     pub debug_clients_http: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigShredstream {
+    pub endpoint: String,
 }
 
 impl Config {
