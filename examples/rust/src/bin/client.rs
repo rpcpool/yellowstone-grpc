@@ -147,7 +147,7 @@ impl Args {
         Some(self.commitment.unwrap_or_default().into())
     }
 
-    async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor>> {
+    async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor + Clone>> {
         let mut tls_config = ClientTlsConfig::new().with_native_roots();
         if let Some(path) = &self.ca_certificate {
             let bytes = fs::read(path).await?;
