@@ -27,6 +27,8 @@ fn main() -> anyhow::Result<()> {
         get_pkg_version(&lockfile, "yellowstone-grpc-proto")
     );
 
+    generate_grpc_shredstream()?;
+
     Ok(())
 }
 
@@ -40,4 +42,12 @@ fn get_pkg_version(lockfile: &Lockfile, pkg_name: &str) -> String {
         .into_iter()
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn generate_grpc_shredstream() -> anyhow::Result<()> {
+    tonic_prost_build::configure()
+        .compile_protos(&["src/shredstream/shredstream.proto"], &["src/shredstream"])
+        .unwrap();
+
+    Ok(())
 }

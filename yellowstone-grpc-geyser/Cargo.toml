@@ -42,6 +42,7 @@ serde_json = { workspace = true }
 solana-clock = { workspace = true }
 solana-logger = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-entry = { workspace = true }
 solana-transaction-status = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
@@ -50,12 +51,15 @@ tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }
+async-stream = { workspace = true }
+tonic-prost = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
+tonic-prost-build = { workspace = true }
 
 [lints]
 workspace = true
