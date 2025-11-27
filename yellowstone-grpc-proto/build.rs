@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
                 .name("subscribe_preprocessed")
                 .route_name("SubscribePreprocessed")
                 .input_type("crate::geyser::SubscribePreprocessedRequest")
-                .output_type("crate::plugin::filter::message::FilteredUpdate")
+                .output_type("crate::plugin::preprocessed::FilteredPreprocessedUpdate")
                 .codec_path("tonic_prost::ProstCodec")
                 .client_streaming()
                 .server_streaming()

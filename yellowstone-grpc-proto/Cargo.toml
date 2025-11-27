@@ -42,6 +42,7 @@ spl-token-2022-interface = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
+solana-entry = { workspace = true}
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -6810,6 +6810,7 @@ dependencies = [
  "solana-account",
  "solana-account-decoder",
  "solana-clock",
+ "solana-entry",
  "solana-hash 3.0.0",
  "solana-keypair",
  "solana-message",

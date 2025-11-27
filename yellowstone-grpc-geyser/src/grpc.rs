@@ -41,12 +41,10 @@ use {
         geyser::{SubscribePreprocessedRequest, SubscribePreprocessedUpdate}, plugin::{
             filter::{
                 Filter, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames
-            },
-            message::{
+            }, message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
-            proto::geyser_server::{Geyser, GeyserServer},
+            }, preprocessed::{FilterPreprocessed, FilteredPreprocessedUpdate, FilteredPreprocessedUpdateOneof}, proto::geyser_server::{Geyser, GeyserServer}
         }, prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
@@ -86,6 +84,12 @@ struct BlockMetaStorageInner {
 }
 
 impl TrafficWeighted for FilteredUpdate {
+    fn weight(&self) -> u32 {
+        self.encoded_len() as u32
+    }
+}
+
+impl TrafficWeighted for FilteredPreprocessedUpdate {
     fn weight(&self) -> u32 {
         self.encoded_len() as u32
     }
@@ -897,6 +901,138 @@ impl GrpcService {
         info!("Geyser loop exiting");
     }
 
+
+    #[allow(clippy::too_many_arguments)]
+    async fn client_loop_preprocessed(
+        id: usize,
+        subscriber_id: Option<String>,
+        endpoint: String,
+        stream_tx: LoadAwareSender<TonicResult<FilteredPreprocessedUpdate>>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, FilterPreprocessed)>>,
+        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) {
+        let mut filter = Filter::default();
+
+        // Ensure cancellation_token is cancelled on exit even if we panic
+        let on_drop = OnDrop::new({
+            let cancellation_token = cancellation_token.clone();
+            move || {
+                cancellation_token.cancel();
+            }
+        });
+
+        metrics::update_subscriptions(&endpoint, None, Some(&filter));
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
+        metrics::connections_total_inc();
+        info!("client #{id}: new");
+
+
+        'outer: loop {
+            set_subscriber_send_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_send_rate().per_second() as i64,
+            );
+
+            set_subscriber_recv_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_consuming_rate().per_second() as i64,
+            );
+
+            set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
+
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("client #{id}: cancelled");
+                    let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
+                    break 'outer;
+                }
+                mut message = client_rx.recv() => {
+                    // forward to latest filter
+                    loop {
+                        match client_rx.try_recv() {
+                            Ok(message_new) => {
+                                message = Some(message_new);
+                            }
+                            Err(mpsc::error::TryRecvError::Empty) => break,
+                            Err(mpsc::error::TryRecvError::Disconnected) => {
+                                message = None;
+                                break;
+                            }
+                        }
+                    }
+
+                    match message {
+                        Some(Some((from_slot, filter_new))) => {
+                            metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                            filter = filter_new;
+                            info!("client #{id}: filter updated");
+
+                        }
+                        Some(None) => {
+                            break 'outer;
+                        },
+                        None => {
+                            break 'outer;
+                        }
+                    }
+                }
+                message = messages_rx.recv() => {
+                    let (commitment, messages) = match message {
+                        Ok((commitment, messages)) => (commitment, messages),
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break 'outer;
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            info!("client #{id}: lagged to receive geyser messages");
+                            task_tracker.spawn(async move {
+                                let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
+                            });
+                            break 'outer;
+                        }
+                    };
+
+                    if commitment == filter.get_commitment_level() {
+                        for (_msgid, message) in messages.iter() {
+                            for message in filter.get_updates(message, Some(commitment)) {
+                                let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
+                                match stream_tx.try_send(Ok(message)) {
+                                    Ok(()) => {
+                                        metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                        metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                    }
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        error!("client #{id}: lagged to send an update");
+                                        task_tracker.spawn(async move {
+                                            let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                        });
+                                        break 'outer;
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("client #{id}: stream closed");
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        stream_tx.no_load();
+                    }
+
+                }
+            }
+        }
+        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_queue_size(&subscriber_id, 0);
+
+        metrics::connections_total_dec();
+        metrics::update_subscriptions(&endpoint, Some(&filter), None);
+        info!("client #{id}: removed");
+        drop(on_drop);
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
@@ -1213,7 +1349,7 @@ impl GrpcService {
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
-    type SubscribePreprocessedStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
+    type SubscribePreprocessedStream = LoadAwareReceiver<TonicResult<FilteredPreprocessedUpdate>>;
     
     async fn subscribe(
         &self,
@@ -1394,7 +1530,7 @@ impl Geyser for GrpcService {
                         break;
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
+                        let msg = FilteredPreprocessedUpdate::new_empty(FilteredPreprocessedUpdateOneof::ping());
                         match ping_stream_tx.try_send(Ok(msg)) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {}
@@ -1439,7 +1575,7 @@ impl Geyser for GrpcService {
                             let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
-                            if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
+                            if let Err(error) = match FilterPreprocessed::new(&request, &config_filter_limits, &mut filter_names) {
                                 Ok(filter) => {
                                     if let Some(msg) = filter.get_pong_msg() {
                                         if incoming_stream_tx.send(Ok(msg)).await.is_err() {
@@ -1476,19 +1612,8 @@ impl Geyser for GrpcService {
             }
         });
 
-        self.task_tracker.spawn(Self::client_loop(
-            id,
-            subscriber_id,
-            endpoint,
-            stream_tx,
-            client_rx,
-            snapshot_rx,
-            self.broadcast_tx.subscribe(),
-            self.replay_stored_slots_tx.clone(),
-            self.debug_clients_tx.clone(),
-            client_cancelation_token,
-            self.task_tracker.clone(),
-        ));
+        
+
 
         Ok(Response::new(stream_rx))    
     }
