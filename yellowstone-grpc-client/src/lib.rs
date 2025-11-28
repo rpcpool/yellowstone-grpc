@@ -54,6 +54,7 @@ pub enum GeyserGrpcClientError {
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
+#[derive(Clone)]
 pub struct GeyserGrpcClient<F> {
     pub health: HealthClient<InterceptedService<Channel, F>>,
     pub geyser: GeyserClient<InterceptedService<Channel, F>>,
@@ -253,7 +254,7 @@ impl GeyserGrpcBuilder {
     fn build(
         self,
         channel: Channel,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let interceptor = InterceptorXToken {
             x_token: self.x_token,
             x_request_snapshot: self.x_request_snapshot,
@@ -279,12 +280,16 @@ impl GeyserGrpcBuilder {
         ))
     }
 
-    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    pub async fn connect(
+        self,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
-    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor>> {
+    pub fn connect_lazy(
+        self,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
     }
