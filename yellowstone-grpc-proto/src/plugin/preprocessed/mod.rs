@@ -12,6 +12,7 @@ use crate::{convert_to::{create_header, create_instruction, create_lookup}, geys
 use prost::{DecodeError, encoding::{DecodeContext, WireType}};
 use solana_entry::entry::Entry as SolanaEntry;
 use crate::prelude::Message as SolanaStorageMessage;
+use solana_signature::Signature;
 use prost::Message;
 
 
@@ -87,10 +88,17 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FilterPreprocessed {
     // transactions: FilterTransactions,
     ping: Option<i32>,
+}
+
+
+impl FilterPreprocessed {
+    pub fn get_updates(&self, preprocessed_entries: &PreprocessedEntries) -> Vec<FilteredPreprocessedUpdate> {
+        todo!()
+    }
 }
 
 

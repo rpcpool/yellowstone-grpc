@@ -31,7 +31,7 @@ solana-clock = { workspace = true, optional = true }
 solana-hash = { workspace = true, optional = true }
 solana-message = { workspace = true, optional = true }
 solana-pubkey = { workspace = true, optional = true }
-solana-signature = { workspace = true, optional = true }
+solana-signature = { workspace = true }
 solana-storage-proto = { workspace = true, optional = true }
 solana-transaction = { workspace = true, optional = true }
 solana-transaction-context = { workspace = true, optional = true }
@@ -68,7 +68,6 @@ convert = [
     "dep:solana-hash",
     "dep:solana-message",
     "dep:solana-pubkey",
-    "dep:solana-signature",
     "dep:solana-transaction",
     "dep:solana-transaction-context",
     "dep:solana-transaction-error",

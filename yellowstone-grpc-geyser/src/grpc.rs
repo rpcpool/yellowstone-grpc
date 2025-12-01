@@ -1,17 +1,14 @@
 use {
     crate::{
-        config::ConfigGrpc,
-        metrics::{
+        config::ConfigGrpc, metrics::{
             self, DebugClientMessage, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load, set_subscriber_send_bandwidth_load
-        },
-        util::{
+        }, shredstream::subscribe_shredstream_entries, util::{
             ema::{DEFAULT_EMA_WINDOW, EmaReactivity},
             stream::{
                 LoadAwareReceiver, LoadAwareSender, StatsSettings, TrafficWeighted, load_aware_channel
             },
             sync::OnDrop,
-        },
-        version::GrpcVersionInfo,
+        }, version::GrpcVersionInfo
     },
     anyhow::Context,
     log::{error, info},
@@ -44,7 +41,7 @@ use {
             }, message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo, SlotStatus,
-            }, preprocessed::{FilterPreprocessed, FilteredPreprocessedUpdate, FilteredPreprocessedUpdateOneof}, proto::geyser_server::{Geyser, GeyserServer}
+            }, preprocessed::{FilterPreprocessed, FilteredPreprocessedUpdate, FilteredPreprocessedUpdateOneof, PreprocessedEntries}, proto::geyser_server::{Geyser, GeyserServer}
         }, prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
@@ -393,6 +390,7 @@ pub struct GrpcService {
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    preprocessed_broadcast_tx: Option<broadcast::Sender<Arc<PreprocessedEntries>>>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -485,6 +483,12 @@ impl GrpcService {
             config.filter_names_cleanup_interval,
         )));
 
+        let preprocessed_broadcast_tx = if let Some(endpoint) = config.jito_shredstream_endpoint {
+            Some(subscribe_shredstream_entries(endpoint, config.subscribe_preprocessed_channel_capacity, task_tracker.clone(), service_cancellation_token.child_token()))
+        } else {
+            None
+        };
+
         // Create Server
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -500,6 +504,7 @@ impl GrpcService {
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
             filter_names,
+            preprocessed_broadcast_tx,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
         })
@@ -903,17 +908,16 @@ impl GrpcService {
 
 
     #[allow(clippy::too_many_arguments)]
+    // TODO: Update metrics
     async fn client_loop_preprocessed(
         id: usize,
-        subscriber_id: Option<String>,
-        endpoint: String,
         stream_tx: LoadAwareSender<TonicResult<FilteredPreprocessedUpdate>>,
-        mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, FilterPreprocessed)>>,
-        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<FilterPreprocessed>>,
+        mut messages_rx: broadcast::Receiver<Arc<PreprocessedEntries>>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
-        let mut filter = Filter::default();
+        let mut filter = FilterPreprocessed::default();
 
         // Ensure cancellation_token is cancelled on exit even if we panic
         let on_drop = OnDrop::new({
@@ -923,24 +927,10 @@ impl GrpcService {
             }
         });
 
-        metrics::update_subscriptions(&endpoint, None, Some(&filter));
-        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
-        metrics::connections_total_inc();
         info!("client #{id}: new");
 
 
         'outer: loop {
-            set_subscriber_send_bandwidth_load(
-                &subscriber_id,
-                stream_tx.estimated_send_rate().per_second() as i64,
-            );
-
-            set_subscriber_recv_bandwidth_load(
-                &subscriber_id,
-                stream_tx.estimated_consuming_rate().per_second() as i64,
-            );
-
-            set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -964,8 +954,7 @@ impl GrpcService {
                     }
 
                     match message {
-                        Some(Some((from_slot, filter_new))) => {
-                            metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
+                        Some(Some(filter_new)) => {
                             filter = filter_new;
                             info!("client #{id}: filter updated");
 
@@ -979,8 +968,8 @@ impl GrpcService {
                     }
                 }
                 message = messages_rx.recv() => {
-                    let (commitment, messages) = match message {
-                        Ok((commitment, messages)) => (commitment, messages),
+                    let preprocessed_entries = match message {
+                        Ok(preprocessed_entries) => preprocessed_entries,
                         Err(broadcast::error::RecvError::Closed) => {
                             break 'outer;
                         },
@@ -993,42 +982,26 @@ impl GrpcService {
                         }
                     };
 
-                    if commitment == filter.get_commitment_level() {
-                        for (_msgid, message) in messages.iter() {
-                            for message in filter.get_updates(message, Some(commitment)) {
-                                let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
-                                match stream_tx.try_send(Ok(message)) {
-                                    Ok(()) => {
-                                        metrics::incr_grpc_message_sent_counter(&subscriber_id);
-                                        metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
-                                    }
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        error!("client #{id}: lagged to send an update");
-                                        task_tracker.spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                        });
-                                        break 'outer;
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("client #{id}: stream closed");
-                                        break 'outer;
-                                    }
-                                }
+                    for message in filter.get_updates(&preprocessed_entries) {
+                        match stream_tx.try_send(Ok(message)) {
+                            Ok(()) => {
+                            }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                error!("client #{id}: lagged to send an update");
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                });
+                                break 'outer;
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                error!("client #{id}: stream closed");
+                                break 'outer;
                             }
                         }
-                    } else {
-                        stream_tx.no_load();
                     }
-
                 }
             }
         }
-        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_queue_size(&subscriber_id, 0);
-
-        metrics::connections_total_dec();
-        metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
         drop(on_drop);
     }
@@ -1499,6 +1472,11 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribePreprocessedRequest>>,
     ) -> TonicResult<Response<Self::SubscribePreprocessedStream>> {
+        if self.preprocessed_broadcast_tx.is_none() {
+            return Err(Status::unimplemented("preprocessed streaming is not supported"));
+        }
+        let preprocessed_broadcast_tx = self.preprocessed_broadcast_tx.as_ref().unwrap();
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
         let client_cancelation_token = self.cancellation_token.child_token();
@@ -1585,7 +1563,7 @@ impl Geyser for GrpcService {
                                         }
                                         continue;
                                     }
-                                    match incoming_client_tx.send(Some((request.from_slot, filter))) {
+                                    match incoming_client_tx.send(Some(filter)) {
                                         Ok(()) => Ok(()),
                                         Err(error) => Err(error.to_string()),
                                     }
@@ -1611,6 +1589,15 @@ impl Geyser for GrpcService {
                 }
             }
         });
+
+        self.task_tracker.spawn(Self::client_loop_preprocessed(
+            id,
+            stream_tx,
+            client_rx,
+            preprocessed_broadcast_tx.subscribe(),
+            client_cancelation_token,
+            self.task_tracker.clone(),
+        ));
 
         
 

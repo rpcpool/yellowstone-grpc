@@ -181,6 +181,8 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub subscribe_preprocessed_channel_capacity: usize,
+    /// Jito shredstream gRPC endpoint 
+    pub jito_shredstream_endpoint: Option<String>,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
