@@ -527,7 +527,7 @@ impl GrpcService {
             .await;
         });
 
-        // Run Server based on transport type
+        // Run Server
         let shutdown_grpc = service_cancellation_token.child_token();
 
         // Helper macro to spawn the gRPC server with a given incoming stream
