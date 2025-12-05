@@ -8,7 +8,6 @@
   },
   "grpc": {
     "transport": "uds",
-    "address": null,
     "uds": {
       "socket_path": "/tmp/yellowstone-grpc.sock",
       "remove_on_startup": true

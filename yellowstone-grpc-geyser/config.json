@@ -8,9 +8,7 @@
     "affinity": "0-1,12-13"
   },
   "grpc": {
-    "transport": "tcp",
     "address": "0.0.0.0:10000",
-    "uds": null,
     "tls_config": {
       "cert_path": "",
       "key_path": ""
