@@ -4,7 +4,7 @@ This repo contains a fully functional gRPC interface for Solana. It is built aro
 
 It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path.
 
-For additional documentation,  please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
+For additional documentation, please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
 
 #### Known bugs
 
@@ -15,6 +15,55 @@ Block reconstruction inside gRPC plugin is based on information provided by Bloc
 ```bash
 solana-validator --geyser-plugin-config yellowstone-grpc-geyser/config.json
 ```
+
+### Transport Options
+
+The gRPC server supports two transport types:
+
+#### TCP (default)
+
+```json
+{
+  "grpc": {
+    "transport": "tcp",
+    "address": "0.0.0.0:10000"
+  }
+}
+```
+
+#### Unix Domain Socket (UDS)
+
+For local communication, UDS provides ~18-20% lower latency compared to TCP:
+
+```json
+{
+  "grpc": {
+    "transport": "uds",
+    "uds": {
+      "socket_path": "/tmp/yellowstone-grpc.sock",
+      "remove_on_startup": true
+    }
+  }
+}
+```
+
+Client connection via UDS:
+
+```rust
+// Rust client
+let client = GeyserGrpcClient::build_from_static("unix:///tmp/yellowstone-grpc.sock")?
+    .connect()
+    .await?;
+```
+
+##### Benchmark Results (TCP vs UDS)
+
+| Metric       | TCP      | UDS      | Improvement    |
+| ------------ | -------- | -------- | -------------- |
+| Ping Latency | 37.3 µs  | 30.6 µs  | **18% faster** |
+| Throughput   | 27.0 K/s | 32.4 K/s | **20% higher** |
+
+Run benchmarks: `cargo bench -p yellowstone-grpc-benches`
 
 ### Plugin config check
 
@@ -30,32 +79,32 @@ Geyser interface on block update does not provide detailed information about tra
 
 Please check [yellowstone-grpc-proto/proto/geyser.proto](yellowstone-grpc-proto/proto/geyser.proto) for details.
 
-   - `commitment` — commitment level: `processed` / `confirmed` / `finalized`
-   - `accounts_data_slice` — array of objects `{ offset: uint64, length: uint64 }`, allow to receive only required data from accounts
-   - `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if the client doesn't send anything during some time. You can send the same filter every N seconds as a workaround, but this would not be optimal since you need to keep this filter. Instead, you can send a subscribe request with `ping` field set to `true` and ignore the rest of the fields in the request. Since we sent a `Ping` message every 15s from the server, you can send a subscribe request with `ping` as a reply and receive a `Pong` message.
+- `commitment` — commitment level: `processed` / `confirmed` / `finalized`
+- `accounts_data_slice` — array of objects `{ offset: uint64, length: uint64 }`, allow to receive only required data from accounts
+- `ping` — optional boolean field. Some cloud providers (like Cloudflare, Fly.io) close the stream if the client doesn't send anything during some time. You can send the same filter every N seconds as a workaround, but this would not be optimal since you need to keep this filter. Instead, you can send a subscribe request with `ping` field set to `true` and ignore the rest of the fields in the request. Since we sent a `Ping` message every 15s from the server, you can send a subscribe request with `ping` as a reply and receive a `Pong` message.
 
 #### Slots
 
-   - `filter_by_commitment` — by default, slots are sent for all commitment levels, but with this filter, you can receive only the selected commitment level
+- `filter_by_commitment` — by default, slots are sent for all commitment levels, but with this filter, you can receive only the selected commitment level
 
 #### Account
 
 Accounts can be filtered by:
 
-   - `account` — account Pubkey, match to any Pubkey from the array
-   - `owner` — account owner Pubkey, match to any Pubkey from the array
-   - `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
+- `account` — account Pubkey, match to any Pubkey from the array
+- `owner` — account owner Pubkey, match to any Pubkey from the array
+- `filters` — same as `getProgramAccounts` filters, array of `dataSize` or `Memcmp` (bytes, base58, base64 are supported)
 
 If all fields are empty, then all accounts are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR` (except values in `filters` that works as logical `AND`).
 
 #### Transactions
 
-   - `vote` — enable/disable broadcast `vote` transactions
-   - `failed` — enable/disable broadcast `failed` transactions
-   - `signature` — match only specified transaction
-   - `account_include` — filter transactions that use any account from the list
-   - `account_exclude` — opposite to `account_include`
-   - `account_required` — require all accounts from the list to be used in the transaction
+- `vote` — enable/disable broadcast `vote` transactions
+- `failed` — enable/disable broadcast `failed` transactions
+- `signature` — match only specified transaction
+- `account_include` — filter transactions that use any account from the list
+- `account_exclude` — opposite to `account_include`
+- `account_required` — require all accounts from the list to be used in the transaction
 
 If all fields are empty, then all transactions are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR`.
 
@@ -65,10 +114,10 @@ Currently, we do not have filters for the entries, all entries are broadcast.
 
 #### Blocks
 
-   - `account_include` — filter transactions and accounts that use any account from the list
-   - `include_transactions` — include all transactions
-   - `include_accounts` — include all accounts updates
-   - `include_entries` — include all entries
+- `account_include` — filter transactions and accounts that use any account from the list
+- `include_transactions` — include all transactions
+- `include_accounts` — include all accounts updates
+- `include_entries` — include all entries
 
 #### Blocks meta
 
@@ -135,15 +184,15 @@ It's possible to add limits for filters in the config. If the `filters` field is
 
 ### Examples
 
-   - [Go](examples/golang)
-   - [Rust](examples/rust)
-   - [TypeScript](examples/typescript)
+- [Go](examples/golang)
+- [Rust](examples/rust)
+- [TypeScript](examples/typescript)
 
 > [!NOTE]
 > Some load balancers will terminate gRPC connections if no messages are sent from the client for a period of time.
-In order to mitigate this, you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.
-The gRPC server already sends pings to the client, so you can reply with a ping, and your connection will remain open.
-You can see in the rust example how to reply to the ping from the server with the client.
+> In order to mitigate this, you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.
+> The gRPC server already sends pings to the client, so you can reply with a ping, and your connection will remain open.
+> You can see in the rust example how to reply to the ping from the server with the client.
 
 ### Projects based on Geyser gRPC
 
