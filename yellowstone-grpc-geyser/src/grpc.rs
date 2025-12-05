@@ -533,7 +533,6 @@ impl GrpcService {
         // Helper macro to spawn the gRPC server with a given incoming stream
         macro_rules! spawn_grpc_server {
             ($incoming:expr) => {{
-                let shutdown = shutdown_grpc.clone();
                 task_tracker.spawn(async move {
                     let (health_reporter, health_service) = health_reporter();
                     health_reporter.set_serving::<GeyserServer<Self>>().await;
@@ -553,7 +552,7 @@ impl GrpcService {
                         ))
                         .add_service(health_service)
                         .add_service(service)
-                        .serve_with_incoming_shutdown($incoming, shutdown.cancelled())
+                        .serve_with_incoming_shutdown($incoming, shutdown_grpc.cancelled())
                         .await;
                     info!("gRPC server shut down with result: {result:?}");
                 });
