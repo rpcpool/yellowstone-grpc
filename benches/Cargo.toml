@@ -1,0 +1,36 @@
+[package]
+name = "yellowstone-grpc-benches"
+version = "0.1.0"
+authors = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+bytes = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+futures = { workspace = true }
+prost = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "net",
+    "sync",
+    "time",
+    "macros",
+] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
+
+# Yellowstone
+yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-proto = { workspace = true, features = ["tonic"] }
+
+[[bench]]
+name = "transport"
+path = "transport.rs"
+harness = false
+
+[lints]
+workspace = true
