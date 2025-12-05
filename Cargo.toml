@@ -64,6 +64,7 @@ tonic-build = "0.14.0"
 tonic-prost = "0.14.0"
 tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
+tower = "0.5"
 vergen = "9.0.6"
 
 # Agave Monorepo

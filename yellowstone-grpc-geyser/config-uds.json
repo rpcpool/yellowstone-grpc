@@ -4,20 +4,25 @@
     "level": "info"
   },
   "tokio": {
-    "worker_threads": 8,
-    "affinity": "0-1,12-13"
+    "worker_threads": 8
   },
   "grpc": {
-    "transport": "tcp",
-    "address": "0.0.0.0:10000",
-    "uds": null,
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
+    "transport": "uds",
+    "address": null,
+    "uds": {
+      "socket_path": "/tmp/yellowstone-grpc.sock",
+      "remove_on_startup": true
     },
+    "tls_config": null,
     "compression": {
-      "accept": ["gzip", "zstd"],
-      "send": ["gzip", "zstd"]
+      "accept": [
+        "gzip",
+        "zstd"
+      ],
+      "send": [
+        "gzip",
+        "zstd"
+      ]
     },
     "server_http2_adaptive_window": null,
     "server_http2_keepalive_interval": null,
@@ -40,9 +45,9 @@
         "max": 1,
         "any": false,
         "account_max": 10,
-        "account_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
+        "account_reject": [],
         "owner_max": 10,
-        "owner_reject": ["11111111111111111111111111111111"],
+        "owner_reject": [],
         "data_slice_max": 2
       },
       "slots": {
@@ -52,9 +57,7 @@
         "max": 1,
         "any": false,
         "account_include_max": 10,
-        "account_include_reject": [
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        ],
+        "account_include_reject": [],
         "account_exclude_max": 10,
         "account_required_max": 10
       },
@@ -62,9 +65,7 @@
         "max": 1,
         "any": false,
         "account_include_max": 10,
-        "account_include_reject": [
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        ],
+        "account_include_reject": [],
         "account_exclude_max": 10,
         "account_required_max": 10
       },
@@ -72,9 +73,7 @@
         "max": 1,
         "account_include_max": 10,
         "account_include_any": false,
-        "account_include_reject": [
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        ],
+        "account_include_reject": [],
         "include_transactions": true,
         "include_accounts": false,
         "include_entries": false
