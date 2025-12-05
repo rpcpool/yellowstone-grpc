@@ -493,7 +493,7 @@ impl GrpcService {
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
-            config_filter_limits: Arc::new(config.filter_limits.clone()),
+            config_filter_limits: Arc::new(config.filter_limits),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -506,10 +506,10 @@ impl GrpcService {
             task_tracker: task_tracker.clone(),
         })
         .max_decoding_message_size(max_decoding_message_size);
-        for encoding in config.compression.accept.iter().copied() {
+        for encoding in config.compression.accept {
             service = service.accept_compressed(encoding);
         }
-        for encoding in config.compression.send.iter().copied() {
+        for encoding in config.compression.send {
             service = service.send_compressed(encoding);
         }
 
