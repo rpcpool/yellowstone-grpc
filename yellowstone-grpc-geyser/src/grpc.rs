@@ -30,11 +30,9 @@ use {
     },
     tokio::{
         fs,
-        net::UnixListener,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
-    tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         service::interceptor,
@@ -69,6 +67,9 @@ use {
         prost::Message as ProstMessage,
     },
 };
+
+#[cfg(unix)]
+use {tokio::net::UnixListener, tokio_stream::wrappers::UnixListenerStream};
 
 #[derive(Debug)]
 struct BlockhashStatus {
@@ -572,31 +573,47 @@ impl GrpcService {
                 spawn_grpc_server!(incoming);
             }
             TransportType::Uds => {
-                let uds_config = config
-                    .uds
-                    .context("UDS config is required for UDS transport")?;
-                let socket_path = &uds_config.socket_path;
-
-                // Remove existing socket file if configured
-                if uds_config.remove_on_startup && socket_path.exists() {
-                    std::fs::remove_file(socket_path)
-                        .context("failed to remove existing UDS socket file")?;
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("UDS transport is only supported on Unix platforms");
                 }
+                #[cfg(unix)]
+                {
+                    let uds_config = config
+                        .uds
+                        .context("UDS config is required for UDS transport")?;
+                    let socket_path = &uds_config.socket_path;
 
-                // Create parent directory if it doesn't exist
-                if let Some(parent) = socket_path.parent() {
-                    if !parent.exists() {
-                        std::fs::create_dir_all(parent)
-                            .context("failed to create parent directory for UDS socket")?;
+                    // Remove existing socket file if configured
+                    if uds_config.remove_on_startup && socket_path.exists() {
+                        fs::remove_file(socket_path).await.with_context(|| {
+                            format!(
+                                "failed to remove existing UDS socket file at {:?}",
+                                socket_path
+                            )
+                        })?;
                     }
+
+                    // Create parent directory if it doesn't exist
+                    if let Some(parent) = socket_path.parent() {
+                        if !parent.exists() {
+                            fs::create_dir_all(parent).await.with_context(|| {
+                                format!(
+                                    "failed to create parent directory for UDS socket at {:?}",
+                                    parent
+                                )
+                            })?;
+                        }
+                    }
+
+                    let uds_listener = UnixListener::bind(socket_path).with_context(|| {
+                        format!("failed to bind UDS socket at {:?}", socket_path)
+                    })?;
+                    let uds_stream = UnixListenerStream::new(uds_listener);
+
+                    info!("Starting gRPC server on UDS: {:?}", socket_path);
+                    spawn_grpc_server!(uds_stream);
                 }
-
-                let uds_listener =
-                    UnixListener::bind(socket_path).context("failed to bind UDS socket")?;
-                let uds_stream = UnixListenerStream::new(uds_listener);
-
-                info!("Starting gRPC server on UDS: {:?}", socket_path);
-                spawn_grpc_server!(uds_stream);
             }
         }
 
