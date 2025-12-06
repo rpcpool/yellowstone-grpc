@@ -35,7 +35,7 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
-        geyser::{SubscribePreprocessedRequest, SubscribePreprocessedUpdate}, plugin::{
+        geyser::{SubscribePreprocessedRequest}, plugin::{
             filter::{
                 Filter, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames
             }, message::{
@@ -390,7 +390,7 @@ pub struct GrpcService {
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-    preprocessed_broadcast_tx: Option<broadcast::Sender<Arc<PreprocessedEntries>>>,
+    preprocessed_broadcast_tx: Option<Arc<broadcast::Sender<Arc<PreprocessedEntries>>>>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -1522,18 +1522,6 @@ impl Geyser for GrpcService {
             }
             info!("client #{id}: ping task exiting");
         });
-
-        let endpoint = request
-            .metadata()
-            .get("x-endpoint")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .unwrap_or_else(|| "".to_owned());
-
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
