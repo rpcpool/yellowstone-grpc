@@ -670,11 +670,11 @@ enum FilterTransactionsType {
 #[derive(Debug, Clone)]
 struct FilterTransactionsInner {
     failed: Option<bool>,
-    preprocessed_filters: FilterTransactionsPreprocessedInner,
+    preprocessed_inner: FilterTransactionsPreprocessedInner,
 }
 
 #[derive(Debug, Clone)]
-struct FilterTransactionsPreprocessedInner {
+pub(crate) struct FilterTransactionsPreprocessedInner {
     vote: Option<bool>,
     signature: Option<Signature>,
     account_include: HashSet<Pubkey>,
@@ -723,9 +723,9 @@ impl FilterTransactions {
             filters.insert(
                 names.get(name)?,
                 FilterTransactionsInner {
-                    common_filters: FilterTransactionsPreprocessedInner {
+                    failed: filter.failed,
+                    preprocessed_inner: FilterTransactionsPreprocessedInner {
                         vote: filter.vote,
-                        failed: filter.failed,
                         signature: filter
                             .signature
                             .as_ref()
@@ -733,16 +733,11 @@ impl FilterTransactions {
                                 signature_str.parse().map_err(FilterError::InvalidSignature)
                             })
                             .transpose()?,
-                    account_exclude: Filter::decode_pubkeys_into_set(
-                            &filter.account_exclude,
-                            &HashSet::new(),
-                        )?,
-                        account_required: Filter::decode_pubkeys_into_set(
-                            &filter.account_required,
-                            &HashSet::new(),
-                        )?,
+                        account_exclude: Filter::decode_pubkeys_into_set(&filter.account_exclude, &HashSet::new())?,
+                        account_required: Filter::decode_pubkeys_into_set(&filter.account_required, &HashSet::new())?,
+                        account_include: Filter::decode_pubkeys_into_set(&filter.account_include, &HashSet::new())?,
                     },
-                },
+                }
             );
         }
         Ok(Self {
@@ -756,53 +751,15 @@ impl FilterTransactions {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if let Some(is_vote) = inner.vote {
-                    if is_vote != message.transaction.is_vote {
-                        return None;
-                    }
-                }
 
                 if let Some(is_failed) = inner.failed {
                     if is_failed != message.transaction.meta.err.is_some() {
                         return None;
                     }
                 }
-
-                if let Some(signature) = &inner.signature {
-                    let tx_sig = message.transaction.transaction.signatures.first();
-                    if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
-                        return None;
-                    }
-                }
-
-                if !inner.account_include.is_empty()
-                    && inner
-                        .account_include
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_none()
-                {
+                if !filter_transactions_inner(&inner.preprocessed_inner, &message.transaction.account_keys, message.transaction.is_vote, &message.transaction.transaction.signatures) {
                     return None;
                 }
-
-                if !inner.account_exclude.is_empty()
-                    && inner
-                        .account_exclude
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_some()
-                {
-                    return None;
-                }
-
-                if !inner.account_required.is_empty()
-                    && !inner
-                        .account_required
-                        .is_subset(&message.transaction.account_keys)
-                {
-                    return None;
-                }
-
                 Some(name.clone())
             })
             .collect::<FilteredUpdateFilters>();
@@ -818,6 +775,55 @@ impl FilterTransactions {
             message.created_at
         )
     }
+}
+
+pub(crate) fn filter_transactions_inner(
+    inner: &FilterTransactionsPreprocessedInner,
+    transaction_account_keys: &HashSet<Pubkey>,
+    transaction_is_vote: bool,
+    transaction_signatures: &Vec<Vec<u8>>,
+) -> bool {
+    if let Some(is_vote) = inner.vote {
+        if is_vote != transaction_is_vote {
+            return false;
+        }
+    }
+
+    if let Some(signature) = &inner.signature {
+        let tx_sig = transaction_signatures.first();
+        if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
+            return false;
+        }
+    }
+
+    if !inner.account_include.is_empty()
+        && inner.account_include
+            .intersection(&transaction_account_keys)
+            .next()
+            .is_none()
+    {
+        return false;
+    }
+
+    if !inner.account_exclude.is_empty()
+        && inner
+            .account_exclude
+            .intersection(&transaction_account_keys)
+            .next()
+            .is_some()
+    {
+        return false;
+    }
+
+    if !inner.account_required.is_empty()
+        && !inner
+            .account_required
+            .is_subset(&transaction_account_keys)
+    {
+        return false;
+    }
+
+    true
 }
 
 #[derive(Debug, Default, Clone)]

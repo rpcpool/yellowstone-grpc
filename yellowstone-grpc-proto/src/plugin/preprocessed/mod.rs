@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::SystemTime};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::SystemTime};
 
 use bytes::{Buf, BufMut};
 use prost_types::Timestamp;
@@ -8,7 +8,7 @@ use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
 use solana_transaction::{simple_vote_transaction_checker::is_simple_vote_transaction, versioned::{VersionedTransaction, sanitized::SanitizedVersionedTransaction}};
 
-use crate::{convert_to::{create_header, create_instruction, create_lookup}, geyser::{SubscribePreprocessedRequest, SubscribeUpdatePong, SubscribeUpdateTransaction}, plugin::filter::{FilterError, limits::FilterLimits, name::{FilterName, FilterNames}}, prelude::Transaction};
+use crate::{convert_to::{create_header, create_instruction, create_lookup}, geyser::{SubscribePreprocessedRequest, SubscribePreprocessedTransaction, SubscribePreprocessedTransactionInfo, SubscribeUpdatePong, SubscribeUpdateTransaction}, plugin::filter::{FilterError, filter::{FilterTransactionsPreprocessedInner, filter_transactions_inner}, limits::FilterLimits, name::{FilterName, FilterNames}}, prelude::Transaction};
 use prost::{DecodeError, encoding::{DecodeContext, WireType}};
 use solana_entry::entry::Entry as SolanaEntry;
 use crate::prelude::Message as SolanaStorageMessage;
@@ -53,7 +53,7 @@ impl FilteredPreprocessedUpdate {
 pub enum FilteredPreprocessedUpdateOneof {
     Ping,
     Pong(SubscribeUpdatePong),
-    PreprocessedTransactiion(Arc<SubscribeUpdateTransaction>)
+    PreprocessedTransaction(Arc<SubscribePreprocessedTransaction>)
 }
 
 impl FilteredPreprocessedUpdateOneof {
@@ -67,7 +67,7 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
         match self {
             FilteredPreprocessedUpdateOneof::Ping => todo!(),
             FilteredPreprocessedUpdateOneof::Pong(_pong) => todo!(),
-            FilteredPreprocessedUpdateOneof::PreprocessedTransactiion(_transaction) => todo!(),
+            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(_transaction) => todo!(),
         }
     }
 
@@ -75,7 +75,7 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
         match self {
             FilteredPreprocessedUpdateOneof::Ping => todo!(),
             FilteredPreprocessedUpdateOneof::Pong(_pong) => todo!(),
-            FilteredPreprocessedUpdateOneof::PreprocessedTransactiion(_transaction) => todo!(),
+            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(_transaction) => todo!(),
         }
     }
 
@@ -88,57 +88,95 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
     }
 }
 
+
+#[derive(Debug, Clone, Default)]
+pub struct FilterTransactionsPreprocessed {
+    filters: HashMap<FilterName, FilterTransactionsPreprocessedInner>,
+}
+
+
+// let filters = self
+// .filters
+// .iter()
+// .filter_map(|(name, inner)| {
+
+//     if let Some(is_failed) = inner.failed {
+//         if is_failed != message.transaction.meta.err.is_some() {
+//             return None;
+//         }
+//     }
+//     if !filter_transactions_inner(inner, message) {
+//         return None;
+//     }
+//     Some(name.clone())
+// })
+// .collect::<FilteredUpdateFilters>();
+
+// filtered_updates_once_owned!(
+// filters,
+// match self.filter_type {
+//     FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
+//     FilterTransactionsType::TransactionStatus => {
+//         FilteredUpdateOneof::transaction_status(message)
+//     }
+// },
+// message.created_at
+// )
+// }
+impl FilterTransactionsPreprocessed {
+    pub fn get_updates(&self, message: &PreprocessedEntries) -> Vec<FilteredPreprocessedUpdate> {
+        let mut transactions = Vec::new();
+        let slot = message.slot;
+        for entry in &message.entries {
+            for transaction in &entry.transactions {
+                let filters = self
+                    .filters
+                    .iter()
+                    .filter_map(|(name, inner)| {
+                        if !filter_transactions_inner(inner, &transaction.account_keys, transaction.is_vote, &transaction.transaction.signatures) {
+                            return None;
+                        }
+                        Some(name.clone())
+                    })
+                    .collect::<FilteredPreprocessedUpdateFilters>();
+                if filters.is_empty() {
+                    continue;
+                }
+                let transaction = SubscribePreprocessedTransaction{ 
+                    transaction: Some(
+                        SubscribePreprocessedTransactionInfo{ 
+                            signature: transaction.signature.as_array().into(), 
+                            is_vote: transaction.is_vote, transaction: 
+                            Some(transaction.transaction.clone()) 
+                    }), 
+                    slot
+                };
+                transactions.push(FilteredPreprocessedUpdate::new_empty(FilteredPreprocessedUpdateOneof::PreprocessedTransaction(Arc::new(transaction))));
+            }
+        }
+        transactions
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FilterPreprocessed {
-    transactions: FilterTransactions,
+    transactions: FilterTransactionsPreprocessed,
     ping: Option<i32>,
 }
 
 
 impl FilterPreprocessed {
     pub fn get_updates(&self, preprocessed_entries: &PreprocessedEntries) -> Vec<FilteredPreprocessedUpdate> {
-        todo!()
+        return self.transactions.get_updates(preprocessed_entries);
     }
 }
-
-
-// pub fn new(
-//     config: &SubscribeRequest,
-//     limits: &FilterLimits,
-//     names: &mut FilterNames,
-// ) -> FilterResult<Self> {
-//     Ok(Self {
-//         accounts: FilterAccounts::new(&config.accounts, &limits.accounts, names)?,
-//         slots: FilterSlots::new(&config.slots, &limits.slots, names)?,
-//         transactions: FilterTransactions::new(
-//             &config.transactions,
-//             &limits.transactions,
-//             FilterTransactionsType::Transaction,
-//             names,
-//         )?,
-//         transactions_status: FilterTransactions::new(
-//             &config.transactions_status,
-//             &limits.transactions_status,
-//             FilterTransactionsType::TransactionStatus,
-//             names,
-//         )?,
-//         entries: FilterEntries::new(&config.entry, &limits.entries, names)?,
-//         blocks: FilterBlocks::new(&config.blocks, &limits.blocks, names)?,
-//         blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limits.blocks_meta, names)?,
-//         commitment: Self::decode_commitment(config.commitment)?,
-//         accounts_data_slice: FilterAccountsDataSlice::new(
-//             &config.accounts_data_slice,
-//             limits.accounts.data_slice_max,
-//         )?,
-//         ping: config.ping.as_ref().map(|msg| msg.id),
-//     })
-// }
 impl FilterPreprocessed {
 
     pub fn new(subscribe_request: &SubscribePreprocessedRequest, _limits: &FilterLimits, _names: &mut FilterNames) -> Result<Self, FilterError> {
-        Ok(Self { 
-            ping: subscribe_request.ping.as_ref().map(|msg| msg.id),
-        })
+        todo!()
+        // Ok(Self { 
+        //     ping: subscribe_request.ping.as_ref().map(|msg| msg.id),
+        // })
     }
 
     pub fn get_pong_msg(&self) -> Option<FilteredPreprocessedUpdate> {
