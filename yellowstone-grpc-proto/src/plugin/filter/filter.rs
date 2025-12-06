@@ -669,8 +669,13 @@ enum FilterTransactionsType {
 
 #[derive(Debug, Clone)]
 struct FilterTransactionsInner {
-    vote: Option<bool>,
     failed: Option<bool>,
+    preprocessed_filters: FilterTransactionsPreprocessedInner,
+}
+
+#[derive(Debug, Clone)]
+struct FilterTransactionsPreprocessedInner {
+    vote: Option<bool>,
     signature: Option<Signature>,
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
@@ -718,27 +723,25 @@ impl FilterTransactions {
             filters.insert(
                 names.get(name)?,
                 FilterTransactionsInner {
-                    vote: filter.vote,
-                    failed: filter.failed,
-                    signature: filter
-                        .signature
-                        .as_ref()
-                        .map(|signature_str| {
-                            signature_str.parse().map_err(FilterError::InvalidSignature)
-                        })
-                        .transpose()?,
-                    account_include: Filter::decode_pubkeys_into_set(
-                        &filter.account_include,
-                        &limits.account_include_reject,
-                    )?,
+                    common_filters: FilterTransactionsPreprocessedInner {
+                        vote: filter.vote,
+                        failed: filter.failed,
+                        signature: filter
+                            .signature
+                            .as_ref()
+                            .map(|signature_str| {
+                                signature_str.parse().map_err(FilterError::InvalidSignature)
+                            })
+                            .transpose()?,
                     account_exclude: Filter::decode_pubkeys_into_set(
-                        &filter.account_exclude,
-                        &HashSet::new(),
-                    )?,
-                    account_required: Filter::decode_pubkeys_into_set(
-                        &filter.account_required,
-                        &HashSet::new(),
-                    )?,
+                            &filter.account_exclude,
+                            &HashSet::new(),
+                        )?,
+                        account_required: Filter::decode_pubkeys_into_set(
+                            &filter.account_required,
+                            &HashSet::new(),
+                        )?,
+                    },
                 },
             );
         }

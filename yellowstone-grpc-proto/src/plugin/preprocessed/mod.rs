@@ -90,7 +90,7 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
 
 #[derive(Debug, Clone, Default)]
 pub struct FilterPreprocessed {
-    // transactions: FilterTransactions,
+    transactions: FilterTransactions,
     ping: Option<i32>,
 }
 
