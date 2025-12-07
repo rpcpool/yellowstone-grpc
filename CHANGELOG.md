@@ -16,6 +16,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-12-07
+
+- yellowstone-grpc-client-simple-10.2.1
+- yellowstone-grpc-client-10.2.1
+- yellowstone-grpc-geyser-10.2.1
+- yellowstone-grpc-proto-10.2.1
+
+### Features 
+
+- Added support for preprocessed transaction fanout. 
+
 ## 2025-11-27
 
 - yellowstone-grpc-client-simple-10.1.1
