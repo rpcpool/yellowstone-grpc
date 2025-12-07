@@ -26,8 +26,6 @@ pub struct FilteredPreprocessedUpdate {
     pub created_at: Timestamp,
 }
 
-
-// TODO: Double check encoding logic 
 impl prost::Message for FilteredPreprocessedUpdate {
 
     fn encode_raw(&self, buf: &mut impl BufMut) {
@@ -37,13 +35,13 @@ impl prost::Message for FilteredPreprocessedUpdate {
             buf.put_slice(name.as_bytes());
         }
         self.message.encode_raw(buf);
-        message::encode(11u32, &self.created_at, buf);
+        message::encode(5u32, &self.created_at, buf);
     }
 
     fn encoded_len(&self) -> usize {
         prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
             + self.message.encoded_len()
-            + message::encoded_len(11u32, &self.created_at)
+            + message::encoded_len(5u32, &self.created_at)
     }
 
     fn merge_field(&mut self, _tag: u32, _wire_type: WireType, _buf: &mut impl Buf, _ctx: DecodeContext) -> Result<(), DecodeError> {
@@ -79,19 +77,19 @@ impl prost::Message for FilteredPreprocessedUpdateOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
             FilteredPreprocessedUpdateOneof::Ping => {
-                encode_key(6u32, WireType::LengthDelimited, buf);
+                encode_key(3u32, WireType::LengthDelimited, buf);
                 encode_varint(0, buf);
             }
-            FilteredPreprocessedUpdateOneof::Pong(msg) => message::encode(9u32, msg, buf),
-            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(msg) => message::encode(4u32, msg.as_ref(), buf),
+            FilteredPreprocessedUpdateOneof::Pong(msg) => message::encode(4u32, msg, buf),
+            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(msg) => message::encode(2u32, msg.as_ref(), buf),
         }
     }
 
     fn encoded_len(&self) -> usize {
         match self {
-            FilteredPreprocessedUpdateOneof::Ping => key_len(6u32) + encoded_len_varint(0),
-            FilteredPreprocessedUpdateOneof::Pong(msg) => message::encoded_len(9u32, msg),
-            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(msg) => message::encoded_len(4u32, msg.as_ref()),
+            FilteredPreprocessedUpdateOneof::Ping => key_len(3u32) + encoded_len_varint(0),
+            FilteredPreprocessedUpdateOneof::Pong(msg) => message::encoded_len(4u32, msg),
+            FilteredPreprocessedUpdateOneof::PreprocessedTransaction(msg) => message::encoded_len(2u32, msg.as_ref()),
         }
     }
 
