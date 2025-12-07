@@ -1541,7 +1541,7 @@ impl Geyser for GrpcService {
                             let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
-                            if let Err(error) = match FilterPreprocessed::new(&request, &config_filter_limits, &mut filter_names) {
+                            if let Err(error) = match FilterPreprocessed::new(&request, &config_filter_limits.transactions, &mut filter_names) {
                                 Ok(filter) => {
                                     if let Some(msg) = filter.get_pong_msg() {
                                         if incoming_stream_tx.send(Ok(msg)).await.is_err() {

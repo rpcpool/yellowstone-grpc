@@ -8,7 +8,7 @@ use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
 use solana_transaction::{simple_vote_transaction_checker::is_simple_vote_transaction, versioned::{VersionedTransaction, sanitized::SanitizedVersionedTransaction}};
 
-use crate::{convert_to::{create_header, create_instruction, create_lookup}, geyser::{SubscribePreprocessedRequest, SubscribePreprocessedTransaction, SubscribePreprocessedTransactionInfo, SubscribeUpdatePong, SubscribeUpdateTransaction}, plugin::filter::{FilterError, filter::{FilterTransactionsPreprocessedInner, filter_transactions_inner}, limits::FilterLimits, name::{FilterName, FilterNames}}, prelude::Transaction};
+use crate::{convert_to::{create_header, create_instruction, create_lookup}, geyser::{SubscribePreprocessedRequest, SubscribePreprocessedRequestFilterTransactions, SubscribePreprocessedTransaction, SubscribePreprocessedTransactionInfo, SubscribeUpdatePong, SubscribeUpdateTransaction}, plugin::filter::{FilterError, FilterResult, filter::{FilterTransactionsPreprocessedInner, check_preprocessed_fields, filter_transactions_inner}, limits::{FilterLimits, FilterLimitsTransactions}, name::{FilterName, FilterNames}}, prelude::Transaction};
 use prost::{DecodeError, encoding::{DecodeContext, WireType}};
 use solana_entry::entry::Entry as SolanaEntry;
 use crate::prelude::Message as SolanaStorageMessage;
@@ -95,34 +95,25 @@ pub struct FilterTransactionsPreprocessed {
 }
 
 
-// let filters = self
-// .filters
-// .iter()
-// .filter_map(|(name, inner)| {
+impl FilterTransactionsPreprocessed {
+    pub fn new(configs: &HashMap<String, SubscribePreprocessedRequestFilterTransactions>, limits: &FilterLimitsTransactions, names: &mut FilterNames) -> FilterResult<Self> {
+        FilterLimits::check_max(configs.len(), limits.max)?;
+        let mut filters = HashMap::new();
+        for (name, filter) in configs {
+            FilterLimits::check_any(
+                filter.vote.is_none()
+                    && filter.account_include.is_empty()
+                    && filter.account_exclude.is_empty()
+                    && filter.account_required.is_empty(),
+                limits.any,
+            )?;
+            check_preprocessed_fields(&filter.account_include, &filter.account_exclude, &filter.account_required, limits)?;
+            filters.insert(names.get(name)?, FilterTransactionsPreprocessedInner::new(filter)?);
+        }
+        Ok(Self { filters })
+    }
+}
 
-//     if let Some(is_failed) = inner.failed {
-//         if is_failed != message.transaction.meta.err.is_some() {
-//             return None;
-//         }
-//     }
-//     if !filter_transactions_inner(inner, message) {
-//         return None;
-//     }
-//     Some(name.clone())
-// })
-// .collect::<FilteredUpdateFilters>();
-
-// filtered_updates_once_owned!(
-// filters,
-// match self.filter_type {
-//     FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
-//     FilterTransactionsType::TransactionStatus => {
-//         FilteredUpdateOneof::transaction_status(message)
-//     }
-// },
-// message.created_at
-// )
-// }
 impl FilterTransactionsPreprocessed {
     pub fn get_updates(&self, message: &PreprocessedEntries) -> Vec<FilteredPreprocessedUpdate> {
         let mut transactions = Vec::new();
@@ -169,14 +160,12 @@ impl FilterPreprocessed {
     pub fn get_updates(&self, preprocessed_entries: &PreprocessedEntries) -> Vec<FilteredPreprocessedUpdate> {
         return self.transactions.get_updates(preprocessed_entries);
     }
-}
-impl FilterPreprocessed {
 
-    pub fn new(subscribe_request: &SubscribePreprocessedRequest, _limits: &FilterLimits, _names: &mut FilterNames) -> Result<Self, FilterError> {
-        todo!()
-        // Ok(Self { 
-        //     ping: subscribe_request.ping.as_ref().map(|msg| msg.id),
-        // })
+    pub fn new(config: &SubscribePreprocessedRequest, limits: &FilterLimitsTransactions, names: &mut FilterNames) -> Result<Self, FilterError> {
+        Ok(Self { 
+            ping: config.ping.as_ref().map(|msg| msg.id),
+            transactions: FilterTransactionsPreprocessed::new(&config.transactions, limits, names)?,
+        })
     }
 
     pub fn get_pong_msg(&self) -> Option<FilteredPreprocessedUpdate> {
