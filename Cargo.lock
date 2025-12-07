@@ -410,37 +410,15 @@ checksum = "eab1c04a571841102f5345a8fc0f6bb3d31c315dec879b5c6e42e40ce7ffa34e"
 
 [[package]]
 name = "async-compression"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e86f6d3dc9dc4352edeea6b8e499e13e3f5dc3b964d7ca5fd411415a3498473"
+checksum = "07a926debf178f2d355197f9caddb08e54a9329d44748034bba349c5848cb519"
 dependencies = [
  "compression-codecs",
  "compression-core",
  "futures-core",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]
@@ -883,9 +861,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "302266479cb963552d11bd042013a58ef1adc56768016c8b82b4199488f2d4ad"
+checksum = "34a3cbbb8b6eca96f3a5c4bf6938d5b27ced3675d69f95bb51948722870bc323"
 dependencies = [
  "brotli",
  "compression-core",
@@ -6706,7 +6684,7 @@ checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "10.2.1"
+version = "10.2.0"
 dependencies = [
  "bytes",
  "futures",
@@ -6746,12 +6724,11 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "10.2.1"
+version = "10.1.1"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
  "anyhow",
- "async-stream",
  "base64 0.22.1",
  "bincode",
  "bs58",
@@ -6774,17 +6751,14 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-clock",
- "solana-entry",
  "solana-logger",
  "solana-pubkey",
- "solana-transaction-status",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tonic",
  "tonic-health",
- "tonic-prost",
  "tonic-prost-build",
  "vergen",
  "yellowstone-grpc-proto",
@@ -6792,7 +6766,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "10.2.1"
+version = "10.1.1"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",

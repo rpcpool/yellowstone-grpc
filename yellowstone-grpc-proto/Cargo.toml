@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "10.2.1"
+version = "10.1.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -16,7 +16,6 @@ harness = false
 required-features = ["plugin-bench"]
 
 [dependencies]
-agave-geyser-plugin-interface = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 bs58 = { workspace = true, optional = true }
@@ -25,24 +24,31 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 prost_011 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
-solana-account = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
+
+# Agave Monorepo
+agave-geyser-plugin-interface = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
+solana-storage-proto = { workspace = true, optional = true }
+solana-transaction-status = { workspace = true, optional = true }
+solana-transaction-context = { workspace = true, optional = true }
+
+# Solana SDK
+solana-account = { workspace = true, optional = true }
 solana-clock = { workspace = true, optional = true }
 solana-hash = { workspace = true, optional = true }
 solana-message = { workspace = true, optional = true }
 solana-pubkey = { workspace = true, optional = true }
-solana-signature = { workspace = true }
-solana-storage-proto = { workspace = true, optional = true }
+solana-signature = { workspace = true, optional = true }
 solana-transaction = { workspace = true, optional = true }
-solana-transaction-context = { workspace = true, optional = true }
 solana-transaction-error = { workspace = true, optional = true }
-solana-transaction-status = { workspace = true, optional = true }
-smallvec = { workspace = true, optional = true }
+solana-entry = { workspace = true }
+
+# Solana Misc
 spl-token-2022-interface = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
-tonic-prost = { workspace = true, optional = true }
-solana-entry = { workspace = true}
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -68,6 +74,7 @@ convert = [
     "dep:solana-hash",
     "dep:solana-message",
     "dep:solana-pubkey",
+    "dep:solana-signature",
     "dep:solana-transaction",
     "dep:solana-transaction-context",
     "dep:solana-transaction-error",

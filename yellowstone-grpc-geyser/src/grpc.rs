@@ -1330,8 +1330,8 @@ impl Geyser for GrpcService {
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
-        let client_cancelation_token = self.cancellation_token.child_token();
-        if client_cancelation_token.is_cancelled() {
+        let client_cancellation_token = self.cancellation_token.child_token();
+        if client_cancellation_token.is_cancelled() {
             return Err(Status::unavailable("server is shutting down"));
         }
 
@@ -1342,7 +1342,7 @@ impl Geyser for GrpcService {
             None
         };
 
-        let client_stats_settigns = StatsSettings::default()
+        let client_stats_settings = StatsSettings::default()
             .tx_ema_reactivity(EmaReactivity::Reactive)
             .tx_ema_window(DEFAULT_EMA_WINDOW)
             .rx_ema_reactivity(EmaReactivity::Reactive)
@@ -1354,13 +1354,13 @@ impl Geyser for GrpcService {
             } else {
                 self.config_channel_capacity
             },
-            client_stats_settigns,
+            client_stats_settings,
         );
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
         let ping_client_tx = client_tx.clone();
-        let ping_cancellation_token = client_cancelation_token.child_token();
+        let ping_cancellation_token = client_cancellation_token.child_token();
         self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
@@ -1400,7 +1400,7 @@ impl Geyser for GrpcService {
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
-        let incoming_cancellation_token = client_cancelation_token.child_token();
+        let incoming_cancellation_token = client_cancellation_token.child_token();
 
         self.task_tracker.spawn(async move {
             loop {
@@ -1461,7 +1461,7 @@ impl Geyser for GrpcService {
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
-            client_cancelation_token,
+            client_cancellation_token,
             self.task_tracker.clone(),
         ));
 
