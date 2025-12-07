@@ -44,6 +44,8 @@ tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
+solana-entry = { workspace = true }
+tonic-prost = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
