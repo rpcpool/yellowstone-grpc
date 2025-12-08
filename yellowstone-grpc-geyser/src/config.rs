@@ -4,7 +4,12 @@ use {
     },
     serde::{de, Deserialize, Deserializer},
     std::{
-        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        collections::HashSet,
+        fmt,
+        fs::read_to_string,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
@@ -132,11 +137,46 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     Ok(vec)
 }
 
+/// Transport type for gRPC service
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportType {
+    /// TCP transport (default)
+    #[default]
+    Tcp,
+    /// Unix Domain Socket transport
+    Uds,
+}
+
+/// Configuration for Unix Domain Socket transport
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigUds {
+    /// Path to the Unix domain socket file
+    pub socket_path: PathBuf,
+    /// Whether to remove existing socket file on startup
+    #[serde(default = "ConfigUds::default_remove_on_startup")]
+    pub remove_on_startup: bool,
+}
+
+impl ConfigUds {
+    const fn default_remove_on_startup() -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
-    /// Address of Grpc service.
-    pub address: SocketAddr,
+    /// Transport type: "tcp" (default) or "uds"
+    #[serde(default)]
+    pub transport: TransportType,
+    /// Address of Grpc service (for TCP transport).
+    #[serde(default)]
+    pub address: Option<SocketAddr>,
+    /// Unix Domain Socket configuration (for UDS transport)
+    #[serde(default)]
+    pub uds: Option<ConfigUds>,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
     /// Possible compression options

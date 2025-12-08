@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigGrpc, TransportType},
         metrics::{
             self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
             set_subscriber_send_bandwidth_load, DebugClientMessage,
@@ -67,6 +67,9 @@ use {
         prost::Message as ProstMessage,
     },
 };
+
+#[cfg(unix)]
+use {tokio::net::UnixListener, tokio_stream::wrappers::UnixListenerStream};
 
 #[derive(Debug)]
 struct BlockhashStatus {
@@ -419,11 +422,6 @@ impl GrpcService {
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
     )> {
-        // Bind service address
-        let incoming = TcpIncoming::bind(config.address)?
-            .with_nodelay(Some(true))
-            .with_keepalive(Some(Duration::from_secs(20)));
-
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
             Some(cap) if !is_reload => {
@@ -532,30 +530,92 @@ impl GrpcService {
 
         // Run Server
         let shutdown_grpc = service_cancellation_token.child_token();
-        task_tracker.spawn(async move {
-            // gRPC Health check service
-            let (health_reporter, health_service) = health_reporter();
-            health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            let result = server_builder
-                .layer(interceptor::InterceptorLayer::new(
-                    move |request: Request<()>| {
-                        if let Some(x_token) = &config.x_token {
-                            match request.metadata().get("x-token") {
-                                Some(token) if x_token == token => Ok(request),
-                                _ => Err(Status::unauthenticated("No valid auth token")),
-                            }
-                        } else {
-                            Ok(request)
+        // Helper macro to spawn the gRPC server with a given incoming stream
+        macro_rules! spawn_grpc_server {
+            ($incoming:expr) => {{
+                task_tracker.spawn(async move {
+                    let (health_reporter, health_service) = health_reporter();
+                    health_reporter.set_serving::<GeyserServer<Self>>().await;
+
+                    let result = server_builder
+                        .layer(interceptor::InterceptorLayer::new(
+                            move |request: Request<()>| {
+                                if let Some(x_token) = &config.x_token {
+                                    match request.metadata().get("x-token") {
+                                        Some(token) if x_token == token => Ok(request),
+                                        _ => Err(Status::unauthenticated("No valid auth token")),
+                                    }
+                                } else {
+                                    Ok(request)
+                                }
+                            },
+                        ))
+                        .add_service(health_service)
+                        .add_service(service)
+                        .serve_with_incoming_shutdown($incoming, shutdown_grpc.cancelled())
+                        .await;
+                    info!("gRPC server shut down with result: {result:?}");
+                });
+            }};
+        }
+
+        match config.transport {
+            TransportType::Tcp => {
+                let address = config
+                    .address
+                    .context("TCP address is required for TCP transport")?;
+                let incoming = TcpIncoming::bind(address)?
+                    .with_nodelay(Some(true))
+                    .with_keepalive(Some(Duration::from_secs(20)));
+
+                info!("Starting gRPC server on TCP: {}", address);
+                spawn_grpc_server!(incoming);
+            }
+            TransportType::Uds => {
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("UDS transport is only supported on Unix platforms");
+                }
+                #[cfg(unix)]
+                {
+                    let uds_config = config
+                        .uds
+                        .context("UDS config is required for UDS transport")?;
+                    let socket_path = &uds_config.socket_path;
+
+                    // Remove existing socket file if configured
+                    if uds_config.remove_on_startup && socket_path.exists() {
+                        fs::remove_file(socket_path).await.with_context(|| {
+                            format!(
+                                "failed to remove existing UDS socket file at {:?}",
+                                socket_path
+                            )
+                        })?;
+                    }
+
+                    // Create parent directory if it doesn't exist
+                    if let Some(parent) = socket_path.parent() {
+                        if !parent.exists() {
+                            fs::create_dir_all(parent).await.with_context(|| {
+                                format!(
+                                    "failed to create parent directory for UDS socket at {:?}",
+                                    parent
+                                )
+                            })?;
                         }
-                    },
-                ))
-                .add_service(health_service)
-                .add_service(service)
-                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
-                .await;
-            info!("gRPC server shut down with result: {result:?}");
-        });
+                    }
+
+                    let uds_listener = UnixListener::bind(socket_path).with_context(|| {
+                        format!("failed to bind UDS socket at {:?}", socket_path)
+                    })?;
+                    let uds_stream = UnixListenerStream::new(uds_listener);
+
+                    info!("Starting gRPC server on UDS: {:?}", socket_path);
+                    spawn_grpc_server!(uds_stream);
+                }
+            }
+        }
 
         Ok((snapshot_tx, messages_tx))
     }
