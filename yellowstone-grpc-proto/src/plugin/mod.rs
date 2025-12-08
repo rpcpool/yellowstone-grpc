@@ -1,5 +1,6 @@
 pub mod filter;
 pub mod message;
+pub mod preprocessed;
 
 pub mod proto {
     #![allow(clippy::clone_on_ref_ptr)]

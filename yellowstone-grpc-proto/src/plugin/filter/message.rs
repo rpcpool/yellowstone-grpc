@@ -54,13 +54,13 @@ pub const fn prost_bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
     prost_field_encoded_len(tag, value.len())
 }
 
-macro_rules! prost_repeated_encoded_len_map {
+#[macro_export] macro_rules! prost_repeated_encoded_len_map {
     ($tag:expr, $values:expr, $get_len:expr) => {{
-        key_len($tag) * $values.len()
+        prost::encoding::key_len($tag) * $values.len()
             + $values
                 .iter()
                 .map($get_len)
-                .map(|len| encoded_len_varint(len as u64) + len)
+                .map(|len| prost::encoding::encoded_len_varint(len as u64) + len)
                 .sum::<usize>()
     }};
 }

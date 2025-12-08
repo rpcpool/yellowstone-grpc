@@ -47,6 +47,17 @@ fn main() -> anyhow::Result<()> {
         )
         .method(
             Method::builder()
+                .name("subscribe_preprocessed")
+                .route_name("SubscribePreprocessed")
+                .input_type("crate::geyser::SubscribePreprocessedRequest")
+                .output_type("crate::plugin::preprocessed::FilteredPreprocessedUpdate")
+                .codec_path("tonic_prost::ProstCodec")
+                .client_streaming()
+                .server_streaming()
+                .build(),
+        )
+        .method(
+            Method::builder()
                 .name("subscribe_first_available_slot")
                 .route_name("SubscribeReplayInfo")
                 .input_type("crate::geyser::SubscribeReplayInfoRequest")

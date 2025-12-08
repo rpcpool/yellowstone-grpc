@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 10.1.1
-    "yellowstone-grpc-client", # 10.1.1
-    "yellowstone-grpc-geyser", # 10.1.1
-    "yellowstone-grpc-proto", # 10.1.1
+    "examples/rust", # 10.2.1
+    "yellowstone-grpc-client", # 10.2.1
+    "yellowstone-grpc-geyser", # 10.2.1
+    "yellowstone-grpc-proto", # 10.2.1
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
@@ -85,6 +85,7 @@ solana-signature = "3.1.0"
 solana-signer = "3.0.0"
 solana-transaction = "3.0.1"
 solana-transaction-error = "3.0.0"
+solana-entry = "3.0.0"
 
 # Solana Misc
 spl-token-2022-interface = "2.0.0"

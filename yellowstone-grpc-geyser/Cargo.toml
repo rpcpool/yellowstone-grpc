@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "10.1.1"
+version = "10.2.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -44,6 +44,8 @@ tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
+solana-entry = { workspace = true }
+tonic-prost = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
@@ -61,6 +63,7 @@ anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
+tonic-prost-build = { workspace = true }
 
 [lints]
 workspace = true

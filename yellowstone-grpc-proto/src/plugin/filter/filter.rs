@@ -1,15 +1,7 @@
 use {
     crate::{
         geyser::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
+            CommitmentLevel as CommitmentLevelProto, SubscribePreprocessedRequestFilterTransactions, SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports, SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof, subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports, subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof
         },
         plugin::{
             filter::{
@@ -30,9 +22,9 @@ use {
             },
         },
     },
-    base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
+    base64::{Engine, engine::general_purpose::STANDARD as base64_engine},
     bytes::buf::BufMut,
-    prost::encoding::{encode_key, encode_varint, WireType},
+    prost::encoding::{WireType, encode_key, encode_varint},
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
     spl_token_2022_interface::{
@@ -669,18 +661,45 @@ enum FilterTransactionsType {
 
 #[derive(Debug, Clone)]
 struct FilterTransactionsInner {
-    vote: Option<bool>,
     failed: Option<bool>,
+    preprocessed_inner: FilterTransactionsPreprocessedInner,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FilterTransactionsPreprocessedInner {
+    vote: Option<bool>,
     signature: Option<Signature>,
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
     account_required: HashSet<Pubkey>,
 }
 
+impl FilterTransactionsPreprocessedInner {
+    pub fn new(filter: &SubscribePreprocessedRequestFilterTransactions) -> FilterResult<Self> {
+        Ok(Self {
+            vote: filter.vote,
+            signature: filter.signature.as_ref().map(|signature_str| {
+                signature_str.parse().map_err(FilterError::InvalidSignature)
+            })
+            .transpose()?,
+            account_include: Filter::decode_pubkeys_into_set(&filter.account_include, &HashSet::new())?,
+            account_exclude: Filter::decode_pubkeys_into_set(&filter.account_exclude, &HashSet::new())?,
+            account_required: Filter::decode_pubkeys_into_set(&filter.account_required, &HashSet::new())?,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FilterTransactions {
     filter_type: FilterTransactionsType,
     filters: HashMap<FilterName, FilterTransactionsInner>,
+}
+
+pub fn check_preprocessed_fields(account_include: &[String], account_exclude: &[String], account_required: &[String], limits: &FilterLimitsTransactions) -> FilterResult<()> {
+    FilterLimits::check_pubkey_max(account_include.len(), limits.account_include_max)?;
+    FilterLimits::check_pubkey_max(account_exclude.len(), limits.account_exclude_max)?;
+    FilterLimits::check_pubkey_max(account_required.len(), limits.account_required_max)?;
+    Ok(())
 }
 
 impl FilterTransactions {
@@ -702,44 +721,26 @@ impl FilterTransactions {
                     && filter.account_required.is_empty(),
                 limits.any,
             )?;
-            FilterLimits::check_pubkey_max(
-                filter.account_include.len(),
-                limits.account_include_max,
-            )?;
-            FilterLimits::check_pubkey_max(
-                filter.account_exclude.len(),
-                limits.account_exclude_max,
-            )?;
-            FilterLimits::check_pubkey_max(
-                filter.account_required.len(),
-                limits.account_required_max,
-            )?;
+            check_preprocessed_fields(&filter.account_include, &filter.account_exclude, &filter.account_required, limits)?;
 
             filters.insert(
                 names.get(name)?,
                 FilterTransactionsInner {
-                    vote: filter.vote,
                     failed: filter.failed,
-                    signature: filter
-                        .signature
-                        .as_ref()
-                        .map(|signature_str| {
-                            signature_str.parse().map_err(FilterError::InvalidSignature)
-                        })
-                        .transpose()?,
-                    account_include: Filter::decode_pubkeys_into_set(
-                        &filter.account_include,
-                        &limits.account_include_reject,
-                    )?,
-                    account_exclude: Filter::decode_pubkeys_into_set(
-                        &filter.account_exclude,
-                        &HashSet::new(),
-                    )?,
-                    account_required: Filter::decode_pubkeys_into_set(
-                        &filter.account_required,
-                        &HashSet::new(),
-                    )?,
-                },
+                    preprocessed_inner: FilterTransactionsPreprocessedInner {
+                        vote: filter.vote,
+                        signature: filter
+                            .signature
+                            .as_ref()
+                            .map(|signature_str| {
+                                signature_str.parse().map_err(FilterError::InvalidSignature)
+                            })
+                            .transpose()?,
+                        account_exclude: Filter::decode_pubkeys_into_set(&filter.account_exclude, &HashSet::new())?,
+                        account_required: Filter::decode_pubkeys_into_set(&filter.account_required, &HashSet::new())?,
+                        account_include: Filter::decode_pubkeys_into_set(&filter.account_include, &HashSet::new())?,
+                    },
+                }
             );
         }
         Ok(Self {
@@ -753,53 +754,15 @@ impl FilterTransactions {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if let Some(is_vote) = inner.vote {
-                    if is_vote != message.transaction.is_vote {
-                        return None;
-                    }
-                }
 
                 if let Some(is_failed) = inner.failed {
                     if is_failed != message.transaction.meta.err.is_some() {
                         return None;
                     }
                 }
-
-                if let Some(signature) = &inner.signature {
-                    let tx_sig = message.transaction.transaction.signatures.first();
-                    if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
-                        return None;
-                    }
-                }
-
-                if !inner.account_include.is_empty()
-                    && inner
-                        .account_include
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_none()
-                {
+                if !filter_transactions_inner(&inner.preprocessed_inner, &message.transaction.account_keys, message.transaction.is_vote, &message.transaction.transaction.signatures) {
                     return None;
                 }
-
-                if !inner.account_exclude.is_empty()
-                    && inner
-                        .account_exclude
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_some()
-                {
-                    return None;
-                }
-
-                if !inner.account_required.is_empty()
-                    && !inner
-                        .account_required
-                        .is_subset(&message.transaction.account_keys)
-                {
-                    return None;
-                }
-
                 Some(name.clone())
             })
             .collect::<FilteredUpdateFilters>();
@@ -815,6 +778,55 @@ impl FilterTransactions {
             message.created_at
         )
     }
+}
+
+pub(crate) fn filter_transactions_inner(
+    inner: &FilterTransactionsPreprocessedInner,
+    transaction_account_keys: &HashSet<Pubkey>,
+    transaction_is_vote: bool,
+    transaction_signatures: &Vec<Vec<u8>>,
+) -> bool {
+    if let Some(is_vote) = inner.vote {
+        if is_vote != transaction_is_vote {
+            return false;
+        }
+    }
+
+    if let Some(signature) = &inner.signature {
+        let tx_sig = transaction_signatures.first();
+        if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
+            return false;
+        }
+    }
+
+    if !inner.account_include.is_empty()
+        && inner.account_include
+            .intersection(&transaction_account_keys)
+            .next()
+            .is_none()
+    {
+        return false;
+    }
+
+    if !inner.account_exclude.is_empty()
+        && inner
+            .account_exclude
+            .intersection(&transaction_account_keys)
+            .next()
+            .is_some()
+    {
+        return false;
+    }
+
+    if !inner.account_required.is_empty()
+        && !inner
+            .account_required
+            .is_subset(&transaction_account_keys)
+    {
+        return false;
+    }
+
+    true
 }
 
 #[derive(Debug, Default, Clone)]

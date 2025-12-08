@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "10.1.1"
+version = "10.2.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -45,6 +45,7 @@ solana-pubkey = { workspace = true, optional = true }
 solana-signature = { workspace = true, optional = true }
 solana-transaction = { workspace = true, optional = true }
 solana-transaction-error = { workspace = true, optional = true }
+solana-entry = { workspace = true }
 
 # Solana Misc
 spl-token-2022-interface = { workspace = true, optional = true }

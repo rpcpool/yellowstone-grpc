@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribePreprocessed(stream SubscribePreprocessedRequest) returns (stream SubscribePreprocessedUpdate) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -16,6 +17,41 @@ service Geyser {
   rpc GetSlot(GetSlotRequest) returns (GetSlotResponse) {}
   rpc IsBlockhashValid(IsBlockhashValidRequest) returns (IsBlockhashValidResponse) {}
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {}
+}
+
+// Subscriptions to Preprocessed transactions
+message SubscribePreprocessedRequest {
+  map<string, SubscribePreprocessedRequestFilterTransactions> transactions = 1;
+  optional SubscribeRequestPing ping = 2;
+}
+
+message SubscribePreprocessedRequestFilterTransactions {
+  optional bool vote = 1;
+  optional string signature = 2;
+  repeated string account_include = 3;
+  repeated string account_exclude = 4;
+  repeated string account_required = 5;
+}
+
+message SubscribePreprocessedUpdate {
+  repeated string filters = 1;
+  oneof update_oneof {
+    SubscribePreprocessedTransaction transaction = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+  }
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message SubscribePreprocessedTransaction {
+  SubscribePreprocessedTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribePreprocessedTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
 }
 
 enum CommitmentLevel {

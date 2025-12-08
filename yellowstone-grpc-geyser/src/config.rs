@@ -23,9 +23,17 @@ pub struct Config {
     pub grpc: ConfigGrpc,
     #[serde(default)]
     pub prometheus: Option<ConfigPrometheus>,
+    #[serde(default)]
+    pub shredstream: ConfigShredstream,
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
     pub debug_clients_http: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigShredstream {
+    pub endpoint: String,
 }
 
 impl Config {
@@ -167,6 +175,14 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub channel_capacity: usize,
+    /// Capacity of the channel per connection for preprocessed requests
+    #[serde(
+        default = "ConfigGrpc::subscribe_preprocessed_channel_capacity_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub subscribe_preprocessed_channel_capacity: usize,
+    /// Jito shredstream gRPC endpoint 
+    pub jito_shredstream_endpoint: Option<String>,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -225,6 +241,10 @@ impl ConfigGrpc {
     }
 
     const fn channel_capacity_default() -> usize {
+        250_000
+    }
+
+    const fn subscribe_preprocessed_channel_capacity_default() -> usize {
         250_000
     }
 
