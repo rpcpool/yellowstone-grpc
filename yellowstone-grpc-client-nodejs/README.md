@@ -24,3 +24,25 @@ npm run build
 ```
 
 Please refer to [examples/typescript](../examples/typescript/README.md) for some usage examples.
+
+## Troubleshooting
+
+### For macOS:
+
+You might have to run `npm run build` with `RUSTFLAGS="-Clink-arg=-undefined -Clink-arg=dynamic_lookup"` to skip the strict linkers from failing the build step and resolve `dylib`s via runtime.
+
+```bash
+RUSTFLAGS="-Clink-arg=-undefined -Clink-arg=dynamic_lookup" npm run build
+```
+
+## Working
+
+Since the start, the `@triton-one/yellowstone-grpc` package has used the `@grpc/grpc-js` lib for gRPC types enforcement, connection and subscription management. This hit a bottleneck, described in [this blog](https://blog.triton.one/supercharging-the-javascript-sdk-with-napi/)
+
+From `v5.0.0` the [napi-rs](https://github.com/napi-rs/napi-rs) framework is used for gRPC connection and subscription management. It's described into [this blog](https://blog.triton.one/supercharging-the-javascript-sdk-with-napi/)
+
+These changes are internal to the SDK and do not have any breaking changes for client code. If you face any issues, please open an issue
+
+The `@grpc/grpc-js` lib is still being used for types management. This is will be removed in the future release without any braking API changes
+
+The [napi-rs](https://github.com/napi-rs/napi-rs) based implementation is inspired from the implemenation of the [LaserStream SDK](https://github.com/helius-labs/laserstream-sdk)

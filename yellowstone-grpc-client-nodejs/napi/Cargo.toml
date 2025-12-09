@@ -1,0 +1,50 @@
+[package]
+name = "yellowstone-grpc-napi"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[workspace]
+# This is an independent workspace, not part of the parent workspace
+
+[dependencies]
+napi = { version = "3", features = ["async", "napi9", "serde-json", "web_stream"] }
+napi-derive = "3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tonic = { version = "0.11", features = ["transport", "tls", "gzip", "zstd"] }
+rustls = { version = "0.23", features = ["ring"] }
+bytes = "1"
+futures = "0.3"
+futures-util = "0.3"
+futures-channel = "0.3"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+yellowstone-grpc-client = "10.0.0"
+yellowstone-grpc-proto = "10.0.0"
+prost = "~0.14"
+bs58 = { version = "0.5.0", features = ["alloc"] }
+fastrand = "2.0"
+lazy_static = "1.5.0"
+prost-types = "~0.14"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+opt-level = 3
+
+
+[package.metadata.napi]
+name = "yellowstone-grpc-napi"
+
+[patch.crates-io]
+yellowstone-grpc-proto = { git = "https://github.com/rpcpool/yellowstone-grpc", tag = "v10.0.0+solana.3.0.6"}
+yellowstone-grpc-client = { git = "https://github.com/rpcpool/yellowstone-grpc", tag = "v10.0.0+solana.3.0.6"}

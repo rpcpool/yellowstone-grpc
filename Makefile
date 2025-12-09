@@ -1,4 +1,4 @@
-clean: clean-nodejs clean-rust
+clean: clean-nodejs clean-rust clean-napi
 	rm -rf test-ledger
 
 clean-nodejs:
@@ -12,6 +12,17 @@ clean-nodejs:
 clean-rust:
 	rm -rf target
 	rm -rf yellowstone-grpc-client-nodejs/solana-encoding-wasm/target
+	rm -rf yellowstone-grpc-client-nodejs/napi/target
+
+clean-napi:
+	rm -rf yellowstone-grpc-client-nodejs/napi/target
+	rm -rf yellowstone-grpc-client-nodejs/napi/*.node
+	rm -rf yellowstone-grpc-client-nodejs/napi/index.js
+	rm -rf yellowstone-grpc-client-nodejs/napi/index.d.ts
+
+solana-encoding-wasm-install-dependencies:
+	rustup target add wasm32-unknown-unknown
+	cargo install -f wasm-bindgen-cli --version 0.2.100
 
 solana-encoding-wasm-install-dependencies:
 	rustup target add wasm32-unknown-unknown

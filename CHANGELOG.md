@@ -16,6 +16,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-12-09
+
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-client-simple-10.0.0
+- yellowstone-grpc-client-10.0.0
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-proto-10.0.0
+- @triton-one/yellowstone-grpc-5.0.0
+
+### Breaking
+- The `@triton-one/yellowstone-grpc` TypeScript SDK client has migrated from `@grpc/grpc-js` to `napi-rs` for gRPC connection and subscription management
+
 ## 2025-11-27
 
 - yellowstone-grpc-client-simple-10.1.1

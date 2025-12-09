@@ -17,6 +17,9 @@ yellowstone-grpc-client-nodejs/src/grpc
 venv
 __pycache__/
 
+# napi
+yellowstone-grpc-client-nodejs/napi/*.node
+
 # IDE
 .idea
 .vscode
@@ -24,5 +27,12 @@ __pycache__/
 # Configs
 yellowstone-grpc-geyser/config-test.json
 
-# local files for development
+# Misc. local files
+.DS_Store
+
+# Local development files
 .local
+.editorconfig
+.env
+.env.local
+scripts
