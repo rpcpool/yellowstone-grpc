@@ -573,3 +573,4 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.DuplexStream = nativeBinding.DuplexStream
+module.exports.JsCompressionAlgorithm = nativeBinding.JsCompressionAlgorithm

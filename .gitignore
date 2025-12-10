@@ -36,3 +36,6 @@ yellowstone-grpc-geyser/config-test.json
 .env
 .env.local
 scripts
+
+yellowstone-grpc-napi.linux-x64-gnu.node
+/workspaces/devpool/yellowstone-grpc/yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.linux-x64-gnu.node
