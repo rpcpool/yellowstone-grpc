@@ -1,6 +1,6 @@
 {
   "name": "@triton-one/yellowstone-grpc",
-  "version": "5.0.1-beta-5",
+  "version": "5.0.1-beta-6",
   "license": "Apache-2.0",
   "author": "Triton One",
   "description": "Yellowstone gRPC Geyser Node.js Client",
@@ -8,8 +8,9 @@
   "types": "./dist/types/index.d.ts",
   "scripts": {
     "build": "npm run grpc-generate && npm run build:napi && npm run cp-napi-files && tsc --project tsconfig.esm.json && tsc --project tsconfig.cjs.json && npm run cp-encoding-files && node add-js-extensions.js",
-    "build:napi": "cd napi && napi build --platform --release --no-dts-cache",
-    "build:napi:debug": "cd napi && napi build --platform --no-dts-cache",
+    "build:napi": "cd napi && napi build --platform --release --target x86_64-apple-darwin --target aarch64-apple-darwin --target x86_64-unknown-linux-gnu",
+    "build:napi:platform": "cd napi && napi build --platform --release --target $TARGET",
+    "build:napi:debug": "cd napi && napi build --platform",
     "cp-encoding-files": "mkdir -p dist/esm/encoding && cp -r src/encoding/* dist/cjs/encoding/ && mkdir -p dist/esm/encoding && cp -r src/encoding/* dist/esm/encoding/ && mkdir -p dist/types/encoding && cp -r src/encoding/* dist/types/encoding/",
     "cp-napi-files": "mkdir -p src/napi && mkdir -p dist/cjs/napi && mkdir -p dist/esm/napi && mkdir -p dist/types/napi && cp -r napi/*.node src/napi/ 2>/dev/null || true && cp -r napi/*.node dist/cjs/napi/ 2>/dev/null || true && cp -r napi/*.node dist/esm/napi/ 2>/dev/null || true && cp -r napi/index.d.ts src/napi 2>/dev/null || true && cp -r napi/index.d.ts dist/types/napi/ 2>/dev/null || true && cp -r napi/index.js src/napi 2>/dev/null || true && cp -r napi/index.js dist/cjs/napi/ 2>/dev/null || true && cp -r napi/index.js dist/esm/napi/ 2>/dev/null || true",
     "fmt": "prettier -w .",
