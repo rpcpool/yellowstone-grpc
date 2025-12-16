@@ -1,6 +1,6 @@
 {
   "name": "@triton-one/yellowstone-grpc",
-  "version": "5.0.1-beta-3",
+  "version": "5.0.1-beta-4",
   "license": "Apache-2.0",
   "author": "Triton One",
   "description": "Yellowstone gRPC Geyser Node.js Client",
@@ -32,7 +32,10 @@
   ],
   "homepage": "https://triton.one",
   "dependencies": {
-    "@grpc/grpc-js": "^1.8.0"
+    "@grpc/grpc-js": "^1.8.0",
+    "@solana/rpc-api": "=5.1.0",
+    "@solana/addresses": "=5.1.0",
+    "@solana/rpc-types": "=5.1.0"
   },
   "devDependencies": {
     "@babel/core": "^7.28.5",
@@ -40,7 +43,6 @@
     "@babel/preset-env": "^7.28.5",
     "@babel/preset-typescript": "^7.28.5",
     "@napi-rs/cli": "^3.4.1",
-    "@solana/rpc-api": "=5.1.0",
     "@types/jest": "^30.0.0",
     "babel-jest": "^30.2.0",
     "dotenv": "^17.2.3",
@@ -50,9 +52,7 @@
     "recast": "^0.23.9",
     "ts-jest": "^29.4.5",
     "ts-proto": "^2.8.3",
-    "typescript": "=5.9.3",
-    "@solana/addresses": "=5.1.0",
-    "@solana/rpc-types": "=5.1.0"
+    "typescript": "=5.9.3"
   },
   "engines": {
     "node": ">=20.18.0"
