@@ -2,14 +2,12 @@ use {
     crate::{
         config::ConfigGrpc,
         metrics::{
-            self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
-            set_subscriber_send_bandwidth_load, DebugClientMessage,
+            self, DebugClientMessage, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load, set_subscriber_send_bandwidth_load
         },
         util::{
-            ema::{EmaReactivity, DEFAULT_EMA_WINDOW},
+            ema::{DEFAULT_EMA_WINDOW, EmaReactivity},
             stream::{
-                load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
-                TrafficWeighted,
+                LoadAwareReceiver, LoadAwareSender, StatsSettings, TrafficWeighted, load_aware_channel
             },
             sync::OnDrop,
         },
@@ -18,38 +16,31 @@ use {
     anyhow::Context,
     log::{error, info},
     prost_types::Timestamp,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_clock::{MAX_RECENT_BLOCKHASHES, Slot},
     solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc,
+            Arc, atomic::{AtomicU64, AtomicUsize, Ordering}
         },
         time::SystemTime,
     },
     tokio::{
         fs,
-        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration},
+        sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot},
+        time::{Duration, Instant, sleep},
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
-        service::interceptor,
-        transport::{
-            server::{Server, TcpIncoming},
-            Identity, ServerTlsConfig,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
+        Request, Response, Result as TonicResult, Status, Streaming, service::interceptor, transport::{
+            Identity, ServerTlsConfig, server::{Server, TcpIncoming}
+        }
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
         plugin::{
             filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateOneof},
-                name::FilterNames,
-                Filter,
+                Filter, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames
             },
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,

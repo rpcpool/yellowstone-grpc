@@ -1,7 +1,7 @@
 use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
-    }, bytesize::ByteSize, serde::{de, Deserialize, Deserializer}, std::{
+    }, serde::{de, Deserialize, Deserializer}, std::{
         collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
         time::Duration,
     }, tokio::sync::Semaphore, tonic::codec::CompressionEncoding, yellowstone_grpc_proto::plugin::filter::limits::FilterLimits

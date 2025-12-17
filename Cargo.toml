@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "examples/rust", # 10.1.1
     "yellowstone-grpc-client", # 10.1.1
-    "yellowstone-grpc-geyser", # 10.1.1
+    "yellowstone-grpc-geyser", # 10.1.2-rc1
     "yellowstone-grpc-proto", # 10.1.1
 ]
 exclude = [
