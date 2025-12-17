@@ -35,6 +35,9 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
+    enable_notify_account_update: bool,
+    enable_notify_transaction: bool,
+    filter_notify_account_update_size: Option<usize>,
 }
 
 impl PluginInner {
@@ -105,6 +108,14 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
+        let enable_notify_account_update = config
+            .grpc
+            .enable_notify_account_update
+            .unwrap_or(true);
+        let enable_notify_transaction = config.grpc.enable_notify_transaction.unwrap_or(true);
+
+        let filter_notify_account_update_size = config.grpc.filter_notify_account_update_size;
+
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
@@ -141,6 +152,9 @@ impl GeyserPlugin for Plugin {
             grpc_channel,
             plugin_cancellation_token,
             plugin_task_tracker,
+            enable_notify_account_update,
+            enable_notify_transaction,
+            filter_notify_account_update_size,
         });
 
         Ok(())
@@ -197,6 +211,11 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
+                if let Some(acconut_data_size_limit) = inner.filter_notify_account_update_size.as_ref() {
+                    if account.data.len() > *acconut_data_size_limit {
+                        return Ok(());
+                    }
+                }
                 let message =
                     Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
                 inner.send_message(message);
@@ -290,7 +309,7 @@ impl GeyserPlugin for Plugin {
     }
 
     fn account_data_notifications_enabled(&self) -> bool {
-        true
+        self.inner.as_ref().unwrap().enable_notify_account_update
     }
 
     fn account_data_snapshot_notifications_enabled(&self) -> bool {
@@ -298,7 +317,7 @@ impl GeyserPlugin for Plugin {
     }
 
     fn transaction_notifications_enabled(&self) -> bool {
-        true
+        self.inner.as_ref().unwrap().enable_notify_transaction
     }
 
     fn entry_notifications_enabled(&self) -> bool {
