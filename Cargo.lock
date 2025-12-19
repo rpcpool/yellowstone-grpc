@@ -5041,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "10.1.2-rc1"
+version = "10.1.2-rc2"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5071,6 +5071,7 @@ dependencies = [
  "solana-clock",
  "solana-logger",
  "solana-pubkey",
+ "solana-sdk-ids",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",

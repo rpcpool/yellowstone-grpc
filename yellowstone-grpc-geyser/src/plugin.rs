@@ -6,8 +6,8 @@ use {
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
+        ReplicaEntryInfoVersions, ReplicaTransactionInfoV3, ReplicaTransactionInfoVersions,
+        Result as PluginResult, SlotStatus,
     },
     std::{
         concat, env,
@@ -22,8 +22,12 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_grpc_proto::plugin::message::{
-        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+    yellowstone_grpc_proto::{
+        plugin::message::{
+            Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransaction,
+        },
+        prost::Message as ProstMessage,
     },
 };
 
@@ -36,8 +40,11 @@ pub struct PluginInner {
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
     enable_notify_account_update: bool,
-    enable_notify_transaction: bool,
+    enable_notify_transaction_update: bool,
+    enable_notify_vote_transaction: bool,
+    enable_notify_vote_account_update: bool,
     filter_notify_account_update_size: Option<usize>,
+    filter_notify_transaction_update_size: Option<usize>,
 }
 
 impl PluginInner {
@@ -108,13 +115,19 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-        let enable_notify_account_update = config
+        let enable_notify_account_update = config.grpc.enable_notify_account_update.unwrap_or(true);
+        let enable_notify_transaction_update =
+            config.grpc.enable_notify_transaction_update.unwrap_or(true);
+        let enable_notify_vote_transaction =
+            config.grpc.enable_notify_vote_transaction.unwrap_or(true);
+        let enable_notify_vote_account_update = config
             .grpc
-            .enable_notify_account_update
+            .enable_notify_vote_account_update
             .unwrap_or(true);
-        let enable_notify_transaction = config.grpc.enable_notify_transaction.unwrap_or(true);
 
         let filter_notify_account_update_size = config.grpc.filter_notify_account_update_size;
+        let filter_notify_transaction_update_size =
+            config.grpc.filter_notify_transaction_update_size;
 
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
@@ -153,8 +166,11 @@ impl GeyserPlugin for Plugin {
             plugin_cancellation_token,
             plugin_task_tracker,
             enable_notify_account_update,
-            enable_notify_transaction,
+            enable_notify_transaction_update,
+            enable_notify_vote_transaction,
+            enable_notify_vote_account_update,
             filter_notify_account_update_size,
+            filter_notify_transaction_update_size,
         });
 
         Ok(())
@@ -211,10 +227,18 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
-                if let Some(acconut_data_size_limit) = inner.filter_notify_account_update_size.as_ref() {
+                if let Some(acconut_data_size_limit) =
+                    inner.filter_notify_account_update_size.as_ref()
+                {
                     if account.data.len() > *acconut_data_size_limit {
                         return Ok(());
                     }
+                }
+                // Verify if we should filter out vote account updates
+                if !inner.enable_notify_vote_account_update
+                    && account.owner == solana_sdk_ids::stake::ID.to_bytes()
+                {
+                    return Ok(());
                 }
                 let message =
                     Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
@@ -262,8 +286,28 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
-            inner.send_message(message);
+            // Apply vote transaction filter if configured
+            if !inner.enable_notify_vote_transaction {
+                let ReplicaTransactionInfoV3 { is_vote, .. } = &transaction;
+                if *is_vote {
+                    return Ok(());
+                }
+            }
+
+            let msg_transaction = MessageTransaction::from_geyser(transaction, slot);
+
+            // Apply transaction size filter if configured
+            if let Some(transaction_size_limit) =
+                inner.filter_notify_transaction_update_size.as_ref()
+            {
+                let size = msg_transaction.transaction.transaction.encoded_len()
+                    + msg_transaction.transaction.meta.encoded_len();
+                if size > *transaction_size_limit {
+                    return Ok(());
+                }
+            }
+
+            inner.send_message(Message::Transaction(msg_transaction));
 
             Ok(())
         })
@@ -317,7 +361,10 @@ impl GeyserPlugin for Plugin {
     }
 
     fn transaction_notifications_enabled(&self) -> bool {
-        self.inner.as_ref().unwrap().enable_notify_transaction
+        self.inner
+            .as_ref()
+            .unwrap()
+            .enable_notify_transaction_update
     }
 
     fn entry_notifications_enabled(&self) -> bool {

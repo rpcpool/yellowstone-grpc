@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "10.1.2-rc1"
+version = "10.1.2-rc2"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -53,6 +53,7 @@ solana-logger = { workspace = true }
 # Solana SDK
 solana-clock = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-sdk-ids = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }

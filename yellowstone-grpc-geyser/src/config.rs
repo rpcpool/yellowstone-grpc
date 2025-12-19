@@ -1,10 +1,15 @@
 use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
-    }, serde::{de, Deserialize, Deserializer}, std::{
+    },
+    serde::{de, Deserialize, Deserializer},
+    std::{
         collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
         time::Duration,
-    }, tokio::sync::Semaphore, tonic::codec::CompressionEncoding, yellowstone_grpc_proto::plugin::filter::limits::FilterLimits
+    },
+    tokio::sync::Semaphore,
+    tonic::codec::CompressionEncoding,
+    yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,18 +209,24 @@ pub struct ConfigGrpc {
     pub server_initial_connection_window_size: Option<u32>,
     #[serde(default)]
     pub server_initial_stream_window_size: Option<u32>,
-    // Enable/disable account update notifications
+    /// Enable/disable account update notifications
     #[serde(default)]
     pub enable_notify_account_update: Option<bool>,
-    // Enable/disable transaction notifications
+    /// Enable/disable transaction update notifications
     #[serde(default)]
-    pub enable_notify_transaction: Option<bool>,
-    // Maximum account data size to send in notify_account_update, if None no limit
-    #[serde(
-        default,
-        deserialize_with = "deserialize_int_str_maybe"
-    )]
+    pub enable_notify_transaction_update: Option<bool>,
+    /// Enable/disable vote transaction notifications
+    #[serde(default)]
+    pub enable_notify_vote_transaction: Option<bool>,
+    /// Enable/disable vote account update notifications
+    #[serde(default)]
+    pub enable_notify_vote_account_update: Option<bool>,
+    /// Maximum account data size to send in notify_account_update, if None no limit
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub filter_notify_account_update_size: Option<usize>,
+    /// Maximum transaction data size to send in notify_transaction_update, if None no limit
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub filter_notify_transaction_update_size: Option<usize>,
 }
 
 impl ConfigGrpc {
