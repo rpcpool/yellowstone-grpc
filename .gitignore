@@ -12,6 +12,9 @@ yellowstone-grpc-client-nodejs/dist
 yellowstone-grpc-client-nodejs/node_modules
 yellowstone-grpc-client-nodejs/src/encoding
 yellowstone-grpc-client-nodejs/src/grpc
+yellowstone-grpc-napi.*.node
+yellowstone-grpc-client-nodejs/src/napi
+yellowstone-grpc-client-nodejs/napi/index-patched.js
 
 # Python
 venv
@@ -36,6 +39,3 @@ yellowstone-grpc-geyser/config-test.json
 .env
 .env.local
 scripts
-
-yellowstone-grpc-napi.linux-x64-gnu.node
-/workspaces/devpool/yellowstone-grpc/yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.linux-x64-gnu.node
