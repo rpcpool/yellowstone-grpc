@@ -43,6 +43,4 @@ From `v5.0.0` the [napi-rs](https://github.com/napi-rs/napi-rs) framework is use
 
 These changes are internal to the SDK and do not have any breaking changes for client code. If you face any issues, please open an issue
 
-The `@grpc/grpc-js` lib is still being used for types management. This is will be removed in the future release without any braking API changes
-
 The [napi-rs](https://github.com/napi-rs/napi-rs) based implementation is inspired from the implemenation of the [LaserStream SDK](https://github.com/helius-labs/laserstream-sdk)

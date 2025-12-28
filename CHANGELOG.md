@@ -27,6 +27,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 - The `@triton-one/yellowstone-grpc` TypeScript SDK client has migrated from `@grpc/grpc-js` to `napi-rs` for gRPC connection and subscription management
+- Unary calls via the TypeScript are not supported
+- gRPC channnel options changed from snake_case to cameCase
 
 ## 2025-11-27
 

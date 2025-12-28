@@ -4,7 +4,6 @@
 import {
   CommitmentLevel,
   GetLatestBlockhashResponse,
-  GeyserClient,
   IsBlockhashValidResponse,
   SubscribeReplayInfoResponse,
   SubscribeRequest,
