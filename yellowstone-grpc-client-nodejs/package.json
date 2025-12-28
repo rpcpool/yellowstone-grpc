@@ -13,6 +13,8 @@
     
     "build:napi": "cd napi && napi build --platform --release",
 
+    "build:napi:platform": "cd napi && napi build --platform --release --target $TARGET",
+
     "cp-napi-files": "mkdir -p src/napi && mkdir -p dist/cjs/napi && mkdir -p dist/esm/napi && mkdir -p dist/types/napi && cp -r napi/index.d.ts src/napi 2>/dev/null || true && cp -r napi/index.d.ts dist/types/napi/ 2>/dev/null || true && cp -r napi/index-patched.js src/napi/index.js 2>/dev/null || true && cp -r napi/index-patched.js dist/cjs/napi/index.js 2>/dev/null || true && cp -r napi/index-patched.js dist/esm/napi/index.js 2>/dev/null || true",
 
     "cp-napi-files-dev": "mkdir -p src/napi && mkdir -p dist/cjs/napi && mkdir -p dist/esm/napi && mkdir -p dist/types/napi && cp -r napi/*.node src/napi/ 2>/dev/null || true && cp -r napi/*.node dist/cjs/napi/ 2>/dev/null || true && cp -r napi/*.node dist/esm/napi/ 2>/dev/null || true && cp -r napi/index.d.ts src/napi 2>/dev/null || true && cp -r napi/index.d.ts dist/types/napi/ 2>/dev/null || true && cp -r napi/index.js src/napi 2>/dev/null || true && cp -r napi/index.js dist/cjs/napi/ 2>/dev/null || true && cp -r napi/index.js dist/esm/napi/ 2>/dev/null || true",
