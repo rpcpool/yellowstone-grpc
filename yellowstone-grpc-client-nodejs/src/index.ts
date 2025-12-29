@@ -1,21 +1,7 @@
 /** TypeScript/JavaScript client for gRPC Geyser. */
 
 // Import generated gRPC client and types.
-import {
-  CommitmentLevel,
-  GetLatestBlockhashResponse,
-  IsBlockhashValidResponse,
-  SubscribeReplayInfoResponse,
-  SubscribeRequest,
-  SubscribeRequestAccountsDataSlice,
-  SubscribeRequestFilterAccounts,
-  SubscribeRequestFilterBlocks,
-  SubscribeRequestFilterBlocksMeta,
-  SubscribeRequestFilterEntry,
-  SubscribeRequestFilterSlots,
-  SubscribeRequestFilterTransactions,
-  SubscribeUpdateTransactionInfo,
-} from "./grpc/geyser";
+import {SubscribeUpdateTransactionInfo } from "./grpc/geyser";
 
 // Reexport automatically generated types
 export {
@@ -54,11 +40,42 @@ export default class Client {
   _insecureEndpoint: string;
   _insecureXToken: string | undefined;
   _channelOptions: napi.JsChannelOptions | undefined;
+  _grpcClient: napi.GrpcClient | null = null;
 
-  constructor(endpoint: string, xToken: string | undefined, channel_options: napi.JsChannelOptions | undefined) {
+  constructor(
+    endpoint: string,
+    xToken: string | undefined,
+    channel_options: napi.JsChannelOptions | undefined,
+  ) {
     this._insecureEndpoint = endpoint;
     this._insecureXToken = xToken;
     this._channelOptions = channel_options;
+  }
+
+  async connect(): Promise<void> {
+    // Use the factory method to create the client
+    this._grpcClient = await napi.GrpcClient.new(
+      this._insecureEndpoint,
+      this._insecureXToken,
+      this._channelOptions,
+    );
+  }
+
+  /**
+   * Get the latest blockhash from the Solana cluster.
+   */
+  async getLatestBlockhash(
+    commitment?: number,
+  ): Promise<napi.JsGetLatestBlockhashResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsGetLatestBlockhashRequest = {
+      commitment: commitment ?? null,
+    };
+
+    return await this._grpcClient.getLatestBlockhash(request);
   }
 
   async subscribe(): Promise<ClientDuplexStream> {
@@ -75,9 +92,16 @@ export default class Client {
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {
-        resolve(new ClientDuplexStream(this._insecureEndpoint, this._insecureXToken, this._channelOptions, options));
+        resolve(
+          new ClientDuplexStream(
+            this._insecureEndpoint,
+            this._insecureXToken,
+            this._channelOptions,
+            options,
+          ),
+        );
       } catch (err) {
-        reject(err)
+        reject(err);
       }
     });
   }
@@ -86,15 +110,24 @@ export default class Client {
 class ClientDuplexStream extends Duplex {
   _napiDuplexStream: napi.DuplexStream;
 
-  constructor(endpoint: string, xToken: string | undefined, channel_options: napi.JsChannelOptions | undefined, options: object | undefined) {
+  constructor(
+    endpoint: string,
+    xToken: string | undefined,
+    channel_options: napi.JsChannelOptions | undefined,
+    options: object | undefined,
+  ) {
     super({ ...options });
-    this._napiDuplexStream = new napi.DuplexStream(endpoint, xToken, channel_options);
+    this._napiDuplexStream = new napi.DuplexStream(
+      endpoint,
+      xToken,
+      channel_options,
+    );
   }
 
   async _read(_size: number) {
     try {
       const update = await this._napiDuplexStream.read();
-      this.push(update)
+      this.push(update);
     } catch (err) {
       this.push(null); // Signal end of stream
       this.destroy(err); // Handle resource cleanup
@@ -104,9 +137,9 @@ class ClientDuplexStream extends Duplex {
   _write(chunk: object, _encoding: any, callback: any) {
     try {
       this._napiDuplexStream.write(chunk);
-      callback()
+      callback();
     } catch (err) {
-      callback(err)
+      callback(err);
     }
   }
 }
@@ -130,15 +163,15 @@ export const txEncode = {
     message: SubscribeUpdateTransactionInfo,
     encoding: T,
     max_supported_transaction_version: number | undefined,
-    show_rewards: boolean
+    show_rewards: boolean,
   ): MapTransactionEncodingToReturnType[T] => {
     return JSON.parse(
       wasm.encode_tx(
         SubscribeUpdateTransactionInfo.encode(message).finish(),
         encoding,
         max_supported_transaction_version,
-        show_rewards
-      )
+        show_rewards,
+      ),
     );
   },
 };

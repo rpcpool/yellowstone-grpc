@@ -206,3 +206,17 @@ pub struct JsAccountsDataSlice {
 pub struct JsPing {
   pub id: i32,
 }
+
+// GetLatestBlockhash types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsGetLatestBlockhashRequest {
+  pub commitment: Option<i32>,
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct JsGetLatestBlockhashResponse {
+  pub blockhash: String,
+  pub last_valid_block_height: String, // u64 as string for JS compatibility
+}

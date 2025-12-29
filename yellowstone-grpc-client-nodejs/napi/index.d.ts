@@ -37,6 +37,39 @@ export declare class DuplexStream {
 }
 
 /**
+ * Main client struct exposed to JavaScript via NAPI.
+ *
+ * The client maintains a persistent gRPC connection that is created once
+ * in the constructor and reused for all subsequent operations.
+ */
+export declare class GrpcClient {
+  /**
+   * Creates a new gRPC client and establishes a connection.
+   *
+   * This is an async factory method that:
+   * 1. Initializes the crypto provider (required for TLS)
+   * 2. Builds the client with the provided configuration
+   * 3. Establishes the gRPC connection
+   * 4. Wraps the client for safe concurrent access
+   *
+   * The connection is persistent and will be reused for all subsequent operations.
+   */
+  static new(endpoint: string, xToken?: string | undefined | null, channelOptions?: JsChannelOptions | undefined | null): Promise<GrpcClient>
+  /**
+   * Gets the latest blockhash from the Solana cluster.
+   *
+   * This method:
+   * 1. Accepts a JavaScript-compatible request object
+   * 2. Converts the request to protobuf format
+   * 3. Downcasts the holder to the concrete type
+   * 4. Delegates to the holder's method
+   * 5. Converts the protobuf response back to JavaScript-compatible format
+   * 6. Returns the full response including blockhash and last valid block height
+   */
+  getLatestBlockhash(request: JsGetLatestBlockhashRequest): Promise<JsGetLatestBlockhashResponse>
+}
+
+/**
  * ChannelOptions from JS.
  *
  * Struct to hold the channel options configuration
@@ -67,4 +100,13 @@ export interface JsChannelOptions {
 export declare const enum JsCompressionAlgorithm {
   Gzip = 0,
   Zstd = 1
+}
+
+export interface JsGetLatestBlockhashRequest {
+  commitment?: number
+}
+
+export interface JsGetLatestBlockhashResponse {
+  blockhash: string
+  lastValidBlockHeight: string
 }

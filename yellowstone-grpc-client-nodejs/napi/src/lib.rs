@@ -4,6 +4,7 @@
 //! runtime to interact with Rust's async runtime.
 mod bindings;
 mod utils;
+mod client;
 
 use std::sync::Arc;
 use yellowstone_grpc_proto::prelude::*;

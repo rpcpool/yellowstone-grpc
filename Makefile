@@ -8,6 +8,7 @@ clean-nodejs:
 	rm -rf yellowstone-grpc-client-nodejs/node_modules
 	rm -rf yellowstone-grpc-client-nodejs/src/encoding
 	rm -rf yellowstone-grpc-client-nodejs/src/grpc
+	rm -rf yellowstone-grpc-client-nodejs/src/napi
 
 clean-rust:
 	rm -rf target
