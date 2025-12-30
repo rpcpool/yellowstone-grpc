@@ -3,19 +3,21 @@
 //! This module provides the gateway for the JS
 //! runtime to interact with Rust's async runtime.
 mod bindings;
-mod utils;
 mod client;
+mod utils;
 
-use std::sync::Arc;
-use yellowstone_grpc_proto::prelude::*;
-use napi::{
-  Env,
-  bindgen_prelude::*
-};
+use futures_util::{SinkExt, StreamExt};
+use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
+use std::sync::Arc;
 use std::sync::Once;
-use tokio::{sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver}, sync::Mutex};
-use futures_util::{StreamExt, SinkExt};
+use tokio::{
+  sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+  sync::Mutex,
+};
+use yellowstone_grpc_proto::prelude::*;
+
+use crate::client::GrpcClient;
 
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
@@ -35,44 +37,37 @@ fn init_crypto_provider() {
 /// rather an underlying stream implementation where stream.Duplex
 /// will `_read()` from and `_write()` to.
 #[napi]
-pub struct DuplexStream {
+struct DuplexStream {
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
-  writable: UnboundedSender<SubscribeRequest>
+  writable: UnboundedSender<SubscribeRequest>,
 }
 
 #[napi]
 impl DuplexStream {
-  /// Creates a new DuplexStream Engine.
-  ///
-  /// This constructor does the following:
-  /// 1. Initialize crypto provider.
-  /// 2. Process channel options.
-  /// 3. Initialize channels.
-  /// 4. Spawn the worker receiving requests and updates.
-  /// 5. Create the instance of DuplexStream Engine.
-  #[napi(constructor)]
-  pub fn new(env: &Env, endpoint: String, x_token: Option<String>, channel_options: Option<Object>) -> Result<Self> {
-    init_crypto_provider();
-
-    let channel_options = match channel_options {
-      Some(opts) => Some(env.from_js_value(opts)?),
-      None => None
-    };
+  // #[napi]
+  pub fn subscribe(env: &Env, grpc_client: &GrpcClient) -> Result<Self> {
+  
+    let client_holder = grpc_client.holder.clone();
 
     // TODO : Fine tune unbounded channels.
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
 
     env.spawn_future(async move {
-      let builder = utils::get_client_builder(endpoint, x_token, channel_options).await?;
-      let mut client = match builder.connect().await {
-        Ok(c) => c,
-        Err(e) => return Err(napi::Error::from_reason(e.to_string()))
-      };
-      let (mut stream_tx, mut stream_rx) = match client.subscribe().await {
-        Ok(stream) => stream,
-        Err(e) => return Err(napi::Error::from_reason(e.to_string()))
-      };
+
+      let holder = client_holder
+      .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+      // Acquire lock, call subscribe, and immediately release the lock
+      // The returned streams are independent and don't need the client lock
+      let (mut stream_tx, mut stream_rx) = {
+        let mut client = holder.client.lock().await;
+        match client.subscribe().await {
+          Ok(stream) => stream,
+          Err(e) => return Err(napi::Error::from_reason(e.to_string()))
+        }
+      }; // Lock is dropped here when client goes out of scope
 
       loop {
         tokio::select! {
@@ -106,7 +101,10 @@ impl DuplexStream {
       Ok(())
     })?;
 
-    Ok(Self { readable: Arc::new(Mutex::new(readable_rx)), writable: writable_tx })
+    Ok(Self {
+      readable: Arc::new(Mutex::new(readable_rx)),
+      writable: writable_tx,
+    })
   }
 
   /// Read JS Accesspoint.
@@ -118,12 +116,12 @@ impl DuplexStream {
 
     env.spawn_future_with_callback(
       async move {
-          match readable.lock().await.recv().await {
-              Some(update) => Ok(update),
-              None => Err(napi::Error::from_reason("No update available"))
-          }
+        match readable.lock().await.recv().await {
+          Some(update) => Ok(update),
+          None => Err(napi::Error::from_reason("No update available")),
+        }
       },
-      move |env, update| utils::to_js_update(env, update)
+      move |env, update| utils::to_js_update(env, update),
     )
   }
 
@@ -134,7 +132,7 @@ impl DuplexStream {
   pub fn write(&self, env: &Env, chunk: Object) -> Result<()> {
     let request: SubscribeRequest = utils::js_to_subscribe_request(env, chunk)?;
     if let Err(e) = self.writable.send(request) {
-      return Err(napi::Error::from_reason(e.to_string()))
+      return Err(napi::Error::from_reason(e.to_string()));
     }
     Ok(())
   }

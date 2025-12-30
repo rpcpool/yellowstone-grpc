@@ -151,16 +151,11 @@ export default class Client {
       // highWaterMark: 16
     };
 
+    const stream = this._grpcClient.subscribe();
+
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {
-        resolve(
-          new ClientDuplexStream(
-            this._insecureEndpoint,
-            this._insecureXToken,
-            this._channelOptions,
-            options,
-          ),
-        );
+        resolve(new ClientDuplexStream(stream, options));
       } catch (err) {
         reject(err);
       }
@@ -171,18 +166,9 @@ export default class Client {
 class ClientDuplexStream extends Duplex {
   _napiDuplexStream: napi.DuplexStream;
 
-  constructor(
-    endpoint: string,
-    xToken: string | undefined,
-    channel_options: napi.JsChannelOptions | undefined,
-    options: object | undefined,
-  ) {
+  constructor(stream: napi.DuplexStream, options: object | undefined) {
     super({ ...options });
-    this._napiDuplexStream = new napi.DuplexStream(
-      endpoint,
-      xToken,
-      channel_options,
-    );
+    this._napiDuplexStream = stream;
   }
 
   async _read(_size: number) {

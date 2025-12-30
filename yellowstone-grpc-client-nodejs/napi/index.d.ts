@@ -12,17 +12,6 @@
  */
 export declare class DuplexStream {
   /**
-   * Creates a new DuplexStream Engine.
-   *
-   * This constructor does the following:
-   * 1. Initialize crypto provider.
-   * 2. Process channel options.
-   * 3. Initialize channels.
-   * 4. Spawn the worker receiving requests and updates.
-   * 5. Create the instance of DuplexStream Engine.
-   */
-  constructor(endpoint: string, xToken?: string | undefined | null, channelOptions?: object | undefined | null)
-  /**
    * Read JS Accesspoint.
    *
    * Retrieve one SubscribeUpdate from the worker.
@@ -61,6 +50,7 @@ export declare class GrpcClient {
   getSlot(request: JsGetSlotRequest): Promise<JsGetSlotResponse>
   isBlockhashValid(request: JsIsBlockhashValidRequest): Promise<JsIsBlockhashValidResponse>
   getVersion(request: JsGetVersionRequest): Promise<JsGetVersionResponse>
+  subscribe(): DuplexStream
 }
 
 /**

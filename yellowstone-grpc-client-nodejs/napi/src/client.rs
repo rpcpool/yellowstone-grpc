@@ -43,7 +43,7 @@ use crate::{
 
 /// Internal module containing the generic client holder implementation.
 /// This is kept separate from the NAPI-exposed types to avoid generic type exposure.
-mod internal {
+pub mod internal {
   use std::sync::Arc;
   use tokio::sync::Mutex;
   use yellowstone_grpc_client::{GeyserGrpcClient, Interceptor};
@@ -82,7 +82,7 @@ pub struct GrpcClient {
   /// - The builder configuration guarantees the interceptor type
   /// - We always create `ClientHolder<InterceptorXToken>`
   /// - The downcast will always succeed (or fail gracefully)
-  holder: Arc<dyn std::any::Any + Send + Sync>,
+  pub(crate) holder: Arc<dyn std::any::Any + Send + Sync>,
 }
 
 #[napi]
@@ -263,4 +263,12 @@ impl GrpcClient {
 
     Ok(js_response)
   }
+
+  // subscribe should only be available via the `GrpcClient`
+  #[allow(private_interfaces)]
+  #[napi]
+  pub fn subscribe(&self, env: &napi::Env) -> napi::Result<crate::DuplexStream> {
+    crate::DuplexStream::subscribe(env, self)
+  }
+
 }
