@@ -146,6 +146,7 @@ pub fn get_latest_blockhash_response_to_js(
   pb_resp: yellowstone_grpc_proto::geyser::GetLatestBlockhashResponse,
 ) -> crate::bindings::JsGetLatestBlockhashResponse {
   crate::bindings::JsGetLatestBlockhashResponse {
+    slot: pb_resp.slot.to_string(),
     blockhash: pb_resp.blockhash,
     last_valid_block_height: pb_resp.last_valid_block_height.to_string(),
   }
@@ -182,6 +183,7 @@ pub fn is_blockhash_valid_response_to_js(
   pb_resp: yellowstone_grpc_proto::geyser::IsBlockhashValidResponse,
 ) -> JsIsBlockhashValidResponse {
   JsIsBlockhashValidResponse {
+    slot: pb_resp.slot.to_string(),
     valid: pb_resp.valid,
   }
 }

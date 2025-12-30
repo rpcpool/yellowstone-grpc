@@ -217,6 +217,7 @@ pub struct JsGetLatestBlockhashRequest {
 #[napi(object)]
 #[derive(Debug)]
 pub struct JsGetLatestBlockhashResponse {
+  pub slot: String,
   pub blockhash: String,
   pub last_valid_block_height: String, // u64 as string for JS compatibility
 }
@@ -271,6 +272,7 @@ pub struct JsIsBlockhashValidRequest {
 #[napi(object)]
 #[derive(Debug)]
 pub struct JsIsBlockhashValidResponse {
+  pub slot: String,
   pub valid: bool,
 }
 

@@ -99,6 +99,7 @@ export interface JsGetLatestBlockhashRequest {
 }
 
 export interface JsGetLatestBlockhashResponse {
+  slot: string
   blockhash: string
   lastValidBlockHeight: string
 }
@@ -125,6 +126,7 @@ export interface JsIsBlockhashValidRequest {
 }
 
 export interface JsIsBlockhashValidResponse {
+  slot: string
   valid: boolean
 }
 

@@ -1,41 +1,72 @@
-// Imports NodeJS client built with napi-rs
-import Client,
-{CommitmentLevel, SubscribeRequest, SubscribeRequestFilterAccountsFilter,
- SubscribeRequestFilterAccountsFilterLamports, SubscribeUpdate,
- SubscribeUpdateTransactionInfo, txEncode,
- txErrDecode,} from "@triton-one/yellowstone-grpc";
-import {inspect} from "node:util";
 import yargs from "yargs";
+import { inspect } from "node:util";
+import Client, {
+  CommitmentLevel,
+  SubscribeRequest,
+  SubscribeRequestFilterAccountsFilter,
+  SubscribeRequestFilterAccountsFilterLamports,
+  SubscribeUpdateTransactionInfo,
+  txEncode,
+  txErrDecode,
+} from "@triton-one/yellowstone-grpc";
 
 async function main() {
   const args = parseCommandLineArgs();
 
   // Open connection.
   const client = new Client(args.endpoint, args.xToken, {
-    grpcMaxDecodingMessageSize: 64 * 1024 * 1024, // 64MiB
+    // "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
+    grpcMaxDecodingMessageSize: 64 * 1024 * 1024
   });
+
+  await client.connect()
 
   const commitment = parseCommitmentLevel(args.commitment);
 
   // Execute a requested command
   switch (args["_"][0]) {
-  case "subscribe":
-    await subscribeCommand(client, args);
-    break;
+    case "ping":
+      console.log("response: " + (JSON.stringify(await client.ping(1))));
+      break;
 
-  default:
-    console.error(`Unknown command: ${
-        args["_"]}. Use "--help" for a list of supported commands.`);
-    break;
+    case "get-version":
+      console.log("response: " + (await client.getVersion()));
+      break;
+
+    case "get-slot":
+      console.log("response: " + (await client.getSlot(commitment)));
+      break;
+
+    case "get-block-height":
+      console.log("response: " + (await client.getBlockHeight(commitment)));
+      break;
+
+    case "get-latest-blockhash":
+      console.log("response: ", await client.getLatestBlockhash(commitment));
+      break;
+
+    case "is-blockhash-valid":
+      console.log("response: ", await client.isBlockhashValid(args.blockhash));
+      break;
+
+    case "subscribe":
+      await subscribeCommand(client, args);
+      break;
+
+    default:
+      console.error(
+        `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
+      );
+      break;
   }
 }
 
-function parseCommitmentLevel(commitment: string|undefined) {
+function parseCommitmentLevel(commitment: string | undefined) {
   if (!commitment) {
     return;
   }
   const typedCommitment =
-      commitment.toUpperCase() as keyof typeof CommitmentLevel;
+    commitment.toUpperCase() as keyof typeof CommitmentLevel;
   return CommitmentLevel[typedCommitment];
 }
 
@@ -247,220 +278,217 @@ async function subscribeCommand(client, args) {
 
 function parseCommandLineArgs() {
   return yargs(process.argv.slice(2))
-      .options({
-        endpoint : {
-          alias : "e",
-          default : "http://localhost:10000",
-          describe : "gRPC endpoint",
-          type : "string",
+    .options({
+      endpoint: {
+        alias: "e",
+        default: "http://localhost:10000",
+        describe: "gRPC endpoint",
+        type: "string",
+      },
+      "x-token": {
+        describe: "token for auth, can be used only with ssl",
+        type: "string",
+      },
+      commitment: {
+        describe: "commitment level",
+        choices: ["processed", "confirmed", "finalized"],
+      },
+    })
+    .command("subscribe-replay-info", "get subscribe replay info")
+    .command("ping", "single ping of the RPC server")
+    .command("get-version", "get the server version")
+    .command("get-latest-blockhash", "get the latest block hash")
+    .command("get-block-height", "get the current block height")
+    .command("get-slot", "get the current slot")
+    .command(
+      "is-blockhash-valid",
+      "check the validity of a given block hash",
+      (yargs) => {
+        return yargs.options({
+          blockhash: {
+            type: "string",
+            demandOption: true,
+          },
+        });
+      }
+    )
+    .command("subscribe", "subscribe to events", (yargs) => {
+      return yargs.options({
+        accounts: {
+          default: false,
+          describe: "subscribe on accounts updates",
+          type: "boolean",
         },
-        "x-token" : {
-          describe : "token for auth, can be used only with ssl",
-          type : "string",
+        "accounts-account": {
+          default: [],
+          describe: "filter by account pubkey",
+          type: "array",
         },
-        commitment : {
-          describe : "commitment level",
-          choices : [ "processed", "confirmed", "finalized" ],
+        "accounts-owner": {
+          default: [],
+          describe: "filter by owner pubkey",
+          type: "array",
         },
-      })
-      .command("subscribe-replay-info", "get subscribe replay info")
-      .command("ping", "single ping of the RPC server")
-      .command("get-version", "get the server version")
-      .command("get-latest-blockhash", "get the latest block hash")
-      .command("get-block-height", "get the current block height")
-      .command("get-slot", "get the current slot")
-      .command("is-blockhash-valid", "check the validity of a given block hash",
-               (yargs) => {
-                 return yargs.options({
-                   blockhash : {
-                     type : "string",
-                     demandOption : true,
-                   },
-                 });
-               })
-      .command(
-          "subscribe", "subscribe to events",
-          (yargs) => {
-            return yargs.options({
-              accounts : {
-                default : false,
-                describe : "subscribe on accounts updates",
-                type : "boolean",
-              },
-              "accounts-account" : {
-                default : [],
-                describe : "filter by account pubkey",
-                type : "array",
-              },
-              "accounts-owner" : {
-                default : [],
-                describe : "filter by owner pubkey",
-                type : "array",
-              },
-              "accounts-memcmp" : {
-                default : [],
-                describe :
-                    "filter by offset and data, format: `offset,data in base58`",
-                type : "array",
-              },
-              "accounts-datasize" : {
-                default : 0,
-                describe : "filter by data size",
-                type : "number",
-              },
-              "accounts-tokenaccountstate" : {
-                default : false,
-                describe : "filter valid token accounts",
-                type : "boolean",
-              },
-              "accounts-lamports" : {
-                default : [],
-                describe :
-                    "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
-                type : "array",
-              },
-              "accounts-nonemptytxnsignature" : {
-                description : "filter by presence of field txn_signature",
-                type : "boolean",
-              },
-              "accounts-dataslice" : {
-                default : [],
-                describe :
-                    "receive only part of updated data account, format: `offset,size`",
-                type : "string",
-              },
-              slots : {
-                default : false,
-                describe : "subscribe on slots updates",
-                type : "boolean",
-              },
-              "slots-filter-by-commitment" : {
-                default : false,
-                describe : "filter slot messages by commitment",
-                type : "boolean",
-              },
-              transactions : {
-                default : false,
-                describe : "subscribe on transactions updates",
-                type : "boolean",
-              },
-              "transactions-vote" : {
-                description : "filter vote transactions",
-                type : "boolean",
-              },
-              "transactions-failed" : {
-                description : "filter failed transactions",
-                type : "boolean",
-              },
-              "transactions-signature" : {
-                description : "filter by transaction signature",
-                type : "string",
-              },
-              "transactions-account-include" : {
-                default : [],
-                description : "filter included account in transactions",
-                type : "array",
-              },
-              "transactions-account-exclude" : {
-                default : [],
-                description : "filter excluded account in transactions",
-                type : "array",
-              },
-              "transactions-account-required" : {
-                default : [],
-                description : "filter required account in transactions",
-                type : "array",
-              },
-              "transactions-parsed" : {
-                default : false,
-                describe : "parse transaction to json",
-                type : "boolean",
-              },
-              "transactions-decode-err" : {
-                default : false,
-                describe : "decode transactions errors",
-                type : "boolean",
-              },
-              "transactions-status" : {
-                default : false,
-                describe : "subscribe on transactionsStatus updates",
-                type : "boolean",
-              },
-              "transactions-status-vote" : {
-                description : "filter vote transactions",
-                type : "boolean",
-              },
-              "transactions-status-failed" : {
-                description : "filter failed transactions",
-                type : "boolean",
-              },
-              "transactions-status-signature" : {
-                description : "filter by transaction signature",
-                type : "string",
-              },
-              "transactions-status-account-include" : {
-                default : [],
-                description : "filter included account in transactions",
-                type : "array",
-              },
-              "transactions-status-account-exclude" : {
-                default : [],
-                description : "filter excluded account in transactions",
-                type : "array",
-              },
-              "transactions-status-account-required" : {
-                default : [],
-                description : "filter required account in transactions",
-                type : "array",
-              },
-              entry : {
-                default : false,
-                description : "subscribe on entry updates",
-                type : "boolean",
-              },
-              blocks : {
-                default : false,
-                description : "subscribe on block updates",
-                type : "boolean",
-              },
-              "blocks-account-include" : {
-                default : [],
-                description : "filter included account in transactions",
-                type : "array",
-              },
-              "blocks-include-transactions" : {
-                default : false,
-                description : "include transactions to block messsage",
-                type : "boolean",
-              },
-              "blocks-include-accounts" : {
-                default : false,
-                description : "include accounts to block message",
-                type : "boolean",
-              },
-              "blocks-include-entries" : {
-                default : false,
-                description : "include entries to block message",
-                type : "boolean",
-              },
-              "blocks-meta" : {
-                default : false,
-                description :
-                    "subscribe on block meta updates (without transactions)",
-                type : "boolean",
-              },
-              ping : {
-                default : undefined,
-                description : "send ping request in subscribe",
-                type : "number",
-              },
-            });
-          })
-      .demandCommand(1)
-      .help()
-      .argv;
+        "accounts-memcmp": {
+          default: [],
+          describe:
+            "filter by offset and data, format: `offset,data in base58`",
+          type: "array",
+        },
+        "accounts-datasize": {
+          default: 0,
+          describe: "filter by data size",
+          type: "number",
+        },
+        "accounts-tokenaccountstate": {
+          default: false,
+          describe: "filter valid token accounts",
+          type: "boolean",
+        },
+        "accounts-lamports": {
+          default: [],
+          describe:
+            "filter by lamports, format: `eq:42` / `ne:42` / `lt:42` / `gt:42`",
+          type: "array",
+        },
+        "accounts-nonemptytxnsignature": {
+          description: "filter by presence of field txn_signature",
+          type: "boolean",
+        },
+        "accounts-dataslice": {
+          default: [],
+          describe:
+            "receive only part of updated data account, format: `offset,size`",
+          type: "string",
+        },
+        slots: {
+          default: false,
+          describe: "subscribe on slots updates",
+          type: "boolean",
+        },
+        "slots-filter-by-commitment": {
+          default: false,
+          describe: "filter slot messages by commitment",
+          type: "boolean",
+        },
+        transactions: {
+          default: false,
+          describe: "subscribe on transactions updates",
+          type: "boolean",
+        },
+        "transactions-vote": {
+          description: "filter vote transactions",
+          type: "boolean",
+        },
+        "transactions-failed": {
+          description: "filter failed transactions",
+          type: "boolean",
+        },
+        "transactions-signature": {
+          description: "filter by transaction signature",
+          type: "string",
+        },
+        "transactions-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
+        },
+        "transactions-account-exclude": {
+          default: [],
+          description: "filter excluded account in transactions",
+          type: "array",
+        },
+        "transactions-account-required": {
+          default: [],
+          description: "filter required account in transactions",
+          type: "array",
+        },
+        "transactions-parsed": {
+          default: false,
+          describe: "parse transaction to json",
+          type: "boolean",
+        },
+        "transactions-decode-err": {
+          default: false,
+          describe: "decode transactions errors",
+          type: "boolean",
+        },
+        "transactions-status": {
+          default: false,
+          describe: "subscribe on transactionsStatus updates",
+          type: "boolean",
+        },
+        "transactions-status-vote": {
+          description: "filter vote transactions",
+          type: "boolean",
+        },
+        "transactions-status-failed": {
+          description: "filter failed transactions",
+          type: "boolean",
+        },
+        "transactions-status-signature": {
+          description: "filter by transaction signature",
+          type: "string",
+        },
+        "transactions-status-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
+        },
+        "transactions-status-account-exclude": {
+          default: [],
+          description: "filter excluded account in transactions",
+          type: "array",
+        },
+        "transactions-status-account-required": {
+          default: [],
+          description: "filter required account in transactions",
+          type: "array",
+        },
+        entry: {
+          default: false,
+          description: "subscribe on entry updates",
+          type: "boolean",
+        },
+        blocks: {
+          default: false,
+          description: "subscribe on block updates",
+          type: "boolean",
+        },
+        "blocks-account-include": {
+          default: [],
+          description: "filter included account in transactions",
+          type: "array",
+        },
+        "blocks-include-transactions": {
+          default: false,
+          description: "include transactions to block messsage",
+          type: "boolean",
+        },
+        "blocks-include-accounts": {
+          default: false,
+          description: "include accounts to block message",
+          type: "boolean",
+        },
+        "blocks-include-entries": {
+          default: false,
+          description: "include entries to block message",
+          type: "boolean",
+        },
+        "blocks-meta": {
+          default: false,
+          description: "subscribe on block meta updates (without transactions)",
+          type: "boolean",
+        },
+        ping: {
+          default: undefined,
+          description: "send ping request in subscribe",
+          type: "number",
+        },
+      });
+    })
+    .demandCommand(1)
+    .help().argv;
 }
 
-main()
-	.then(() => { console.log("DONE") })
-	.catch((err: any) => { console.error(`FAIL: ${err}`) })
+main();

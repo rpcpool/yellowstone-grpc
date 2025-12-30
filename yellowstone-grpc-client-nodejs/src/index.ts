@@ -75,7 +75,7 @@ export default class Client {
     return await this._grpcClient.getLatestBlockhash(request);
   }
 
-  async ping(count: number): Promise<napi.JsPingRequest> {
+  async ping(count: number): Promise<number> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -84,12 +84,12 @@ export default class Client {
       count,
     };
 
-    return await this._grpcClient.ping(request);
+    return (await this._grpcClient.ping(request)).count;
   }
 
   async getBlockHeight(
     commitment?: number,
-  ): Promise<napi.JsGetBlockHeightResponse> {
+  ): Promise<string> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -98,10 +98,10 @@ export default class Client {
       commitment,
     };
 
-    return await this._grpcClient.getBlockHeight(request);
+    return (await this._grpcClient.getBlockHeight(request)).blockHeight;
   }
 
-  async getSlot(commitment?: number): Promise<napi.JsGetSlotResponse> {
+  async getSlot(commitment?: number): Promise<string> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -110,7 +110,7 @@ export default class Client {
       commitment,
     };
 
-    return await this._grpcClient.getSlot(request);
+    return (await this._grpcClient.getSlot(request)).slot;
   }
 
   async isBlockhashValid(
@@ -129,14 +129,14 @@ export default class Client {
     return await this._grpcClient.isBlockhashValid(request);
   }
 
-  async getVersion(): Promise<napi.JsGetVersionResponse> {
+  async getVersion(): Promise<string> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
 
     const request: napi.JsGetVersionRequest = {};
 
-    return await this._grpcClient.getVersion(request);
+    return (await this._grpcClient.getVersion(request)).version;
   }
 
   async subscribe(): Promise<ClientDuplexStream> {
