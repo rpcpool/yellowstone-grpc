@@ -33,6 +33,12 @@ export {
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 
+import type {
+  TransactionErrorSolana,
+  // Import mapper to get return type based on WasmUiTransactionEncoding
+  MapTransactionEncodingToReturnType,
+} from "./types";
+
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
 
@@ -191,29 +197,17 @@ class ClientDuplexStream extends Duplex {
   }
 }
 
-//--------------------------------------------------------------------------------
-// Use old WASM encoders for now.
-//--------------------------------------------------------------------------------
-
-// Import transaction encoding function created in Rust
-import * as wasm from "./encoding/yellowstone_grpc_solana_encoding_wasm";
-import type {
-  TransactionErrorSolana,
-  // Import mapper to get return type based on WasmUiTransactionEncoding
-  MapTransactionEncodingToReturnType,
-} from "./types";
-
 export const txEncode = {
-  encoding: wasm.WasmUiTransactionEncoding,
-  encode_raw: wasm.encode_tx,
-  encode: <T extends wasm.WasmUiTransactionEncoding>(
+  encoding: (napi as any).WasmUiTransactionEncoding,
+  encode_raw: napi.encodeTx,
+  encode: <T extends napi.WasmUiTransactionEncoding>(
     message: SubscribeUpdateTransactionInfo,
     encoding: T,
     max_supported_transaction_version: number | undefined,
     show_rewards: boolean,
   ): MapTransactionEncodingToReturnType[T] => {
     return JSON.parse(
-      wasm.encode_tx(
+      napi.encodeTx(
         SubscribeUpdateTransactionInfo.encode(message).finish(),
         encoding,
         max_supported_transaction_version,
@@ -224,8 +218,8 @@ export const txEncode = {
 };
 
 export const txErrDecode = {
-  decode_raw: wasm.decode_tx_error,
+  decode_raw: napi.decodeTxError,
   decode: (buf: Uint8Array): TransactionErrorSolana => {
-    return JSON.parse(wasm.decode_tx_error(buf));
+    return JSON.parse(napi.decodeTxError(Array.from(buf)));
   },
 };

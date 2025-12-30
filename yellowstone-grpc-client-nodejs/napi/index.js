@@ -574,4 +574,7 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.DuplexStream = nativeBinding.DuplexStream
 module.exports.GrpcClient = nativeBinding.GrpcClient
+module.exports.decodeTxError = nativeBinding.decodeTxError
+module.exports.encodeTx = nativeBinding.encodeTx
 module.exports.JsCompressionAlgorithm = nativeBinding.JsCompressionAlgorithm
+module.exports.WasmUiTransactionEncoding = nativeBinding.WasmUiTransactionEncoding

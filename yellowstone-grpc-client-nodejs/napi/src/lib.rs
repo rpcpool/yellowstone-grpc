@@ -5,6 +5,7 @@
 mod bindings;
 mod client;
 mod utils;
+mod encoding;
 
 use futures_util::{SinkExt, StreamExt};
 use napi::{bindgen_prelude::*, Env};

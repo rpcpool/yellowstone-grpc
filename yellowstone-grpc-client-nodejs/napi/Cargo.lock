@@ -4128,6 +4128,7 @@ dependencies = [
  "rustls 0.23.32",
  "serde",
  "serde_json",
+ "solana-transaction-status",
  "tokio",
  "tokio-stream",
  "tonic 0.11.0",

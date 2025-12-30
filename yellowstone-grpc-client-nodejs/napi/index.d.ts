@@ -53,6 +53,10 @@ export declare class GrpcClient {
   subscribe(): DuplexStream
 }
 
+export declare function decodeTxError(err: Array<number>): string
+
+export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
+
 /**
  * ChannelOptions from JS.
  *
@@ -136,4 +140,12 @@ export interface JsPingRequest {
 
 export interface JsPongResponse {
   count: number
+}
+
+export declare const enum WasmUiTransactionEncoding {
+  Binary = 0,
+  Base64 = 1,
+  Base58 = 2,
+  Json = 3,
+  JsonParsed = 4
 }
