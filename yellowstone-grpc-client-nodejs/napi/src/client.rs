@@ -29,9 +29,15 @@
 
 use napi_derive::napi;
 use std::sync::Arc;
+use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
 use crate::{
-  bindings::{JsChannelOptions, JsGetLatestBlockhashRequest, JsGetLatestBlockhashResponse},
+  bindings::{
+    JsChannelOptions, JsGetBlockHeightRequest, JsGetBlockHeightResponse,
+    JsGetLatestBlockhashRequest, JsGetLatestBlockhashResponse, JsGetSlotRequest, JsGetSlotResponse,
+    JsGetVersionRequest, JsGetVersionResponse, JsIsBlockhashValidRequest,
+    JsIsBlockhashValidResponse, JsPingRequest, JsPongResponse,
+  },
   init_crypto_provider, utils,
 };
 
@@ -41,7 +47,6 @@ mod internal {
   use std::sync::Arc;
   use tokio::sync::Mutex;
   use yellowstone_grpc_client::{GeyserGrpcClient, Interceptor};
-  use yellowstone_grpc_proto::geyser::{GetLatestBlockhashRequest, GetLatestBlockhashResponse};
 
   /// Generic holder for GeyserGrpcClient with any interceptor type.
   /// Wraps the client in Arc<Mutex<>> to allow safe sharing across async tasks.
@@ -57,32 +62,6 @@ mod internal {
         client: Arc::new(Mutex::new(client)),
       }
     }
-
-    /// Gets the latest blockhash from the Solana cluster.
-    /// This method acquires the mutex lock and delegates to the underlying client.
-    /// Accepts the full protobuf request and returns the full protobuf response.
-    pub async fn get_latest_blockhash(
-      &self,
-      request: GetLatestBlockhashRequest,
-    ) -> Result<GetLatestBlockhashResponse, String> {
-      let mut client = self.client.lock().await;
-
-      // Convert the optional i32 commitment to CommitmentLevel enum
-      let commitment = request.commitment.and_then(|c| {
-        use yellowstone_grpc_proto::geyser::CommitmentLevel;
-        CommitmentLevel::try_from(c).ok()
-      });
-
-      client
-        .get_latest_blockhash(commitment)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    // Additional gRPC methods can be added here following the same pattern:
-    // - Lock the client
-    // - Call the underlying gRPC method
-    // - Return the result
   }
 }
 
@@ -143,39 +122,144 @@ impl GrpcClient {
     })
   }
 
-  /// Gets the latest blockhash from the Solana cluster.
-  ///
-  /// This method:
-  /// 1. Accepts a JavaScript-compatible request object
-  /// 2. Converts the request to protobuf format
-  /// 3. Downcasts the holder to the concrete type
-  /// 4. Delegates to the holder's method
-  /// 5. Converts the protobuf response back to JavaScript-compatible format
-  /// 6. Returns the full response including blockhash and last valid block height
   #[napi]
   pub async fn get_latest_blockhash(
     &self,
     request: JsGetLatestBlockhashRequest,
   ) -> napi::Result<JsGetLatestBlockhashResponse> {
-    // Downcast from `dyn Any` back to the concrete ClientHolder type.
-    // This will always succeed because we control the type at creation time.
-    // If it fails, it indicates a serious logic error in our code.
     let holder = self
       .holder
       .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
       .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    // Convert JavaScript request to protobuf format
-    let pb_request = utils::js_to_get_latest_blockhash_request(request);
+    let mut grpc_client = holder.client.lock().await;
 
-    // Delegate to the holder's implementation
-    let pb_response = holder
-      .get_latest_blockhash(pb_request)
+    let commitment = request
+      .commitment
+      .and_then(|c| CommitmentLevel::try_from(c).ok());
+
+    let pb_response = grpc_client
+      .get_latest_blockhash(commitment)
       .await
-      .map_err(|e| napi::Error::from_reason(e))?;
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    // Convert protobuf response to JavaScript-compatible format
     let js_response = utils::get_latest_blockhash_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn ping(&self, request: JsPingRequest) -> napi::Result<JsPongResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let pb_response = grpc_client
+      .ping(request.count)
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::pong_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn get_block_height(
+    &self,
+    request: JsGetBlockHeightRequest,
+  ) -> napi::Result<JsGetBlockHeightResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let commitment = request
+      .commitment
+      .and_then(|c| CommitmentLevel::try_from(c).ok());
+
+    let pb_response = grpc_client
+      .get_block_height(commitment)
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::get_block_height_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn get_slot(&self, request: JsGetSlotRequest) -> napi::Result<JsGetSlotResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let commitment = request
+      .commitment
+      .and_then(|c| CommitmentLevel::try_from(c).ok());
+
+    let pb_response = grpc_client
+      .get_slot(commitment)
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::get_slot_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn is_blockhash_valid(
+    &self,
+    request: JsIsBlockhashValidRequest,
+  ) -> napi::Result<JsIsBlockhashValidResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let commitment = request
+      .commitment
+      .and_then(|c| CommitmentLevel::try_from(c).ok());
+
+    let pb_response = grpc_client
+      .is_blockhash_valid(request.blockhash, commitment)
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::is_blockhash_valid_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn get_version(
+    &self,
+    _request: JsGetVersionRequest,
+  ) -> napi::Result<JsGetVersionResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let pb_response = grpc_client
+      .get_version()
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::get_version_response_to_js(pb_response);
 
     Ok(js_response)
   }

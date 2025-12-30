@@ -220,3 +220,69 @@ pub struct JsGetLatestBlockhashResponse {
   pub blockhash: String,
   pub last_valid_block_height: String, // u64 as string for JS compatibility
 }
+
+// Ping types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsPingRequest {
+  pub count: i32,
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct JsPongResponse {
+  pub count: i32,
+}
+
+// GetBlockHeight Types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsGetBlockHeightRequest {
+  pub commitment: Option<i32>,
+}
+
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsGetBlockHeightResponse {
+  pub block_height: String, // u64 as string for JS compatibility
+}
+
+// GetSlot types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsGetSlotRequest {
+  pub commitment: Option<i32>,
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct JsGetSlotResponse {
+  pub slot: String, // u64 as string for JS compatibility
+}
+
+// IsBlockhashValid types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsIsBlockhashValidRequest {
+  pub blockhash: String,
+  pub commitment: Option<i32>,
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct JsIsBlockhashValidResponse {
+  pub valid: bool,
+}
+
+// GetVersion types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsGetVersionRequest {
+  // Empty struct - no fields needed since the gRPC method takes no parameters
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct JsGetVersionResponse {
+  pub version: String,
+}

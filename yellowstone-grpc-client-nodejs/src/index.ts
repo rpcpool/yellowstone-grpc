@@ -1,7 +1,7 @@
 /** TypeScript/JavaScript client for gRPC Geyser. */
 
 // Import generated gRPC client and types.
-import {SubscribeUpdateTransactionInfo } from "./grpc/geyser";
+import { SubscribeUpdateTransactionInfo } from "./grpc/geyser";
 
 // Reexport automatically generated types
 export {
@@ -61,9 +61,6 @@ export default class Client {
     );
   }
 
-  /**
-   * Get the latest blockhash from the Solana cluster.
-   */
   async getLatestBlockhash(
     commitment?: number,
   ): Promise<napi.JsGetLatestBlockhashResponse> {
@@ -76,6 +73,70 @@ export default class Client {
     };
 
     return await this._grpcClient.getLatestBlockhash(request);
+  }
+
+  async ping(count: number): Promise<napi.JsPingRequest> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsPingRequest = {
+      count,
+    };
+
+    return await this._grpcClient.ping(request);
+  }
+
+  async getBlockHeight(
+    commitment?: number,
+  ): Promise<napi.JsGetBlockHeightResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsGetBlockHeightRequest = {
+      commitment,
+    };
+
+    return await this._grpcClient.getBlockHeight(request);
+  }
+
+  async getSlot(commitment?: number): Promise<napi.JsGetSlotResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsGetSlotRequest = {
+      commitment,
+    };
+
+    return await this._grpcClient.getSlot(request);
+  }
+
+  async isBlockhashValid(
+    blockhash: string,
+    commitment?: number,
+  ): Promise<napi.JsIsBlockhashValidResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsIsBlockhashValidRequest = {
+      blockhash,
+      commitment,
+    };
+
+    return await this._grpcClient.isBlockhashValid(request);
+  }
+
+  async getVersion(): Promise<napi.JsGetVersionResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsGetVersionRequest = {};
+
+    return await this._grpcClient.getVersion(request);
   }
 
   async subscribe(): Promise<ClientDuplexStream> {

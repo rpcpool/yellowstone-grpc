@@ -55,18 +55,12 @@ export declare class GrpcClient {
    * The connection is persistent and will be reused for all subsequent operations.
    */
   static new(endpoint: string, xToken?: string | undefined | null, channelOptions?: JsChannelOptions | undefined | null): Promise<GrpcClient>
-  /**
-   * Gets the latest blockhash from the Solana cluster.
-   *
-   * This method:
-   * 1. Accepts a JavaScript-compatible request object
-   * 2. Converts the request to protobuf format
-   * 3. Downcasts the holder to the concrete type
-   * 4. Delegates to the holder's method
-   * 5. Converts the protobuf response back to JavaScript-compatible format
-   * 6. Returns the full response including blockhash and last valid block height
-   */
   getLatestBlockhash(request: JsGetLatestBlockhashRequest): Promise<JsGetLatestBlockhashResponse>
+  ping(request: JsPingRequest): Promise<JsPongResponse>
+  getBlockHeight(request: JsGetBlockHeightRequest): Promise<JsGetBlockHeightResponse>
+  getSlot(request: JsGetSlotRequest): Promise<JsGetSlotResponse>
+  isBlockhashValid(request: JsIsBlockhashValidRequest): Promise<JsIsBlockhashValidResponse>
+  getVersion(request: JsGetVersionRequest): Promise<JsGetVersionResponse>
 }
 
 /**
@@ -102,6 +96,14 @@ export declare const enum JsCompressionAlgorithm {
   Zstd = 1
 }
 
+export interface JsGetBlockHeightRequest {
+  commitment?: number
+}
+
+export interface JsGetBlockHeightResponse {
+  blockHeight: string
+}
+
 export interface JsGetLatestBlockhashRequest {
   commitment?: number
 }
@@ -109,4 +111,37 @@ export interface JsGetLatestBlockhashRequest {
 export interface JsGetLatestBlockhashResponse {
   blockhash: string
   lastValidBlockHeight: string
+}
+
+export interface JsGetSlotRequest {
+  commitment?: number
+}
+
+export interface JsGetSlotResponse {
+  slot: string
+}
+
+export interface JsGetVersionRequest {
+
+}
+
+export interface JsGetVersionResponse {
+  version: string
+}
+
+export interface JsIsBlockhashValidRequest {
+  blockhash: string
+  commitment?: number
+}
+
+export interface JsIsBlockhashValidResponse {
+  valid: boolean
+}
+
+export interface JsPingRequest {
+  count: number
+}
+
+export interface JsPongResponse {
+  count: number
 }

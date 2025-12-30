@@ -1,4 +1,7 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsSubscribeRequest};
+use crate::bindings::{
+  JsChannelOptions, JsCompressionAlgorithm, JsGetBlockHeightResponse, JsGetSlotResponse,
+  JsGetVersionResponse, JsIsBlockhashValidResponse, JsSubscribeRequest,
+};
 use base64::{engine::general_purpose, Engine as _};
 use napi::bindgen_prelude::*;
 use prost_types::Timestamp;
@@ -138,19 +141,6 @@ pub async fn get_client_builder(
   Ok(builder)
 }
 
-//--------------------------------------------------------------------------------
-// GetLatestBlockhash conversion functions
-//--------------------------------------------------------------------------------
-
-/// Converts a JavaScript GetLatestBlockhashRequest to the protobuf version.
-pub fn js_to_get_latest_blockhash_request(
-  js_req: crate::bindings::JsGetLatestBlockhashRequest,
-) -> yellowstone_grpc_proto::geyser::GetLatestBlockhashRequest {
-  yellowstone_grpc_proto::geyser::GetLatestBlockhashRequest {
-    commitment: js_req.commitment,
-  }
-}
-
 /// Converts a protobuf GetLatestBlockhashResponse to JavaScript-compatible format.
 pub fn get_latest_blockhash_response_to_js(
   pb_resp: yellowstone_grpc_proto::geyser::GetLatestBlockhashResponse,
@@ -158,6 +148,50 @@ pub fn get_latest_blockhash_response_to_js(
   crate::bindings::JsGetLatestBlockhashResponse {
     blockhash: pb_resp.blockhash,
     last_valid_block_height: pb_resp.last_valid_block_height.to_string(),
+  }
+}
+
+/// Converts a protobuf PongResponse to JavaScript-compatible format.
+pub fn pong_response_to_js(
+  pb_resp: yellowstone_grpc_proto::geyser::PongResponse,
+) -> crate::bindings::JsPongResponse {
+  crate::bindings::JsPongResponse {
+    count: pb_resp.count,
+  }
+}
+
+pub fn get_block_height_response_to_js(
+  pb_resp: GetBlockHeightResponse,
+) -> JsGetBlockHeightResponse {
+  JsGetBlockHeightResponse {
+    block_height: pb_resp.block_height.to_string(),
+  }
+}
+
+/// Converts a protobuf GetSlotResponse to JavaScript-compatible format.
+pub fn get_slot_response_to_js(
+  pb_resp: yellowstone_grpc_proto::geyser::GetSlotResponse,
+) -> JsGetSlotResponse {
+  JsGetSlotResponse {
+    slot: pb_resp.slot.to_string(),
+  }
+}
+
+/// Converts a protobuf IsBlockhashValidResponse to JavaScript-compatible format.
+pub fn is_blockhash_valid_response_to_js(
+  pb_resp: yellowstone_grpc_proto::geyser::IsBlockhashValidResponse,
+) -> JsIsBlockhashValidResponse {
+  JsIsBlockhashValidResponse {
+    valid: pb_resp.valid,
+  }
+}
+
+/// Converts a protobuf GetVersionResponse to JavaScript-compatible format.
+pub fn get_version_response_to_js(
+  pb_resp: yellowstone_grpc_proto::geyser::GetVersionResponse,
+) -> JsGetVersionResponse {
+  JsGetVersionResponse {
+    version: pb_resp.version,
   }
 }
 
