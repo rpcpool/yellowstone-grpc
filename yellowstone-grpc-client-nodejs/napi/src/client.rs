@@ -36,7 +36,8 @@ use crate::{
     JsChannelOptions, JsGetBlockHeightRequest, JsGetBlockHeightResponse,
     JsGetLatestBlockhashRequest, JsGetLatestBlockhashResponse, JsGetSlotRequest, JsGetSlotResponse,
     JsGetVersionRequest, JsGetVersionResponse, JsIsBlockhashValidRequest,
-    JsIsBlockhashValidResponse, JsPingRequest, JsPongResponse,
+    JsIsBlockhashValidResponse, JsPingRequest, JsPongResponse, JsSubscribeReplayInfoRequest,
+    JsSubscribeReplayInfoResponse,
   },
   init_crypto_provider, utils,
 };
@@ -260,6 +261,28 @@ impl GrpcClient {
       .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     let js_response = utils::get_version_response_to_js(pb_response);
+
+    Ok(js_response)
+  }
+
+  #[napi]
+  pub async fn subscribe_replay_info(
+    &self,
+    _request: JsSubscribeReplayInfoRequest,
+  ) -> napi::Result<JsSubscribeReplayInfoResponse> {
+    let holder = self
+      .holder
+      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+    let mut grpc_client = holder.client.lock().await;
+
+    let pb_response = grpc_client
+      .subscribe_replay_info()
+      .await
+      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let js_response = utils::subscribe_replay_info_response_to_js(pb_response);
 
     Ok(js_response)
   }

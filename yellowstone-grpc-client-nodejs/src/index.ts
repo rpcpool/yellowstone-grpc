@@ -93,9 +93,7 @@ export default class Client {
     return (await this._grpcClient.ping(request)).count;
   }
 
-  async getBlockHeight(
-    commitment?: number,
-  ): Promise<string> {
+  async getBlockHeight(commitment?: number): Promise<string> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -143,6 +141,16 @@ export default class Client {
     const request: napi.JsGetVersionRequest = {};
 
     return (await this._grpcClient.getVersion(request)).version;
+  }
+
+  async subscribeReplayInfo(): Promise<napi.JsSubscribeReplayInfoResponse> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
+    const request: napi.JsSubscribeReplayInfoRequest = {};
+
+    return await this._grpcClient.subscribeReplayInfo(request);
   }
 
   async subscribe(): Promise<ClientDuplexStream> {

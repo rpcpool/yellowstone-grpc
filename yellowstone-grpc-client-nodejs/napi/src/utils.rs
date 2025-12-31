@@ -1,6 +1,7 @@
 use crate::bindings::{
   JsChannelOptions, JsCompressionAlgorithm, JsGetBlockHeightResponse, JsGetSlotResponse,
-  JsGetVersionResponse, JsIsBlockhashValidResponse, JsSubscribeRequest,
+  JsGetVersionResponse, JsIsBlockhashValidResponse, JsSubscribeReplayInfoResponse,
+  JsSubscribeRequest,
 };
 use base64::{engine::general_purpose, Engine as _};
 use napi::bindgen_prelude::*;
@@ -194,6 +195,15 @@ pub fn get_version_response_to_js(
 ) -> JsGetVersionResponse {
   JsGetVersionResponse {
     version: pb_resp.version,
+  }
+}
+
+/// Converts a protobuf GetVersionResponse to JavaScript-compatible format.
+pub fn subscribe_replay_info_response_to_js(
+  pb_resp: yellowstone_grpc_proto::geyser::SubscribeReplayInfoResponse,
+) -> JsSubscribeReplayInfoResponse {
+  JsSubscribeReplayInfoResponse {
+    first_available: pb_resp.first_available.map(|n| n.to_string()),
   }
 }
 

@@ -288,3 +288,17 @@ pub struct JsGetVersionRequest {
 pub struct JsGetVersionResponse {
   pub version: String,
 }
+
+// SubscribeReplayInfo types
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsSubscribeReplayInfoRequest {
+  // Empty struct - no fields needed since the gRPC method takes no parameters
+}
+
+#[napi(object)]
+#[derive(Deserialize, Debug)]
+pub struct JsSubscribeReplayInfoResponse {
+  #[serde(alias = "firstAvailable")]
+  pub first_available: Option<String>,
+}

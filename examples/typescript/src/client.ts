@@ -25,8 +25,12 @@ async function main() {
 
   // Execute a requested command
   switch (args["_"][0]) {
+    case "subscribe-replay-info":
+      console.log("response: " + inspect(await client.subscribeReplayInfo()));
+      break;
+
     case "ping":
-      console.log("response: " + (JSON.stringify(await client.ping(1))));
+      console.log("response: " + (await client.ping(1)));
       break;
 
     case "get-version":

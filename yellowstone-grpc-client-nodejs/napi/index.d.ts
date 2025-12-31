@@ -50,6 +50,7 @@ export declare class GrpcClient {
   getSlot(request: JsGetSlotRequest): Promise<JsGetSlotResponse>
   isBlockhashValid(request: JsIsBlockhashValidRequest): Promise<JsIsBlockhashValidResponse>
   getVersion(request: JsGetVersionRequest): Promise<JsGetVersionResponse>
+  subscribeReplayInfo(request: JsSubscribeReplayInfoRequest): Promise<JsSubscribeReplayInfoResponse>
   subscribe(): DuplexStream
 }
 
@@ -140,6 +141,14 @@ export interface JsPingRequest {
 
 export interface JsPongResponse {
   count: number
+}
+
+export interface JsSubscribeReplayInfoRequest {
+
+}
+
+export interface JsSubscribeReplayInfoResponse {
+  firstAvailable?: string
 }
 
 export declare const enum WasmUiTransactionEncoding {
