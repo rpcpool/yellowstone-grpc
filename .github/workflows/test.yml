@@ -97,6 +97,9 @@ jobs:
           cd yellowstone-grpc-client-nodejs/napi
           cargo +nightly fmt --all -- --check
 
+      - name: Clean cargo advisory database cache
+        run: rm -rf ~/.cargo/advisory-dbs
+
       - name: cargo deny check advisories
         uses: EmbarkStudios/cargo-deny-action@v2.0.13
         with:
