@@ -270,5 +270,4 @@ impl GrpcClient {
   pub fn subscribe(&self, env: &napi::Env) -> napi::Result<crate::DuplexStream> {
     crate::DuplexStream::subscribe(env, self)
   }
-
 }

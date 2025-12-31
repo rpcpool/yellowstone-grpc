@@ -341,11 +341,12 @@ pub fn js_to_subscribe_request(env: &Env, js_obj: Object) -> Result<SubscribeReq
   if let Some(transactions) = js_request.transactions {
     let mut transactions_map = HashMap::new();
     for (key, filter) in transactions {
-      let mut yellowstone_filter = SubscribeRequestFilterTransactions::default();
-
-      yellowstone_filter.vote = filter.vote;
-      yellowstone_filter.failed = filter.failed;
-      yellowstone_filter.signature = filter.signature;
+      let mut yellowstone_filter = SubscribeRequestFilterTransactions {
+        vote: filter.vote,
+        failed: filter.failed,
+        signature: filter.signature,
+        ..Default::default()
+      };
 
       if let Some(account_include) = filter.account_include {
         yellowstone_filter.account_include = account_include;

@@ -4,8 +4,8 @@
 //! runtime to interact with Rust's async runtime.
 mod bindings;
 mod client;
-mod utils;
 mod encoding;
+mod utils;
 
 use futures_util::{SinkExt, StreamExt};
 use napi::{bindgen_prelude::*, Env};
@@ -47,7 +47,6 @@ struct DuplexStream {
 impl DuplexStream {
   // #[napi]
   pub fn subscribe(env: &Env, grpc_client: &GrpcClient) -> Result<Self> {
-  
     let client_holder = grpc_client.holder.clone();
 
     // TODO : Fine tune unbounded channels.
