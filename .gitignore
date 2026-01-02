@@ -8,6 +8,7 @@ yellowstone-grpc-proto/src/bin/raw.rs
 # Node.js
 examples/typescript/dist
 examples/typescript/node_modules
+examples/typescript/measurement-outputs
 yellowstone-grpc-client-nodejs/dist
 yellowstone-grpc-client-nodejs/node_modules
 yellowstone-grpc-client-nodejs/src/encoding
