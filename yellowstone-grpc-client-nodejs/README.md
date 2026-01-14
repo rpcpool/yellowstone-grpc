@@ -44,3 +44,19 @@ From `v5.0.0` the [napi-rs](https://github.com/napi-rs/napi-rs) framework is use
 These changes are internal to the SDK and do not have any breaking changes for client code. If you face any issues, please open an issue
 
 The [napi-rs](https://github.com/napi-rs/napi-rs) based implementation is inspired from the implemenation of the [LaserStream SDK](https://github.com/helius-labs/laserstream-sdk)
+
+## Development
+
+### Local Testing
+
+When building for local testing at the root of the project where the `Makefile` resides, you must:
+
+1. Clean build artifacts if any with `make clean`
+
+2. Navigate to the SDK (where this README resides) and install dependencies with `npm install` and `npm run build:dev`. Make sure to use `build:dev` to reflect local changes in your test runs and NOT `build`.
+
+3. Navigate to `examples/typescript` folder and install dependencies with `npm install`.
+
+4. Run `client.ts` with an example subscription request below:
+`tsx examples/typescript/src/client.ts --endpoint <ENDPOINT> --x-token <X-TOKEN> --commitment processed subscribe --transactions TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+
