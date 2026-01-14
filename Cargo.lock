@@ -68,9 +68,9 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "816a655a90bda7e1f2f41188b66eea4afa5e8241e15d33e8a95ebebb4a61c264"
+checksum = "1cf33c329313ce6f88702d02013def48afeff133ea897ee7071d57b8655b9af1"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a6b8e9eb76eda082b3f7fd8915863d761e999c655da48bce2a18d28cb748daa"
+checksum = "f5dd5f08bfdc47b1e029850222ab0778769fb4e27ce9eccf0beca65d96151416"
 dependencies = [
  "log",
  "solana-clock",
@@ -97,9 +97,9 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a81224b65697d8e5a7d3bcc0f7d00107247c47b1769bfc0d1874b2b731ea33"
+checksum = "c88b70eb0118706280ec9b63e458b227c297155e8c866a2be8e194cdb13d9896"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey",
@@ -2813,9 +2813,9 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc4148b8ca32a5079336424da7f9fbcb114c0e14d847b4ed865d5c22aca75929"
+checksum = "38beb03a0f14d6456d70bcace8c8ae5e0ad4812240f8979bc5397d343c286c78"
 dependencies = [
  "Inflector",
  "base64",
@@ -2856,9 +2856,9 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bdc3319d4a03a8a2c40a366051612bab4cd8336245ad3254ce10ffc9d70c7c5"
+checksum = "46fd55df200ac8f0292fbe2196fc11cbad9e48567b81d1e18b6f6a79513d4a4f"
 dependencies = [
  "base64",
  "bs58",
@@ -3505,9 +3505,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0ba2a8d133a05b58054fd8e45c034db59378fa69014786283142a43af8f4d4b"
+checksum = "f1687f26e871f2ba62456b1952c2907e77006041311bd6ed4688ca1cf96fbc4a"
 dependencies = [
  "bincode",
  "bs58",
@@ -3530,9 +3530,9 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a45cb106d92777438df2af16956ff269b2853337cc08517b4aa08784c061da30"
+checksum = "22e960a99c5620874b1deb5f00139f78753d67ec5626216f75c90842988f6c23"
 
 [[package]]
 name = "solana-system-interface"
@@ -3615,9 +3615,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "917fe382dafb8f73cf35a39638a342b6b3321bb55157f1ea517d709628b17567"
+checksum = "6b532aebf58bd36375a84e0a77432c8db546df535a7f3b7d5bc7c60fbcd5b0a2"
 dependencies = [
  "bincode",
  "serde",
@@ -3645,9 +3645,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "510007171942cc8c42d3772860bdacda446cf2799f3032af14caf8b2cb9ec9b5"
+checksum = "3ee7b3da7cb0a92722ba12e91a470201368c33f14e73b7b38a1491d9032e16d4"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3689,9 +3689,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "3.0.6"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f429cdb4bc6b9373ff399f7cbc9e0d6312411eaa718654cfd6ae9a3763459483"
+checksum = "99be022d0e2908ff2a600c305c4c1dd3bb12896513629bcd2dd5c52efb09555a"
 dependencies = [
  "base64",
  "bincode",
@@ -4995,7 +4995,7 @@ checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "10.2.0"
+version = "10.2.0+solana.3.0.14"
 dependencies = [
  "bytes",
  "futures",
@@ -5008,7 +5008,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "10.1.1"
+version = "10.1.1+solana.3.0.14"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5035,7 +5035,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "10.1.1"
+version = "10.1.1+solana.3.0.14"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5076,7 +5076,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "10.1.1"
+version = "10.1.1+solana.3.0.14"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",
