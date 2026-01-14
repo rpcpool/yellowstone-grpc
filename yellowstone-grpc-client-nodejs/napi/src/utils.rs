@@ -742,7 +742,7 @@ fn to_js_token_balance(env: &Env, tb: TokenBalance) -> Result<Object> {
 
 fn to_js_ui_token_amount(env: &Env, uta: UiTokenAmount) -> Result<Object> {
   let mut obj = Object::new(env)?;
-  obj.set("uiAmount", uta.amount.clone())?;
+  obj.set("uiAmount", uta.ui_amount)?;
   obj.set("decimals", env.create_uint32(uta.decimals)?)?;
   obj.set("amount", uta.amount)?;
   obj.set("uiAmountString", uta.ui_amount_string)?;
