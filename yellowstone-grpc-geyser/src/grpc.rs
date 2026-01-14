@@ -1292,7 +1292,7 @@ impl Geyser for GrpcService {
             .metadata()
             .get("x-subscription-id")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.to_string()));
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);

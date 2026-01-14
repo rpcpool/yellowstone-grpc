@@ -21,7 +21,6 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "3.1.0"
 anyhow = "1.0.98"
 backoff = "0.4.0"
 base64 = "0.22.1"
@@ -55,23 +54,7 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account = "3.1.0"
-solana-account-decoder = "3.1.0"
-solana-clock = "3.0.0"
-solana-hash = "3.1.0"
-solana-keypair = "3.1.0"
-solana-logger = "3.0.0"
-solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
-solana-pubkey = "3.0.0"
-solana-signature = "3.1.0"
-solana-signer = "3.0.0"
-solana-storage-proto = "3.0.0"
-solana-transaction = "3.0.1"
-solana-transaction-context = "3.1.1"
-solana-transaction-error = "3.0.0"
-solana-transaction-status = "3.1.1"
 smallvec = "1.15.1"
-spl-token-2022-interface = "2.0.0"
 thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
@@ -82,6 +65,31 @@ tonic-prost = "0.14.0"
 tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "9.0.6"
+
+# Agave Monorepo
+agave-geyser-plugin-interface = "~3.1.0"
+solana-account-decoder = "~3.1.0"
+solana-logger = "3.0.0"
+solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "~3.1.0"
+solana-transaction-status = "~3.1.0"
+
+# Solana SDK
+solana-account = "3.0.0"
+solana-clock = "3.0.0"
+solana-hash = "3.0.0"
+solana-keypair = "3.0.1"
+solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
+solana-pubkey = "3.0.0"
+solana-signature = "3.1.0"
+solana-signer = "3.0.0"
+solana-transaction = "3.0.1"
+solana-transaction-error = "3.0.0"
+
+# Solana Misc
+spl-token-2022-interface = "2.0.0"
+
+# Yellowstone
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.1.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.1.0", default-features = false }
 
