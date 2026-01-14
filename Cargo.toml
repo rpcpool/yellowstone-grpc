@@ -79,7 +79,7 @@ solana-account = "3.0.0"
 solana-clock = "3.0.0"
 solana-hash = "3.0.0"
 solana-keypair = "3.0.1"
-solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
+solana-message = "3.0.1"
 solana-pubkey = "3.0.0"
 solana-signature = "3.1.0"
 solana-signer = "3.0.0"
