@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 10.1.1
-    "yellowstone-grpc-client", # 10.1.1
-    "yellowstone-grpc-geyser", # 10.1.1
-    "yellowstone-grpc-proto", # 10.1.1
+    "examples/rust", # 11.0.0
+    "yellowstone-grpc-client", # 11.0.0
+    "yellowstone-grpc-geyser", # 11.0.0
+    "yellowstone-grpc-proto", # 11.0.0
 ]
 exclude = [
-    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 3.0.0
+    "yellowstone-grpc-client-nodejs/solana-encoding-wasm", # 4.0.0
 ]
 
 [workspace.package]
@@ -21,17 +21,16 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "3.1.0"
 anyhow = "1.0.98"
 backoff = "0.4.0"
 base64 = "0.22.1"
 bincode = "1.3.3"
 bs58 = "0.5.1"
 bytes = "1.10.1"
-cargo-lock = "10.1.0"
+cargo-lock = "11.0.0"
 chrono = "0.4.26"
 clap = "4.5.42"
-criterion = "0.7.0"
+criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
 env_logger = "0.11.3"
 futures = "0.3.24"
@@ -52,26 +51,10 @@ prometheus = "0.14.0"
 prost = "0.14.0"
 prost-types = "0.14.0"
 prost_011 = { package = "prost", version = "0.11.9" }
-protobuf-src = "1.1.0"
+protoc-bin-vendored = "3.2.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
-solana-account = "3.1.0"
-solana-account-decoder = "3.1.0"
-solana-clock = "3.0.0"
-solana-hash = "3.1.0"
-solana-keypair = "3.1.0"
-solana-logger = "3.0.0"
-solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
-solana-pubkey = "3.0.0"
-solana-signature = "3.1.0"
-solana-signer = "3.0.0"
-solana-storage-proto = "3.0.0"
-solana-transaction = "3.0.1"
-solana-transaction-context = "3.1.1"
-solana-transaction-error = "3.0.0"
-solana-transaction-status = "3.1.1"
 smallvec = "1.15.1"
-spl-token-2022-interface = "2.0.0"
 thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
@@ -82,8 +65,33 @@ tonic-prost = "0.14.0"
 tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "9.0.6"
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "10.1.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "10.1.0", default-features = false }
+
+# Agave Monorepo
+agave-geyser-plugin-interface = "~3.1.0"
+solana-account-decoder = "~3.1.0"
+solana-logger = "3.0.0"
+solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "~3.1.0"
+solana-transaction-status = "~3.1.0"
+
+# Solana SDK
+solana-account = "3.0.0"
+solana-clock = "3.0.0"
+solana-hash = "4.0.0"
+solana-keypair = "3.0.1"
+solana-message = "3.0.1"
+solana-pubkey = "4.0.0"
+solana-signature = "3.1.0"
+solana-signer = "3.0.0"
+solana-transaction = "3.0.1"
+solana-transaction-error = "3.0.0"
+
+# Solana Misc
+spl-token-2022-interface = "2.0.0"
+
+# Yellowstone
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "11.0.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "11.0.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

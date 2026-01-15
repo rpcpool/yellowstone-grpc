@@ -4,7 +4,11 @@ use {
 };
 
 fn main() -> anyhow::Result<()> {
-    std::env::set_var("PROTOC", protobuf_src::protoc());
+    // Use vendored protoc to avoid building C++ protobuf via autotools
+    let protoc_path = protoc_bin_vendored::protoc_bin_path()?;
+    unsafe {
+        std::env::set_var("PROTOC", protoc_path);
+    }
 
     // build protos
     #[cfg(feature = "account-data-as-bytes")]

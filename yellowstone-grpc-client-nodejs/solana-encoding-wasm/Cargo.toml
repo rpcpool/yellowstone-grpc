@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-solana-encoding-wasm"
-version = "3.0.0"
+version = "4.0.0"
 authors = ["Triton One"]
 edition = "2021"
 homepage = "https://triton.one"
@@ -17,9 +17,9 @@ crate-type = ["cdylib"]
 # thus, this needs to be added as a dependency with the feature enabled. Refer the Makefile in root for the build commands
 getrandom = { version = "0.3", features = ["wasm_js"] }
 serde_json = "1.0.86"
-solana-transaction-status = "3.1.1"
+solana-transaction-status = "~3.1.0"
 wasm-bindgen = "0.2.100"
-yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "10.0.0", default-features = false, features = ["convert"] }
+yellowstone-grpc-proto = { path = "../../yellowstone-grpc-proto", version = "11.0.0", default-features = false, features = ["convert"] }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
@@ -29,8 +29,3 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
-
-# wasm32 and spl-token-confidential-transfer-proof-generation
-[patch.crates-io]
-spl-token-2022_6 = { package = "spl-token-2022", version = "6.0.0", git = "https://github.com/rpcpool/token-2022.git", tag = "program@v6.0.0-wasm" }
-spl-token-2022_7 = { package = "spl-token-2022", version = "7.0.0", git = "https://github.com/rpcpool/token-2022.git", tag = "program@v7.0.0-wasm" }
