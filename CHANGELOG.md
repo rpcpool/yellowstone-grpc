@@ -16,6 +16,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2026-01-16
+
+- yellowstone-grpc-client-11.0.0
+- yellowstone-grpc-geyser-11.0.0
+- yellowstone-grpc-proto-11.0.0
+
+### Breaking
+
+- solana: upgrade dependencies to 3.1.x
+
 ## 2025-11-27
 
 - yellowstone-grpc-client-simple-10.1.1
