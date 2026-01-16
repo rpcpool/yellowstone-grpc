@@ -67,7 +67,7 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "~3.1.0"
+agave-geyser-plugin-interface = "=3.1.6"
 solana-account-decoder = "~3.1.0"
 solana-logger = "3.0.0"
 solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
