@@ -64,7 +64,6 @@ jobs:
           NAPI_TARGET: x86_64-unknown-linux-gnu
           LIBC: gnu
         run: |
-          cd napi
           npm run build -- --platform --release --target x86_64-unknown-linux-gnu
 
       - name: Validate binary (GNU libc)
@@ -145,7 +144,6 @@ jobs:
           LIBC: musl
         run: |
           source $HOME/.cargo/env
-          cd napi
           npm run build -- --platform --release --target x86_64-unknown-linux-musl
 
       - name: Validate binary (MUSL libc)
@@ -219,7 +217,6 @@ jobs:
         env:
           NAPI_TARGET: x86_64-apple-darwin
         run: |
-          cd napi
           npm run build -- --platform --release --target x86_64-apple-darwin
 
       - name: Validate binary (macOS x64)
@@ -293,7 +290,6 @@ jobs:
         env:
           NAPI_TARGET: aarch64-apple-darwin
         run: |
-          cd napi
           npm run build -- --platform --release --target aarch64-apple-darwin
 
       - name: Validate binary (macOS ARM64)
