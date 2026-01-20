@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "10.1.1"
+version = "11.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
