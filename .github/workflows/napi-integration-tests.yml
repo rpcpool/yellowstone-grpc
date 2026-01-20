@@ -1,0 +1,338 @@
+name: NAPI Integration Tests
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - 'yellowstone-grpc-client-nodejs/**'
+      - '.github/workflows/napi-integration-tests.yml'
+  push:
+    branches:
+      - 'master'
+      - 'v*'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: '20.18.0'
+
+jobs:
+  # Linux x64 GNU (glibc) - Ubuntu
+  test-linux-x64-gnu:
+    name: Test Linux x64 GNU (glibc)
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: yellowstone-grpc-client-nodejs/package-lock.json
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential protobuf-compiler libsasl2-dev
+
+      - name: Install Node dependencies
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm ci
+
+      - name: Build NAPI binary for linux-x64-gnu
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: x86_64-unknown-linux-gnu
+          LIBC: gnu
+        run: |
+          cd napi
+          npm run build -- --platform --release --target x86_64-unknown-linux-gnu
+
+      - name: Validate binary (GNU libc)
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          ./ci/validate-binary.sh napi/yellowstone-grpc-napi.linux-x64-gnu.node gnu x86_64
+
+      - name: Copy binary for tests
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm run cp-napi-files-dev
+
+      - name: Build TypeScript
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          npm run grpc-generate
+          npx tsc --project tsconfig.esm.json
+          npx tsc --project tsconfig.cjs.json
+          node add-js-extensions.js
+
+      - name: Run integration tests
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: linux-x64-gnu
+          TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+        run: npm run test:integration
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-linux-x64-gnu
+          path: yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.linux-x64-gnu.node
+
+  # Linux x64 MUSL - Alpine container
+  test-linux-x64-musl:
+    name: Test Linux x64 MUSL (Alpine)
+    runs-on: ubuntu-22.04
+    container:
+      image: alpine:3.19
+    
+    steps:
+      - name: Install build dependencies in Alpine
+        run: |
+          apk add --no-cache \
+            git \
+            bash \
+            curl \
+            nodejs \
+            npm \
+            python3 \
+            make \
+            g++ \
+            gcc \
+            musl-dev \
+            linux-headers \
+            protobuf-dev \
+            cyrus-sasl-dev
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          rustup default $RUST_VERSION
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Install Node dependencies
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm ci
+
+      - name: Build NAPI binary for linux-x64-musl
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: x86_64-unknown-linux-musl
+          LIBC: musl
+        run: |
+          source $HOME/.cargo/env
+          cd napi
+          npm run build -- --platform --release --target x86_64-unknown-linux-musl
+
+      - name: Validate binary (MUSL libc)
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          ./ci/validate-binary.sh napi/yellowstone-grpc-napi.linux-x64-musl.node musl x86_64
+
+      - name: Copy binary for tests
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm run cp-napi-files-dev
+
+      - name: Build TypeScript
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          npm run grpc-generate
+          npx tsc --project tsconfig.esm.json
+          npx tsc --project tsconfig.cjs.json
+          node add-js-extensions.js
+
+      - name: Run integration tests
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: linux-x64-musl
+          TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+        run: npm run test:integration
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-linux-x64-musl
+          path: yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.linux-x64-musl.node
+
+  # macOS x64 (Intel)
+  test-macos-x64:
+    name: Test macOS x64 (Intel)
+    runs-on: macos-13
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: yellowstone-grpc-client-nodejs/package-lock.json
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: x86_64-apple-darwin
+
+      - name: Install system dependencies
+        run: |
+          brew install protobuf
+
+      - name: Install Node dependencies
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm ci
+
+      - name: Build NAPI binary for darwin-x64
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: x86_64-apple-darwin
+        run: |
+          cd napi
+          npm run build -- --platform --release --target x86_64-apple-darwin
+
+      - name: Validate binary (macOS x64)
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          ./ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-x64.node x86_64
+
+      - name: Copy binary for tests
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm run cp-napi-files-dev
+
+      - name: Build TypeScript
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          npm run grpc-generate
+          npx tsc --project tsconfig.esm.json
+          npx tsc --project tsconfig.cjs.json
+          node add-js-extensions.js
+
+      - name: Run integration tests
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: darwin-x64
+          TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+        run: npm run test:integration
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-darwin-x64
+          path: yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.darwin-x64.node
+
+  # macOS ARM64 (Apple Silicon)
+  test-macos-arm64:
+    name: Test macOS ARM64 (Apple Silicon)
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: yellowstone-grpc-client-nodejs/package-lock.json
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: aarch64-apple-darwin
+
+      - name: Install system dependencies
+        run: |
+          brew install protobuf
+
+      - name: Install Node dependencies
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm ci
+
+      - name: Build NAPI binary for darwin-arm64
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: aarch64-apple-darwin
+        run: |
+          cd napi
+          npm run build -- --platform --release --target aarch64-apple-darwin
+
+      - name: Validate binary (macOS ARM64)
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          ./ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-arm64.node arm64
+
+      - name: Copy binary for tests
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm run cp-napi-files-dev
+
+      - name: Build TypeScript
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          npm run grpc-generate
+          npx tsc --project tsconfig.esm.json
+          npx tsc --project tsconfig.cjs.json
+          node add-js-extensions.js
+
+      - name: Run integration tests
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: darwin-arm64
+          TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+        run: npm run test:integration
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-darwin-arm64
+          path: yellowstone-grpc-client-nodejs/napi/yellowstone-grpc-napi.darwin-arm64.node
+
+  # Release gate - all tests must pass
+  integration-tests-complete:
+    name: All Integration Tests Passed
+    needs: [test-linux-x64-gnu, test-linux-x64-musl, test-macos-x64, test-macos-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark as complete
+        run: echo "All NAPI integration tests passed successfully"
+
