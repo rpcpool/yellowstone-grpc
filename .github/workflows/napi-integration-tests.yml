@@ -176,7 +176,7 @@ jobs:
   # macOS x64 (Intel)
   test-macos-x64:
     name: Test macOS x64 (Intel)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     
     steps:
       - name: Checkout repository
@@ -241,7 +241,7 @@ jobs:
   # macOS ARM64 (Apple Silicon)
   test-macos-arm64:
     name: Test macOS ARM64 (Apple Silicon)
-    runs-on: macos-14
+    runs-on: macos-latset
     
     steps:
       - name: Checkout repository
