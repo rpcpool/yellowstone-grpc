@@ -114,7 +114,9 @@ jobs:
             linux-headers \
             protobuf-dev \
             cyrus-sasl-dev \
-            curl
+            curl \
+            file \
+            binutils
 
       - name: Checkout repository
         uses: actions/checkout@v4

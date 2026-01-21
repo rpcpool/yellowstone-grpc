@@ -71,7 +71,7 @@ describe("subscribe response schema tests", () => {
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(response.createdAt)).toBe("[object Date]");
     expect(typeof response.account).toBe("object");
-    expect(typeof response.account.slot).toBe("bigint");
+    expect(typeof response.account.slot).toBe("string");
     expect(typeof response.account.isStartup).toBe("boolean");
     expect(typeof response.account.account).toBe("object");
 
@@ -79,9 +79,9 @@ describe("subscribe response schema tests", () => {
     expect(account.pubkey).toBeInstanceOf(Buffer);
     expect(account.owner).toBeInstanceOf(Buffer);
     expect(account.data).toBeInstanceOf(Buffer);
-    expect(typeof account.lamports).toBe("bigint");
-    expect(typeof account.rentEpoch).toBe("bigint");
-    expect(typeof account.writeVersion).toBe("bigint");
+    expect(typeof account.lamports).toBe("string");
+    expect(typeof account.rentEpoch).toBe("string");
+    expect(typeof account.writeVersion).toBe("string");
     expect(typeof account.executable).toBe("boolean");
 
 	}, TEST_TIMEOUT);
@@ -128,7 +128,7 @@ describe("subscribe response schema tests", () => {
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(response.createdAt)).toBe("[object Date]");
     expect(typeof response.slot).toBe("object");
-    expect(typeof response.slot.slot).toBe("bigint");
+    expect(typeof response.slot.slot).toBe("string");
     expect(typeof response.slot.status).toBe("number");
 
 	}, TEST_TIMEOUT);
@@ -175,13 +175,13 @@ describe("subscribe response schema tests", () => {
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(response.createdAt)).toBe("[object Date]");
     expect(typeof response.transaction).toBe("object");
-    expect(typeof response.transaction.slot).toBe("bigint");
+    expect(typeof response.transaction.slot).toBe("string");
 
     const tx = response.transaction.transaction;
     expect(tx.signature).toBeInstanceOf(Buffer);
     expect(typeof tx.transaction).toBe("object");
     expect(typeof tx.meta).toBe("object");
-    expect(typeof tx.index).toBe("bigint");
+    expect(typeof tx.index).toBe("string");
     expect(typeof tx.isVote).toBe("boolean");
 
     const txMeta = response.transaction.transaction.meta;
@@ -197,9 +197,9 @@ describe("subscribe response schema tests", () => {
     expect(typeof txMeta.innerInstructionsNone).toBe("boolean");
     expect(typeof txMeta.logMessagesNone).toBe("boolean");
     expect(typeof txMeta.returnDataNone).toBe("boolean");
-    expect(typeof txMeta.computeUnitsConsumed).toBe("bigint");
-    expect(typeof txMeta.fee).toBe("bigint");
-    expect(typeof txMeta.costUnits).toBe("bigint");
+    expect(typeof txMeta.computeUnitsConsumed).toBe("string");
+    expect(typeof txMeta.fee).toBe("string");
+    expect(typeof txMeta.costUnits).toBe("string");
 
     const innerTx = response.transaction.transaction.transaction;
     expect(Object.prototype.toString.call(innerTx.signatures)).toBe("[object Array]");
@@ -261,13 +261,13 @@ describe("subscribe response schema tests", () => {
     expect(Object.prototype.toString.call(response.block.accounts)).toBe("[object Array]");
     expect(Object.prototype.toString.call(response.block.transactions)).toBe("[object Array]");
     expect(typeof response.block).toBe("object");
-    expect(typeof response.block.slot).toBe("bigint");
+    expect(typeof response.block.slot).toBe("string");
     expect(typeof response.block.blockhash).toBe("string");
-    expect(typeof response.block.parentSlot).toBe("bigint");
+    expect(typeof response.block.parentSlot).toBe("string");
     expect(typeof response.block.parentBlockhash).toBe("string");
-    expect(typeof response.block.executedTransactionCount).toBe("bigint");
-    expect(typeof response.block.updatedAccountCount).toBe("bigint");
-    expect(typeof response.block.entriesCount).toBe("bigint");
+    expect(typeof response.block.executedTransactionCount).toBe("string");
+    expect(typeof response.block.updatedAccountCount).toBe("string");
+    expect(typeof response.block.entriesCount).toBe("string");
 
     const rewards = response.block.rewards;
     expect(typeof rewards).toBe("object");
@@ -279,7 +279,7 @@ describe("subscribe response schema tests", () => {
 
     const blockHeight = response.block.blockHeight;
     expect(typeof blockHeight).toBe("object");
-    expect(typeof blockHeight.blockHeight).toBe("bigint");
+    expect(typeof blockHeight.blockHeight).toBe("string");
 
 	}, TEST_TIMEOUT);
 
@@ -325,11 +325,11 @@ describe("subscribe response schema tests", () => {
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(response.createdAt)).toBe("[object Date]");
     expect(typeof response.entry).toBe("object");
-    expect(typeof response.entry.slot).toBe("bigint");
-    expect(typeof response.entry.index).toBe("bigint");
-    expect(typeof response.entry.numHashes).toBe("bigint");
-    expect(typeof response.entry.executedTransactionCount).toBe("bigint");
-    expect(typeof response.entry.startingTransactionIndex).toBe("bigint");
+    expect(typeof response.entry.slot).toBe("string");
+    expect(typeof response.entry.index).toBe("string");
+    expect(typeof response.entry.numHashes).toBe("string");
+    expect(typeof response.entry.executedTransactionCount).toBe("string");
+    expect(typeof response.entry.startingTransactionIndex).toBe("string");
     expect(response.entry.hash).toBeInstanceOf(Buffer);
 
 	}, TEST_TIMEOUT);
@@ -423,12 +423,12 @@ describe("subscribe response schema tests", () => {
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(response.createdAt)).toBe("[object Date]");
     expect(typeof response.blockMeta).toBe("object");
-    expect(typeof response.blockMeta.slot).toBe("bigint");
+    expect(typeof response.blockMeta.slot).toBe("string");
     expect(typeof response.blockMeta.blockhash).toBe("string");
-    expect(typeof response.blockMeta.parentSlot).toBe("bigint");
+    expect(typeof response.blockMeta.parentSlot).toBe("string");
     expect(typeof response.blockMeta.parentBlockhash).toBe("string");
-    expect(typeof response.blockMeta.executedTransactionCount).toBe("bigint");
-    expect(typeof response.blockMeta.entriesCount).toBe("bigint");
+    expect(typeof response.blockMeta.executedTransactionCount).toBe("string");
+    expect(typeof response.blockMeta.entriesCount).toBe("string");
 
     const rewards = response.blockMeta.rewards;
     expect(typeof rewards).toBe("object");
@@ -440,7 +440,7 @@ describe("subscribe response schema tests", () => {
 
     const blockHeight = response.blockMeta.blockHeight;
     expect(typeof blockHeight).toBe("object");
-    expect(typeof blockHeight.blockHeight).toBe("bigint");
+    expect(typeof blockHeight.blockHeight).toBe("string");
 
 	}, TEST_TIMEOUT);
 });
