@@ -13,6 +13,10 @@ describe("subscribe response schema tests", () => {
   const channelOptions = {};
   const client = new Client(endpoint, xToken, channelOptions);
 
+  beforeAll(async () => {
+    await client.connect();
+  });
+
   // A helper function to check the Buffer structure repeatedly
   const expectBufferSchema = (bufferObject: any) => {
       expect(bufferObject).toEqual(
