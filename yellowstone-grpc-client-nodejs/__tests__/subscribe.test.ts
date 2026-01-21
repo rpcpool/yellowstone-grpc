@@ -1,6 +1,6 @@
 import Client from "../src"
 
-describe("subscribe response schema tests", () => {
+describe("subscribe response schema tests", async () => {
   const TEST_TIMEOUT = 100000;
 
 	// .env
@@ -12,6 +12,8 @@ describe("subscribe response schema tests", () => {
   // Use options sensible defaults.
   const channelOptions = {};
   const client = new Client(endpoint, xToken, channelOptions);
+
+  await client.connect();
 
   // A helper function to check the Buffer structure repeatedly
   const expectBufferSchema = (bufferObject: any) => {
