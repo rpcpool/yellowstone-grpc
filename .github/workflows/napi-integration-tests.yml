@@ -149,7 +149,6 @@ jobs:
           NAPI_TARGET: x86_64-unknown-linux-musl
           LIBC: musl
         run: |
-          cd napi
           npm run build -- --platform --release --target x86_64-unknown-linux-musl
 
       - name: Validate binary (MUSL libc)
@@ -214,7 +213,6 @@ jobs:
         env:
           NAPI_TARGET: x86_64-apple-darwin
         run: |
-          cd napi
           npm run build -- --platform --release --target x86_64-apple-darwin
 
       - name: Validate binary (macOS x64)
