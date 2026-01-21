@@ -132,3 +132,15 @@ npm start -- -e="https://api.rpcpool.com" \
 ```text
 response: { version: "{\"version\":\"0.7.0+solana.1.15.2\",\"proto\":\"1.2.0+solana.1.15.2\",\"solana\":\"1.15.2\",\"git\":\"e03a47c-modified\",\"rustc\":\"1.68.0-nightly\",\"buildts\":\"2023-05-27T08:20:15.440278Z\"}" }
 ```
+
+### unary SubscribeReplayInfo
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe-replay-info
+```
+
+```text
+response: { firstAvailable: '390356345' }
+```

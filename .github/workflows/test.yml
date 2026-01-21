@@ -73,13 +73,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev protobuf-compiler
-          if ! command -v wasm-bindgen-cli &> /dev/null
-          then
-              echo "wasm-bindgen-cli not found, installing"
-              cargo install wasm-bindgen-cli --force
-          else
-              echo "wasm-bindgen-cli is already installed"
-          fi
 
       - name: cargo tree
         run: |
@@ -88,9 +81,9 @@ jobs:
           git checkout Cargo.lock
           cargo tree --frozen
 
-      - name: cargo tree wasm
+      - name: cargo tree napi
         run: |
-          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cd yellowstone-grpc-client-nodejs/napi
           cargo tree
           git diff Cargo.lock
           git checkout Cargo.lock
@@ -99,29 +92,22 @@ jobs:
       - name: cargo fmt
         run: cargo +nightly fmt --all -- --check
 
-      - name: cargo fmt wasm
+      - name: cargo fmt napi
         run: |
-          cd yellowstone-grpc-client-nodejs/solana-encoding-wasm
+          cd yellowstone-grpc-client-nodejs/napi
           cargo +nightly fmt --all -- --check
 
       - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.0.13
+        uses: EmbarkStudios/cargo-deny-action@v2.0.14
         with:
           command: check advisories
           rust-version: ${{ env.RUST_STABLE }}
-
-      - name: cargo deny check advisories wasm
-        uses: EmbarkStudios/cargo-deny-action@v2.0.13
-        with:
-          command: check advisories
-          rust-version: ${{ env.RUST_STABLE }}
-          manifest-path: ./yellowstone-grpc-client-nodejs/solana-encoding-wasm/Cargo.toml
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
 
-      - name: cargo clippy wasm
-        run: make solana-encoding-wasm-clippy
+      - name: cargo clippy napi
+        run: make solana-encoding-napi-clippy
 
       - name: check features in `client`
         run: cargo check -p yellowstone-grpc-client --all-targets
@@ -136,12 +122,6 @@ jobs:
 
       - name: cargo test
         run: cargo test --all-features
-
-      - name: install wasm dependencies
-        run: make solana-encoding-wasm-install-dependencies
-
-      - name: make solana-encoding-wasm-build
-        run: make solana-encoding-wasm-build
 
       - name: Build
         run: ./ci/cargo-build-test.sh
