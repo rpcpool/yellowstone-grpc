@@ -60,19 +60,33 @@ echo "Library dependencies (ldd):"
 ldd "$BINARY_PATH" || true
 echo ""
 
-# Verify libc type
+# Verify libc type using the ELF interpreter when available.
+# ldd on musl can emit relocation errors for node addons because N-API
+# symbols are resolved by the Node runtime, not the loader.
+INTERPRETER="$(readelf -l "$BINARY_PATH" 2>/dev/null | awk -F': ' '/Requesting program interpreter/ {print $2; exit}')"
+echo "ELF interpreter: ${INTERPRETER:-unknown}"
+echo ""
+
 if [[ "$LIBC_TYPE" == "gnu" ]]; then
-    if ldd "$BINARY_PATH" 2>&1 | grep -q "musl"; then
-        echo "Error: Binary is linked against musl, expected glibc"
+    if [[ -z "$INTERPRETER" ]]; then
+        echo "Error: Missing ELF interpreter; expected glibc loader (ld-linux)"
         exit 1
     fi
-    # Check for glibc
-    if ! ldd "$BINARY_PATH" 2>&1 | grep -q "libc.so"; then
-        echo "Warning: Could not verify glibc linkage"
+    if ! echo "$INTERPRETER" | grep -q "ld-linux"; then
+        echo "Error: Expected glibc interpreter (ld-linux), got: $INTERPRETER"
+        exit 1
+    fi
+    if echo "$INTERPRETER" | grep -q "ld-musl"; then
+        echo "Error: Interpreter indicates musl, expected glibc: $INTERPRETER"
+        exit 1
     fi
 elif [[ "$LIBC_TYPE" == "musl" ]]; then
-    if ! ldd "$BINARY_PATH" 2>&1 | grep -qi "musl"; then
-        echo "Error: Binary is not linked against musl"
+    if [[ -z "$INTERPRETER" ]]; then
+        echo "Error: Missing ELF interpreter; expected musl loader (ld-musl)"
+        exit 1
+    fi
+    if ! echo "$INTERPRETER" | grep -q "ld-musl"; then
+        echo "Error: Expected musl interpreter (ld-musl), got: $INTERPRETER"
         exit 1
     fi
 fi

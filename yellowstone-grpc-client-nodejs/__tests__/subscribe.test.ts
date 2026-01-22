@@ -1,6 +1,6 @@
 import Client from "../src"
 
-describe("subscribe response schema tests", async () => {
+describe("subscribe response schema tests", () => {
   const TEST_TIMEOUT = 100000;
 
 	// .env
