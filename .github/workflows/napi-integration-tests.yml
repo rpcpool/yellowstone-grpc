@@ -9,12 +9,6 @@ on:
     paths:
       - 'yellowstone-grpc-client-nodejs/**'
       - '.github/workflows/napi-integration-tests.yml'
-  push:
-    branches:
-      - 'master'
-      - 'v*'
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 env:
