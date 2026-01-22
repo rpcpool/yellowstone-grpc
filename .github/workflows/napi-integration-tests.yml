@@ -63,6 +63,7 @@ jobs:
       - name: Validate binary (GNU libc)
         working-directory: yellowstone-grpc-client-nodejs
         run: |
+          chmod u+x ../ci/validate-binary.sh
           ../ci/validate-binary.sh napi/yellowstone-grpc-napi.linux-x64-gnu.node gnu x86_64
 
       - name: Build TypeScript SDK
@@ -144,6 +145,7 @@ jobs:
       - name: Validate binary (MUSL libc)
         working-directory: yellowstone-grpc-client-nodejs
         run: |
+          chmod u+x ../ci/validate-binary.sh
           ../ci/validate-binary.sh napi/yellowstone-grpc-napi.linux-x64-musl.node musl x86_64
 
       - name: Build TypeScript SDK
@@ -202,6 +204,7 @@ jobs:
       - name: Validate binary (macOS x64)
         working-directory: yellowstone-grpc-client-nodejs
         run: |
+          chmod u+x ../ci/validate-binary-macos.sh
           ../ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-x64.node x86_64
 
       - name: Build TypeScript SDK
@@ -260,6 +263,7 @@ jobs:
   #     - name: Validate binary (macOS ARM64)
   #       working-directory: yellowstone-grpc-client-nodejs
   #       run: |
+  #         chmod u+x ../ci/validate-binary-macos.sh
   #         ../ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-arm64.node arm64
 
   #     - name: Build TypeScript SDK
