@@ -7,6 +7,7 @@ use {
             SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
             SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
+        plugin::filter::encoder::TransactionEncoder,
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -275,6 +276,7 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
+    pub pre_encoded: Option<Bytes>,
 }
 
 impl MessageTransactionInfo {
@@ -299,18 +301,22 @@ impl MessageTransactionInfo {
             .copied()
             .collect();
 
-        Self {
+        let mut tx = Self {
             signature: *info.signature,
             is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
-        }
+            pre_encoded: None,
+        };
+
+        TransactionEncoder::pre_encode(&mut tx);
+        tx
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
+        let mut tx = Self {
             signature: Signature::try_from(msg.signature.as_slice())
                 .map_err(|_| "invalid signature length")?,
             is_vote: msg.is_vote,
@@ -320,7 +326,11 @@ impl MessageTransactionInfo {
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
             account_keys: HashSet::new(),
-        })
+            pre_encoded: None,
+        };
+
+        TransactionEncoder::pre_encode(&mut tx);
+        Ok(tx)
     }
 
     pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
@@ -352,6 +362,11 @@ impl MessageTransactionInfo {
 
         self.account_keys = account_keys;
         Ok(())
+    }
+
+    #[inline]
+    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.as_ref()
     }
 }
 
