@@ -45,6 +45,21 @@ These changes are internal to the SDK and do not have any breaking changes for c
 
 The [napi-rs](https://github.com/napi-rs/napi-rs) based implementation is inspired from the implemenation of the [LaserStream SDK](https://github.com/helius-labs/laserstream-sdk)
 
+### Type Compatibility
+
+The public SDK always returns the generated protobuf-compatible types from
+`src/grpc/geyser.ts`.
+
+- Unary methods return generated response objects (for example `PongResponse`,
+  `GetSlotResponse`, `GetVersionResponse`) instead of raw N-API wrapper shapes.
+- Subscription stream updates are normalized to `SubscribeUpdate` with
+  top-level oneof fields (`account`, `slot`, `transaction`, etc).
+- The internal N-API `Js...` objects are an implementation detail and are
+  converted automatically by the SDK wrapper.
+
+This allows existing user code typed against the generated `src/grpc` types to
+remain stable while using the N-API backend.
+
 ## Development
 
 ### Local Testing
@@ -59,4 +74,3 @@ When building for local testing at the root of the project where the `Makefile` 
 
 4. Run `client.ts` with an example subscription request below:
 `tsx examples/typescript/src/client.ts --endpoint <ENDPOINT> --x-token <X-TOKEN> --commitment processed subscribe --transactions TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
-

@@ -1,24 +1,41 @@
-//! N-API stream.Duplex Engine
+//! N-API stream engine for Yellowstone subscriptions.
 //!
-//! This module provides the gateway for the JS
-//! runtime to interact with Rust's async runtime.
+//! This module exposes a `DuplexStream` type used by the JS SDK wrapper.
+//! The Rust side owns the gRPC subscribe task and bridges:
+//! - JS writes (`SubscribeRequest`) -> gRPC sink
+//! - gRPC stream (`SubscribeUpdate`) -> JS reads
+//!
+//! Design goals:
+//! - Keep JS-facing API small and stable (`read` / `write`)
+//! - Convert all protobuf <-> JS objects through generated `js_types`
+//! - Stop worker tasks deterministically when JS drops stream handles
 mod bindings;
 mod client;
 mod encoding;
+mod subscribe_request_validation;
 mod utils;
 
 use futures_util::{SinkExt, StreamExt};
 use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
-use std::sync::Arc;
-use std::sync::Once;
-use tokio::{
-  sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-  sync::Mutex,
+use prost::Message;
+use std::sync::{
+  atomic::{AtomicBool, Ordering},
+  Arc, Mutex as StdMutex, Once,
+};
+use tokio::sync::{
+  mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+  Mutex,
 };
 use yellowstone_grpc_proto::prelude::*;
 
-use crate::client::GrpcClient;
+use crate::{
+  client::GrpcClient,
+  js_types::{JsSubscribeRequest, JsSubscribeUpdate},
+  subscribe_request_validation::validate_subscribe_request,
+};
+
+pub mod js_types;
 
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
@@ -39,8 +56,19 @@ fn init_crypto_provider() {
 /// will `_read()` from and `_write()` to.
 #[napi]
 struct DuplexStream {
+  /// Read side consumed by `read()`. Each message is delivered exactly once.
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
-  writable: UnboundedSender<SubscribeRequest>,
+  /// Write side used by `write()`. Requests are forwarded to gRPC task.
+  ///
+  /// The mutex protects a close-state transition, not sender sharing:
+  /// - `close()` sets the state to `None` (revokes future writes).
+  /// - `write()` reads/clones under the same lock.
+  ///
+  /// `UnboundedSender` being cheap-`Clone` is true, but clone alone does not
+  /// provide an atomic "disable writes now" transition.
+  writable: Arc<StdMutex<Option<UnboundedSender<SubscribeRequest>>>>,
+  /// Set once JS has started destroying this stream.
+  is_closing: Arc<AtomicBool>,
 }
 
 #[napi]
@@ -52,9 +80,13 @@ impl DuplexStream {
     // TODO : Fine tune unbounded channels.
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
+    let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+    let is_closing = Arc::new(AtomicBool::new(false));
+    let is_closing_worker = is_closing.clone();
 
+    // Spawn one worker per `subscribe()` call. The worker owns both sides of
+    // the gRPC bidirectional stream and forwards data between JS and gRPC.
     env.spawn_future(async move {
-
       let holder = client_holder
       .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
       .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
@@ -76,25 +108,37 @@ impl DuplexStream {
           req_option = writable_rx.recv() => {
             if let Some(request) = req_option {
               if let Err(e) = stream_tx.send(request).await {
+                if is_closing_worker.load(Ordering::Acquire) {
+                  break;
+                }
                 return Err(napi::Error::from_reason(e.to_string()))
               }
+            } else {
+              // JS writable side dropped: no more requests can be sent.
+              // Exit worker so the upstream gRPC stream is torn down as well.
+              break;
             }
           },
 
           // 1. SubscribeUpdate is received from Geyser client's receiver.
           // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
-          Some(update_result) = stream_rx.next() => {
-            let update = match update_result {
-              Ok(u) => u,
-              Err(e) => return Err(napi::Error::from_reason(e.to_string()))
-            };
-
-            if let Err(e) = readable_tx.send(update) {
-              return Err(napi::Error::from_reason(e.to_string()))
+          maybe_update_result = stream_rx.next() => {
+            match maybe_update_result {
+              Some(Ok(update)) => {
+                // JS reader side disappeared; no point continuing the worker.
+                if readable_tx.send(update).is_err() {
+                  break;
+                }
+              }
+              Some(Err(e)) => {
+                if is_closing_worker.load(Ordering::Acquire) {
+                  break;
+                }
+                return Err(napi::Error::from_reason(e.to_string()))
+              }
+              None => break,
             }
           }
-
-          else => { break; }
         }
       }
 
@@ -103,37 +147,531 @@ impl DuplexStream {
 
     Ok(Self {
       readable: Arc::new(Mutex::new(readable_rx)),
-      writable: writable_tx,
+      writable,
+      is_closing,
     })
   }
 
   /// Read JS Accesspoint.
   ///
-  /// Retrieve one SubscribeUpdate from the worker.
+  /// Retrieve one `SubscribeUpdate` from the worker and convert it to
+  /// the generated N-API JS representation (`JsSubscribeUpdate`).
   #[napi]
-  pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Object<'env>>> {
+  pub fn read<'env>(
+    &self,
+    env: &'env Env,
+  ) -> Result<PromiseRaw<'env, Option<JsSubscribeUpdate<'env>>>> {
     let readable = self.readable.clone();
 
     env.spawn_future_with_callback(
       async move {
         match readable.lock().await.recv().await {
-          Some(update) => Ok(update),
-          None => Err(napi::Error::from_reason("No update available")),
+          Some(update) => Ok(Some(update)),
+          // Channel close indicates worker termination; JS wrapper treats this
+          // as stream end and destroys the Node duplex stream.
+          None => Ok(None),
         }
       },
-      move |env, update| utils::to_js_update(env, update),
+      move |environment, subscribe_update_opt| match subscribe_update_opt {
+        Some(subscribe_update) => {
+          JsSubscribeUpdate::from_protobuf_to_js_type(environment, subscribe_update).map(Some)
+        }
+        None => Ok(None),
+      },
     )
   }
 
   /// Write JS Accesspoint.
   ///
-  /// Take in SubscribeRequest and send to the worker.
+  /// Accept a JS request object, convert to protobuf, then enqueue for the
+  /// worker to forward to the gRPC request sink.
   #[napi]
-  pub fn write(&self, env: &Env, chunk: Object) -> Result<()> {
-    let request: SubscribeRequest = utils::js_to_subscribe_request(env, chunk)?;
-    if let Err(e) = self.writable.send(request) {
+  pub fn close(&self) -> Result<()> {
+    self.is_closing.store(true, Ordering::Release);
+
+    let mut writable_guard = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    // Dropping the last sender closes the channel and causes
+    // `writable_rx.recv()` to return `None` in the worker.
+    *writable_guard = None;
+
+    Ok(())
+  }
+
+  #[napi]
+  pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
+    let protobuf_subscribe_request: SubscribeRequest = request.from_js_to_protobuf_type()?;
+    validate_subscribe_request(&protobuf_subscribe_request)
+      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
+
+    self.enqueue_subscribe_request(protobuf_subscribe_request)
+  }
+
+  #[napi]
+  pub fn write_raw(&self, request_bytes: Buffer) -> Result<()> {
+    let protobuf_subscribe_request =
+      SubscribeRequest::decode(request_bytes.as_ref()).map_err(|error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("invalid SubscribeRequest payload: {error}"),
+        )
+      })?;
+
+    validate_subscribe_request(&protobuf_subscribe_request)
+      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
+
+    self.enqueue_subscribe_request(protobuf_subscribe_request)
+  }
+
+  fn enqueue_subscribe_request(&self, protobuf_subscribe_request: SubscribeRequest) -> Result<()> {
+    if self.is_closing.load(Ordering::Acquire) {
+      return Err(napi::Error::from_reason(
+        "Cannot write to a closing subscription stream",
+      ));
+    }
+
+    let writable = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?
+      .as_ref()
+      .cloned()
+      .ok_or_else(|| napi::Error::from_reason("Cannot write to a closed subscription stream"))?;
+
+    if let Err(e) = writable.send(protobuf_subscribe_request) {
       return Err(napi::Error::from_reason(e.to_string()));
     }
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::{js_types::JsSubscribeRequest, DuplexStream};
+  use napi::bindgen_prelude::Buffer;
+  use prost::Message;
+  use std::collections::HashMap;
+  use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex as StdMutex,
+  };
+  use tokio::sync::mpsc::unbounded_channel;
+  use tokio::sync::Mutex;
+  use tokio::time::{timeout, Duration};
+  use yellowstone_grpc_proto::geyser::{
+    subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
+    subscribe_request_filter_accounts_filter_memcmp,
+  };
+  use yellowstone_grpc_proto::prelude::{
+    SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+    SubscribeRequestFilterAccountsFilterLamports, SubscribeRequestFilterAccountsFilterMemcmp,
+    SubscribeUpdate,
+  };
+
+  fn empty_subscribe_request() -> JsSubscribeRequest<'static> {
+    JsSubscribeRequest {
+      accounts: HashMap::new(),
+      slots: HashMap::new(),
+      transactions: HashMap::new(),
+      transactions_status: HashMap::new(),
+      blocks: HashMap::new(),
+      blocks_meta: HashMap::new(),
+      entry: HashMap::new(),
+      commitment: None,
+      accounts_data_slice: Vec::new(),
+      ping: None,
+      from_slot: None,
+    }
+  }
+
+  fn subscribe_request_with_memcmp_filter() -> SubscribeRequest {
+    let mut accounts = HashMap::new();
+    accounts.insert(
+      "client".to_string(),
+      SubscribeRequestFilterAccounts {
+        account: vec![],
+        owner: vec![],
+        filters: vec![SubscribeRequestFilterAccountsFilter {
+          filter: Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
+            SubscribeRequestFilterAccountsFilterMemcmp {
+              offset: 4,
+              data: Some(
+                subscribe_request_filter_accounts_filter_memcmp::Data::Bytes(vec![9, 9, 9]),
+              ),
+            },
+          )),
+        }],
+        nonempty_txn_signature: None,
+      },
+    );
+
+    SubscribeRequest {
+      accounts,
+      slots: HashMap::new(),
+      transactions: HashMap::new(),
+      transactions_status: HashMap::new(),
+      blocks: HashMap::new(),
+      blocks_meta: HashMap::new(),
+      entry: HashMap::new(),
+      commitment: Some(1),
+      accounts_data_slice: Vec::new(),
+      ping: None,
+      from_slot: None,
+    }
+  }
+
+  fn subscribe_request_with_memcmp_base58_filter() -> SubscribeRequest {
+    let mut request = subscribe_request_with_memcmp_filter();
+    request.accounts.get_mut("client").unwrap().filters[0].filter =
+      Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
+        SubscribeRequestFilterAccountsFilterMemcmp {
+          offset: 4,
+          data: Some(
+            subscribe_request_filter_accounts_filter_memcmp::Data::Base58(
+              "11111111111111111111111111111111".to_string(),
+            ),
+          ),
+        },
+      ));
+    request
+  }
+
+  fn subscribe_request_with_memcmp_base64_filter() -> SubscribeRequest {
+    let mut request = subscribe_request_with_memcmp_filter();
+    request.accounts.get_mut("client").unwrap().filters[0].filter =
+      Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
+        SubscribeRequestFilterAccountsFilterMemcmp {
+          offset: 4,
+          data: Some(
+            subscribe_request_filter_accounts_filter_memcmp::Data::Base64("AQID".to_string()),
+          ),
+        },
+      ));
+    request
+  }
+
+  fn subscribe_request_with_lamports_filter(
+    cmp: subscribe_request_filter_accounts_filter_lamports::Cmp,
+  ) -> SubscribeRequest {
+    let mut request = subscribe_request_with_memcmp_filter();
+    request.accounts.get_mut("client").unwrap().filters[0].filter =
+      Some(subscribe_request_filter_accounts_filter::Filter::Lamports(
+        SubscribeRequestFilterAccountsFilterLamports { cmp: Some(cmp) },
+      ));
+    request
+  }
+
+  fn make_test_stream() -> (
+    DuplexStream,
+    tokio::sync::mpsc::UnboundedReceiver<SubscribeRequest>,
+  ) {
+    let (_readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
+    let (writable_tx, writable_rx) = unbounded_channel::<SubscribeRequest>();
+
+    (
+      DuplexStream {
+        readable: Arc::new(Mutex::new(readable_rx)),
+        writable: Arc::new(StdMutex::new(Some(writable_tx))),
+        is_closing: Arc::new(AtomicBool::new(false)),
+      },
+      writable_rx,
+    )
+  }
+
+  #[tokio::test]
+  async fn close_drops_sender_and_worker_receiver_observes_shutdown() {
+    let (stream, mut writable_rx) = make_test_stream();
+
+    stream.close().expect("close should succeed");
+
+    let shutdown_observed = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out");
+
+    assert!(
+      shutdown_observed.is_none(),
+      "receiver should observe channel close when stream is closed"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_after_close_is_rejected() {
+    let (stream, _writable_rx) = make_test_stream();
+
+    stream.close().expect("close should succeed");
+
+    let error = stream
+      .write(empty_subscribe_request())
+      .expect_err("write should fail after close");
+
+    assert!(
+      error
+        .to_string()
+        .contains("Cannot write to a closing subscription stream"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn worker_loop_style_receiver_exits_after_close() {
+    let (stream, mut writable_rx) = make_test_stream();
+    let processed_requests = Arc::new(AtomicUsize::new(0));
+    let processed_requests_worker = processed_requests.clone();
+
+    let worker = tokio::spawn(async move {
+      while writable_rx.recv().await.is_some() {
+        processed_requests_worker.fetch_add(1, Ordering::SeqCst);
+      }
+    });
+
+    stream
+      .write(empty_subscribe_request())
+      .expect("initial write should succeed");
+    stream.close().expect("close should succeed");
+
+    timeout(Duration::from_secs(1), worker)
+      .await
+      .expect("worker did not terminate after close")
+      .expect("worker join failed");
+
+    assert_eq!(
+      processed_requests.load(Ordering::SeqCst),
+      1,
+      "expected exactly one enqueued request before channel shutdown"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_before_close_is_delivered_to_receiver() {
+    let (stream, mut writable_rx) = make_test_stream();
+
+    stream
+      .write(empty_subscribe_request())
+      .expect("write before close should succeed");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out");
+
+    assert!(
+      received.is_some(),
+      "receiver should get request written before close"
+    );
+
+    stream.close().expect("close should succeed");
+  }
+
+  #[tokio::test]
+  async fn write_after_receiver_drop_returns_channel_closed_error() {
+    let (stream, writable_rx) = make_test_stream();
+    drop(writable_rx);
+
+    let error = stream
+      .write(empty_subscribe_request())
+      .expect_err("write should fail when receiver is dropped");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("channel closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn close_is_idempotent() {
+    let (stream, _writable_rx) = make_test_stream();
+
+    stream.close().expect("first close should succeed");
+    stream.close().expect("second close should succeed");
+
+    let error = stream
+      .write(empty_subscribe_request())
+      .expect_err("writes should stay rejected after repeated close");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn concurrent_close_write_race_is_stable_and_stream_ends_closed() {
+    for _ in 0..32 {
+      let (stream, _writable_rx) = make_test_stream();
+      let stream = Arc::new(stream);
+      let stream_for_close = stream.clone();
+      let stream_for_write = stream.clone();
+
+      let (close_result, write_result) =
+        tokio::join!(async move { stream_for_close.close() }, async move {
+          stream_for_write.write(empty_subscribe_request())
+        });
+
+      close_result.expect("close should never fail");
+      if let Err(error) = write_result {
+        let message = error.to_string().to_lowercase();
+        assert!(
+          message.contains("closing")
+            || message.contains("closed")
+            || message.contains("channel closed"),
+          "unexpected race error message: {error}"
+        );
+      }
+
+      let post_close_error = stream
+        .write(empty_subscribe_request())
+        .expect_err("writes after close/write race should be rejected");
+      let post_close_message = post_close_error.to_string().to_lowercase();
+      assert!(
+        post_close_message.contains("closing") || post_close_message.contains("closed"),
+        "unexpected post-race error message: {post_close_error}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn write_raw_delivers_decoded_request_to_receiver() {
+    let (stream, mut writable_rx) = make_test_stream();
+    let request = subscribe_request_with_memcmp_filter();
+    let encoded_request = request.encode_to_vec();
+
+    stream
+      .write_raw(Buffer::from(encoded_request))
+      .expect("write_raw should succeed for valid payload");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out")
+      .expect("receiver should get one request");
+
+    assert_eq!(received, request);
+  }
+
+  #[tokio::test]
+  async fn write_raw_rejects_invalid_bytes_payload() {
+    let (stream, _writable_rx) = make_test_stream();
+
+    let error = stream
+      .write_raw(Buffer::from(vec![0xFF, 0x00, 0xAA]))
+      .expect_err("invalid protobuf bytes should be rejected");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("invalid subscriberequest payload"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_raw_rejects_filter_without_variant() {
+    let (stream, _writable_rx) = make_test_stream();
+    let mut request = subscribe_request_with_memcmp_filter();
+    request.accounts.get_mut("client").unwrap().filters[0].filter = None;
+
+    let error = stream
+      .write_raw(Buffer::from(request.encode_to_vec()))
+      .expect_err("missing filter variant should be rejected");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("filter should be defined"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_raw_rejects_lamports_filter_without_cmp() {
+    let (stream, _writable_rx) = make_test_stream();
+    let mut request = subscribe_request_with_memcmp_filter();
+    request.accounts.get_mut("client").unwrap().filters[0].filter =
+      Some(subscribe_request_filter_accounts_filter::Filter::Lamports(
+        SubscribeRequestFilterAccountsFilterLamports { cmp: None },
+      ));
+
+    let error = stream
+      .write_raw(Buffer::from(request.encode_to_vec()))
+      .expect_err("missing lamports comparator should be rejected");
+    let message = error.to_string().to_lowercase();
+    assert!(
+      message.contains("lamports comparator should be defined"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_raw_accepts_memcmp_base58_variant() {
+    let (stream, mut writable_rx) = make_test_stream();
+    let request = subscribe_request_with_memcmp_base58_filter();
+
+    stream
+      .write_raw(Buffer::from(request.encode_to_vec()))
+      .expect("memcmp base58 should be accepted");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out")
+      .expect("receiver should receive request");
+    assert_eq!(received, request);
+  }
+
+  #[tokio::test]
+  async fn write_raw_accepts_memcmp_base64_variant() {
+    let (stream, mut writable_rx) = make_test_stream();
+    let request = subscribe_request_with_memcmp_base64_filter();
+
+    stream
+      .write_raw(Buffer::from(request.encode_to_vec()))
+      .expect("memcmp base64 should be accepted");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out")
+      .expect("receiver should receive request");
+    assert_eq!(received, request);
+  }
+
+  #[tokio::test]
+  async fn write_raw_accepts_each_lamports_comparator_variant() {
+    let lamports_cmp_variants = vec![
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Eq(1),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Ne(2),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Lt(3),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Gt(4),
+    ];
+
+    for cmp in lamports_cmp_variants {
+      let (stream, mut writable_rx) = make_test_stream();
+      let request = subscribe_request_with_lamports_filter(cmp);
+
+      stream
+        .write_raw(Buffer::from(request.encode_to_vec()))
+        .expect("lamports comparator variant should be accepted");
+
+      let received = timeout(Duration::from_millis(200), writable_rx.recv())
+        .await
+        .expect("receiver await should not time out")
+        .expect("receiver should receive request");
+      assert_eq!(received, request);
+    }
+  }
+
+  #[tokio::test]
+  async fn write_raw_after_close_is_rejected() {
+    let (stream, _writable_rx) = make_test_stream();
+    stream.close().expect("close should succeed");
+
+    let error = stream
+      .write_raw(Buffer::from(
+        subscribe_request_with_memcmp_filter().encode_to_vec(),
+      ))
+      .expect_err("write_raw after close should fail");
+    let message = error.to_string().to_lowercase();
+    assert!(
+      message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
   }
 }
