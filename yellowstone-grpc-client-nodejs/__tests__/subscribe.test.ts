@@ -17,26 +17,6 @@ describe("subscribe response schema tests", () => {
     await client.connect();
   });
 
-  const waitForStreamClosed = (
-    stream: NodeJS.ReadableStream,
-    ignoreErrors: { value: boolean },
-  ) =>
-    new Promise<void>((resolve, reject) => {
-      stream.on("error", (error) => {
-        if (ignoreErrors.value) {
-          resolve();
-          return;
-        }
-        reject(error);
-      });
-      stream.on("end", () => {
-        resolve();
-      });
-      stream.on("close", () => {
-        resolve();
-      });
-    });
-
   // A helper function to check the Buffer structure repeatedly
   const expectBufferSchema = (bufferObject: any) => {
       expect(bufferObject).toEqual(
@@ -65,15 +45,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -115,15 +103,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -155,15 +151,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -231,15 +235,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -291,15 +303,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -335,15 +355,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
@@ -375,15 +403,23 @@ describe("subscribe response schema tests", () => {
       }
     });
 
-    const ignoreErrors = { value: false };
     stream.once("data", (data) => {
       response = data;
-      ignoreErrors.value = true;
       stream.end();
       stream.destroy();
     });
 
-    const streamClosed = waitForStreamClosed(stream, ignoreErrors);
+    const streamClosed = new Promise<void>((resolve, reject) => {
+      stream.on("error", (error) => {
+        reject(error);
+      });
+      stream.on("end", () => {
+        resolve();
+      });
+      stream.on("close", () => {
+        resolve();
+      });
+    });
 
     await streamClosed;
 
