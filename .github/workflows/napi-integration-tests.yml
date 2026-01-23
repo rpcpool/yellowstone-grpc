@@ -218,64 +218,64 @@ jobs:
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
         run: npm test
 
-  # # macOS ARM64 (Apple Silicon)
-  # test-macos-arm64:
-  #   name: Test macOS ARM64 (Apple Silicon)
-  #   runs-on: macos-latset
+  # macOS ARM64 (Apple Silicon)
+  test-macos-arm64:
+    name: Test macOS ARM64 (Apple Silicon)
+    runs-on: macos-latset
     
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  #     - name: Set up Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: ${{ env.NODE_VERSION }}
-  #         cache: 'npm'
-  #         cache-dependency-path: yellowstone-grpc-client-nodejs/package-lock.json
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: yellowstone-grpc-client-nodejs/package-lock.json
 
-  #     - name: Set rust version
-  #       run: |
-  #         RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
-  #         echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
 
-  #     - name: Install Rust toolchain
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.RUST_STABLE }}
-  #         targets: aarch64-apple-darwin
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: aarch64-apple-darwin
 
-  #     - name: Install system dependencies
-  #       run: |
-  #         brew install protobuf
+      - name: Install system dependencies
+        run: |
+          brew install protobuf
 
-  #     - name: Install Node dependencies
-  #       working-directory: yellowstone-grpc-client-nodejs
-  #       run: npm ci
+      - name: Install Node dependencies
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm ci
 
-  #     - name: Build NAPI binary for darwin-arm64
-  #       working-directory: yellowstone-grpc-client-nodejs
-  #       env:
-  #         NAPI_TARGET: aarch64-apple-darwin
-  #       run: |
-  #         npm run build -- --platform --release --target aarch64-apple-darwin
+      - name: Build NAPI binary for darwin-arm64
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          NAPI_TARGET: aarch64-apple-darwin
+        run: |
+          npm run build -- --platform --release --target aarch64-apple-darwin
 
-  #     - name: Validate binary (macOS ARM64)
-  #       working-directory: yellowstone-grpc-client-nodejs
-  #       run: |
-  #         chmod u+x ../ci/validate-binary-macos.sh
-  #         ../ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-arm64.node arm64
+      - name: Validate binary (macOS ARM64)
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          chmod u+x ../ci/validate-binary-macos.sh
+          ../ci/validate-binary-macos.sh napi/yellowstone-grpc-napi.darwin-arm64.node arm64
 
-  #     - name: Build TypeScript SDK
-  #       working-directory: yellowstone-grpc-client-nodejs
-  #       run: npm run build:dev
+      - name: Build TypeScript SDK
+        working-directory: yellowstone-grpc-client-nodejs
+        run: npm run build:dev
 
-  #     - name: Run tests
-  #       working-directory: yellowstone-grpc-client-nodejs
-  #       env:
-  #         TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
-  #         TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
-  #       run: npm test
+      - name: Run tests
+        working-directory: yellowstone-grpc-client-nodejs
+        env:
+          TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+        run: npm test
 
   # Release gate - all tests must pass
   integration-tests-complete:
