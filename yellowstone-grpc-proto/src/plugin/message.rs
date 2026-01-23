@@ -7,7 +7,7 @@ use {
             SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
             SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
-        plugin::filter::encoder::TransactionEncoder,
+        plugin::filter::encoder::{AccountEncoder, TransactionEncoder},
         solana::storage::confirmed_block,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -195,13 +195,14 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
+    pub pre_encoded: Option<Bytes>,
 }
 
 impl MessageAccountInfo {
     pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
         let shared = info.data.to_vec();
         let data = Bytes::from(shared);
-        Self {
+        let mut account = Self {
             pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
             lamports: info.lamports,
             owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
@@ -210,11 +211,14 @@ impl MessageAccountInfo {
             data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
-        }
+            pre_encoded: None,
+        };
+        AccountEncoder::pre_encode(&mut account);
+        account
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateAccountInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
+        let mut account = Self {
             pubkey: Pubkey::try_from(msg.pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
             lamports: msg.lamports,
             owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
@@ -231,7 +235,14 @@ impl MessageAccountInfo {
                     Signature::try_from(sig.as_slice()).map_err(|_| "invalid signature length")
                 })
                 .transpose()?,
-        })
+            pre_encoded: None,
+        };
+        AccountEncoder::pre_encode(&mut account);
+        Ok(account)
+    }
+
+    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.as_ref()
     }
 }
 
@@ -365,7 +376,7 @@ impl MessageTransactionInfo {
     }
 
     #[inline]
-    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
         self.pre_encoded.as_ref()
     }
 }

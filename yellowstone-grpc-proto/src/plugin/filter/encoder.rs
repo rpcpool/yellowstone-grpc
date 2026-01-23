@@ -1,6 +1,10 @@
-use bytes::Bytes;
-
-use crate::plugin::message::MessageTransactionInfo;
+use {
+    crate::plugin::{
+        filter::message::{prost_bytes_encode_raw, prost_bytes_encoded_len},
+        message::{MessageAccountInfo, MessageTransactionInfo},
+    },
+    bytes::Bytes,
+};
 
 pub struct TransactionEncoder;
 
@@ -54,5 +58,70 @@ impl TransactionEncoder {
             } else {
                 0
             }
+    }
+}
+
+pub struct AccountEncoder;
+
+impl AccountEncoder {
+    pub fn pre_encode(account: &mut MessageAccountInfo) {
+        let len = Self::encoded_len(account);
+        let mut buf = Vec::with_capacity(len);
+
+        prost_bytes_encode_raw(1u32, account.pubkey.as_ref(), &mut buf);
+        if account.lamports != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &account.lamports, &mut buf);
+        }
+        prost_bytes_encode_raw(3u32, account.owner.as_ref(), &mut buf);
+        if account.executable {
+            ::prost::encoding::bool::encode(4u32, &account.executable, &mut buf);
+        }
+        if account.rent_epoch != 0u64 {
+            ::prost::encoding::uint64::encode(5u32, &account.rent_epoch, &mut buf);
+        }
+        if !account.data.is_empty() {
+            prost_bytes_encode_raw(6u32, &account.data, &mut buf);
+        }
+        if account.write_version != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &account.write_version, &mut buf);
+        }
+        if let Some(value) = &account.txn_signature {
+            prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
+        }
+
+        account.pre_encoded = Some(Bytes::from(buf));
+    }
+
+    pub fn encoded_len(account: &MessageAccountInfo) -> usize {
+        prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
+            + if account.lamports != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
+            } else {
+                0
+            }
+            + prost_bytes_encoded_len(3u32, account.owner.as_ref())
+            + if account.executable {
+                ::prost::encoding::bool::encoded_len(4u32, &account.executable)
+            } else {
+                0
+            }
+            + if account.rent_epoch != 0u64 {
+                ::prost::encoding::uint64::encoded_len(5u32, &account.rent_epoch)
+            } else {
+                0
+            }
+            + if !account.data.is_empty() {
+                prost_bytes_encoded_len(6u32, &account.data)
+            } else {
+                0
+            }
+            + if account.write_version != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &account.write_version)
+            } else {
+                0
+            }
+            + account
+                .txn_signature
+                .map_or(0, |sig| prost_bytes_encoded_len(8u32, sig.as_ref()))
     }
 }
