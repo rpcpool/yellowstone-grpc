@@ -60,33 +60,32 @@ echo "Library dependencies (ldd):"
 ldd "$BINARY_PATH" || true
 echo ""
 
-# Verify libc type using the ELF interpreter when available.
+# Verify libc type using ELF metadata.
+# Shared objects often have no PT_INTERP, so fall back to NEEDED libs.
 # ldd on musl can emit relocation errors for node addons because N-API
 # symbols are resolved by the Node runtime, not the loader.
 INTERPRETER="$(readelf -l "$BINARY_PATH" 2>/dev/null | awk -F': ' '/Requesting program interpreter/ {print $2; exit}')"
-echo "ELF interpreter: ${INTERPRETER:-unknown}"
+NEEDED_LIBS="$(readelf -d "$BINARY_PATH" 2>/dev/null | awk -F'[][]' '/NEEDED/ {print $2}' | tr '\n' ' ')"
+echo "ELF interpreter: ${INTERPRETER:-none}"
+echo "NEEDED libs: ${NEEDED_LIBS:-none}"
 echo ""
 
 if [[ "$LIBC_TYPE" == "gnu" ]]; then
-    if [[ -z "$INTERPRETER" ]]; then
-        echo "Error: Missing ELF interpreter; expected glibc loader (ld-linux)"
-        exit 1
-    fi
-    if ! echo "$INTERPRETER" | grep -q "ld-linux"; then
-        echo "Error: Expected glibc interpreter (ld-linux), got: $INTERPRETER"
-        exit 1
-    fi
-    if echo "$INTERPRETER" | grep -q "ld-musl"; then
+    if [[ -n "$INTERPRETER" ]] && echo "$INTERPRETER" | grep -q "ld-musl"; then
         echo "Error: Interpreter indicates musl, expected glibc: $INTERPRETER"
         exit 1
     fi
-elif [[ "$LIBC_TYPE" == "musl" ]]; then
-    if [[ -z "$INTERPRETER" ]]; then
-        echo "Error: Missing ELF interpreter; expected musl loader (ld-musl)"
+    if ! echo "$NEEDED_LIBS" | grep -q "libc.so.6"; then
+        echo "Error: Missing glibc NEEDED entry (libc.so.6)"
         exit 1
     fi
-    if ! echo "$INTERPRETER" | grep -q "ld-musl"; then
+elif [[ "$LIBC_TYPE" == "musl" ]]; then
+    if [[ -n "$INTERPRETER" ]] && ! echo "$INTERPRETER" | grep -q "ld-musl"; then
         echo "Error: Expected musl interpreter (ld-musl), got: $INTERPRETER"
+        exit 1
+    fi
+    if ! echo "$NEEDED_LIBS" | grep -q "libc.musl"; then
+        echo "Error: Missing musl NEEDED entry (libc.musl-*.so.1)"
         exit 1
     fi
 fi
