@@ -4,19 +4,19 @@ use {
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+            CommitmentLevel as CommitmentLevelProto, SubscribeDeshredRequest, SubscribeRequest,
             SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
+            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
         },
         plugin::{
             filter::{
                 limits::{
                     FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
-                    FilterLimitsCheckError, FilterLimitsEntries, FilterLimitsSlots,
-                    FilterLimitsTransactions,
+                    FilterLimitsCheckError, FilterLimitsDeshredTransactions, FilterLimitsEntries,
+                    FilterLimitsSlots, FilterLimitsTransactions,
                 },
                 message::{
                     FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters,
@@ -26,7 +26,8 @@ use {
             },
             message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
-                MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
+                MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
+                SlotStatus,
             },
         },
     },
@@ -247,6 +248,7 @@ impl Filter {
                 updates.append(&mut self.transactions_status.get_updates(message));
                 updates
             }
+            Message::DeshredTransaction(_) => FilteredUpdates::new(),
             Message::Entry(message) => self.entries.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
@@ -814,6 +816,160 @@ impl FilterTransactions {
             },
             message.created_at
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FilterDeshredTransactionsInner {
+    vote: Option<bool>,
+    static_account_include: HashSet<Pubkey>,
+    static_account_exclude: HashSet<Pubkey>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct FilterDeshredTransactions {
+    filters: HashMap<FilterName, FilterDeshredTransactionsInner>,
+}
+
+impl FilterDeshredTransactions {
+    fn new(
+        configs: &HashMap<String, SubscribeRequestFilterDeshredTransactions>,
+        limits: &FilterLimitsDeshredTransactions,
+        names: &mut FilterNames,
+    ) -> FilterResult<Self> {
+        FilterLimits::check_max(configs.len(), limits.max)?;
+
+        let mut filters = HashMap::new();
+        for (name, filter) in configs {
+            FilterLimits::check_any(
+                filter.vote.is_none()
+                    && filter.static_account_include.is_empty()
+                    && filter.static_account_exclude.is_empty(),
+                limits.any,
+            )?;
+            FilterLimits::check_pubkey_max(
+                filter.static_account_include.len(),
+                limits.static_account_include_max,
+            )?;
+            FilterLimits::check_pubkey_max(
+                filter.static_account_exclude.len(),
+                limits.static_account_exclude_max,
+            )?;
+
+            filters.insert(
+                names.get(name)?,
+                FilterDeshredTransactionsInner {
+                    vote: filter.vote,
+                    static_account_include: Filter::decode_pubkeys_into_set(
+                        &filter.static_account_include,
+                        &limits.static_account_include_reject,
+                    )?,
+                    static_account_exclude: Filter::decode_pubkeys_into_set(
+                        &filter.static_account_exclude,
+                        &HashSet::new(),
+                    )?,
+                },
+            );
+        }
+        Ok(Self { filters })
+    }
+
+    pub fn get_updates(&self, message: &MessageDeshredTransaction) -> FilteredUpdates {
+        let filters = self
+            .filters
+            .iter()
+            .filter_map(|(name, inner)| {
+                if let Some(is_vote) = inner.vote {
+                    if is_vote != message.transaction.is_vote {
+                        return None;
+                    }
+                }
+
+                if !inner.static_account_include.is_empty()
+                    && inner
+                        .static_account_include
+                        .intersection(&message.transaction.static_account_keys)
+                        .next()
+                        .is_none()
+                {
+                    return None;
+                }
+
+                if !inner.static_account_exclude.is_empty()
+                    && inner
+                        .static_account_exclude
+                        .intersection(&message.transaction.static_account_keys)
+                        .next()
+                        .is_some()
+                {
+                    return None;
+                }
+
+                Some(name.clone())
+            })
+            .collect::<FilteredUpdateFilters>();
+
+        filtered_updates_once_owned!(
+            filters,
+            FilteredUpdateOneof::deshred_transaction(message),
+            message.created_at
+        )
+    }
+}
+
+/// Filter for the SubscribeDeshred RPC endpoint.
+/// Handles deshred transaction subscriptions separately from the main Subscribe RPC.
+#[derive(Debug, Clone)]
+pub struct DeshredFilter {
+    deshred_transactions: FilterDeshredTransactions,
+    ping: Option<i32>,
+}
+
+impl Default for DeshredFilter {
+    fn default() -> Self {
+        Self {
+            deshred_transactions: FilterDeshredTransactions::default(),
+            ping: None,
+        }
+    }
+}
+
+impl DeshredFilter {
+    pub fn new(
+        config: &SubscribeDeshredRequest,
+        limits: &FilterLimits,
+        names: &mut FilterNames,
+    ) -> FilterResult<Self> {
+        Ok(Self {
+            deshred_transactions: FilterDeshredTransactions::new(
+                &config.deshred_transactions,
+                &limits.deshred_transactions,
+                names,
+            )?,
+            ping: config.ping.as_ref().map(|msg| msg.id),
+        })
+    }
+
+    pub fn get_updates(&self, message: &Message) -> FilteredUpdates {
+        match message {
+            Message::DeshredTransaction(message) => self.deshred_transactions.get_updates(message),
+            _ => FilteredUpdates::new(),
+        }
+    }
+
+    pub fn get_pong_msg(&self) -> Option<FilteredUpdate> {
+        self.ping
+            .map(|id| FilteredUpdate::new_empty(FilteredUpdateOneof::pong(id)))
+    }
+
+    pub fn get_metrics(&self) -> [(&'static str, usize); 2] {
+        [
+            (
+                "deshred_transactions",
+                self.deshred_transactions.filters.len(),
+            ),
+            ("all", self.deshred_transactions.filters.len()),
+        ]
     }
 }
 

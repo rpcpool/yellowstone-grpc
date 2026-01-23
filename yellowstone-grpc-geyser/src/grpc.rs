@@ -49,7 +49,7 @@ use {
                 limits::FilterLimits,
                 message::{FilteredUpdate, FilteredUpdateOneof},
                 name::FilterNames,
-                Filter,
+                DeshredFilter, Filter,
             },
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
@@ -61,8 +61,8 @@ use {
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
-            SubscribeReplayInfoResponse, SubscribeRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest,
+            SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
     },
@@ -685,6 +685,7 @@ impl GrpcService {
                                 Message::Slot(_) => "Slot",
                                 Message::Account(_) => "Account",
                                 Message::Transaction(_) => "Transaction",
+                                Message::DeshredTransaction(_) => "DeshredTransaction",
                                 Message::Entry(_) => "Entry",
                                 Message::BlockMeta(_) => "BlockMeta",
                                 Message::Block(_) => "Block",
@@ -1216,11 +1217,135 @@ impl GrpcService {
 
         Ok(())
     }
+
+    async fn deshred_client_loop(
+        id: usize,
+        subscriber_id: Option<String>,
+        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+        mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
+        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) {
+        let mut filter = DeshredFilter::default();
+
+        // Ensure cancellation_token is cancelled on exit even if we panic
+        let on_drop = OnDrop::new({
+            let cancellation_token = cancellation_token.clone();
+            move || {
+                cancellation_token.cancel();
+            }
+        });
+
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
+        metrics::connections_total_inc();
+        info!("deshred client #{id}: new");
+
+        'outer: loop {
+            set_subscriber_send_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_send_rate().per_second() as i64,
+            );
+
+            set_subscriber_recv_bandwidth_load(
+                &subscriber_id,
+                stream_tx.estimated_consuming_rate().per_second() as i64,
+            );
+
+            set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
+
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("deshred client #{id}: cancelled");
+                    let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
+                    break 'outer;
+                }
+                mut message = client_rx.recv() => {
+                    // forward to latest filter
+                    loop {
+                        match client_rx.try_recv() {
+                            Ok(message_new) => {
+                                message = Some(message_new);
+                            }
+                            Err(mpsc::error::TryRecvError::Empty) => break,
+                            Err(mpsc::error::TryRecvError::Disconnected) => {
+                                message = None;
+                                break;
+                            }
+                        }
+                    }
+
+                    match message {
+                        Some(Some(filter_new)) => {
+                            filter = filter_new;
+                            info!("deshred client #{id}: filter updated");
+                        }
+                        Some(None) => {
+                            break 'outer;
+                        },
+                        None => {
+                            break 'outer;
+                        }
+                    }
+                }
+                message = messages_rx.recv() => {
+                    let (_commitment, messages) = match message {
+                        Ok((commitment, messages)) => (commitment, messages),
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break 'outer;
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            info!("deshred client #{id}: lagged to receive geyser messages");
+                            task_tracker.spawn(async move {
+                                let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
+                            });
+                            break 'outer;
+                        }
+                    };
+
+                    // Deshred transactions are pre-execution, no commitment levels apply.
+                    // They're only broadcast once when entries are formed from shreds.
+                    for (_msgid, message) in messages.iter() {
+                        for update in filter.get_updates(message) {
+                            let proto_size = update.encoded_len().min(u32::MAX as usize) as u32;
+                            match stream_tx.try_send(Ok(update)) {
+                                Ok(()) => {
+                                    metrics::incr_grpc_message_sent_counter(&subscriber_id);
+                                    metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                }
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    error!("deshred client #{id}: lagged to send an update");
+                                    task_tracker.spawn(async move {
+                                        let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                    });
+                                    break 'outer;
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    error!("deshred client #{id}: stream closed");
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
+        set_subscriber_queue_size(&subscriber_id, 0);
+
+        metrics::connections_total_dec();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
+        info!("deshred client #{id}: removed");
+        drop(on_drop);
+    }
 }
 
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
+    type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
 
     async fn subscribe(
         &self,
@@ -1358,6 +1483,128 @@ impl Geyser for GrpcService {
             snapshot_rx,
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
+            self.debug_clients_tx.clone(),
+            client_cancellation_token,
+            self.task_tracker.clone(),
+        ));
+
+        Ok(Response::new(stream_rx))
+    }
+
+    async fn subscribe_deshred(
+        &self,
+        mut request: Request<Streaming<SubscribeDeshredRequest>>,
+    ) -> TonicResult<Response<Self::SubscribeDeshredStream>> {
+        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+
+        let client_cancellation_token = self.cancellation_token.child_token();
+        if client_cancellation_token.is_cancelled() {
+            return Err(Status::unavailable("server is shutting down"));
+        }
+
+        let client_stats_settings = StatsSettings::default()
+            .tx_ema_reactivity(EmaReactivity::Reactive)
+            .tx_ema_window(DEFAULT_EMA_WINDOW)
+            .rx_ema_reactivity(EmaReactivity::Reactive)
+            .rx_ema_window(DEFAULT_EMA_WINDOW);
+
+        let (stream_tx, stream_rx) =
+            load_aware_channel(self.config_channel_capacity, client_stats_settings);
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+
+        let ping_stream_tx = stream_tx.clone();
+        let ping_client_tx = client_tx.clone();
+        let ping_cancellation_token = client_cancellation_token.child_token();
+        self.task_tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = ping_cancellation_token.cancelled() => {
+                        info!("deshred client #{id}: ping cancelled");
+                        break;
+                    }
+                    _ = sleep(Duration::from_secs(10)) => {
+                        let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
+                        match ping_stream_tx.try_send(Ok(msg)) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                let _ = ping_client_tx.send(None);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            info!("deshred client #{id}: ping task exiting");
+        });
+
+        let subscriber_id = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        let config_filter_limits = Arc::clone(&self.config_filter_limits);
+        let filter_names = Arc::clone(&self.filter_names);
+        let incoming_stream_tx = stream_tx.clone();
+        let incoming_client_tx = client_tx;
+        let incoming_cancellation_token = client_cancellation_token.child_token();
+
+        self.task_tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = incoming_cancellation_token.cancelled() => {
+                        info!("deshred client #{id}: filter receiver cancelled");
+                        break;
+                    }
+                    message = request.get_mut().message() => match message {
+                        Ok(Some(request)) => {
+                            let mut filter_names = filter_names.lock().await;
+                            filter_names.try_clean();
+
+                            if let Err(error) = match DeshredFilter::new(&request, &config_filter_limits, &mut filter_names) {
+                                Ok(filter) => {
+                                    if let Some(msg) = filter.get_pong_msg() {
+                                        if incoming_stream_tx.send(Ok(msg)).await.is_err() {
+                                            error!("deshred client #{id}: stream closed");
+                                            let _ = incoming_client_tx.send(None);
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    match incoming_client_tx.send(Some(filter)) {
+                                        Ok(()) => Ok(()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
+                                },
+                                Err(error) => Err(error.to_string()),
+                            } {
+                                let err = Err(Status::invalid_argument(format!(
+                                    "failed to create deshred filter: {error}"
+                                )));
+                                if incoming_stream_tx.send(err).await.is_err() {
+                                    let _ = incoming_client_tx.send(None);
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(_error) => {
+                            let _ = incoming_client_tx.send(None);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        self.task_tracker.spawn(Self::deshred_client_loop(
+            id,
+            subscriber_id,
+            stream_tx,
+            client_rx,
+            self.broadcast_tx.subscribe(),
             self.debug_clients_tx.clone(),
             client_cancellation_token,
             self.task_tracker.clone(),

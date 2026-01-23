@@ -6,8 +6,8 @@ use {
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     std::{
         concat, env,
@@ -23,7 +23,8 @@ use {
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     yellowstone_grpc_proto::plugin::message::{
-        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
+        Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
+        MessageSlot, MessageTransaction,
     },
 };
 
@@ -289,6 +290,24 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn notify_deshred_transaction(
+        &self,
+        transaction: ReplicaDeshredTransactionInfoVersions<'_>,
+        slot: u64,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let transaction = match transaction {
+                ReplicaDeshredTransactionInfoVersions::V0_0_1(info) => info,
+            };
+
+            let message =
+                Message::DeshredTransaction(MessageDeshredTransaction::from_geyser(transaction, slot));
+            inner.send_message(message);
+
+            Ok(())
+        })
+    }
+
     fn account_data_notifications_enabled(&self) -> bool {
         true
     }
@@ -302,6 +321,10 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }
 }

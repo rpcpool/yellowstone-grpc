@@ -67,7 +67,7 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "3.0.0"
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public"}
 solana-account-decoder = "3.0.0"
 solana-logger = "3.0.0"
 solana-storage-proto = "3.0.0"
@@ -101,3 +101,14 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+agave-feature-set = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-storage-proto = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }
+solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.0-triton-public" }

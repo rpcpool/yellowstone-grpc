@@ -25,6 +25,7 @@ pub struct FilterLimits {
     pub slots: FilterLimitsSlots,
     pub transactions: FilterLimitsTransactions,
     pub transactions_status: FilterLimitsTransactions,
+    pub deshred_transactions: FilterLimitsDeshredTransactions,
     pub blocks: FilterLimitsBlocks,
     pub blocks_meta: FilterLimitsBlocksMeta,
     pub entries: FilterLimitsEntries,
@@ -130,6 +131,32 @@ impl Default for FilterLimitsTransactions {
             account_include_reject: HashSet::new(),
             account_exclude_max: usize::MAX,
             account_required_max: usize::MAX,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FilterLimitsDeshredTransactions {
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub max: usize,
+    pub any: bool,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub static_account_include_max: usize,
+    #[serde(deserialize_with = "deserialize_pubkey_set")]
+    pub static_account_include_reject: HashSet<Pubkey>,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub static_account_exclude_max: usize,
+}
+
+impl Default for FilterLimitsDeshredTransactions {
+    fn default() -> Self {
+        Self {
+            max: usize::MAX,
+            any: true,
+            static_account_include_max: usize::MAX,
+            static_account_include_reject: HashSet::new(),
+            static_account_exclude_max: usize::MAX,
         }
     }
 }
