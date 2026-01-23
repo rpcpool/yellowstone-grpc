@@ -16,8 +16,10 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 affinity = { workspace = true }
+
+[dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }

@@ -87,6 +87,7 @@ impl GeyserPlugin for Plugin {
         if let Some(worker_threads) = config.tokio.worker_threads {
             builder.worker_threads(worker_threads);
         }
+        #[cfg(target_os = "linux")]
         if let Some(tokio_cpus) = config.tokio.affinity.clone() {
             builder.on_thread_start(move || {
                 affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")

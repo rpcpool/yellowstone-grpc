@@ -117,6 +117,7 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     let mut vec = set.into_iter().collect::<Vec<usize>>();
     vec.sort();
 
+    #[cfg(target_os = "linux")]
     if let Some(set_max_index) = vec.last().copied() {
         let max_index = affinity::get_thread_affinity()
             .map_err(|_err| "failed to get affinity".to_owned())?
