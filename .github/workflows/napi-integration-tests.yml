@@ -236,14 +236,14 @@ jobs:
 
       - name: Set rust version
         run: |
-          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
-          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+          RUST_VERSION="$(sed -n 's/^channel = "\([0-9.]*\)"/\1/p' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_STABLE }}
-          targets: aarch64-apple-darwin
+          targets: x86_64-apple-darwin
 
       - name: Install system dependencies
         run: |
