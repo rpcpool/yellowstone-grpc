@@ -138,7 +138,7 @@ jobs:
         working-directory: yellowstone-grpc-client-nodejs
         env:
           NAPI_TARGET: x86_64-unknown-linux-musl
-          # LIBC: musl
+          LIBC: musl
         run: |
           npm run build -- --platform --release --target x86_64-unknown-linux-musl
 
