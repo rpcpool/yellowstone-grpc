@@ -79,6 +79,11 @@ jobs:
           TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
         run: npm test
+      
+      - name: cargo clean
+        working-directory: yellowstone-grpc-client-nodejs/napi
+        run:
+          cargo clean
 
   # Linux x64 MUSL - Alpine container
   test-linux-x64-musl:
@@ -162,6 +167,11 @@ jobs:
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
         run: npm test
 
+      - name: cargo clean
+        working-directory: yellowstone-grpc-client-nodejs/napi
+        run:
+          cargo clean
+
   # macOS x64 (Intel)
   test-macos-x64:
     name: Test macOS x64 (Intel)
@@ -221,6 +231,11 @@ jobs:
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
         run: npm test
 
+      - name: cargo clean
+        working-directory: yellowstone-grpc-client-nodejs/napi
+        run:
+          cargo clean
+
   # macOS ARM64 (Apple Silicon)
   test-macos-arm64:
     name: Test macOS ARM64 (Apple Silicon)
@@ -279,6 +294,11 @@ jobs:
           TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
         run: npm test
+
+      - name: cargo clean
+        working-directory: yellowstone-grpc-client-nodejs/napi
+        run:
+          cargo clean
 
   # Release gate - all tests must pass
   integration-tests-complete:
