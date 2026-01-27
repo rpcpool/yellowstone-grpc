@@ -123,6 +123,14 @@ lazy_static::lazy_static! {
         )
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
+
+    pub static ref GEYSER_BATCH_SIZE: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "yellowstone_geyser_batch_size",
+            "Size of processed message batches"
+        )
+        .buckets(vec![1.0, 4.0, 8.0, 16.0, 24.0, 31.0])
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -274,6 +282,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(GEYSER_BATCH_SIZE);
             register!(GRPC_CLIENT_DISCONNECTS);
 
             VERSION
