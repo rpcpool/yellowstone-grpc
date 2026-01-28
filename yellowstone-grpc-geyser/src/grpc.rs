@@ -1257,24 +1257,20 @@ impl Geyser for GrpcService {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
-        let ping_client_tx = client_tx.clone();
         let ping_cancellation_token = client_cancellation_token.child_token();
         self.task_tracker.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 tokio::select! {
                     _ = ping_cancellation_token.cancelled() => {
                         info!("client #{id}: ping cancelled");
                         break;
                     }
-                    _ = sleep(Duration::from_secs(10)) => {
+                    _ = interval.tick() => {
                         let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
-                        match ping_stream_tx.try_send(Ok(msg)) {
-                            Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(_)) => {}
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                let _ = ping_client_tx.send(None);
-                                break;
-                            }
+                        log::info!("client #{id}: sending ping");
+                        if ping_stream_tx.send(Ok(msg)).await.is_err() {
+                            break;
                         }
                     }
                 }
