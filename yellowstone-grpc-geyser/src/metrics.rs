@@ -108,6 +108,14 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_CLIENT_DISCONNECTS: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "grpc_client_disconnects_total",
+            "Total client disconnections by reason"
+        ),
+        &["subscriber_id", "reason"]
+    ).unwrap();
+
     static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "geyser_account_update_data_size_kib",
@@ -266,6 +274,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(GRPC_CLIENT_DISCONNECTS);
 
             VERSION
                 .with_label_values(&[
@@ -478,6 +487,12 @@ pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
         .set(size as i64);
 }
 
+pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
+    GRPC_CLIENT_DISCONNECTS
+        .with_label_values(&[subscriber_id.as_ref(), reason])
+        .inc();
+}
+
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
 pub fn reset_metrics() {
     // Reset gauge metrics to 0
@@ -497,6 +512,7 @@ pub fn reset_metrics() {
     MISSED_STATUS_MESSAGE.reset();
     GRPC_MESSAGE_SENT.reset();
     GRPC_BYTES_SENT.reset();
+    GRPC_CLIENT_DISCONNECTS.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
