@@ -956,6 +956,7 @@ impl GrpcService {
                     info!("client #{id}: snapshot stream ended");
                 }
                 Err(ClientSnapshotReplayError::Cancelled) => {
+                    metrics::incr_client_disconnect(&subscriber_id, "server_shutdown");
                     let _ = stream_tx.try_send(Err(Status::internal(
                         "server is shutting down try again later",
                     )));
@@ -963,6 +964,7 @@ impl GrpcService {
                 }
                 Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
                     info!("client #{id}: grpc connection closed");
+                    metrics::incr_client_disconnect(&subscriber_id, "client_closed");
                     return;
                 }
             }
@@ -986,6 +988,7 @@ impl GrpcService {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("client #{id}: cancelled");
+                    metrics::incr_client_disconnect(&subscriber_id, "server_shutdown");
                     let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
                     break 'outer;
                 }
@@ -1034,6 +1037,7 @@ impl GrpcService {
                                     Ok(ReplayedResponse::Messages(messages)) => messages,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{id}: broadcast from {from_slot} is not available");
+                                        metrics::incr_client_disconnect(&subscriber_id, "slot_unavailable");
                                         task_tracker.spawn(async move {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
@@ -1062,6 +1066,7 @@ impl GrpcService {
                                             }
                                             Err(mpsc::error::SendError(_)) => {
                                                 error!("client #{id}: stream closed");
+                                                metrics::incr_client_disconnect(&subscriber_id, "client_closed");
                                                 break 'outer;
                                             }
                                         }
@@ -1070,9 +1075,11 @@ impl GrpcService {
                             }
                         }
                         Some(None) => {
+                            metrics::incr_client_disconnect(&subscriber_id, "client_disconnect");
                             break 'outer;
                         },
                         None => {
+                            metrics::incr_client_disconnect(&subscriber_id, "client_disconnect");
                             break 'outer;
                         }
                     }
@@ -1085,6 +1092,7 @@ impl GrpcService {
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             info!("client #{id}: lagged to receive geyser messages");
+                            metrics::incr_client_disconnect(&subscriber_id, "client_broadcast_lag");
                             task_tracker.spawn(async move {
                                 let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                             });
@@ -1103,6 +1111,7 @@ impl GrpcService {
                                     }
                                     Err(mpsc::error::TrySendError::Full(_)) => {
                                         error!("client #{id}: lagged to send an update");
+                                        metrics::incr_client_disconnect(&subscriber_id, "client_channel_full");
                                         task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                         });
@@ -1110,6 +1119,7 @@ impl GrpcService {
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
                                         error!("client #{id}: stream closed");
+                                        metrics::incr_client_disconnect(&subscriber_id, "client_closed");
                                         break 'outer;
                                     }
                                 }
