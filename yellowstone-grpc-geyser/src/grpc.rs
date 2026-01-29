@@ -416,6 +416,7 @@ impl GrpcService {
         is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        parallel_encoder: ParallelEncoder,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
@@ -519,7 +520,6 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-        let parallel_encoder = ParallelEncoder::new(4); // number should be in a config not hard coded
         task_tracker.spawn(async move {
             Self::geyser_loop(
                 messages_rx,

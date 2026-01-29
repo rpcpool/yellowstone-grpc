@@ -18,7 +18,7 @@ struct EncodeRequest {
 }
 
 impl ParallelEncoder {
-    pub fn new(num_threads: usize) -> Self {
+    pub fn new(num_threads: usize) -> (Self, std::thread::JoinHandle<()>) {
         let pool = ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .thread_name(|i| format!("geyser-encoder-{i}"))
@@ -27,12 +27,12 @@ impl ParallelEncoder {
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        std::thread::Builder::new()
-            .name("encoder-bridge".into())
+        let handle = std::thread::Builder::new()
+            .name("geyser-encoder-bridge".into())
             .spawn(move || Self::bridge_loop(rx, pool))
             .expect("failed to spawn encoder bridge");
 
-        Self { tx }
+        (Self { tx }, handle)
     }
 
     fn bridge_loop(mut rx: mpsc::UnboundedReceiver<EncodeRequest>, pool: ThreadPool) {
@@ -52,6 +52,8 @@ impl ParallelEncoder {
 
             let _ = response.send(batch);
         }
+
+        log::info!("exiting encoder bridge loop");
     }
 
     fn encode_message(msg: &mut Message) {
@@ -107,14 +109,16 @@ impl ParallelEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use bytes::Bytes;
-    use prost_types::Timestamp;
-    use solana_pubkey::Pubkey;
-    use solana_signature::Signature;
-    use std::time::SystemTime;
-    use yellowstone_grpc_proto::plugin::message::{
-        MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
+    use {
+        super::*,
+        bytes::Bytes,
+        prost_types::Timestamp,
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        std::time::SystemTime,
+        yellowstone_grpc_proto::plugin::message::{
+            MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
+        },
     };
 
     fn create_test_transaction() -> Message {
@@ -156,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_encoder_transactions() {
-        let encoder = ParallelEncoder::new(2);
+        let (encoder, _handle) = ParallelEncoder::new(2);
 
         let batch: Vec<(u64, Message)> = (0..10).map(|i| (i, create_test_transaction())).collect();
 
@@ -175,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_encoder_accounts() {
-        let encoder = ParallelEncoder::new(2);
+        let (encoder, _handle) = ParallelEncoder::new(2);
 
         let batch: Vec<(u64, Message)> = (0..10).map(|i| (i, create_test_account())).collect();
 
@@ -194,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_small_batch_uses_sync() {
-        let encoder = ParallelEncoder::new(2);
+        let (encoder, _handle) = ParallelEncoder::new(2);
 
         // Small batch < 4 should use sync path
         let batch: Vec<(u64, Message)> = (0..2).map(|i| (i, create_test_transaction())).collect();
@@ -206,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_batch() {
-        let encoder = ParallelEncoder::new(2);
+        let (encoder, _handle) = ParallelEncoder::new(2);
 
         let mut batch: Vec<(u64, Message)> = Vec::new();
         for i in 0..5 {
