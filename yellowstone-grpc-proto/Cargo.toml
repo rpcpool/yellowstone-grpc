@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "11.0.1"
+version = "11.0.1+solana.3.0.14"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -33,7 +33,7 @@ tonic-prost = { workspace = true, optional = true }
 agave-geyser-plugin-interface = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-storage-proto = { workspace = true, optional = true }
-solana-transaction-status = { workspace = true, optional = true, features = ["agave-unstable-api"] }
+solana-transaction-status = { workspace = true, optional = true }
 solana-transaction-context = { workspace = true, optional = true }
 
 # Solana SDK
