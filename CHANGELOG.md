@@ -14,7 +14,24 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: pre-encode transaction content to reduce serialization overhead ([#653](https://github.com/rpcpool/yellowstone-grpc/pull/653))
+- proto: pre-encode account content to reduce serialization overhead ([#657](https://github.com/rpcpool/yellowstone-grpc/pull/657))
+
 ### Breaking
+
+## 2026-01-29
+
+- yellowstone-grpc-client-11.0.1
+- yellowstone-grpc-geyser-11.0.1
+- yellowstone-grpc-proto-11.0.1
+
+### Fixes
+
+- geyser: do not skip ping logic even if the channel is full ([#662](https://github.com/rpcpool/yellowstone-grpc/pull/662))
+
+### Features
+
+- geyser: add client disconnect metrics ([#663](https://github.com/rpcpool/yellowstone-grpc/pull/663))
 
 ## 2026-01-20
 
