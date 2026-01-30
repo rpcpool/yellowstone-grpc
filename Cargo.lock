@@ -5445,10 +5445,13 @@ version = "11.0.1"
 dependencies = [
  "bytes",
  "futures",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "thiserror 2.0.17",
  "tokio",
  "tonic 0.14.2",
  "tonic-health",
+ "tracing",
  "yellowstone-grpc-proto",
 ]
 
