@@ -16,6 +16,17 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
+[features]
+default = []
+opentelemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 affinity = { workspace = true }
 anyhow = { workspace = true }
@@ -55,6 +66,14 @@ solana-pubkey = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }
+
+# OpenTelemetry (optional)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }

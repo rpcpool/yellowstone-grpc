@@ -2,6 +2,8 @@ pub mod config;
 pub mod grpc;
 pub mod metrics;
 pub mod plugin;
+#[cfg(feature = "opentelemetry")]
+pub mod telemetry;
 pub(crate) mod util;
 pub mod version;
 
