@@ -11,8 +11,14 @@ keywords = { workspace = true }
 publish = true
 
 [features]
+default = []
 account-data-as-bytes = [
     "yellowstone-grpc-proto/account-data-as-bytes"
+]
+opentelemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:tracing",
 ]
 
 [dependencies]
@@ -24,6 +30,11 @@ tonic-health = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
+
+# OpenTelemetry (optional)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

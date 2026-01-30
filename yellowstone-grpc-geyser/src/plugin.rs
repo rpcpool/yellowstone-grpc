@@ -79,6 +79,16 @@ impl GeyserPlugin for Plugin {
 
         log::info!("loading plugin: {}", self.name());
 
+        // Initialize OpenTelemetry if configured
+        #[cfg(feature = "opentelemetry")]
+        if let Some(ref otel_config) = config.opentelemetry {
+            if otel_config.enabled {
+                if let Err(e) = crate::telemetry::init_telemetry(otel_config) {
+                    log::error!("Failed to initialize OpenTelemetry: {:?}", e);
+                }
+            }
+        }
+
         // Reset metrics to prevent accumulation across plugin reload cycles
         metrics::reset_metrics();
 
@@ -150,6 +160,11 @@ impl GeyserPlugin for Plugin {
         if let Some(inner) = self.inner.take() {
             let number_of_tasks = inner.plugin_task_tracker.len();
             log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
+
+            // Shutdown OpenTelemetry before runtime shutdown to flush pending spans
+            #[cfg(feature = "opentelemetry")]
+            crate::telemetry::shutdown_telemetry();
+
             inner.plugin_cancellation_token.cancel();
             inner.plugin_task_tracker.close();
             drop(inner.grpc_channel);

@@ -68,6 +68,38 @@ use {
     },
 };
 
+/// Trace context propagation for OpenTelemetry.
+/// Extracts W3C trace context (traceparent/tracestate) from incoming gRPC metadata.
+#[cfg(feature = "opentelemetry")]
+mod trace_context {
+    use opentelemetry::propagation::{Extractor, TextMapPropagator};
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+
+    /// Extract trace context from gRPC metadata and return an OpenTelemetry context.
+    pub fn extract_context(metadata: &tonic::metadata::MetadataMap) -> opentelemetry::Context {
+        let propagator = TraceContextPropagator::new();
+        propagator.extract(&MetadataExtractor(metadata))
+    }
+
+    struct MetadataExtractor<'a>(&'a tonic::metadata::MetadataMap);
+
+    impl Extractor for MetadataExtractor<'_> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|v| v.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0
+                .keys()
+                .filter_map(|k| match k {
+                    tonic::metadata::KeyRef::Ascii(key) => Some(key.as_str()),
+                    tonic::metadata::KeyRef::Binary(_) => None,
+                })
+                .collect()
+        }
+    }
+}
+
 #[derive(Debug)]
 struct BlockhashStatus {
     slot: u64,
@@ -1232,10 +1264,20 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "Subscribe")
+        )
+    )]
     async fn subscribe(
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
         let client_cancellation_token = self.cancellation_token.child_token();
@@ -1372,10 +1414,20 @@ impl Geyser for GrpcService {
         Ok(Response::new(stream_rx))
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, _request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "SubscribeFirstAvailableSlot")
+        )
+    )]
     async fn subscribe_first_available_slot(
         &self,
         _request: Request<SubscribeReplayInfoRequest>,
     ) -> Result<Response<SubscribeReplayInfoResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(_request.metadata()).attach();
+
         let response = SubscribeReplayInfoResponse {
             first_available: self
                 .replay_first_available_slot
@@ -1385,16 +1437,36 @@ impl Geyser for GrpcService {
         Ok(Response::new(response))
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "Ping")
+        )
+    )]
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         let count = request.get_ref().count;
         let response = PongResponse { count };
         Ok(Response::new(response))
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "GetLatestBlockhash")
+        )
+    )]
     async fn get_latest_blockhash(
         &self,
         request: Request<GetLatestBlockhashRequest>,
     ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1414,10 +1486,20 @@ impl Geyser for GrpcService {
         }
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "GetBlockHeight")
+        )
+    )]
     async fn get_block_height(
         &self,
         request: Request<GetBlockHeightRequest>,
     ) -> Result<Response<GetBlockHeightResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1434,10 +1516,20 @@ impl Geyser for GrpcService {
         }
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "GetSlot")
+        )
+    )]
     async fn get_slot(
         &self,
         request: Request<GetSlotRequest>,
     ) -> Result<Response<GetSlotResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1450,10 +1542,20 @@ impl Geyser for GrpcService {
         }
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "IsBlockhashValid")
+        )
+    )]
     async fn is_blockhash_valid(
         &self,
         request: Request<IsBlockhashValidRequest>,
     ) -> Result<Response<IsBlockhashValidResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(request.metadata()).attach();
+
         if let Some(blocks_meta) = &self.blocks_meta {
             let req = request.get_ref();
             blocks_meta
@@ -1464,10 +1566,20 @@ impl Geyser for GrpcService {
         }
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(
+            skip(self, _request),
+            fields(rpc.service = "geyser.Geyser", rpc.method = "GetVersion")
+        )
+    )]
     async fn get_version(
         &self,
         _request: Request<GetVersionRequest>,
     ) -> Result<Response<GetVersionResponse>, Status> {
+        #[cfg(feature = "opentelemetry")]
+        let _guard = trace_context::extract_context(_request.metadata()).attach();
+
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))

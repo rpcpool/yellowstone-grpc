@@ -66,6 +66,14 @@ tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "9.0.6"
 
+# OpenTelemetry
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic", "grpc-tonic"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.28"
+
 # Agave Monorepo
 agave-geyser-plugin-interface = "~3.1.0"
 solana-account-decoder = "~3.1.0"

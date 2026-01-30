@@ -24,6 +24,43 @@ use {
     },
 };
 
+/// Trace context propagation for OpenTelemetry.
+/// Injects W3C trace context (traceparent/tracestate) into outgoing gRPC metadata.
+#[cfg(feature = "opentelemetry")]
+pub mod trace_context {
+    use opentelemetry::propagation::{Injector, TextMapPropagator};
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+
+    /// Inject the current trace context into a tonic Request.
+    pub fn inject_context<T>(request: &mut tonic::Request<T>) {
+        let propagator = TraceContextPropagator::new();
+        let context = tracing::Span::current().context();
+        propagator.inject_context(&context, &mut MetadataInjector(request.metadata_mut()));
+    }
+
+    struct MetadataInjector<'a>(&'a mut tonic::metadata::MetadataMap);
+
+    impl Injector for MetadataInjector<'_> {
+        fn set(&mut self, key: &str, value: String) {
+            if let Ok(key) = key.parse() {
+                if let Ok(value) = value.parse() {
+                    self.0.insert(key, value);
+                }
+            }
+        }
+    }
+}
+
+/// Helper to inject trace context into a request when the opentelemetry feature is enabled.
+#[cfg(feature = "opentelemetry")]
+fn inject_trace_context<T>(request: &mut tonic::Request<T>) {
+    trace_context::inject_context(request);
+}
+
+/// No-op when opentelemetry feature is disabled.
+#[cfg(not(feature = "opentelemetry"))]
+fn inject_trace_context<T>(_request: &mut tonic::Request<T>) {}
+
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
@@ -81,6 +118,10 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     }
 
     // Health
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "grpc.health.v1.Health", rpc.method = "Check"))
+    )]
     pub async fn health_check(&mut self) -> GeyserGrpcClientResult<HealthCheckResponse> {
         let request = HealthCheckRequest {
             service: "geyser.Geyser".to_owned(),
@@ -89,6 +130,10 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "grpc.health.v1.Health", rpc.method = "Watch"))
+    )]
     pub async fn health_watch(
         &mut self,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<HealthCheckResponse, Status>>> {
@@ -100,6 +145,10 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     }
 
     // Subscribe
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "Subscribe"))
+    )]
     pub async fn subscribe(
         &mut self,
     ) -> GeyserGrpcClientResult<(
@@ -109,6 +158,10 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         self.subscribe_with_request(None).await
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self, request), fields(rpc.service = "geyser.Geyser", rpc.method = "Subscribe"))
+    )]
     pub async fn subscribe_with_request(
         &mut self,
         request: Option<SubscribeRequest>,
@@ -128,6 +181,10 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok((subscribe_tx, response.into_inner()))
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self, request), fields(rpc.service = "geyser.Geyser", rpc.method = "Subscribe"))
+    )]
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
@@ -138,70 +195,105 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     }
 
     // RPC calls
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "SubscribeReplayInfo"))
+    )]
     pub async fn subscribe_replay_info(
         &mut self,
     ) -> GeyserGrpcClientResult<SubscribeReplayInfoResponse> {
         let message = SubscribeReplayInfoRequest {};
-        let request = tonic::Request::new(message);
+        let mut request = tonic::Request::new(message);
+        inject_trace_context(&mut request);
         let response = self.geyser.subscribe_replay_info(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "Ping"))
+    )]
     pub async fn ping(&mut self, count: i32) -> GeyserGrpcClientResult<PongResponse> {
         let message = PingRequest { count };
-        let request = tonic::Request::new(message);
+        let mut request = tonic::Request::new(message);
+        inject_trace_context(&mut request);
         let response = self.geyser.ping(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "GetLatestBlockhash"))
+    )]
     pub async fn get_latest_blockhash(
         &mut self,
         commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<GetLatestBlockhashResponse> {
-        let request = tonic::Request::new(GetLatestBlockhashRequest {
+        let mut request = tonic::Request::new(GetLatestBlockhashRequest {
             commitment: commitment.map(|value| value as i32),
         });
+        inject_trace_context(&mut request);
         let response = self.geyser.get_latest_blockhash(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "GetBlockHeight"))
+    )]
     pub async fn get_block_height(
         &mut self,
         commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<GetBlockHeightResponse> {
-        let request = tonic::Request::new(GetBlockHeightRequest {
+        let mut request = tonic::Request::new(GetBlockHeightRequest {
             commitment: commitment.map(|value| value as i32),
         });
+        inject_trace_context(&mut request);
         let response = self.geyser.get_block_height(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "GetSlot"))
+    )]
     pub async fn get_slot(
         &mut self,
         commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<GetSlotResponse> {
-        let request = tonic::Request::new(GetSlotRequest {
+        let mut request = tonic::Request::new(GetSlotRequest {
             commitment: commitment.map(|value| value as i32),
         });
+        inject_trace_context(&mut request);
         let response = self.geyser.get_slot(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "IsBlockhashValid"))
+    )]
     pub async fn is_blockhash_valid(
         &mut self,
         blockhash: String,
         commitment: Option<CommitmentLevel>,
     ) -> GeyserGrpcClientResult<IsBlockhashValidResponse> {
-        let request = tonic::Request::new(IsBlockhashValidRequest {
+        let mut request = tonic::Request::new(IsBlockhashValidRequest {
             blockhash,
             commitment: commitment.map(|value| value as i32),
         });
+        inject_trace_context(&mut request);
         let response = self.geyser.is_blockhash_valid(request).await?;
         Ok(response.into_inner())
     }
 
+    #[cfg_attr(
+        feature = "opentelemetry",
+        tracing::instrument(skip(self), fields(rpc.service = "geyser.Geyser", rpc.method = "GetVersion"))
+    )]
     pub async fn get_version(&mut self) -> GeyserGrpcClientResult<GetVersionResponse> {
-        let request = tonic::Request::new(GetVersionRequest {});
+        let mut request = tonic::Request::new(GetVersionRequest {});
+        inject_trace_context(&mut request);
         let response = self.geyser.get_version(request).await?;
         Ok(response.into_inner())
     }

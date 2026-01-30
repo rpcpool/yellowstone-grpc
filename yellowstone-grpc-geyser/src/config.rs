@@ -4,7 +4,12 @@ use {
     },
     serde::{de, Deserialize, Deserializer},
     std::{
-        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        collections::{HashMap, HashSet},
+        fmt,
+        fs::read_to_string,
+        net::SocketAddr,
+        path::Path,
+        str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
@@ -26,6 +31,9 @@ pub struct Config {
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
     pub debug_clients_http: bool,
+    /// OpenTelemetry configuration
+    #[serde(default)]
+    pub opentelemetry: Option<ConfigOpenTelemetry>,
 }
 
 impl Config {
@@ -347,6 +355,36 @@ where
             .map(Some)
             .map_err(de::Error::custom),
         None => Ok(None),
+    }
+}
+
+/// OpenTelemetry configuration for distributed tracing
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigOpenTelemetry {
+    /// Whether OpenTelemetry tracing is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// OTLP endpoint URL (e.g., "http://localhost:4317")
+    pub endpoint: Option<String>,
+    /// Additional headers to send with OTLP requests (e.g., for authentication)
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Service name for traces
+    #[serde(default = "ConfigOpenTelemetry::default_service_name")]
+    pub service_name: String,
+    /// Sampling ratio (0.0 to 1.0)
+    #[serde(default = "ConfigOpenTelemetry::default_sampling_ratio")]
+    pub sampling_ratio: f64,
+}
+
+impl ConfigOpenTelemetry {
+    fn default_service_name() -> String {
+        "yellowstone-grpc-geyser".to_owned()
+    }
+
+    const fn default_sampling_ratio() -> f64 {
+        1.0
     }
 }
 
