@@ -1,5 +1,5 @@
 ---
-name: Napi test
+name: Yellowstone GRPC Test
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -78,18 +78,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev protobuf-compiler
 
-      - name: cargo tree napi
+      - name: cargo tree
         run: |
-          cd yellowstone-grpc-client-nodejs/napi
           cargo tree
           git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
-      - name: cargo fmt napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo +nightly fmt --all -- --check
+      - name: cargo fmt
+        run: cargo +nightly fmt --all -- --check
 
       - name: cargo deny check advisories
         uses: EmbarkStudios/cargo-deny-action@v2.0.14
@@ -97,8 +94,19 @@ jobs:
           command: check advisories
           rust-version: ${{ env.RUST_STABLE }}
 
-      - name: cargo clippy napi
-        run: make solana-encoding-napi-clippy
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: check features in `client`
+        run: cargo check -p yellowstone-grpc-client --all-targets
+      - name: check features in `client-simple`
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets
+      - name: check features in `geyser`
+        run: cargo check -p yellowstone-grpc-geyser --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
 
       - name: cargo test
         run: cargo test --all-features
