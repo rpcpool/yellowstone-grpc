@@ -6,15 +6,8 @@ concurrency:
 
 on:
   pull_request:
-  push:
-    branches:
-      - 'master'
-      - 'v1.16'
-      - 'v1.17'
-      - 'v1.18'
-      - 'v2.0'
-      - 'v2.1'
-      - 'v2.2'
+    paths:
+      - 'yellowstone-grpc-client-nodejs/napi/**'
   workflow_dispatch:
 
 env:
@@ -96,6 +89,7 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
+
 
       - name: check features in `client`
         run: cargo check -p yellowstone-grpc-client --all-targets
