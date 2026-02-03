@@ -91,12 +91,6 @@ jobs:
           cd yellowstone-grpc-client-nodejs/napi
           cargo +nightly fmt --all -- --check
 
-      - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.0.14
-        with:
-          command: check advisories
-          rust-version: ${{ env.RUST_STABLE }}
-
       - name: cargo clippy napi
         run: make solana-encoding-napi-clippy
 

@@ -1,14 +1,11 @@
 ---
-name: Yellowstone GRPC Test
+name: Yellowstone GRPC advisorioes check
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 on:
   pull_request:
-    paths:
-      - 'yellowstone-grpc-client-nodejs/napi/**'
-      - '.github/workflows/test-napi.yml'
   workflow_dispatch:
 
 env:
@@ -72,32 +69,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev protobuf-compiler
 
-      - name: cargo tree
-        run: |
-          cargo tree
-          git diff Cargo.lock
-          git checkout Cargo.lock
-          cargo tree --frozen
-
-      - name: cargo fmt
-        run: cargo +nightly fmt --all -- --check
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
-
-      - name: check features in `client`
-        run: cargo check -p yellowstone-grpc-client --all-targets
-      - name: check features in `client-simple`
-        run: cargo check -p yellowstone-grpc-client-simple --all-targets
-      - name: check features in `geyser`
-        run: cargo check -p yellowstone-grpc-geyser --all-targets
-      - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets
-      - name: check features in `proto`
-        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
-
-      - name: cargo test
-        run: cargo test --all-features
-
-      - name: Build
-        run: ./ci/cargo-build-test.sh
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v2.0.14
+        with:
+          command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}
