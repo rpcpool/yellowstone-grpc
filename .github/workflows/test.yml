@@ -1,5 +1,5 @@
 ---
-name: Napi test
+name: Yellowstone GRPC Test
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -56,6 +56,11 @@ jobs:
           echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
           echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
 
+      - name: pre rust
+        run: |
+          free -h
+          df -h
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
@@ -71,23 +76,89 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev protobuf-compiler
 
-      - name: baseline
+      - name: post isntall
         run: |
           free -h
           df -h
 
       - name: cargo tree napi
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              ./target
+          key: v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Set rust version
         run: |
-          cd yellowstone-grpc-client-nodejs/napi
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsasl2-dev protobuf-compiler
+
+      - name: cargo tree
+        run: |
           cargo tree
           git diff Cargo.lock
           git checkout Cargo.lock
           cargo tree --frozen
 
-      - name: cargo fmt napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo +nightly fmt --all -- --check
+      - name: cargo fmt
+        run: cargo +nightly fmt --all -- --check
 
-      - name: cargo clippy napi
-        run: make solana-encoding-napi-clippy
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: check features in `client`
+        run: cargo check -p yellowstone-grpc-client --all-targets
+      - name: check features in `client-simple`
+        run: cargo check -p yellowstone-grpc-client-simple --all-targets
+      - name: check features in `geyser`
+        run: cargo check -p yellowstone-grpc-geyser --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets
+      - name: check features in `proto`
+        run: cargo check -p yellowstone-grpc-proto --all-targets --all-features
+
+      - name: cargo test
+        run: cargo test --all-features
+
+      - name: Build
+        run: ./ci/cargo-build-test.sh
