@@ -81,14 +81,6 @@ jobs:
           git checkout Cargo.lock
           cargo tree --frozen
 
-      - name: cargo tree napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo tree
-          git diff Cargo.lock
-          git checkout Cargo.lock
-          cargo tree --frozen
-
       - name: cargo fmt
         run: cargo +nightly fmt --all -- --check
 
