@@ -1,6 +1,7 @@
 pub mod config;
 pub mod grpc;
 pub mod metrics;
+pub mod parallel;
 pub mod plugin;
 pub(crate) mod util;
 pub mod version;
