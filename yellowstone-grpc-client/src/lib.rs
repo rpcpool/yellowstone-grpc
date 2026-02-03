@@ -137,6 +137,18 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             .map(|(_sink, stream)| stream)
     }
 
+    pub async fn persistent_subscribe() -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
+    )> {
+    }
+
+    pub async fn persistent_subscribe_with_request() -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
+    )> {
+    }
+
     // RPC calls
     pub async fn subscribe_replay_info(
         &mut self,
