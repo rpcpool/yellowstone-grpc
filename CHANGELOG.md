@@ -28,6 +28,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - geyser: do not skip ping logic even if the channel is full ([#662](https://github.com/rpcpool/yellowstone-grpc/pull/662))
+- geyser: keep connection alive on client send half-close ([#670](https://github.com/rpcpool/yellowstone-grpc/pull/670))
 
 ### Features
 
