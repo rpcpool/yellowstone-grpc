@@ -1352,6 +1352,10 @@ impl Geyser for GrpcService {
                             }
                         }
                         Ok(None) => {
+                             // Client half-closed its send stream. Stop reading, but keep
+                             // incoming_client_tx alive so client_loop continues running.
+                            info!("client #{id}: client closed send stream, waiting for cancellation");
+                            incoming_cancellation_token.cancelled().await;
                             break;
                         }
                         Err(_error) => {
