@@ -6,6 +6,7 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
+    persistence,
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -137,13 +138,11 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             .map(|(_sink, stream)| stream)
     }
 
-    pub async fn persistent_subscribe() -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
-    )> {
-    }
-
-    pub async fn persistent_subscribe_with_request() -> GeyserGrpcClientResult<(
+    /// Autoreconnection with configurable replay and deduplication
+    pub async fn persistent_subscribe_with_request(
+        config: persistence::PersistenceConfig,
+        request: SubscribeRequest,
+    ) -> GeyserGrpcClientResult<(
         impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
         impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
     )> {
@@ -510,5 +509,26 @@ mod tests {
             "Err(TonicError(tonic::transport::Error(InvalidUri, InvalidUri(InvalidFormat))))"
                 .to_owned()
         );
+    }
+}
+
+/// Separate into a mod for isolation, for now.
+mod persistence {
+    /// Configures persistent subscription connection behavior
+    #[derive(Default, Debug)]
+    pub struct PersistenceConfig {
+        /// None = Unlimited
+        max_reconnection_attempts: Option<u8>,
+        replay_enabled: bool,
+        // deduplication_enabled: bool,
+    }
+
+    impl PersistenceConfig {
+        pub fn new(max_reconnection_attempts: Option<u8>, replay_enabled: bool) -> Self {
+            PersistenceConfig {
+                max_reconnection_attempts,
+                replay_enabled,
+            }
+        }
     }
 }
