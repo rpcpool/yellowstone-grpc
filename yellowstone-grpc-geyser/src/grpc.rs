@@ -1344,6 +1344,8 @@ impl Geyser for GrpcService {
                             }
                         }
                         Ok(None) => {
+                            info!("client #{id}: client closed send stream, waiting for cancellation");
+                            incoming_cancellation_token.cancelled().await;
                             break;
                         }
                         Err(_error) => {
