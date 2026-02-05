@@ -22,19 +22,17 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-    runs-on: ["${{ matrix.os }}"]
+        os: [ubuntu-22.04]
+    runs-on:
+      group: Public
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clear rust cache before creating it
+        run: |
+          cargo cache -r all
 
       - uses: actions/cache@v4
         with:
