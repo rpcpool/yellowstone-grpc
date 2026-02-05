@@ -47,6 +47,7 @@ tonic-health = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
+agave-geyser-plugin-interface-triton = { workspace = true, optional = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
@@ -55,6 +56,9 @@ solana-pubkey = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }
+
+[features]
+deshred-transaction = ["agave-geyser-plugin-interface-triton", "yellowstone-grpc-proto/deshred-transaction"]
 
 [build-dependencies]
 anyhow = { workspace = true }

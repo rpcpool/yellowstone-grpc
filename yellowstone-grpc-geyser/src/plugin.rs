@@ -1,13 +1,20 @@
+#[cfg(not(feature = "deshred-transaction"))]
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
+    ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+};
+#[cfg(feature = "deshred-transaction")]
+use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
+    GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
+    ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+    ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+};
+
 use {
     crate::{
         config::Config,
         grpc::GrpcService,
         metrics::{self, PrometheusService},
-    },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
-        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     std::{
         concat, env,
@@ -23,10 +30,12 @@ use {
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     yellowstone_grpc_proto::plugin::message::{
-        Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
-        MessageSlot, MessageTransaction,
+        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
     },
 };
+
+#[cfg(feature = "deshred-transaction")]
+use yellowstone_grpc_proto::plugin::message::MessageDeshredTransaction;
 
 #[derive(Debug)]
 pub struct PluginInner {
@@ -290,6 +299,7 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    #[cfg(feature = "deshred-transaction")]
     fn notify_deshred_transaction(
         &self,
         transaction: ReplicaDeshredTransactionInfoVersions<'_>,
@@ -324,6 +334,7 @@ impl GeyserPlugin for Plugin {
         true
     }
 
+    #[cfg(feature = "deshred-transaction")]
     fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }

@@ -31,6 +31,7 @@ tonic-prost = { workspace = true, optional = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true, optional = true }
+agave-geyser-plugin-interface-triton = { workspace = true, optional = true }
 solana-account-decoder = { workspace = true, optional = true }
 solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true, optional = true }
@@ -101,6 +102,9 @@ tonic = ["dep:tonic", "dep:tonic-prost"]
 tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
 account-data-as-bytes = [
     "dep:bytes"
+]
+deshred-transaction = [
+    "dep:agave-geyser-plugin-interface-triton"
 ]
 
 [lints]

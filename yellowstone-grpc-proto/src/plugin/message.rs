@@ -1,3 +1,14 @@
+#[cfg(not(feature = "deshred-transaction"))]
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+    SlotStatus as GeyserSlotStatus,
+};
+#[cfg(feature = "deshred-transaction")]
+use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
+    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo, ReplicaEntryInfoV2,
+    ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
+};
+
 use {
     crate::{
         convert_to,
@@ -9,10 +20,6 @@ use {
             SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         solana::storage::confirmed_block,
-    },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
-        ReplicaEntryInfoV2, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     prost_types::Timestamp,
@@ -396,6 +403,7 @@ pub struct MessageDeshredTransactionInfo {
 }
 
 impl MessageDeshredTransactionInfo {
+    #[cfg(feature = "deshred-transaction")]
     pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
         let static_account_keys: HashSet<Pubkey> = info
             .transaction
@@ -456,6 +464,7 @@ pub struct MessageDeshredTransaction {
 }
 
 impl MessageDeshredTransaction {
+    #[cfg(feature = "deshred-transaction")]
     pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>, slot: Slot) -> Self {
         Self {
             transaction: Arc::new(MessageDeshredTransactionInfo::from_geyser(info)),

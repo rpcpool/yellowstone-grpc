@@ -82,6 +82,21 @@ dependencies = [
 [[package]]
 name = "agave-geyser-plugin-interface"
 version = "3.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e48feeac2f42f19b4ca0088b75ecad884fea77a0f346793639607317cc4543f"
+dependencies = [
+ "log",
+ "solana-clock",
+ "solana-hash 3.1.0",
+ "solana-signature",
+ "solana-transaction",
+ "solana-transaction-status",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "agave-geyser-plugin-interface"
+version = "3.0.4"
 source = "git+https://github.com/rpcpool/solana-public?branch=v3.0-triton-public#08cfb97f9bc50b7070e1643e583b93b134ce2286"
 dependencies = [
  "log",
@@ -5056,7 +5071,8 @@ name = "yellowstone-grpc-geyser"
 version = "10.1.1"
 dependencies = [
  "affinity",
- "agave-geyser-plugin-interface",
+ "agave-geyser-plugin-interface 3.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "agave-geyser-plugin-interface 3.0.4 (git+https://github.com/rpcpool/solana-public?branch=v3.0-triton-public)",
  "anyhow",
  "base64",
  "bincode",
@@ -5096,7 +5112,8 @@ dependencies = [
 name = "yellowstone-grpc-proto"
 version = "10.1.1"
 dependencies = [
- "agave-geyser-plugin-interface",
+ "agave-geyser-plugin-interface 3.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "agave-geyser-plugin-interface 3.0.4 (git+https://github.com/rpcpool/solana-public?branch=v3.0-triton-public)",
  "anyhow",
  "base64",
  "bincode",

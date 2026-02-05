@@ -1,7 +1,13 @@
+#[cfg(not(feature = "deshred-transaction"))]
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    GeyserPluginError, Result as PluginResult,
+};
+#[cfg(feature = "deshred-transaction")]
+use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
+    GeyserPluginError, Result as PluginResult,
+};
+
 use {
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPluginError, Result as PluginResult,
-    },
     serde::{de, Deserialize, Deserializer},
     std::{
         collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
