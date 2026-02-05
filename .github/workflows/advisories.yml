@@ -1,5 +1,5 @@
 ---
-name: Yellowstone GRPC advisorioes check
+name: Yellowstone GRPC advisories check
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
