@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigGrpc, GrpcAddress},
         metrics::{
             self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
             set_subscriber_send_bandwidth_load, DebugClientMessage, GEYSER_BATCH_SIZE,
@@ -23,6 +23,7 @@ use {
     solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
+        os::unix::fs::PermissionsExt,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
@@ -31,9 +32,11 @@ use {
     },
     tokio::{
         fs,
+        net::UnixListener,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
+    tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         service::interceptor,
@@ -421,10 +424,36 @@ impl GrpcService {
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
     )> {
-        // Bind service address
-        let incoming = TcpIncoming::bind(config.address)?
-            .with_nodelay(Some(true))
-            .with_keepalive(Some(Duration::from_secs(20)));
+        // Bind service address (TCP or Unix domain socket)
+        let (tcp_incoming, uds_incoming) = match &config.address {
+            GrpcAddress::Tcp(addr) => {
+                let incoming = TcpIncoming::bind(*addr)?
+                    .with_nodelay(Some(true))
+                    .with_keepalive(Some(Duration::from_secs(20)));
+                (Some(incoming), None)
+            }
+            GrpcAddress::Unix(path) => {
+                // warn if tls configured (makes no sense for same-machine)
+                if config.tls_config.is_some() {
+                    log::warn!(
+                        "TLS config is ignored for Unix domain socket: {}",
+                        path.display()
+                    );
+                }
+
+                if let Err(e) = std::fs::remove_file(path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e.into());
+                    }
+                }
+
+                let uds = UnixListener::bind(path)?;
+
+                // set permissions so HAProxy/Whirligig can connect
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?;
+                (None, Some(UnixListenerStream::new(uds)))
+            }
+        };
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -540,7 +569,7 @@ impl GrpcService {
             let (health_reporter, health_service) = health_reporter();
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            let result = server_builder
+            let router = server_builder
                 .layer(interceptor::InterceptorLayer::new(
                     move |request: Request<()>| {
                         if let Some(x_token) = &config.x_token {
@@ -554,9 +583,21 @@ impl GrpcService {
                     },
                 ))
                 .add_service(health_service)
-                .add_service(service)
-                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
-                .await;
+                .add_service(service);
+
+            let result = if let Some(incoming) = tcp_incoming {
+                router
+                    .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
+                    .await
+            } else {
+                router
+                    .serve_with_incoming_shutdown(
+                        uds_incoming.expect("uds_incoming must be Some when tcp_incoming is None"),
+                        shutdown_grpc.cancelled(),
+                    )
+                    .await
+            };
+
             info!("gRPC server shut down with result: {result:?}");
         });
 

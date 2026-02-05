@@ -4,7 +4,12 @@ use {
     },
     serde::{de, Deserialize, Deserializer},
     std::{
-        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        collections::HashSet,
+        fmt,
+        fs::read_to_string,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
@@ -132,11 +137,42 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     Ok(vec)
 }
 
+#[derive(Debug, Clone)]
+pub enum GrpcAddress {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+impl<'de> Deserialize<'de> for GrpcAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if let Some(path) = s.strip_prefix("unix://") {
+            Ok(GrpcAddress::Unix(PathBuf::from(path)))
+        } else {
+            s.parse::<SocketAddr>()
+                .map(GrpcAddress::Tcp)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+impl std::fmt::Display for GrpcAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrpcAddress::Tcp(addr) => write!(f, "{addr}"),
+            GrpcAddress::Unix(path) => write!(f, "unix://{}", path.display()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
     /// Address of Grpc service.
-    pub address: SocketAddr,
+    pub address: GrpcAddress,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
     /// Possible compression options
