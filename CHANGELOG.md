@@ -14,10 +14,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- proto: pre-encode transaction content to reduce serialization overhead ([#653](https://github.com/rpcpool/yellowstone-grpc/pull/653))
-- proto: pre-encode account content to reduce serialization overhead ([#657](https://github.com/rpcpool/yellowstone-grpc/pull/657))
-
 ### Breaking
+
+## 2026-02-05
+
+- yellowstone-grpc-client-11.1.0
+- yellowstone-grpc-client-simple-11.1.0
+- yellowstone-grpc-geyser-11.1.0
+- yellowstone-grpc-proto-11.1.0
+
+### Features
+
+- proto: pre-encode account content to reduce serialization overhead ([#657](https://github.com/rpcpool/yellowstone-grpc/pull/657))
+- proto: pre-encode transaction content to reduce serialization overhead ([#653](https://github.com/rpcpool/yellowstone-grpc/pull/653))
+- geyser: parallel encoding with Rayon threadpool and plugin lifecycle management ([#661](https://github.com/rpcpool/yellowstone-grpc/pull/661))
 
 ## 2026-01-29
 
