@@ -49,6 +49,9 @@ solana-transaction-error = { workspace = true, optional = true }
 # Solana Misc
 spl-token-2022-interface = { workspace = true, optional = true }
 
+# Yellowstone
+yellowstone-proto = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 prost_011 = { workspace = true }

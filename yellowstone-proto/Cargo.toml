@@ -1,0 +1,28 @@
+[package]
+name = "yellowstone-proto"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+prost = { workspace = true, optional = true }
+prost-types = { workspace = true, optional = true }
+
+# Solana SDK
+solana-clock = { workspace = true }
+solana-hash = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-signature = { workspace = true }
+
+[features]
+default = []
+prost = ["dep:prost", "dep:prost-types"]
+
+[lints]
+workspace = true

@@ -5224,6 +5224,20 @@ dependencies = [
  "tonic-build 0.14.2",
  "tonic-prost",
  "tonic-prost-build",
+ "yellowstone-proto",
+]
+
+[[package]]
+name = "yellowstone-proto"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "prost 0.14.3",
+ "prost-types 0.14.3",
+ "solana-clock",
+ "solana-hash 4.0.1",
+ "solana-pubkey 4.0.0",
+ "solana-signature",
 ]
 
 [[package]]
