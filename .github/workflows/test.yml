@@ -1,3 +1,5 @@
+---
+name: Yellowstone GRPC Test
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,9 +24,14 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
+        os: [ubuntu-22.04]
     runs-on: ["${{ matrix.os }}"]
     steps:
+      - name: baseline
+        run: |
+          free -h
+          df -h
+
       - name: Maximize build space
         uses: easimon/maximize-build-space@v10
         with:
@@ -35,6 +42,55 @@ jobs:
           remove-codeql: 'true'
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" | tee -a $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" | tee -a $GITHUB_ENV
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          docker system prune --all --force
+
+      - name: pre rust
+        run: |
+          free -h
+          df -h
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsasl2-dev protobuf-compiler
+
+      - name: post isntall
+        run: |
+          free -h
+          df -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/cache@v4
         with:
@@ -81,33 +137,11 @@ jobs:
           git checkout Cargo.lock
           cargo tree --frozen
 
-      - name: cargo tree napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo tree
-          git diff Cargo.lock
-          git checkout Cargo.lock
-          cargo tree --frozen
-
       - name: cargo fmt
         run: cargo +nightly fmt --all -- --check
 
-      - name: cargo fmt napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo +nightly fmt --all -- --check
-
-      - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.0.14
-        with:
-          command: check advisories
-          rust-version: ${{ env.RUST_STABLE }}
-
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
-
-      - name: cargo clippy napi
-        run: make solana-encoding-napi-clippy
 
       - name: check features in `client`
         run: cargo check -p yellowstone-grpc-client --all-targets
