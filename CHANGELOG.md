@@ -16,6 +16,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - proto: pre-encode transaction content to reduce serialization overhead ([#653](https://github.com/rpcpool/yellowstone-grpc/pull/653))
 - proto: pre-encode account content to reduce serialization overhead ([#657](https://github.com/rpcpool/yellowstone-grpc/pull/657))
+- geyser: add Unix domain socket support for gRPC listener ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
 
 ### Breaking
 
