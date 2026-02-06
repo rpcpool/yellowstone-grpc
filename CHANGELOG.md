@@ -14,7 +14,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser: move plugin module from proto to geyser crate
+- geyser: add triton-ext feature for deshred transaction support
+- proto: remove all Solana dependencies from yellowstone-grpc-proto
+
 ### Breaking
+
+- proto: removed convert_to, convert_from, plugin modules from proto
+- proto: removed plugin, convert, plugin-bench, deshred-transaction features
+- geyser: convert_to, convert_from now live under geyser::plugin
+- geyser: plugin filter, message, encoder modules moved from proto
 
 ## 2026-02-05
 
