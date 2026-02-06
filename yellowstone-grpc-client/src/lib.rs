@@ -6,6 +6,7 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
+    persistence,
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -135,6 +136,30 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         self.subscribe_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
+    }
+
+    /// Autoreconnection with configurable replay and deduplication
+    pub async fn persistent_subscribe_with_request(
+        config: persistence::PersistenceConfig,
+        request: SubscribeRequest,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
+
+        // Parse config.
+
+        // Reconnection worker.
+        let response: Response<Streaming<SubscribeUpdate>> =
+            self.geyser.subscribe(subscribe_rx).await?;
+        Ok((subscribe_tx, response.into_inner()))
     }
 
     // RPC calls
@@ -498,5 +523,47 @@ mod tests {
             "Err(TonicError(tonic::transport::Error(InvalidUri, InvalidUri(InvalidFormat))))"
                 .to_owned()
         );
+    }
+}
+
+/// Separate into a mod for isolation, for now.
+mod persistence {
+    /// Configures persistent subscription connection behavior
+    #[derive(Default, Debug)]
+    pub struct PersistenceConfig {
+        /// None = Unlimited
+        max_reconnection_attempts: u64,
+        max_backoff_time_ms: u64,
+        replay_enabled: bool,
+        // deduplication_enabled: bool,
+    }
+
+    impl PersistenceConfig {
+        pub fn new(
+            max_reconnection_attempts: u64,
+            max_backoff_time_ms: u64,
+            replay_enabled: bool,
+        ) -> Self {
+            PersistenceConfig {
+                max_reconnection_attempts,
+                max_backoff_time_ms,
+                replay_enabled,
+            }
+        }
+    }
+
+    /// PersistenceConfig Defaults
+    ///
+    /// Max Reconnection Attempts: 10
+    /// Max Backoff Time: 10_000ms
+    /// Replay Enabled: false
+    impl Default for PersistenceConfig {
+        fn default() -> Self {
+            Self {
+                max_reconnection_attempts: 10,
+                max_backoff_time_ms: 10_000,
+                replay_enabled: false,
+            }
+        }
     }
 }
