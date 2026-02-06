@@ -1,24 +1,15 @@
-#[cfg(feature = "account-data-as-bytes")]
-use bytes::Bytes;
 use {
-    crate::{
-        geyser::{
-            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus,
+    crate::plugin::{
+        filter::{name::FilterName, FilterAccountsDataSlice},
+        message::{
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
+            MessageSlot, MessageTransaction, MessageTransactionInfo,
         },
-        plugin::{
-            filter::{name::FilterName, FilterAccountsDataSlice},
-            message::{
-                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
-            },
-        },
-        solana::storage::confirmed_block,
     },
-    bytes::buf::{Buf, BufMut},
+    bytes::{
+        buf::{Buf, BufMut},
+        Bytes,
+    },
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -34,6 +25,16 @@ use {
         ops::{Deref, DerefMut},
         sync::Arc,
         time::SystemTime,
+    },
+    yellowstone_grpc_proto::{
+        geyser::{
+            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
+        },
+        solana::storage::confirmed_block,
     },
 };
 
@@ -138,10 +139,7 @@ impl FilteredUpdate {
             owner: message.owner.as_ref().into(),
             executable: message.executable,
             rent_epoch: message.rent_epoch,
-            #[cfg(feature = "account-data-as-bytes")]
             data: Bytes::from(data_slice),
-            #[cfg(not(feature = "account-data-as-bytes"))]
-            data: data_slice,
             write_version: message.write_version,
             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
         }
@@ -1014,26 +1012,21 @@ impl FilteredUpdateEntry {
     }
 }
 
-#[cfg(any(test, feature = "plugin-bench"))]
+#[cfg(any(test, feature = "bench"))]
 pub mod tests {
-    #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
-    #![cfg_attr(feature = "plugin-bench", allow(unused_imports))]
     use {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
-        crate::{
+        crate::plugin::{
             convert_to,
-            geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
-            plugin::{
-                filter::{
-                    encoder::{AccountEncoder, TransactionEncoder},
-                    message::{FilteredUpdateAccount, FilteredUpdateTransaction},
-                    name::FilterName,
-                    FilterAccountsDataSlice,
-                },
-                message::{
-                    MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                    MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
-                },
+            filter::{
+                encoder::{AccountEncoder, TransactionEncoder},
+                message::{FilteredUpdateAccount, FilteredUpdateTransaction},
+                name::FilterName,
+                FilterAccountsDataSlice,
+            },
+            message::{
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransaction, MessageTransactionInfo, SlotStatus,
             },
         },
         bytes::Bytes,
@@ -1053,6 +1046,7 @@ pub mod tests {
             sync::Arc,
             time::SystemTime,
         },
+        yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {

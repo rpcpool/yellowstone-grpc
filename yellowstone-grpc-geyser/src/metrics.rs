@@ -1,5 +1,9 @@
 use {
-    crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
+    crate::{
+        config::ConfigPrometheus,
+        plugin::{filter::Filter, message::SlotStatus},
+        version::VERSION as VERSION_INFO,
+    },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
@@ -27,7 +31,6 @@ use {
         task::JoinHandle,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
 };
 
 lazy_static::lazy_static! {

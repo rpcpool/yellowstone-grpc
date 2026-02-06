@@ -22,10 +22,9 @@ use {
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
     yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
+    yellowstone_grpc_geyser::plugin::{convert_from, filter::message::FilteredUpdate},
     yellowstone_grpc_proto::{
-        convert_from,
         geyser::SlotStatus,
-        plugin::filter::message::FilteredUpdate,
         prelude::{
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,

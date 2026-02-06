@@ -1,4 +1,5 @@
 use {
+    crate::plugin::filter::limits::FilterLimits,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
     },
@@ -9,7 +10,6 @@ use {
     },
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
-    yellowstone_grpc_proto::plugin::filter::limits::FilterLimits,
 };
 
 #[derive(Debug, Clone, Deserialize)]

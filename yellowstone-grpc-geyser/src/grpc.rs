@@ -6,6 +6,19 @@ use {
             set_subscriber_send_bandwidth_load, DebugClientMessage, GEYSER_BATCH_SIZE,
         },
         parallel::ParallelEncoder,
+        plugin::{
+            filter::{
+                limits::FilterLimits,
+                message::{FilteredUpdate, FilteredUpdateOneof},
+                name::FilterNames,
+                Filter,
+            },
+            message::{
+                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransactionInfo, SlotStatus,
+            },
+            proto::geyser_server::{Geyser, GeyserServer},
+        },
         util::{
             ema::{EmaReactivity, DEFAULT_EMA_WINDOW},
             stream::{
@@ -45,19 +58,6 @@ use {
     },
     tonic_health::server::health_reporter,
     yellowstone_grpc_proto::{
-        plugin::{
-            filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateOneof},
-                name::FilterNames,
-                Filter,
-            },
-            message::{
-                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
-            proto::geyser_server::{Geyser, GeyserServer},
-        },
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,

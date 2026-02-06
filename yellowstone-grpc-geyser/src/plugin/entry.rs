@@ -4,6 +4,10 @@ use {
         grpc::GrpcService,
         metrics::{self, PrometheusService},
         parallel::ParallelEncoder,
+        plugin::message::{
+            Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransaction,
+        },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -23,9 +27,6 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_grpc_proto::plugin::message::{
-        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
-    },
 };
 
 #[derive(Debug)]

@@ -1,14 +1,5 @@
 use {
-    crate::{
-        convert_to,
-        geyser::{
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-        },
-        solana::storage::confirmed_block,
-    },
+    super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
         SlotStatus as GeyserSlotStatus,
@@ -24,6 +15,15 @@ use {
         ops::{Deref, DerefMut},
         sync::Arc,
         time::SystemTime,
+    },
+    yellowstone_grpc_proto::{
+        geyser::{
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+        solana::storage::confirmed_block,
     },
 };
 
@@ -221,10 +221,7 @@ impl MessageAccountInfo {
             owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
             executable: msg.executable,
             rent_epoch: msg.rent_epoch,
-            #[cfg(feature = "account-data-as-bytes")]
             data: msg.data,
-            #[cfg(not(feature = "account-data-as-bytes"))]
-            data: Bytes::from(msg.data),
             write_version: msg.write_version,
             txn_signature: msg
                 .txn_signature
