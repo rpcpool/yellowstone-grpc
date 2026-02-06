@@ -44,26 +44,26 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
-    yellowstone_grpc_proto::{
-        plugin::{
-            filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateOneof},
-                name::FilterNames,
-                Filter,
-            },
-            message::{
-                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
-            proto::geyser_server::{Geyser, GeyserServer},
+    crate::plugin::{
+        filter::{
+            limits::FilterLimits,
+            message::{FilteredUpdate, FilteredUpdateOneof},
+            name::FilterNames,
+            Filter,
         },
+        message::{
+            CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
+            MessageSlot, MessageTransactionInfo, SlotStatus,
+        },
+        proto::geyser_server::{Geyser, GeyserServer},
+    },
+    yellowstone_grpc_proto::{
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
-            SubscribeReplayInfoResponse, SubscribeRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse,
+            SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
     },
@@ -1234,6 +1234,7 @@ impl GrpcService {
 
         Ok(())
     }
+
 }
 
 #[tonic::async_trait]

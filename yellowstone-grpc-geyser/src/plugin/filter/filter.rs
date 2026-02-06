@@ -1,34 +1,33 @@
 use {
-    crate::{
-        geyser::{
-            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
-        },
-        plugin::{
-            filter::{
-                limits::{
-                    FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
-                    FilterLimitsCheckError, FilterLimitsEntries, FilterLimitsSlots,
-                    FilterLimitsTransactions,
-                },
-                message::{
-                    FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters,
-                    FilteredUpdateOneof, FilteredUpdates,
-                },
-                name::{FilterName, FilterNameError, FilterNames},
+    crate::plugin::{
+        filter::{
+            limits::{
+                FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
+                FilterLimitsCheckError, FilterLimitsEntries,
+                FilterLimitsSlots, FilterLimitsTransactions,
             },
             message::{
-                CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
-                MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
+                FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters,
+                FilteredUpdateOneof, FilteredUpdates,
             },
+            name::{FilterName, FilterNameError, FilterNames},
         },
+        message::{
+            CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockMeta,
+            MessageEntry, MessageSlot, MessageTransaction,
+            SlotStatus,
+        },
+    },
+    yellowstone_grpc_proto::geyser::{
+        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+        CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterEntry,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
@@ -1114,20 +1113,18 @@ impl FilterAccountsDataSlice {
 mod tests {
     use {
         super::Filter,
-        crate::{
+        crate::plugin::{
             convert_to,
-            geyser::{
-                SubscribeRequest, SubscribeRequestFilterAccounts,
-                SubscribeRequestFilterTransactions,
+            filter::{
+                limits::FilterLimits,
+                message::{FilteredUpdateFilters, FilteredUpdateOneof},
+                name::{FilterName, FilterNames},
             },
-            plugin::{
-                filter::{
-                    limits::FilterLimits,
-                    message::{FilteredUpdateFilters, FilteredUpdateOneof},
-                    name::{FilterName, FilterNames},
-                },
-                message::{Message, MessageTransaction, MessageTransactionInfo},
-            },
+            message::{Message, MessageTransaction, MessageTransactionInfo},
+        },
+        yellowstone_grpc_proto::geyser::{
+            SubscribeRequest, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterTransactions,
         },
         prost_types::Timestamp,
         solana_hash::Hash,

@@ -10,93 +10,20 @@ license = "Apache-2.0"
 keywords = { workspace = true }
 publish = true
 
-[[bench]]
-name = "encode"
-harness = false
-required-features = ["plugin-bench"]
-
 [dependencies]
-base64 = { workspace = true, optional = true }
-bincode = { workspace = true, optional = true }
-bs58 = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost_011 = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
-smallvec = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
-
-# Agave Monorepo
-agave-geyser-plugin-interface = { workspace = true, optional = true }
-solana-account-decoder = { workspace = true, optional = true }
-solana-storage-proto = { workspace = true, optional = true }
-solana-transaction-status = { workspace = true, optional = true, features = ["agave-unstable-api"] }
-solana-transaction-context = { workspace = true, optional = true }
-
-# Solana SDK
-solana-account = { workspace = true, optional = true }
-solana-clock = { workspace = true, optional = true }
-solana-hash = { workspace = true, optional = true }
-solana-message = { workspace = true, optional = true }
-solana-pubkey = { workspace = true, optional = true }
-solana-signature = { workspace = true, optional = true }
-solana-transaction = { workspace = true, optional = true }
-solana-transaction-error = { workspace = true, optional = true }
-
-# Solana Misc
-spl-token-2022-interface = { workspace = true, optional = true }
-
-[dev-dependencies]
-criterion = { workspace = true }
-prost_011 = { workspace = true }
-solana-keypair = { workspace = true }
-solana-signer = { workspace = true }
-solana-storage-proto = { workspace = true }
-solana-transaction = { workspace = true, features = ["blake3"] }
 
 [build-dependencies]
 anyhow = { workspace = true }
 protoc-bin-vendored = { workspace = true }
-tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [features]
-default = ["convert", "tonic", "tonic-compression"]
-convert = [
-    "dep:bincode",
-    "dep:solana-account",
-    "dep:solana-account-decoder",
-    "dep:solana-clock",
-    "dep:solana-hash",
-    "dep:solana-message",
-    "dep:solana-pubkey",
-    "dep:solana-signature",
-    "dep:solana-transaction",
-    "dep:solana-transaction-context",
-    "dep:solana-transaction-error",
-    "dep:solana-transaction-status"
-]
-plugin = [
-    "convert",
-    "dep:agave-geyser-plugin-interface",
-    "dep:base64",
-    "dep:bs58",
-    "dep:bytes",
-    "dep:serde",
-    "dep:smallvec",
-    "dep:spl-token-2022-interface",
-    "dep:thiserror",
-    "dep:tonic"
-]
-plugin-bench = [
-    "plugin",
-    "dep:prost_011",
-    "dep:solana-storage-proto",
-    "solana-transaction/blake3"
-]
+default = ["tonic", "tonic-compression"]
 tonic = ["dep:tonic", "dep:tonic-prost"]
 tonic-compression = ["tonic", "tonic/gzip", "tonic/zstd"]
 account-data-as-bytes = [

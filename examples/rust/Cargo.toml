@@ -40,7 +40,8 @@ solana-signature = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-client = { workspace = true }
-yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
+yellowstone-grpc-geyser = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@ use {
     rayon::{ThreadPool, ThreadPoolBuilder},
     std::sync::Arc,
     tokio::sync::{mpsc, oneshot},
-    yellowstone_grpc_proto::plugin::{
+    crate::plugin::{
         filter::encoder::{AccountEncoder, TransactionEncoder},
         message::Message,
     },
@@ -116,7 +116,7 @@ mod tests {
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         std::time::SystemTime,
-        yellowstone_grpc_proto::plugin::message::{
+        crate::plugin::message::{
             MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
         },
     };

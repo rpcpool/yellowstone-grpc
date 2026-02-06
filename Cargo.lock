@@ -5140,6 +5140,7 @@ dependencies = [
  "tokio",
  "tonic",
  "yellowstone-grpc-client",
+ "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",
 ]
 
@@ -5156,6 +5157,7 @@ dependencies = [
  "bytes",
  "cargo-lock",
  "clap",
+ "criterion",
  "crossbeam-channel",
  "futures",
  "git-version",
@@ -5168,47 +5170,20 @@ dependencies = [
  "lazy_static",
  "log",
  "prometheus",
- "prost 0.14.3",
- "prost-types 0.14.3",
- "rayon",
- "serde",
- "serde_json",
- "solana-clock",
- "solana-logger",
- "solana-pubkey 4.0.0",
- "solana-signature",
- "thiserror 2.0.17",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-health",
- "vergen",
- "yellowstone-grpc-proto",
-]
-
-[[package]]
-name = "yellowstone-grpc-proto"
-version = "11.1.0"
-dependencies = [
- "agave-geyser-plugin-interface",
- "anyhow",
- "base64",
- "bincode",
- "bs58",
- "bytes",
- "criterion",
  "prost 0.11.9",
  "prost 0.14.3",
  "prost-types 0.14.3",
  "protoc-bin-vendored",
+ "rayon",
  "serde",
+ "serde_json",
  "smallvec",
  "solana-account",
  "solana-account-decoder",
  "solana-clock",
  "solana-hash 4.0.1",
  "solana-keypair",
+ "solana-logger",
  "solana-message",
  "solana-pubkey 4.0.0",
  "solana-signature",
@@ -5220,8 +5195,28 @@ dependencies = [
  "solana-transaction-status",
  "spl-token-2022-interface",
  "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-build 0.14.2",
+ "tonic-health",
+ "tonic-prost",
+ "tonic-prost-build",
+ "vergen",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-proto"
+version = "11.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "prost 0.14.3",
+ "prost-types 0.14.3",
+ "protoc-bin-vendored",
+ "tonic",
  "tonic-prost",
  "tonic-prost-build",
 ]
@@ -5376,3 +5371,53 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "agave-feature-set"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "agave-geyser-plugin-interface"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "agave-reserved-account-keys"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-account-decoder"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-account-decoder-client-types"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-storage-proto"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-svm-feature-set"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-transaction-context"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-transaction-status"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
+
+[[patch.unused]]
+name = "solana-transaction-status-client-types"
+version = "3.1.4"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"

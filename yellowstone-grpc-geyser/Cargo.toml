@@ -22,6 +22,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
+bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
@@ -45,27 +46,62 @@ tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
+tonic-prost = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
+solana-account = { workspace = true }
+solana-account-decoder = { workspace = true }
 solana-clock = { workspace = true }
+solana-hash = { workspace = true }
+solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-signature = { workspace = true }
+solana-transaction = { workspace = true }
+solana-transaction-context = { workspace = true }
+solana-transaction-error = { workspace = true }
+solana-transaction-status = { workspace = true }
+
+# Solana Misc
+smallvec = { workspace = true }
+solana-storage-proto = { workspace = true, optional = true }
+spl-token-2022-interface = { workspace = true }
+
+# Bench
+prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
-yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin", "tonic", "account-data-as-bytes"] }
+yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 
-[dev-dependencies]
-solana-signature = { workspace = true }
-bytes = { workspace = true }
+[[bench]]
+name = "encode"
+harness = false
+required-features = ["bench"]
+
+[features]
+bench = ["dep:prost_011", "dep:solana-storage-proto"]
 
 [build-dependencies]
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
+
+[dev-dependencies]
+bytes = { workspace = true }
+criterion = { workspace = true }
+prost_011 = { workspace = true }
+solana-keypair = { workspace = true }
+solana-signature = { workspace = true }
+solana-signer = { workspace = true }
+solana-storage-proto = { workspace = true }
+solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
 
 [lints]
 workspace = true
