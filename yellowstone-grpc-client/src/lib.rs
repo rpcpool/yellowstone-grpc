@@ -551,4 +551,19 @@ mod persistence {
             }
         }
     }
+
+    /// PersistenceConfig Defaults
+    ///
+    /// Max Reconnection Attempts: 10
+    /// Max Backoff Time: 10_000ms
+    /// Replay Enabled: false
+    impl Default for PersistenceConfig {
+        fn default() -> Self {
+            Self {
+                max_reconnection_attempts: 10,
+                max_backoff_time_ms: 10_000,
+                replay_enabled: false,
+            }
+        }
+    }
 }
