@@ -146,6 +146,20 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
         impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
     )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
+
+        // Parse config.
+
+        // Reconnection worker.
+        let response: Response<Streaming<SubscribeUpdate>> =
+            self.geyser.subscribe(subscribe_rx).await?;
+        Ok((subscribe_tx, response.into_inner()))
     }
 
     // RPC calls
@@ -518,15 +532,21 @@ mod persistence {
     #[derive(Default, Debug)]
     pub struct PersistenceConfig {
         /// None = Unlimited
-        max_reconnection_attempts: Option<u8>,
+        max_reconnection_attempts: u64,
+        max_backoff_time_ms: u64,
         replay_enabled: bool,
         // deduplication_enabled: bool,
     }
 
     impl PersistenceConfig {
-        pub fn new(max_reconnection_attempts: Option<u8>, replay_enabled: bool) -> Self {
+        pub fn new(
+            max_reconnection_attempts: u64,
+            max_backoff_time_ms: u64,
+            replay_enabled: bool,
+        ) -> Self {
             PersistenceConfig {
                 max_reconnection_attempts,
+                max_backoff_time_ms,
                 replay_enabled,
             }
         }
