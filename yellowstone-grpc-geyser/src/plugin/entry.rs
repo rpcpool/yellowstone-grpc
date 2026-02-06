@@ -1,9 +1,9 @@
-#[cfg(not(feature = "deshred-transaction"))]
+#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
     ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
 };
-#[cfg(feature = "deshred-transaction")]
+#[cfg(feature = "triton-ext")]
 use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
     ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
@@ -29,13 +29,13 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_grpc_proto::plugin::message::{
+    crate::plugin::message::{
         Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
     },
 };
 
-#[cfg(feature = "deshred-transaction")]
-use yellowstone_grpc_proto::plugin::message::MessageDeshredTransaction;
+#[cfg(feature = "triton-ext")]
+use crate::plugin::message::MessageDeshredTransaction;
 
 #[derive(Debug)]
 pub struct PluginInner {
@@ -299,7 +299,7 @@ impl GeyserPlugin for Plugin {
         })
     }
 
-    #[cfg(feature = "deshred-transaction")]
+    #[cfg(feature = "triton-ext")]
     fn notify_deshred_transaction(
         &self,
         transaction: ReplicaDeshredTransactionInfoVersions<'_>,
@@ -334,7 +334,7 @@ impl GeyserPlugin for Plugin {
         true
     }
 
-    #[cfg(feature = "deshred-transaction")]
+    #[cfg(feature = "triton-ext")]
     fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }

@@ -1,6 +1,6 @@
-#[cfg(not(feature = "deshred-transaction"))]
+#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus;
-#[cfg(feature = "deshred-transaction")]
+#[cfg(feature = "triton-ext")]
 use agave_geyser_plugin_interface_triton::geyser_plugin_interface::SlotStatus as GeyserSlosStatus;
 
 use {
@@ -31,7 +31,7 @@ use {
         task::JoinHandle,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_grpc_proto::plugin::{filter::Filter, message::SlotStatus},
+    crate::plugin::{filter::Filter, message::SlotStatus},
 };
 
 lazy_static::lazy_static! {

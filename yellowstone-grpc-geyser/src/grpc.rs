@@ -43,20 +43,20 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::server::health_reporter,
-    yellowstone_grpc_proto::{
-        plugin::{
-            filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateOneof},
-                name::FilterNames,
-                DeshredFilter, Filter,
-            },
-            message::{
-                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
-            proto::geyser_server::{Geyser, GeyserServer},
+    crate::plugin::{
+        filter::{
+            limits::FilterLimits,
+            message::{FilteredUpdate, FilteredUpdateOneof},
+            name::FilterNames,
+            DeshredFilter, Filter,
         },
+        message::{
+            CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
+            MessageSlot, MessageTransactionInfo, SlotStatus,
+        },
+        proto::geyser_server::{Geyser, GeyserServer},
+    },
+    yellowstone_grpc_proto::{
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,

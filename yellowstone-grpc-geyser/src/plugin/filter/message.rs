@@ -1,7 +1,6 @@
-#[cfg(feature = "account-data-as-bytes")]
 use bytes::Bytes;
 use {
-    crate::{
+    yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
@@ -10,15 +9,15 @@ use {
             SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus,
         },
-        plugin::{
-            filter::{name::FilterName, FilterAccountsDataSlice},
-            message::{
-                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
-                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
-            },
-        },
         solana::storage::confirmed_block,
+    },
+    crate::plugin::{
+        filter::{name::FilterName, FilterAccountsDataSlice},
+        message::{
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+            MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
+            MessageSlot, MessageTransaction, MessageTransactionInfo,
+        },
     },
     bytes::buf::{Buf, BufMut},
     prost::{
@@ -140,10 +139,7 @@ impl FilteredUpdate {
             owner: message.owner.as_ref().into(),
             executable: message.executable,
             rent_epoch: message.rent_epoch,
-            #[cfg(feature = "account-data-as-bytes")]
             data: Bytes::from(data_slice),
-            #[cfg(not(feature = "account-data-as-bytes"))]
-            data: data_slice,
             write_version: message.write_version,
             txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
         }
@@ -1070,23 +1066,19 @@ impl FilteredUpdateEntry {
     }
 }
 
-#[cfg(any(test, feature = "plugin-bench"))]
+#[cfg(any(test, feature = "bench"))]
 pub mod tests {
-    #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
-    #![cfg_attr(feature = "plugin-bench", allow(unused_imports))]
     use {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
-        crate::{
+        crate::plugin::{
             convert_to,
-            geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
-            plugin::{
-                filter::{name::FilterName, FilterAccountsDataSlice},
-                message::{
-                    MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                    MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
-                },
+            filter::{name::FilterName, FilterAccountsDataSlice},
+            message::{
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
             },
         },
+        yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
         bytes::Bytes,
         prost::Message as _,
         prost_011::Message as _,

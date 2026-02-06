@@ -3,7 +3,7 @@ use {
     prost::Message as _,
     prost_types::Timestamp,
     std::time::{Duration, SystemTime},
-    yellowstone_grpc_proto::plugin::{
+    yellowstone_grpc_geyser::plugin::{
         filter::message::{
             tests::{
                 create_accounts, create_message_filters, load_predefined_blocks,

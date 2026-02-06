@@ -1,17 +1,17 @@
-#[cfg(not(feature = "deshred-transaction"))]
+#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
     SlotStatus as GeyserSlotStatus,
 };
-#[cfg(feature = "deshred-transaction")]
+#[cfg(feature = "triton-ext")]
 use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
     ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo, ReplicaEntryInfoV2,
     ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
 };
 
 use {
-    crate::{
-        convert_to,
+    super::convert_to,
+    yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
@@ -227,10 +227,7 @@ impl MessageAccountInfo {
             owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
             executable: msg.executable,
             rent_epoch: msg.rent_epoch,
-            #[cfg(feature = "account-data-as-bytes")]
             data: msg.data,
-            #[cfg(not(feature = "account-data-as-bytes"))]
-            data: Bytes::from(msg.data),
             write_version: msg.write_version,
             txn_signature: msg
                 .txn_signature
@@ -403,7 +400,7 @@ pub struct MessageDeshredTransactionInfo {
 }
 
 impl MessageDeshredTransactionInfo {
-    #[cfg(feature = "deshred-transaction")]
+    #[cfg(feature = "triton-ext")]
     pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
         let static_account_keys: HashSet<Pubkey> = info
             .transaction
@@ -464,7 +461,7 @@ pub struct MessageDeshredTransaction {
 }
 
 impl MessageDeshredTransaction {
-    #[cfg(feature = "deshred-transaction")]
+    #[cfg(feature = "triton-ext")]
     pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>, slot: Slot) -> Self {
         Self {
             transaction: Arc::new(MessageDeshredTransactionInfo::from_geyser(info)),
