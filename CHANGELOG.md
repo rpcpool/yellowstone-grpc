@@ -14,11 +14,22 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- geyser: move plugin module from proto to geyser crate, removing all Solana dependencies from proto ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/674))
+### Breaking
+
+## 2026-02-06
+
+- yellowstone-grpc-client-12.0.0
+- yellowstone-grpc-client-simple-12.0.0
+- yellowstone-grpc-geyser-12.0.0
+- yellowstone-grpc-proto-12.0.0
+
+### Features
+
+- geyser: move plugin module from proto to geyser crate, removing all Solana dependencies from proto ([#675](https://github.com/rpcpool/yellowstone-grpc/pull/675))
 
 ### Breaking
 
-- proto: removed `convert`, `plugin`, and `plugin-bench` features — these modules now live in `yellowstone-grpc-geyser` ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/674))
+- proto: removed `convert`, `plugin`, and `plugin-bench` features, these modules now live in `yellowstone-grpc-geyser` ([#675](https://github.com/rpcpool/yellowstone-grpc/pull/675))
 
 ## 2026-02-05
 
