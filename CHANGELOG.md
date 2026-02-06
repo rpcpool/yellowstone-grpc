@@ -16,6 +16,58 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2026-02-05
+
+- yellowstone-grpc-client-11.1.0
+- yellowstone-grpc-client-simple-11.1.0
+- yellowstone-grpc-geyser-11.1.0
+- yellowstone-grpc-proto-11.1.0
+
+### Features
+
+- proto: pre-encode account content to reduce serialization overhead ([#657](https://github.com/rpcpool/yellowstone-grpc/pull/657))
+- proto: pre-encode transaction content to reduce serialization overhead ([#653](https://github.com/rpcpool/yellowstone-grpc/pull/653))
+- geyser: parallel encoding with Rayon threadpool and plugin lifecycle management ([#661](https://github.com/rpcpool/yellowstone-grpc/pull/661))
+
+## 2026-01-29
+
+- yellowstone-grpc-client-11.0.1
+- yellowstone-grpc-geyser-11.0.1
+- yellowstone-grpc-proto-11.0.1
+
+### Fixes
+
+- geyser: do not skip ping logic even if the channel is full ([#662](https://github.com/rpcpool/yellowstone-grpc/pull/662))
+- geyser: keep connection alive on client send half-close ([#670](https://github.com/rpcpool/yellowstone-grpc/pull/670))
+
+### Features
+
+- geyser: add client disconnect metrics ([#663](https://github.com/rpcpool/yellowstone-grpc/pull/663))
+
+## 2026-01-20
+
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-client-simple-10.0.0
+- yellowstone-grpc-client-10.0.0
+- yellowstone-grpc-geyser-10.0.0
+- yellowstone-grpc-proto-10.0.0
+- @triton-one/yellowstone-grpc-5.0.0
+
+### Breaking
+- The `@triton-one/yellowstone-grpc` TypeScript SDK client has migrated from `@grpc/grpc-js` to `napi-rs` for gRPC connection and subscription management
+- Unary calls via the TypeScript are not supported
+- gRPC channnel options changed from snake_case to cameCase
+
+## 2026-01-16
+
+- yellowstone-grpc-client-11.0.0
+- yellowstone-grpc-geyser-11.0.0
+- yellowstone-grpc-proto-11.0.0
+
+### Breaking
+
+- solana: upgrade dependencies to 3.1.x
+
 ## 2025-11-27
 
 - yellowstone-grpc-client-simple-10.1.1

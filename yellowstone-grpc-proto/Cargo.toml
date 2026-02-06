@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-proto"
-version = "10.1.1"
+version = "11.1.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Protobuf Definitions"
@@ -19,7 +19,7 @@ tonic-prost = { workspace = true, optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
-protobuf-src = { workspace = true }
+protoc-bin-vendored = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [features]

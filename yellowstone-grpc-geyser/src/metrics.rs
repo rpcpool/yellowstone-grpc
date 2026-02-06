@@ -1,7 +1,4 @@
-#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus;
-#[cfg(feature = "triton-ext")]
-use agave_geyser_plugin_interface_triton::geyser_plugin_interface::SlotStatus as GeyserSlosStatus;
 
 use {
     crate::{config::ConfigPrometheus, version::VERSION as VERSION_INFO},
@@ -112,12 +109,28 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_CLIENT_DISCONNECTS: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "grpc_client_disconnects_total",
+            "Total client disconnections by reason"
+        ),
+        &["subscriber_id", "reason"]
+    ).unwrap();
+
     static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "geyser_account_update_data_size_kib",
             "Histogram of all account update data (kib) received from Geyser plugin"
         )
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
+    ).unwrap();
+
+    pub static ref GEYSER_BATCH_SIZE: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "yellowstone_geyser_batch_size",
+            "Size of processed message batches"
+        )
+        .buckets(vec![1.0, 4.0, 8.0, 16.0, 24.0, 31.0])
     ).unwrap();
 }
 
@@ -270,6 +283,8 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(GEYSER_BATCH_SIZE);
+            register!(GRPC_CLIENT_DISCONNECTS);
 
             VERSION
                 .with_label_values(&[
@@ -482,6 +497,12 @@ pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
         .set(size as i64);
 }
 
+pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
+    GRPC_CLIENT_DISCONNECTS
+        .with_label_values(&[subscriber_id.as_ref(), reason])
+        .inc();
+}
+
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
 pub fn reset_metrics() {
     // Reset gauge metrics to 0
@@ -501,6 +522,7 @@ pub fn reset_metrics() {
     MISSED_STATUS_MESSAGE.reset();
     GRPC_MESSAGE_SENT.reset();
     GRPC_BYTES_SENT.reset();
+    GRPC_CLIENT_DISCONNECTS.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup

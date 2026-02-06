@@ -1,13 +1,9 @@
-#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
     SlotStatus as GeyserSlotStatus,
 };
 #[cfg(feature = "triton-ext")]
-use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
-    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo, ReplicaEntryInfoV2,
-    ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
-};
+use agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaDeshredTransactionInfo;
 
 use {
     super::convert_to,
@@ -202,6 +198,7 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
+    pub pre_encoded: Option<Bytes>,
 }
 
 impl MessageAccountInfo {
@@ -217,6 +214,7 @@ impl MessageAccountInfo {
             data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
+            pre_encoded: None,
         }
     }
 
@@ -235,7 +233,12 @@ impl MessageAccountInfo {
                     Signature::try_from(sig.as_slice()).map_err(|_| "invalid signature length")
                 })
                 .transpose()?,
+            pre_encoded: None,
         })
+    }
+
+    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.as_ref()
     }
 }
 
@@ -280,6 +283,7 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
+    pub pre_encoded: Option<Bytes>,
 }
 
 impl MessageTransactionInfo {
@@ -311,6 +315,7 @@ impl MessageTransactionInfo {
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
+            pre_encoded: None,
         }
     }
 
@@ -325,6 +330,7 @@ impl MessageTransactionInfo {
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
             account_keys: HashSet::new(),
+            pre_encoded: None,
         })
     }
 
@@ -357,6 +363,11 @@ impl MessageTransactionInfo {
 
         self.account_keys = account_keys;
         Ok(())
+    }
+
+    #[inline]
+    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.as_ref()
     }
 }
 

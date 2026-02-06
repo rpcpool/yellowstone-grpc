@@ -2,10 +2,16 @@ import { type GetTransactionApi } from "@solana/rpc-api";
 import { type Signature } from "@solana/keys";
 import { type TransactionError } from "@solana/rpc-types";
 
+type GetTransactionEncoding =
+  | "base58"
+  | "base64"
+  | "json"
+  | "jsonParsed";
+
 const fakeGetTransition: GetTransactionApi["getTransaction"] = (
-  signature,
-  config
-) => null;
+  signature: Signature,
+  config: {encoding: GetTransactionEncoding}
+): any => null;
 
 const signature = "" as Signature;
 

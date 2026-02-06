@@ -1,9 +1,4 @@
-#[cfg(not(feature = "triton-ext"))]
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    GeyserPluginError, Result as PluginResult,
-};
-#[cfg(feature = "triton-ext")]
-use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
     GeyserPluginError, Result as PluginResult,
 };
 
@@ -205,6 +200,12 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub replay_stored_slots: u64,
+    /// Number of threads for parallel encoding
+    #[serde(
+        default = "ConfigGrpc::encoder_threads_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub encoder_threads: usize,
     #[serde(default)]
     pub server_http2_adaptive_window: Option<bool>,
     #[serde(default, with = "humantime_serde")]
@@ -252,6 +253,10 @@ impl ConfigGrpc {
 
     const fn default_replay_stored_slots() -> u64 {
         0
+    }
+
+    const fn encoder_threads_default() -> usize {
+        4
     }
 }
 

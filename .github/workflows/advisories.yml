@@ -1,0 +1,49 @@
+---
+name: Yellowstone GRPC advisories check
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+    runs-on: ["${{ matrix.os }}"]
+    steps:
+      - name: baseline
+        run: |
+          free -h
+          df -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" | tee -a $GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: compare after rust install
+        run: |
+          free -h
+          df -h
+
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v2.0.14
+        with:
+          command: check advisories
+          rust-version: ${{ env.RUST_STABLE }}

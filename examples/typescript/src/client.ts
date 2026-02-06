@@ -15,8 +15,11 @@ async function main() {
 
   // Open connection.
   const client = new Client(args.endpoint, args.xToken, {
-    "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
+    // "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
+    grpcMaxDecodingMessageSize: 64 * 1024 * 1024
   });
+
+  await client.connect()
 
   const commitment = parseCommitmentLevel(args.commitment);
 
