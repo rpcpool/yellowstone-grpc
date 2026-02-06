@@ -1,14 +1,18 @@
-use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-    ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
-};
-
 use {
     crate::{
         config::Config,
         grpc::GrpcService,
         metrics::{self, PrometheusService},
         parallel::ParallelEncoder,
+        plugin::message::{
+            Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransaction,
+        },
+    },
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
+        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
+        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
+        SlotStatus,
     },
     std::{
         concat, env,
@@ -23,9 +27,6 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    crate::plugin::message::{
-        Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot, MessageTransaction,
-    },
 };
 
 #[derive(Debug)]

@@ -1,24 +1,15 @@
-use bytes::Bytes;
 use {
-    yellowstone_grpc_proto::{
-        geyser::{
-            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus,
-        },
-        solana::storage::confirmed_block,
-    },
     crate::plugin::{
         filter::{name::FilterName, FilterAccountsDataSlice},
         message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
-            MessageEntry,
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
             MessageSlot, MessageTransaction, MessageTransactionInfo,
         },
     },
-    bytes::buf::{Buf, BufMut},
+    bytes::{
+        buf::{Buf, BufMut},
+        Bytes,
+    },
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -34,6 +25,16 @@ use {
         ops::{Deref, DerefMut},
         sync::Arc,
         time::SystemTime,
+    },
+    yellowstone_grpc_proto::{
+        geyser::{
+            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
+        },
+        solana::storage::confirmed_block,
     },
 };
 
@@ -325,15 +326,15 @@ pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateOneof {
-    Account(FilteredUpdateAccount),                       // 2
-    Slot(FilteredUpdateSlot),                             // 3
-    Transaction(FilteredUpdateTransaction),               // 4
-    TransactionStatus(FilteredUpdateTransactionStatus),   // 10
-    Block(Box<FilteredUpdateBlock>),                      // 5
-    Ping,                                                 // 6
-    Pong(SubscribeUpdatePong),                            // 9
-    BlockMeta(Arc<MessageBlockMeta>),                     // 7
-    Entry(FilteredUpdateEntry),                           // 8
+    Account(FilteredUpdateAccount),                     // 2
+    Slot(FilteredUpdateSlot),                           // 3
+    Transaction(FilteredUpdateTransaction),             // 4
+    TransactionStatus(FilteredUpdateTransactionStatus), // 10
+    Block(Box<FilteredUpdateBlock>),                    // 5
+    Ping,                                               // 6
+    Pong(SubscribeUpdatePong),                          // 9
+    BlockMeta(Arc<MessageBlockMeta>),                   // 7
+    Entry(FilteredUpdateEntry),                         // 8
 }
 
 impl FilteredUpdateOneof {
@@ -1024,11 +1025,10 @@ pub mod tests {
                 FilterAccountsDataSlice,
             },
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransaction, MessageTransactionInfo, SlotStatus,
             },
         },
-        yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
         bytes::Bytes,
         prost::Message as _,
         prost_011::Message as _,
@@ -1046,6 +1046,7 @@ pub mod tests {
             sync::Arc,
             time::SystemTime,
         },
+        yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {

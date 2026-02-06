@@ -1,8 +1,8 @@
-use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    GeyserPluginError, Result as PluginResult,
-};
-
 use {
+    crate::plugin::filter::limits::FilterLimits,
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
+        GeyserPluginError, Result as PluginResult,
+    },
     serde::{de, Deserialize, Deserializer},
     std::{
         collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
@@ -10,7 +10,6 @@ use {
     },
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
-    crate::plugin::filter::limits::FilterLimits,
 };
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,19 +1,8 @@
-use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-    SlotStatus as GeyserSlotStatus,
-};
-
 use {
     super::convert_to,
-    yellowstone_grpc_proto::{
-        geyser::{
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-        },
-        solana::storage::confirmed_block,
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+        SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     prost_types::Timestamp,
@@ -26,6 +15,15 @@ use {
         ops::{Deref, DerefMut},
         sync::Arc,
         time::SystemTime,
+    },
+    yellowstone_grpc_proto::{
+        geyser::{
+            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
+            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
+            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
+        solana::storage::confirmed_block,
     },
 };
 

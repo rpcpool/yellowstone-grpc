@@ -1,11 +1,11 @@
 use {
-    rayon::{ThreadPool, ThreadPoolBuilder},
-    std::sync::Arc,
-    tokio::sync::{mpsc, oneshot},
     crate::plugin::{
         filter::encoder::{AccountEncoder, TransactionEncoder},
         message::Message,
     },
+    rayon::{ThreadPool, ThreadPoolBuilder},
+    std::sync::Arc,
+    tokio::sync::{mpsc, oneshot},
 };
 
 pub struct ParallelEncoder {
@@ -111,14 +111,14 @@ impl ParallelEncoder {
 mod tests {
     use {
         super::*,
+        crate::plugin::message::{
+            MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
+        },
         bytes::Bytes,
         prost_types::Timestamp,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         std::time::SystemTime,
-        crate::plugin::message::{
-            MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
-        },
     };
 
     fn create_test_transaction() -> Message {

@@ -1,5 +1,4 @@
 use {
-    yellowstone_grpc_proto::prelude as proto,
     solana_account::Account,
     solana_account_decoder::parse_token::UiTokenAmount,
     solana_hash::{Hash, HASH_BYTES},
@@ -18,6 +17,7 @@ use {
         RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
         TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
     },
+    yellowstone_grpc_proto::prelude as proto,
 };
 
 type CreateResult<T> = Result<T, &'static str>;
@@ -159,9 +159,7 @@ pub fn create_message_instruction(
     })
 }
 
-pub fn create_tx_meta(
-    meta: proto::TransactionStatusMeta,
-) -> CreateResult<TransactionStatusMeta> {
+pub fn create_tx_meta(meta: proto::TransactionStatusMeta) -> CreateResult<TransactionStatusMeta> {
     let meta_status = match create_tx_error(meta.err.as_ref())? {
         Some(err) => Err(err),
         None => Ok(()),
