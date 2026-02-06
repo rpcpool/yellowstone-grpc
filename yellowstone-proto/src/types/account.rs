@@ -2,6 +2,7 @@ use bytes::Bytes;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
