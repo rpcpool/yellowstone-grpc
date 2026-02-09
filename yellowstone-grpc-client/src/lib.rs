@@ -157,8 +157,11 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         // Parse config.
 
         // Reconnection worker.
+        tokio::spawn(async move {});
+
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
+
         Ok((subscribe_tx, response.into_inner()))
     }
 
