@@ -1,8 +1,8 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
+        ReplicaEntryInfoV2, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     prost_types::Timestamp,
@@ -20,8 +20,9 @@ use {
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
             SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateDeshredTransaction,
+            SubscribeUpdateDeshredTransactionInfo, SubscribeUpdateEntry, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         },
         solana::storage::confirmed_block,
     },
@@ -398,6 +399,98 @@ impl MessageTransaction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredTransactionInfo {
+    pub signature: Signature,
+    pub is_vote: bool,
+    pub transaction: confirmed_block::Transaction,
+    pub static_account_keys: HashSet<Pubkey>,
+}
+
+impl MessageDeshredTransactionInfo {
+    pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
+        let static_account_keys: HashSet<Pubkey> = info
+            .transaction
+            .message
+            .static_account_keys()
+            .iter()
+            .copied()
+            .collect();
+
+        Self {
+            signature: *info.signature,
+            is_vote: info.is_vote,
+            transaction: convert_to::create_transaction(info.transaction),
+            static_account_keys,
+        }
+    }
+
+    pub fn from_update_oneof(
+        msg: SubscribeUpdateDeshredTransactionInfo,
+    ) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            signature: Signature::try_from(msg.signature.as_slice())
+                .map_err(|_| "invalid signature length")?,
+            is_vote: msg.is_vote,
+            transaction: msg
+                .transaction
+                .ok_or("transaction message should be defined")?,
+            static_account_keys: HashSet::new(),
+        })
+    }
+
+    pub fn fill_static_account_keys(&mut self) -> FromUpdateOneofResult<()> {
+        let mut static_account_keys = HashSet::new();
+
+        if let Some(pubkeys) = self
+            .transaction
+            .message
+            .as_ref()
+            .map(|msg| msg.account_keys.as_slice())
+        {
+            for pubkey in pubkeys {
+                static_account_keys.insert(
+                    Pubkey::try_from(pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
+                );
+            }
+        }
+
+        self.static_account_keys = static_account_keys;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredTransaction {
+    pub transaction: Arc<MessageDeshredTransactionInfo>,
+    pub slot: u64,
+    pub created_at: Timestamp,
+}
+
+impl MessageDeshredTransaction {
+    pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>, slot: Slot) -> Self {
+        Self {
+            transaction: Arc::new(MessageDeshredTransactionInfo::from_geyser(info)),
+            slot,
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+
+    pub fn from_update_oneof(
+        msg: SubscribeUpdateDeshredTransaction,
+        created_at: Timestamp,
+    ) -> FromUpdateOneofResult<Self> {
+        Ok(Self {
+            transaction: Arc::new(MessageDeshredTransactionInfo::from_update_oneof(
+                msg.transaction
+                    .ok_or("transaction message should be defined")?,
+            )?),
+            slot: msg.slot,
+            created_at,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageEntry {
     pub slot: u64,
@@ -568,6 +661,7 @@ pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
+    DeshredTransaction(MessageDeshredTransaction),
     Entry(Arc<MessageEntry>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
@@ -580,6 +674,7 @@ impl Message {
             Self::Slot(msg) => msg.slot,
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
+            Self::DeshredTransaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
@@ -612,6 +707,9 @@ impl Message {
             UpdateOneof::Entry(msg) => {
                 Self::Entry(Arc::new(MessageEntry::from_update_oneof(&msg, created_at)?))
             }
+            UpdateOneof::DeshredTransaction(msg) => Self::DeshredTransaction(
+                MessageDeshredTransaction::from_update_oneof(msg, created_at)?,
+            ),
         })
     }
 }

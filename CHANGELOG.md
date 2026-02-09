@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## [Triton Extension Patches]
+
+### Features
+
+- geyser, client, proto: add deshred transaction subscription support (`SubscribeDeshred` RPC, `DeshredTransaction` update variant, client methods, and example CLI command)
+- deps: update solana/agave git dependencies to v3.1.8 (`v3.1-triton-public`)
+- deps: add `[patch.crates-io]` for triton fork compatibility
+
 ## [Unreleased]
 
 ### Fixes
