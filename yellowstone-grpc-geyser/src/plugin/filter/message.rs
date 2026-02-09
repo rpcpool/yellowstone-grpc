@@ -2,8 +2,9 @@ use {
     crate::plugin::{
         filter::{name::FilterName, FilterAccountsDataSlice},
         message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo,
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+            MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry, MessageSlot,
+            MessageTransaction, MessageTransactionInfo,
         },
     },
     bytes::{
@@ -30,6 +31,7 @@ use {
         geyser::{
             subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
             SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateDeshredTransaction, SubscribeUpdateDeshredTransactionInfo,
             SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
             SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
             SubscribeUpdateTransactionStatus,
@@ -236,6 +238,16 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
+            FilteredUpdateOneof::DeshredTransaction(msg) => {
+                UpdateOneof::DeshredTransaction(SubscribeUpdateDeshredTransaction {
+                    transaction: Some(SubscribeUpdateDeshredTransactionInfo {
+                        signature: msg.transaction.signature.as_ref().into(),
+                        is_vote: msg.transaction.is_vote,
+                        transaction: Some(msg.transaction.transaction.clone()),
+                    }),
+                    slot: msg.slot,
+                })
+            }
         };
 
         SubscribeUpdate {
@@ -312,6 +324,13 @@ impl FilteredUpdate {
                 let entry = MessageEntry::from_update_oneof(&msg, created_at)?;
                 FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
             }
+            UpdateOneof::DeshredTransaction(msg) => {
+                let tx = MessageDeshredTransaction::from_update_oneof(msg, created_at)?;
+                FilteredUpdateOneof::DeshredTransaction(FilteredUpdateDeshredTransaction {
+                    transaction: tx.transaction,
+                    slot: tx.slot,
+                })
+            }
         };
 
         Ok(Self {
@@ -326,15 +345,16 @@ pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateOneof {
-    Account(FilteredUpdateAccount),                     // 2
-    Slot(FilteredUpdateSlot),                           // 3
-    Transaction(FilteredUpdateTransaction),             // 4
-    TransactionStatus(FilteredUpdateTransactionStatus), // 10
-    Block(Box<FilteredUpdateBlock>),                    // 5
-    Ping,                                               // 6
-    Pong(SubscribeUpdatePong),                          // 9
-    BlockMeta(Arc<MessageBlockMeta>),                   // 7
-    Entry(FilteredUpdateEntry),                         // 8
+    Account(FilteredUpdateAccount),                       // 2
+    Slot(FilteredUpdateSlot),                             // 3
+    Transaction(FilteredUpdateTransaction),               // 4
+    TransactionStatus(FilteredUpdateTransactionStatus),   // 10
+    Block(Box<FilteredUpdateBlock>),                      // 5
+    Ping,                                                 // 6
+    Pong(SubscribeUpdatePong),                            // 9
+    BlockMeta(Arc<MessageBlockMeta>),                     // 7
+    Entry(FilteredUpdateEntry),                           // 8
+    DeshredTransaction(FilteredUpdateDeshredTransaction), // 12
 }
 
 impl FilteredUpdateOneof {
@@ -384,6 +404,13 @@ impl FilteredUpdateOneof {
     pub const fn entry(message: Arc<MessageEntry>) -> Self {
         Self::Entry(FilteredUpdateEntry(message))
     }
+
+    pub fn deshred_transaction(message: &MessageDeshredTransaction) -> Self {
+        Self::DeshredTransaction(FilteredUpdateDeshredTransaction {
+            transaction: Arc::clone(&message.transaction),
+            slot: message.slot,
+        })
+    }
 }
 
 impl prost::Message for FilteredUpdateOneof {
@@ -401,6 +428,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encode(9u32, msg, buf),
             Self::BlockMeta(msg) => message::encode(7u32, &msg.block_meta, buf),
             Self::Entry(msg) => message::encode(8u32, msg, buf),
+            Self::DeshredTransaction(msg) => message::encode(12u32, msg, buf),
         }
     }
 
@@ -415,6 +443,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encoded_len(9u32, msg),
             Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.block_meta),
             Self::Entry(msg) => message::encoded_len(8u32, msg),
+            Self::DeshredTransaction(msg) => message::encoded_len(12u32, msg),
         }
     }
 
@@ -790,6 +819,67 @@ impl prost::Message for FilteredUpdateTransactionStatus {
 
     fn clear(&mut self) {
         unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateDeshredTransaction {
+    pub transaction: Arc<MessageDeshredTransactionInfo>,
+    pub slot: u64,
+}
+
+impl prost::Message for FilteredUpdateDeshredTransaction {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::tx_encode_raw(1u32, &self.transaction, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction))
+            + if self.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateDeshredTransaction {
+    fn tx_encode_raw(tag: u32, tx: &MessageDeshredTransactionInfo, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
+        }
+        message::encode(3u32, &tx.transaction, buf);
+    }
+
+    fn tx_encoded_len(tx: &MessageDeshredTransactionInfo) -> usize {
+        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + message::encoded_len(3u32, &tx.transaction)
     }
 }
 

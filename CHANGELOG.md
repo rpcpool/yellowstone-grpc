@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- geyser, client, proto: add deshred transaction subscription support (`SubscribeDeshred` RPC, `DeshredTransaction` update variant, client methods, and example CLI command)
+
 ### Breaking
 
 ## 2026-02-06

@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribeDeshred(stream SubscribeDeshredRequest) returns (stream SubscribeUpdate) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -107,6 +108,22 @@ message SubscribeRequestFilterBlocksMeta {}
 
 message SubscribeRequestFilterEntry {}
 
+// Filter for deshred transactions (transactions received before execution).
+// IMPORTANT: Deshred transactions are received when entries are formed from shreds,
+// BEFORE any execution occurs. This means:
+// - No TransactionStatusMeta is available (no execution results)
+// - Address lookup tables have NOT been resolved yet
+// - Only static account keys from the transaction message are available for filtering
+// - Dynamic addresses (from lookup tables) will NOT be present
+message SubscribeRequestFilterDeshredTransactions {
+  optional bool vote = 1;
+  // Filter by static account keys only. These are the account keys explicitly
+  // listed in the transaction message, NOT addresses resolved from lookup tables.
+  repeated string static_account_include = 2;
+  // Exclude transactions containing these static account keys.
+  repeated string static_account_exclude = 3;
+}
+
 message SubscribeRequestAccountsDataSlice {
   uint64 offset = 1;
   uint64 length = 2;
@@ -114,6 +131,19 @@ message SubscribeRequestAccountsDataSlice {
 
 message SubscribeRequestPing {
   int32 id = 1;
+}
+
+// Request message for the SubscribeDeshred RPC.
+// Subscribes to deshred transactions (transactions received before execution).
+// IMPORTANT: Deshred transactions are received when entries are formed from shreds,
+// BEFORE any execution occurs. This means:
+// - No TransactionStatusMeta is available (no execution results)
+// - Address lookup tables have NOT been resolved yet
+// - Only static account keys from the transaction message are available for filtering
+// - Dynamic addresses (from lookup tables) will NOT be present
+message SubscribeDeshredRequest {
+  map<string, SubscribeRequestFilterDeshredTransactions> deshred_transactions = 1;
+  optional SubscribeRequestPing ping = 2;
 }
 
 message SubscribeUpdate {
@@ -128,6 +158,7 @@ message SubscribeUpdate {
     SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
+    SubscribeUpdateDeshredTransaction deshred_transaction = 12;
   }
   google.protobuf.Timestamp created_at = 11;
 }
@@ -212,6 +243,17 @@ message SubscribeUpdateEntry {
   bytes hash = 4;
   uint64 executed_transaction_count = 5;
   uint64 starting_transaction_index = 6; // added in v1.18, for solana 1.17 value is always 0
+}
+
+message SubscribeUpdateDeshredTransaction {
+  SubscribeUpdateDeshredTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUpdateDeshredTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
 }
 
 message SubscribeUpdatePing {}

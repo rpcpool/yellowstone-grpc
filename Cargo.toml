@@ -68,7 +68,7 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "~3.1.0"
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 solana-account-decoder = "~3.1.0"
 solana-logger = "3.0.0"
 solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
@@ -110,7 +110,6 @@ solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", bra
 solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 
 [profile.release]
 lto = true
