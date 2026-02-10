@@ -6,7 +6,7 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
-    persistence,
+    reconnection,
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -139,8 +139,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     }
 
     /// Autoreconnection with configurable replay and deduplication
-    pub async fn persistent_subscribe_with_request(
-        config: persistence::PersistenceConfig,
+    pub async fn reconnecting_subscribe_with_request(
+        config: reconnection::ReconnectionConfig,
         request: SubscribeRequest,
     ) -> GeyserGrpcClientResult<(
         impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
@@ -530,10 +530,10 @@ mod tests {
 }
 
 /// Separate into a mod for isolation, for now.
-mod persistence {
-    /// Configures persistent subscription connection behavior
+mod reconnection {
+    /// Configures reconnecting subscription connection behavior
     #[derive(Default, Debug)]
-    pub struct PersistenceConfig {
+    pub struct ReconnectionConfig {
         /// None = Unlimited
         max_reconnection_attempts: u64,
         max_backoff_time_ms: u64,
@@ -541,13 +541,13 @@ mod persistence {
         // deduplication_enabled: bool,
     }
 
-    impl PersistenceConfig {
+    impl ReconnectionConfig {
         pub fn new(
             max_reconnection_attempts: u64,
             max_backoff_time_ms: u64,
             replay_enabled: bool,
         ) -> Self {
-            PersistenceConfig {
+            Self {
                 max_reconnection_attempts,
                 max_backoff_time_ms,
                 replay_enabled,
@@ -555,12 +555,12 @@ mod persistence {
         }
     }
 
-    /// PersistenceConfig Defaults
+    /// ReconnectionConfig Defaults
     ///
     /// Max Reconnection Attempts: 10
     /// Max Backoff Time: 10_000ms
     /// Replay Enabled: false
-    impl Default for PersistenceConfig {
+    impl Default for ReconnectionConfig {
         fn default() -> Self {
             Self {
                 max_reconnection_attempts: 10,
