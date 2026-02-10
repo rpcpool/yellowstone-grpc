@@ -197,11 +197,13 @@ pub struct FilterLimitsDeshredTransactions {
     pub max: usize,
     pub any: bool,
     #[serde(deserialize_with = "deserialize_usize_str")]
-    pub static_account_include_max: usize,
+    pub account_include_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub static_account_include_reject: HashSet<Pubkey>,
+    pub account_include_reject: HashSet<Pubkey>,
     #[serde(deserialize_with = "deserialize_usize_str")]
-    pub static_account_exclude_max: usize,
+    pub account_exclude_max: usize,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub account_required_max: usize,
 }
 
 impl Default for FilterLimitsDeshredTransactions {
@@ -209,9 +211,10 @@ impl Default for FilterLimitsDeshredTransactions {
         Self {
             max: usize::MAX,
             any: true,
-            static_account_include_max: usize::MAX,
-            static_account_include_reject: HashSet::new(),
-            static_account_exclude_max: usize::MAX,
+            account_include_max: usize::MAX,
+            account_include_reject: HashSet::new(),
+            account_exclude_max: usize::MAX,
+            account_required_max: usize::MAX,
         }
     }
 }
