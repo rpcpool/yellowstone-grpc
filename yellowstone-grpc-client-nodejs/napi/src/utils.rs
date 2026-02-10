@@ -534,7 +534,7 @@ fn to_js_transaction_info(env: &Env, info: SubscribeUpdateTransactionInfo) -> Re
 fn to_js_sol_transaction(env: &Env, tx: Transaction) -> Result<Object> {
   let mut obj = Object::new(env)?;
   let sigs_len = tx.signatures.len() as u32;
-  let mut sigs_arr = env.create_array(sigs_len)?;
+  let mut sigs_arr = env.create_uint8_array(sigs_len)?;
   for (i, sig) in tx.signatures.into_iter().enumerate() {
     sigs_arr.set(i as u32, bytes_to_js(sig))?;
   }
@@ -553,20 +553,20 @@ fn to_js_message(env: &Env, msg: Message) -> Result<Object> {
     obj.set("header", to_js_message_header(env, header)?)?;
   }
   let accts_len = msg.account_keys.len() as u32;
-  let mut accts_arr = env.create_array(accts_len)?;
+  let mut accts_arr = env.create_uint8_array(accts_len)?;
   for (i, acct) in msg.account_keys.into_iter().enumerate() {
     accts_arr.set(i as u32, bytes_to_js(acct))?;
   }
   obj.set("accountKeys", accts_arr)?;
   obj.set("recentBlockhash", bytes_to_js(msg.recent_blockhash))?;
   let insts_len = msg.instructions.len() as u32;
-  let mut insts_arr = env.create_array(insts_len)?;
+  let mut insts_arr = env.create_uint8_array(insts_len)?;
   for (i, inst) in msg.instructions.into_iter().enumerate() {
     insts_arr.set(i as u32, to_js_compiled_instruction(env, inst)?)?;
   }
   obj.set("instructions", insts_arr)?;
   let lookups_len = msg.address_table_lookups.len() as u32;
-  let mut lookups_arr = env.create_array(lookups_len)?;
+  let mut lookups_arr = env.create_uint8_array(lookups_len)?;
   for (i, lookup) in msg.address_table_lookups.into_iter().enumerate() {
     lookups_arr.set(i as u32, to_js_address_table_lookup(env, lookup)?)?;
   }
@@ -579,13 +579,13 @@ fn to_js_address_table_lookup(env: &Env, lookup: MessageAddressTableLookup) -> R
   let mut obj = Object::new(env)?;
   obj.set("accountKey", bytes_to_js(lookup.account_key))?;
   let writable_len = lookup.writable_indexes.len() as u32;
-  let mut writable_arr = env.create_array(writable_len)?;
+  let mut writable_arr = env.create_uint8_array(writable_len)?;
   for (i, idx) in lookup.writable_indexes.into_iter().enumerate() {
     writable_arr.set(i as u32, idx as u32)?;
   }
   obj.set("writableIndexes", writable_arr)?;
   let readonly_len = lookup.readonly_indexes.len() as u32;
-  let mut readonly_arr = env.create_array(readonly_len)?;
+  let mut readonly_arr = env.create_uint8_array(readonly_len)?;
   for (i, idx) in lookup.readonly_indexes.into_iter().enumerate() {
     readonly_arr.set(i as u32, idx as u32)?;
   }
@@ -625,58 +625,58 @@ fn to_js_transaction_status_meta(env: &Env, meta: TransactionStatusMeta) -> Resu
   }
   obj.set("fee", meta.fee.to_string())?;
   let pre_bal_len = meta.pre_balances.len() as u32;
-  let mut pre_bal_arr = env.create_array(pre_bal_len)?;
+  let mut pre_bal_arr = env.create_uint8_array(pre_bal_len)?;
   for (i, bal) in meta.pre_balances.into_iter().enumerate() {
     pre_bal_arr.set(i as u32, bal.to_string())?;
   }
   obj.set("preBalances", pre_bal_arr)?;
   let post_bal_len = meta.post_balances.len() as u32;
-  let mut post_bal_arr = env.create_array(post_bal_len)?;
+  let mut post_bal_arr = env.create_uint8_array(post_bal_len)?;
   for (i, bal) in meta.post_balances.into_iter().enumerate() {
     post_bal_arr.set(i as u32, bal.to_string())?;
   }
   obj.set("postBalances", post_bal_arr)?;
   let inner_len = meta.inner_instructions.len() as u32;
-  let mut inner_arr = env.create_array(inner_len)?;
+  let mut inner_arr = env.create_uint8_array(inner_len)?;
   for (i, ii) in meta.inner_instructions.into_iter().enumerate() {
     inner_arr.set(i as u32, to_js_inner_instructions(env, ii)?)?;
   }
   obj.set("innerInstructions", inner_arr)?;
   obj.set("innerInstructionsNone", meta.inner_instructions_none)?;
   let logs_len = meta.log_messages.len() as u32;
-  let mut logs_arr = env.create_array(logs_len)?;
+  let mut logs_arr = env.create_uint8_array(logs_len)?;
   for (i, log) in meta.log_messages.into_iter().enumerate() {
     logs_arr.set(i as u32, log)?;
   }
   obj.set("logMessages", logs_arr)?;
   obj.set("logMessagesNone", meta.log_messages_none)?;
   let pre_tb_len = meta.pre_token_balances.len() as u32;
-  let mut pre_tb_arr = env.create_array(pre_tb_len)?;
+  let mut pre_tb_arr = env.create_uint8_array(pre_tb_len)?;
   for (i, tb) in meta.pre_token_balances.into_iter().enumerate() {
     pre_tb_arr.set(i as u32, to_js_token_balance(env, tb)?)?;
   }
   obj.set("preTokenBalances", pre_tb_arr)?;
   let post_tb_len = meta.post_token_balances.len() as u32;
-  let mut post_tb_arr = env.create_array(post_tb_len)?;
+  let mut post_tb_arr = env.create_uint8_array(post_tb_len)?;
   for (i, tb) in meta.post_token_balances.into_iter().enumerate() {
     post_tb_arr.set(i as u32, to_js_token_balance(env, tb)?)?;
   }
   obj.set("postTokenBalances", post_tb_arr)?;
   let rewards_len = meta.rewards.len() as u32;
-  let mut rewards_arr = env.create_array(rewards_len)?;
+  let mut rewards_arr = env.create_uint8_array(rewards_len)?;
   for (i, r) in meta.rewards.into_iter().enumerate() {
     rewards_arr.set(i as u32, to_js_reward(env, r)?)?;
   }
   obj.set("rewards", rewards_arr)?;
 
   let writable_len = meta.loaded_writable_addresses.len() as u32;
-  let mut writable_arr = env.create_array(writable_len)?;
+  let mut writable_arr = env.create_uint8_array(writable_len)?;
   for (i, addr) in meta.loaded_writable_addresses.into_iter().enumerate() {
     writable_arr.set(i as u32, bytes_to_js(addr))?;
   }
   obj.set("loadedWritableAddresses", writable_arr)?;
   let readonly_len = meta.loaded_readonly_addresses.len() as u32;
-  let mut readonly_arr = env.create_array(readonly_len)?;
+  let mut readonly_arr = env.create_uint8_array(readonly_len)?;
   for (i, addr) in meta.loaded_readonly_addresses.into_iter().enumerate() {
     readonly_arr.set(i as u32, bytes_to_js(addr))?;
   }
@@ -704,7 +704,7 @@ fn to_js_inner_instructions(env: &Env, ii: InnerInstructions) -> Result<Object> 
   let mut obj = Object::new(env)?;
   obj.set("index", env.create_uint32(ii.index)?)?;
   let insts_len = ii.instructions.len() as u32;
-  let mut insts_arr = env.create_array(insts_len)?;
+  let mut insts_arr = env.create_uint8_array(insts_len)?;
   for (i, inst) in ii.instructions.into_iter().enumerate() {
     insts_arr.set(i as u32, to_js_inner_instruction(env, inst)?)?;
   }
@@ -716,7 +716,7 @@ fn to_js_inner_instruction(env: &Env, inst: InnerInstruction) -> Result<Object> 
   let mut obj = Object::new(env)?;
   obj.set("programIdIndex", env.create_uint32(inst.program_id_index)?)?;
   let accts_len = inst.accounts.len() as u32;
-  let mut accts_arr = env.create_array(accts_len)?;
+  let mut accts_arr = env.create_uint8_array(accts_len)?;
   for (i, acct_idx) in inst.accounts.into_iter().enumerate() {
     accts_arr.set(i as u32, env.create_uint32(acct_idx as u32)?)?;
   }
@@ -800,7 +800,7 @@ fn to_js_block(env: &Env, block: SubscribeUpdateBlock) -> Result<Object> {
   if let Some(rewards) = block.rewards {
     let mut rewards_obj = Object::new(env)?;
     let rewards_len = rewards.rewards.len() as u32;
-    let mut rewards_arr = env.create_array(rewards_len)?;
+    let mut rewards_arr = env.create_uint8_array(rewards_len)?;
     for (i, r) in rewards.rewards.into_iter().enumerate() {
       rewards_arr.set(i as u32, to_js_reward(env, r)?)?;
     }
@@ -818,19 +818,19 @@ fn to_js_block(env: &Env, block: SubscribeUpdateBlock) -> Result<Object> {
     obj.set("blockHeight", block_height_obj)?;
   }
   let txs_len = block.transactions.len() as u32;
-  let mut txs_arr = env.create_array(txs_len)?;
+  let mut txs_arr = env.create_uint8_array(txs_len)?;
   for (i, tx_info) in block.transactions.into_iter().enumerate() {
     txs_arr.set(i as u32, to_js_transaction_info(env, tx_info)?)?;
   }
   obj.set("transactions", txs_arr)?;
   let accts_len = block.accounts.len() as u32;
-  let mut accts_arr = env.create_array(accts_len)?;
+  let mut accts_arr = env.create_uint8_array(accts_len)?;
   for (i, acct_info) in block.accounts.into_iter().enumerate() {
     accts_arr.set(i as u32, to_js_account_info(env, acct_info)?)?;
   }
   obj.set("accounts", accts_arr)?;
   let entries_len = block.entries.len() as u32;
-  let mut entries_arr = env.create_array(entries_len)?;
+  let mut entries_arr = env.create_uint8_array(entries_len)?;
   for (i, entry) in block.entries.into_iter().enumerate() {
     entries_arr.set(i as u32, to_js_entry(env, entry)?)?;
   }
@@ -877,7 +877,7 @@ fn to_js_block_meta(env: &Env, meta: SubscribeUpdateBlockMeta) -> Result<Object>
   if let Some(rewards) = meta.rewards {
     let mut rewards_obj = Object::new(env)?;
     let rewards_len = rewards.rewards.len() as u32;
-    let mut rewards_arr = env.create_array(rewards_len)?;
+    let mut rewards_arr = env.create_uint8_array(rewards_len)?;
     for (i, r) in rewards.rewards.into_iter().enumerate() {
       rewards_arr.set(i as u32, to_js_reward(env, r)?)?;
     }
@@ -922,7 +922,7 @@ pub fn to_js_update(env: &Env, update: SubscribeUpdate) -> Result<Object> {
 
   // Filters as array of strings
   let filters_len = update.filters.len() as u32;
-  let mut filters_arr = env.create_array(filters_len)?;
+  let mut filters_arr = env.create_uint8_array(filters_len)?;
   for (i, filter) in update.filters.into_iter().enumerate() {
     filters_arr.set(i as u32, filter)?;
   }
