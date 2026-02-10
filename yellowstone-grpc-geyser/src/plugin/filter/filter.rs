@@ -819,8 +819,9 @@ impl FilterTransactions {
 #[derive(Debug, Clone)]
 struct FilterDeshredTransactionsInner {
     vote: Option<bool>,
-    static_account_include: HashSet<Pubkey>,
-    static_account_exclude: HashSet<Pubkey>,
+    account_include: HashSet<Pubkey>,
+    account_exclude: HashSet<Pubkey>,
+    account_required: HashSet<Pubkey>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -840,29 +841,38 @@ impl FilterDeshredTransactions {
         for (name, filter) in configs {
             FilterLimits::check_any(
                 filter.vote.is_none()
-                    && filter.static_account_include.is_empty()
-                    && filter.static_account_exclude.is_empty(),
+                    && filter.account_include.is_empty()
+                    && filter.account_exclude.is_empty()
+                    && filter.account_required.is_empty(),
                 limits.any,
             )?;
             FilterLimits::check_pubkey_max(
-                filter.static_account_include.len(),
-                limits.static_account_include_max,
+                filter.account_include.len(),
+                limits.account_include_max,
             )?;
             FilterLimits::check_pubkey_max(
-                filter.static_account_exclude.len(),
-                limits.static_account_exclude_max,
+                filter.account_exclude.len(),
+                limits.account_exclude_max,
+            )?;
+            FilterLimits::check_pubkey_max(
+                filter.account_required.len(),
+                limits.account_required_max,
             )?;
 
             filters.insert(
                 names.get(name)?,
                 FilterDeshredTransactionsInner {
                     vote: filter.vote,
-                    static_account_include: Filter::decode_pubkeys_into_set(
-                        &filter.static_account_include,
-                        &limits.static_account_include_reject,
+                    account_include: Filter::decode_pubkeys_into_set(
+                        &filter.account_include,
+                        &limits.account_include_reject,
                     )?,
-                    static_account_exclude: Filter::decode_pubkeys_into_set(
-                        &filter.static_account_exclude,
+                    account_exclude: Filter::decode_pubkeys_into_set(
+                        &filter.account_exclude,
+                        &HashSet::new(),
+                    )?,
+                    account_required: Filter::decode_pubkeys_into_set(
+                        &filter.account_required,
                         &HashSet::new(),
                     )?,
                 },
@@ -882,24 +892,33 @@ impl FilterDeshredTransactions {
                     }
                 }
 
-                if !inner.static_account_include.is_empty()
-                    && inner
-                        .static_account_include
-                        .intersection(&message.transaction.static_account_keys)
-                        .next()
-                        .is_none()
+                let tx = &message.transaction;
+
+                if !inner.account_include.is_empty()
+                    && !tx
+                        .all_account_keys()
+                        .any(|key| inner.account_include.contains(key))
                 {
                     return None;
                 }
 
-                if !inner.static_account_exclude.is_empty()
-                    && inner
-                        .static_account_exclude
-                        .intersection(&message.transaction.static_account_keys)
-                        .next()
-                        .is_some()
+                if !inner.account_exclude.is_empty()
+                    && tx
+                        .all_account_keys()
+                        .any(|key| inner.account_exclude.contains(key))
                 {
                     return None;
+                }
+
+                if !inner.account_required.is_empty() {
+                    let all_keys: HashSet<&Pubkey> = tx.all_account_keys().collect();
+                    if !inner
+                        .account_required
+                        .iter()
+                        .all(|key| all_keys.contains(key))
+                    {
+                        return None;
+                    }
                 }
 
                 Some(name.clone())

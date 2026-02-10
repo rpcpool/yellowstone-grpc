@@ -412,13 +412,17 @@ struct ActionSubscribeDeshred {
     #[clap(long)]
     vote: Option<bool>,
 
-    /// Filter by static account keys (include)
+    /// Filter by account keys (include) - matches static + ALT-loaded addresses
     #[clap(long)]
-    static_account_include: Vec<String>,
+    account_include: Vec<String>,
 
-    /// Filter by static account keys (exclude)
+    /// Filter by account keys (exclude) - matches static + ALT-loaded addresses
     #[clap(long)]
-    static_account_exclude: Vec<String>,
+    account_exclude: Vec<String>,
+
+    /// Filter by required account keys - all must be present (static or ALT-loaded)
+    #[clap(long)]
+    account_required: Vec<String>,
 
     /// Send ping in subscribe request
     #[clap(long)]
@@ -625,8 +629,9 @@ impl Action {
                     "client".to_string(),
                     SubscribeRequestFilterDeshredTransactions {
                         vote: args.vote,
-                        static_account_include: args.static_account_include.clone(),
-                        static_account_exclude: args.static_account_exclude.clone(),
+                        account_include: args.account_include.clone(),
+                        account_exclude: args.account_exclude.clone(),
+                        account_required: args.account_required.clone(),
                     },
                 );
 

@@ -244,6 +244,18 @@ impl FilteredUpdate {
                         signature: msg.transaction.signature.as_ref().into(),
                         is_vote: msg.transaction.is_vote,
                         transaction: Some(msg.transaction.transaction.clone()),
+                        loaded_writable_addresses: msg
+                            .transaction
+                            .loaded_writable_addresses
+                            .iter()
+                            .map(|pk| pk.as_ref().into())
+                            .collect(),
+                        loaded_readonly_addresses: msg
+                            .transaction
+                            .loaded_readonly_addresses
+                            .iter()
+                            .map(|pk| pk.as_ref().into())
+                            .collect(),
                     }),
                     slot: msg.slot,
                 })
@@ -870,6 +882,12 @@ impl FilteredUpdateDeshredTransaction {
             ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
         }
         message::encode(3u32, &tx.transaction, buf);
+        for pk in &tx.loaded_writable_addresses {
+            prost_bytes_encode_raw(4u32, pk.as_ref(), buf);
+        }
+        for pk in &tx.loaded_readonly_addresses {
+            prost_bytes_encode_raw(5u32, pk.as_ref(), buf);
+        }
     }
 
     fn tx_encoded_len(tx: &MessageDeshredTransactionInfo) -> usize {
@@ -880,6 +898,12 @@ impl FilteredUpdateDeshredTransaction {
                 0
             }
             + message::encoded_len(3u32, &tx.transaction)
+            + prost_repeated_encoded_len_map!(4u32, tx.loaded_writable_addresses, |pk| pk
+                .as_ref()
+                .len())
+            + prost_repeated_encoded_len_map!(5u32, tx.loaded_readonly_addresses, |pk| pk
+                .as_ref()
+                .len())
     }
 }
 

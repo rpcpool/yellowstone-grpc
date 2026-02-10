@@ -405,6 +405,8 @@ pub struct MessageDeshredTransactionInfo {
     pub is_vote: bool,
     pub transaction: confirmed_block::Transaction,
     pub static_account_keys: HashSet<Pubkey>,
+    pub loaded_writable_addresses: Vec<Pubkey>,
+    pub loaded_readonly_addresses: Vec<Pubkey>,
 }
 
 impl MessageDeshredTransactionInfo {
@@ -417,17 +419,43 @@ impl MessageDeshredTransactionInfo {
             .copied()
             .collect();
 
+        let (loaded_writable_addresses, loaded_readonly_addresses) = info
+            .loaded_addresses
+            .map(|la| (la.writable.clone(), la.readonly.clone()))
+            .unwrap_or_default();
+
         Self {
             signature: *info.signature,
             is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
             static_account_keys,
+            loaded_writable_addresses,
+            loaded_readonly_addresses,
         }
+    }
+
+    /// Returns all account keys (static + dynamically loaded from ALTs).
+    pub fn all_account_keys(&self) -> impl Iterator<Item = &Pubkey> {
+        self.static_account_keys
+            .iter()
+            .chain(self.loaded_writable_addresses.iter())
+            .chain(self.loaded_readonly_addresses.iter())
     }
 
     pub fn from_update_oneof(
         msg: SubscribeUpdateDeshredTransactionInfo,
     ) -> FromUpdateOneofResult<Self> {
+        let loaded_writable_addresses = msg
+            .loaded_writable_addresses
+            .iter()
+            .map(|b| Pubkey::try_from(b.as_slice()).map_err(|_| "invalid pubkey length"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let loaded_readonly_addresses = msg
+            .loaded_readonly_addresses
+            .iter()
+            .map(|b| Pubkey::try_from(b.as_slice()).map_err(|_| "invalid pubkey length"))
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             signature: Signature::try_from(msg.signature.as_slice())
                 .map_err(|_| "invalid signature length")?,
@@ -436,10 +464,12 @@ impl MessageDeshredTransactionInfo {
                 .transaction
                 .ok_or("transaction message should be defined")?,
             static_account_keys: HashSet::new(),
+            loaded_writable_addresses,
+            loaded_readonly_addresses,
         })
     }
 
-    pub fn fill_static_account_keys(&mut self) -> FromUpdateOneofResult<()> {
+    pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
         let mut static_account_keys = HashSet::new();
 
         if let Some(pubkeys) = self

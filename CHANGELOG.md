@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - geyser, client, proto: add deshred transaction subscription support (`SubscribeDeshred` RPC, `DeshredTransaction` update variant, client methods, and example CLI command)
+- geyser, proto: add loaded addresses (ALT) support for deshred transactions, enabling filtering on both static and dynamically loaded account keys (`account_include`, `account_exclude`, `account_required`)
 
 ### Breaking
 
