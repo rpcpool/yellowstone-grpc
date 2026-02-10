@@ -1485,3 +1485,89 @@ impl Geyser for GrpcService {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::{
+            plugin::filter::{limits::FilterLimits, name::FilterNames, Filter},
+            util::stream::{load_aware_channel, StatsSettings},
+        },
+        yellowstone_grpc_proto::prelude::{SubscribeRequest, SubscribeRequestFilterSlots},
+    };
+
+    fn create_filter_with_slots() -> Filter {
+        let config = SubscribeRequest {
+            slots: HashMap::from([("test".into(), SubscribeRequestFilterSlots::default())]),
+            ..Default::default()
+        };
+        let mut names = FilterNames::new(64, 1024, Duration::from_secs(1));
+        Filter::new(&config, &FilterLimits::default(), &mut names).unwrap()
+    }
+
+    // Regression test for #662 / #670.
+    //
+    // #662 (91709fd) removed ping_client_tx, the clone of client_tx that
+    // lived in the ping task. before that patch two senders existed for
+    // client_rx: ping_client_tx and incoming_client_tx. when a client
+    // half-closed its send stream (Ok(None)), the incoming task dropped its
+    // sender but ping_client_tx kept client_rx open so client_loop survived.
+    //
+    // after #662 incoming_client_tx is the only sender. without the fix from
+    // #670 (awaiting cancellation in the Ok(None) handler instead of
+    // breaking), dropping it closes client_rx and tears down the connection
+    // on a normal grpc half-close.
+    //
+    // this test keeps client_tx alive (simulating the Ok(None) handler
+    // holding incoming_client_tx via cancellation await), then has the client
+    // drop its subscription rx. the next try_send in client_loop fails,
+    // client_loop exits, on_drop fires and the cancellation token is set.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_cancellation_on_client_disconnect_after_half_close() {
+        let ct = CancellationToken::new();
+        let tt = TaskTracker::new();
+        let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let (stream_tx, stream_rx) = load_aware_channel(16, StatsSettings::default());
+
+        let handle = tokio::spawn(GrpcService::client_loop(
+            0,
+            Some("test".into()),
+            "test".into(),
+            stream_tx,
+            client_rx,
+            None,
+            broadcast_tx.subscribe(),
+            None,
+            None,
+            ct.clone(),
+            tt.clone(),
+        ));
+
+        // client sends filter then half-closes (client_tx stays alive)
+        client_tx
+            .send(Some((None, create_filter_with_slots())))
+            .unwrap();
+
+        // client drops subscription rx
+        drop(stream_rx);
+
+        // broadcast so client_loop hits try_send -> Closed
+        let msg = Message::Slot(MessageSlot {
+            slot: 100,
+            parent: Some(99),
+            status: SlotStatus::Processed,
+            dead_error: None,
+            created_at: Timestamp::from(SystemTime::now()),
+        });
+        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(vec![(1, msg)])));
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("client_loop did not exit")
+            .expect("client_loop panicked");
+
+        assert!(ct.is_cancelled());
+    }
+}
