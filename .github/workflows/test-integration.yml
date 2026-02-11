@@ -90,19 +90,26 @@ jobs:
           restore-keys: |
             v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
 
-      - name: Build geyser plugin
-        run: cargo build --release -p yellowstone-grpc-geyser
+      # For testing: use prebuilt release instead of building
+      # - name: Build geyser plugin
+      #   run: cargo build --release -p yellowstone-grpc-geyser
+
+      - name: Download yellowstone-grpc release
+        run: |
+          curl -sSL -o yellowstone-grpc-release.tar.bz2 "https://github.com/rpcpool/yellowstone-grpc/releases/download/v12.0.0%2Bsolana.3.1.8/yellowstone-grpc-geyser-release22-x86_64-unknown-linux-gnu.tar.bz2"
+          tar -xjf yellowstone-grpc-release.tar.bz2
+          echo "GEYSER_SO_PATH=$PWD/yellowstone-grpc-geyser-release22-x86_64-unknown-linux-gnu/yellowstone-grpc-geyser-release/lib/libyellowstone_grpc_geyser.so" >> $GITHUB_ENV
 
       - name: Download Agave
         run: |
           curl -sSL -o solana-release.tar.bz2 "https://github.com/anza-xyz/agave/releases/download/v3.1.8/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
           tar -xjf solana-release.tar.bz2
-          echo "PATH=$PWD/solana-release/bin:$PATH" >> $GITHUB_ENV
+          echo "PATH=$PWD/solana-release-x86_64-unknown-linux-gnu/solana-release/bin:$PATH" >> $GITHUB_ENV
           solana-test-validator --version
 
       - name: Prepare geyser config
         run: |
-          SO_PATH="$PWD/target/release/libyellowstone_grpc_geyser.so"
+          SO_PATH="${GEYSER_SO_PATH}"
           jq --arg lib "$SO_PATH" '.libpath = $lib' yellowstone-grpc-geyser/config.json > /tmp/geyser-config.json
           echo "GEYSER_CONFIG=/tmp/geyser-config.json" >> $GITHUB_ENV
 
