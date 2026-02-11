@@ -97,13 +97,13 @@ struct Args {
     #[clap(long)]
     http2_keep_alive_interval_ms: Option<u64>,
 
-    /// Sets the max connection-level flow control for HTTP2, default is 64MB
-    #[clap(long, default_value_t = 64 * 1024 * 1024)]
-    initial_connection_window_size: u32,
+    /// Sets the max connection-level flow control for HTTP2. Library default is 32MB if not specified.
+    #[clap(long)]
+    initial_connection_window_size: Option<u32>,
 
-    /// Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control, default is 64MB
-    #[clap(long, default_value_t = 64 * 1024 * 1024)]
-    initial_stream_window_size: u32,
+    /// Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control. Library default is 32MB if not specified.
+    #[clap(long)]
+    initial_stream_window_size: Option<u32>,
 
     ///Set http2 KEEP_ALIVE_TIMEOUT. Uses hyper’s default otherwise.
     #[clap(long)]
@@ -180,8 +180,12 @@ impl Args {
         if let Some(duration) = self.http2_keep_alive_interval_ms {
             builder = builder.http2_keep_alive_interval(Duration::from_millis(duration));
         }
-        builder = builder.initial_connection_window_size(self.initial_connection_window_size);
-        builder = builder.initial_stream_window_size(self.initial_stream_window_size);
+        if let Some(sz) = self.initial_connection_window_size {
+            builder = builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = self.initial_stream_window_size {
+            builder = builder.initial_stream_window_size(sz);
+        }
         if let Some(duration) = self.keep_alive_timeout_ms {
             builder = builder.keep_alive_timeout(Duration::from_millis(duration));
         }

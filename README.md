@@ -140,14 +140,14 @@ For high-throughput subscriptions, increase the Linux TCP receive buffer sizes. 
 Apply immediately:
 
 ```bash
-sudo sysctl -w net.core.rmem_max=67108864 net.ipv4.tcp_rmem="4096 87380 67108864"
+sudo sysctl -w net.core.rmem_max=33554432 net.ipv4.tcp_rmem="4096 87380 33554432"
 ```
 
 To persist across reboots, add to `/etc/sysctl.conf`:
 
 ```
-net.core.rmem_max=67108864
-net.ipv4.tcp_rmem=4096 87380 67108864
+net.core.rmem_max=33554432
+net.ipv4.tcp_rmem=4096 87380 33554432
 ```
 
 ### Examples

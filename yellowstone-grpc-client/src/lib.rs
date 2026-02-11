@@ -229,14 +229,9 @@ pub struct GeyserGrpcBuilder {
 }
 
 impl GeyserGrpcBuilder {
-    // Create new builder with optimized HTTP/2 flow control defaults.
-    // Sets stream and connection window sizes to 64MB to prevent
-    // flow control bottlenecks on high-throughput subscriptions.
     fn new(endpoint: Endpoint) -> Self {
         Self {
-            endpoint: endpoint
-                .initial_stream_window_size(64 * 1024 * 1024) // 64MB
-                .initial_connection_window_size(64 * 1024 * 1024), // 64MB
+            endpoint,
             x_token: None,
             x_request_snapshot: false,
             send_compressed: None,
@@ -246,12 +241,23 @@ impl GeyserGrpcBuilder {
         }
     }
 
+    /// Apply optimized HTTP/2 flow control defaults (32MB stream + connection window).
+    fn with_default_window_sizes(endpoint: Endpoint) -> Endpoint {
+        endpoint
+            .initial_stream_window_size(32 * 1024 * 1024)
+            .initial_connection_window_size(32 * 1024 * 1024)
+    }
+
     pub fn from_shared(endpoint: impl Into<Bytes>) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self::new(Endpoint::from_shared(endpoint)?))
+        Ok(Self::new(Self::with_default_window_sizes(
+            Endpoint::from_shared(endpoint)?,
+        )))
     }
 
     pub fn from_static(endpoint: &'static str) -> Self {
-        Self::new(Endpoint::from_static(endpoint))
+        Self::new(Self::with_default_window_sizes(
+            Endpoint::from_static(endpoint),
+        ))
     }
 
     // Create client
