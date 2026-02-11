@@ -135,22 +135,21 @@ jobs:
           wait-for: 60s
 
       - name: Run gRPC tests
-        env:
-          proto_flag: -import-path yellowstone-grpc-proto/proto -proto geyser.proto
-          endpoint: -plaintext localhost:10000
         run: |
           set -e
+          PROTO="-import-path yellowstone-grpc-proto/proto -proto geyser.proto"
+          ADDR="-plaintext localhost:10000"
           echo "GetVersion"
-          grpcurl ${{ env.proto_flag }} ${{ env.endpoint }} geyser.Geyser/GetVersion
+          grpcurl $PROTO $ADDR geyser.Geyser/GetVersion
 
           echo "Ping"
-          grpcurl ${{ env.proto_flag }} ${{ env.endpoint }} geyser.Geyser/Ping -d '{}'
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/Ping
 
           echo "GetSlot"
-          grpcurl ${{ env.proto_flag }} ${{ env.endpoint }} geyser.Geyser/GetSlot -d '{}'
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetSlot
 
           echo "GetBlockHeight"
-          grpcurl ${{ env.proto_flag }} ${{ env.endpoint }} geyser.Geyser/GetBlockHeight -d '{}'
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetBlockHeight
 
           echo "GetLatestBlockhash"
-          grpcurl ${{ env.proto_flag }} ${{ env.endpoint }} geyser.Geyser/GetLatestBlockhash -d '{}'
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetLatestBlockhash
