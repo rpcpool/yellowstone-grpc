@@ -5378,11 +5378,6 @@ version = "3.1.4"
 source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
 
 [[patch.unused]]
-name = "agave-geyser-plugin-interface"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
 name = "agave-reserved-account-keys"
 version = "3.1.4"
 source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"

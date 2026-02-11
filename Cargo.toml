@@ -110,7 +110,6 @@ solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", bra
 solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
 
 [profile.release]
 lto = true
