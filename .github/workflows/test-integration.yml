@@ -126,6 +126,7 @@ jobs:
         uses: JarvusInnovations/background-action@v1
         with:
           run: solana-test-validator --geyser-plugin-config "$GEYSER_CONFIG" --limit-ledger-size 50000000 &
+          wait-on: tcp:localhost:10000
           wait-for: 60s
 
       - name: Run gRPC tests
