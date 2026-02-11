@@ -1,3 +1,14 @@
+#[cfg(not(feature = "triton-ext"))]
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
+    ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+};
+#[cfg(feature = "triton-ext")]
+use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
+    GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
+    ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+};
+
 use {
     crate::{
         config::Config,
@@ -8,11 +19,6 @@ use {
             Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
             MessageTransaction,
         },
-    },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
     },
     std::{
         concat, env,

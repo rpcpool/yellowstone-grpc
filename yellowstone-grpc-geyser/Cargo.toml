@@ -49,7 +49,8 @@ tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { workspace = true }
+agave-geyser-plugin-interface = { workspace = true, optional = true }
+agave-geyser-plugin-interface-triton = { workspace = true, optional = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
@@ -82,7 +83,9 @@ harness = false
 required-features = ["bench"]
 
 [features]
+default = ["dep:agave-geyser-plugin-interface"]
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
+triton-ext = ["dep:agave-geyser-plugin-interface-triton"]
 
 [build-dependencies]
 anyhow = { workspace = true }

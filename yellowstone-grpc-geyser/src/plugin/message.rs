@@ -1,9 +1,16 @@
+#[cfg(not(feature = "triton-ext"))]
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+    SlotStatus as GeyserSlotStatus,
+};
+#[cfg(feature = "triton-ext")]
+use agave_geyser_plugin_interface_triton::geyser_plugin_interface::{
+    ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+    SlotStatus as GeyserSlotStatus,
+};
+
 use {
     super::convert_to,
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
-    },
     bytes::Bytes,
     prost_types::Timestamp,
     solana_clock::Slot,

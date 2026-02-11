@@ -68,9 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e0d37e3232be339a6a19a376c7696458b6a8183e95bf806709fad71595010b"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -82,9 +81,9 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "3.1.6"
+version = "3.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9f17248234375e36023de5dddf0a5670a0d66451672f831a52fcb4b49400c6d"
+checksum = "ff2b906e2711e80506d6e67d3df4768cc47e050871793457e347fce8de6e427c"
 dependencies = [
  "log",
  "solana-clock",
@@ -96,10 +95,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agave-geyser-plugin-interface"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+dependencies = [
+ "log",
+ "solana-clock",
+ "solana-hash 3.1.0",
+ "solana-message",
+ "solana-signature",
+ "solana-transaction",
+ "solana-transaction-status",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "agave-reserved-account-keys"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c651f94dc123e67cacfcf320b686aaaf8daf7910a263982ab806fe50ae197eb0"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 3.0.0",
@@ -188,7 +201,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -199,7 +212,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1012,7 +1025,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2595,7 +2608,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2608,7 +2621,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2918,9 +2931,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2743ab6d07e8261a2066d9f118a566a9c4c2143629a3c3d0a7dc58c3d37b659f"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "Inflector",
  "base64",
@@ -2960,9 +2972,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "903d72faba9acbb483b35e00d5c84e4245367336410553fc4d1f216219283724"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "base64",
  "bs58",
@@ -3636,9 +3647,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "3.1.6"
+version = "3.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb6f968e748eec0ce2eb04babc6872ca140325e78ac0dadca8330002b99fe840"
+checksum = "e1c6304e0da807b148c5fb7606fe2d474c3e871d8165f91178ea0afb6fdcf481"
 dependencies = [
  "bincode",
  "bs58",
@@ -3661,9 +3672,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4a59053cd2bbee5e85476739707f5030a089457c4140340960260e7aedc2a0"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 
 [[package]]
 name = "solana-system-interface"
@@ -3746,9 +3756,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "017886b71c6c22d15b08967c8d6f9e94f1745a2f01c280d08d22f82d5454bcd1"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "bincode",
  "serde",
@@ -3775,9 +3784,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15be3ad6c8f39beffcb5e5a5c62c87696c3749e9ef20b8ec62544dec101d22a2"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3818,9 +3826,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "3.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b3cb8c718af0245ab3b84324f856661d87e29f193c0c0125ed0a4c212814d61"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
 dependencies = [
  "base64",
  "bincode",
@@ -4200,7 +4207,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4849,7 +4856,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5149,7 +5156,8 @@ name = "yellowstone-grpc-geyser"
 version = "12.0.0"
 dependencies = [
  "affinity",
- "agave-geyser-plugin-interface",
+ "agave-geyser-plugin-interface 3.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "agave-geyser-plugin-interface 3.1.8 (git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public)",
  "anyhow",
  "base64",
  "bincode",
@@ -5373,46 +5381,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "agave-feature-set"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "agave-reserved-account-keys"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-account-decoder"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-account-decoder-client-types"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
 name = "solana-storage-proto"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-svm-feature-set"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-transaction-context"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-transaction-status"
-version = "3.1.4"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
-
-[[patch.unused]]
-name = "solana-transaction-status-client-types"
 version = "3.1.4"
 source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#d5b1f25b29c74da6915d1f848f958b3c79e3f3b7"
