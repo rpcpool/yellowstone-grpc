@@ -1,3 +1,4 @@
+use futures::{channel::mpsc::unbounded, stream, StreamExt};
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
@@ -6,7 +7,6 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
-    reconnection,
     std::time::Duration,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -140,6 +140,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
 
     /// Autoreconnection with configurable replay and deduplication
     pub async fn reconnecting_subscribe_with_request(
+        &mut self,
         config: reconnection::ReconnectionConfig,
         request: SubscribeRequest,
     ) -> GeyserGrpcClientResult<(
@@ -154,15 +155,35 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
                 .map_err(GeyserGrpcClientError::SubscribeSendError)?;
         }
 
-        // Parse config.
-
-        // Reconnection worker.
-        tokio::spawn(async move {});
-
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
 
-        Ok((subscribe_tx, response.into_inner()))
+        let stream = response.into_inner();
+
+        let (bridge_tx, bridge_rx) = mpsc::unbounded();
+        let bridge_stream = futures::stream::iter(bridge_rx);
+
+        // Reconnection worker.
+        tokio::spawn(async move {
+            let attempts = 0;
+            let backoff_ms = 1000;
+            loop {
+                // tokio::select! {
+                //     Some(msg) = stream.next().await => {}
+                // }
+                //
+                if attempts >= config.max_reconnection_attempts {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(backoff_ms));
+                // Exponential backoff.
+                backoff_ms *= 2;
+                backoff_ms = std::cmp::min(backoff_ms, config.max_backoff_time_ms);
+            }
+        });
+
+        // Ok((subscribe_tx, response.into_inner()))
     }
 
     // RPC calls
@@ -535,9 +556,9 @@ mod reconnection {
     #[derive(Default, Debug)]
     pub struct ReconnectionConfig {
         /// None = Unlimited
-        max_reconnection_attempts: u64,
-        max_backoff_time_ms: u64,
-        replay_enabled: bool,
+        pub max_reconnection_attempts: u64,
+        pub max_backoff_time_ms: u64,
+        pub replay_enabled: bool,
         // deduplication_enabled: bool,
     }
 
