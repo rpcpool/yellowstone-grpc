@@ -16,6 +16,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2026-02-11
+
+- yellowstone-grpc-client-12.1.0
+- yellowstone-grpc-client-simple-12.1.0
+- @triton-one/yellowstone-grpc-5.1.0
+
+### Features
+
+- client: set HTTP/2 stream and connection window sizes to 64MB by default to prevent flow control bottlenecks on high-throughput subscriptions
+- nodejs: increase default stream and connection window sizes from 4MB/8MB to 64MB
+- examples: add 64MB window size defaults to Go, Python, and Rust example clients
+- docs: add system tuning section to README for TCP receive buffer configuration
+
 ## 2026-02-06
 
 - yellowstone-grpc-client-12.0.0

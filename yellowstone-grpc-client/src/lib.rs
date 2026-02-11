@@ -229,10 +229,14 @@ pub struct GeyserGrpcBuilder {
 }
 
 impl GeyserGrpcBuilder {
-    // Create new builder
-    const fn new(endpoint: Endpoint) -> Self {
+    // Create new builder with optimized HTTP/2 flow control defaults.
+    // Sets stream and connection window sizes to 64MB to prevent
+    // flow control bottlenecks on high-throughput subscriptions.
+    fn new(endpoint: Endpoint) -> Self {
         Self {
-            endpoint,
+            endpoint: endpoint
+                .initial_stream_window_size(64 * 1024 * 1024) // 64MB
+                .initial_connection_window_size(64 * 1024 * 1024), // 64MB
             x_token: None,
             x_request_snapshot: false,
             send_compressed: None,
