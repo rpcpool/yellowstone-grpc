@@ -113,8 +113,10 @@ jobs:
 
       - name: Prepare geyser config
         run: |
-          SO_PATH="${GEYSER_SO_PATH}"
-          jq --arg lib "$SO_PATH" '.libpath = $lib' yellowstone-grpc-geyser/config.json > /tmp/geyser-config.json
+          jq -n \
+            --arg lib "${GEYSER_SO_PATH}" \
+            '{ libpath: $lib, log: { level: "info" }, grpc: { address: "0.0.0.0:10000", channel_capacity: "1_000_000", compression: { accept: ["gzip","zstd"], send: ["gzip","zstd"] }, max_decoding_message_size: "1_000_000_000", replay_stored_slots: "0", unary_concurrency_limit: "100" }, prometheus: { address: "0.0.0.0:9123" } }' \
+            > /tmp/geyser-config.json
           echo "GEYSER_CONFIG=/tmp/geyser-config.json" >> $GITHUB_ENV
 
       - name: Install grpcurl
