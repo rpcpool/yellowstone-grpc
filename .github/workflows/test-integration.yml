@@ -106,7 +106,7 @@ jobs:
           tar -xjf solana-release.tar.bz2
           ls -lha solana*/*/*
 
-          echo "PATH=$PWD/solana-release-x86_64-unknown-linux-gnu/solana-release/bin:$PATH" >> $GITHUB_ENV
+          echo "PATH=$PWD/solana-release/bin:$PATH" >> $GITHUB_ENV
           solana-test-validator --version
 
       - name: Prepare geyser config
