@@ -1,3 +1,4 @@
+use futures::{channel::mpsc::unbounded, stream, StreamExt};
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
     bytes::Bytes,
@@ -135,6 +136,54 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         self.subscribe_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
+    }
+
+    /// Autoreconnection with configurable replay and deduplication
+    pub async fn reconnecting_subscribe_with_request(
+        &mut self,
+        config: reconnection::ReconnectionConfig,
+        request: SubscribeRequest,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
+
+        let response: Response<Streaming<SubscribeUpdate>> =
+            self.geyser.subscribe(subscribe_rx).await?;
+
+        let stream = response.into_inner();
+
+        let (bridge_tx, bridge_rx) = mpsc::unbounded();
+        let bridge_stream = futures::stream::iter(bridge_rx);
+
+        // Reconnection worker.
+        tokio::spawn(async move {
+            let attempts = 0;
+            let backoff_ms = 1000;
+            loop {
+                // tokio::select! {
+                //     Some(msg) = stream.next().await => {}
+                // }
+                //
+                if attempts >= config.max_reconnection_attempts {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(backoff_ms));
+                // Exponential backoff.
+                backoff_ms *= 2;
+                backoff_ms = std::cmp::min(backoff_ms, config.max_backoff_time_ms);
+            }
+        });
+
+        // Ok((subscribe_tx, response.into_inner()))
     }
 
     // RPC calls
@@ -498,5 +547,47 @@ mod tests {
             "Err(TonicError(tonic::transport::Error(InvalidUri, InvalidUri(InvalidFormat))))"
                 .to_owned()
         );
+    }
+}
+
+/// Separate into a mod for isolation, for now.
+mod reconnection {
+    /// Configures reconnecting subscription connection behavior
+    #[derive(Default, Debug)]
+    pub struct ReconnectionConfig {
+        /// None = Unlimited
+        pub max_reconnection_attempts: u64,
+        pub max_backoff_time_ms: u64,
+        pub replay_enabled: bool,
+        // deduplication_enabled: bool,
+    }
+
+    impl ReconnectionConfig {
+        pub fn new(
+            max_reconnection_attempts: u64,
+            max_backoff_time_ms: u64,
+            replay_enabled: bool,
+        ) -> Self {
+            Self {
+                max_reconnection_attempts,
+                max_backoff_time_ms,
+                replay_enabled,
+            }
+        }
+    }
+
+    /// ReconnectionConfig Defaults
+    ///
+    /// Max Reconnection Attempts: 10
+    /// Max Backoff Time: 10_000ms
+    /// Replay Enabled: false
+    impl Default for ReconnectionConfig {
+        fn default() -> Self {
+            Self {
+                max_reconnection_attempts: 10,
+                max_backoff_time_ms: 10_000,
+                replay_enabled: false,
+            }
+        }
     }
 }
