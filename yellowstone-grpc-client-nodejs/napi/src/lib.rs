@@ -20,6 +20,8 @@ use yellowstone_grpc_proto::prelude::*;
 
 use crate::client::GrpcClient;
 
+mod js_types;
+
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
 /// Initialize crypto provider once.
