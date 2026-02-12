@@ -217,7 +217,7 @@ use napi_derive::napi;
                 }
 
                 impl<'env> #js_type_ident<'env> {
-                    pub fn from_rust(
+                    pub fn from_protobuf_to_js_type(
                         env: &'env Env,
                         value: #rust_oneof_path,
                     ) -> napi::Result<Self> {
@@ -236,7 +236,7 @@ use napi_derive::napi;
                 }
 
                 impl #js_type_ident {
-                    pub fn from_rust(
+                    pub fn from_protobuf_to_js_type(
                         env: &Env,
                         value: #rust_oneof_path,
                     ) -> napi::Result<Self> {
@@ -293,7 +293,7 @@ use napi_derive::napi;
                     }
 
                     impl<'env> #js_name<'env> {
-                        pub fn from_rust(
+                    pub fn from_protobuf_to_js_type(
                             env: &'env Env,
                             value: #orig,
                         ) -> napi::Result<Self> {
@@ -310,7 +310,7 @@ use napi_derive::napi;
                     }
 
                     impl #js_name {
-                        pub fn from_rust(
+                    pub fn from_protobuf_to_js_type(
                             env: &Env,
                             value: #orig,
                         ) -> napi::Result<Self> {
@@ -706,13 +706,13 @@ fn map_type_to_js_type_and_conversion_result_expression(
             if env_required_oneof_rust_paths.contains(&normalized_type_path_string) {
                 return (
                     quote!(#js_type_ident<'env>),
-                    quote!(#js_type_ident::from_rust(env, #input_value_expression)),
+                    quote!(#js_type_ident::from_protobuf_to_js_type(env, #input_value_expression)),
                 );
             }
 
             return (
                 quote!(#js_type_ident),
-                quote!(#js_type_ident::from_rust(env, #input_value_expression)),
+                quote!(#js_type_ident::from_protobuf_to_js_type(env, #input_value_expression)),
             );
         }
 
@@ -820,13 +820,13 @@ fn map_type_to_js_type_and_conversion_result_expression(
             if env_required_struct_names.contains(&type_name) {
                 return (
                     quote!(#js_type_ident<'env>),
-                    quote!(#js_type_ident::from_rust(env, #input_value_expression)),
+                    quote!(#js_type_ident::from_protobuf_to_js_type(env, #input_value_expression)),
                 );
             }
 
             return (
                 quote!(#js_type_ident),
-                quote!(#js_type_ident::from_rust(env, #input_value_expression)),
+                quote!(#js_type_ident::from_protobuf_to_js_type(env, #input_value_expression)),
             );
         }
     }

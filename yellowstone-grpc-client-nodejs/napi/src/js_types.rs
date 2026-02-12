@@ -11,16 +11,18 @@ pub struct JsSubscribeRequestFilterAccountsFilterFilter<'env> {
   pub lamports: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterLamports>,
 }
 impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &'env Env,
     value: subscribe_request_filter_accounts_filter::Filter,
   ) -> napi::Result<Self> {
     match value {
       subscribe_request_filter_accounts_filter::Filter::Memcmp(oneof_variant_value) => Ok(Self {
-        memcmp: Some(JsSubscribeRequestFilterAccountsFilterMemcmp::from_rust(
-          env,
-          oneof_variant_value,
-        )?),
+        memcmp: Some(
+          JsSubscribeRequestFilterAccountsFilterMemcmp::from_protobuf_to_js_type(
+            env,
+            oneof_variant_value,
+          )?,
+        ),
         datasize: None,
         token_account_state: None,
         lamports: None,
@@ -40,10 +42,12 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
         })
       }
       subscribe_request_filter_accounts_filter::Filter::Lamports(oneof_variant_value) => Ok(Self {
-        lamports: Some(JsSubscribeRequestFilterAccountsFilterLamports::from_rust(
-          env,
-          oneof_variant_value,
-        )?),
+        lamports: Some(
+          JsSubscribeRequestFilterAccountsFilterLamports::from_protobuf_to_js_type(
+            env,
+            oneof_variant_value,
+          )?,
+        ),
         memcmp: None,
         datasize: None,
         token_account_state: None,
@@ -60,7 +64,7 @@ pub struct JsSubscribeRequestFilterAccountsFilterLamportsCmp {
   pub gt: ::core::option::Option<String>,
 }
 impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &Env,
     value: subscribe_request_filter_accounts_filter_lamports::Cmp,
   ) -> napi::Result<Self> {
@@ -99,7 +103,7 @@ pub struct JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
   pub base64: ::core::option::Option<::prost::alloc::string::String>,
 }
 impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &'env Env,
     value: subscribe_request_filter_accounts_filter_memcmp::Data,
   ) -> napi::Result<Self> {
@@ -141,10 +145,13 @@ pub struct JsSubscribeUpdateUpdateOneof<'env> {
   pub entry: ::core::option::Option<JsSubscribeUpdateEntry<'env>>,
 }
 impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
-  pub fn from_rust(env: &'env Env, value: subscribe_update::UpdateOneof) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: subscribe_update::UpdateOneof,
+  ) -> napi::Result<Self> {
     match value {
       subscribe_update::UpdateOneof::Account(oneof_variant_value) => Ok(Self {
-        account: Some(JsSubscribeUpdateAccount::from_rust(
+        account: Some(JsSubscribeUpdateAccount::from_protobuf_to_js_type(
           env,
           oneof_variant_value,
         )?),
@@ -158,7 +165,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Slot(oneof_variant_value) => Ok(Self {
-        slot: Some(JsSubscribeUpdateSlot::from_rust(env, oneof_variant_value)?),
+        slot: Some(JsSubscribeUpdateSlot::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
         account: None,
         transaction: None,
         transaction_status: None,
@@ -169,7 +179,7 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Transaction(oneof_variant_value) => Ok(Self {
-        transaction: Some(JsSubscribeUpdateTransaction::from_rust(
+        transaction: Some(JsSubscribeUpdateTransaction::from_protobuf_to_js_type(
           env,
           oneof_variant_value,
         )?),
@@ -183,10 +193,9 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::TransactionStatus(oneof_variant_value) => Ok(Self {
-        transaction_status: Some(JsSubscribeUpdateTransactionStatus::from_rust(
-          env,
-          oneof_variant_value,
-        )?),
+        transaction_status: Some(
+          JsSubscribeUpdateTransactionStatus::from_protobuf_to_js_type(env, oneof_variant_value)?,
+        ),
         account: None,
         slot: None,
         transaction: None,
@@ -197,7 +206,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Block(oneof_variant_value) => Ok(Self {
-        block: Some(JsSubscribeUpdateBlock::from_rust(env, oneof_variant_value)?),
+        block: Some(JsSubscribeUpdateBlock::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
         account: None,
         slot: None,
         transaction: None,
@@ -208,7 +220,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Ping(oneof_variant_value) => Ok(Self {
-        ping: Some(JsSubscribeUpdatePing::from_rust(env, oneof_variant_value)?),
+        ping: Some(JsSubscribeUpdatePing::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
         account: None,
         slot: None,
         transaction: None,
@@ -219,7 +234,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Pong(oneof_variant_value) => Ok(Self {
-        pong: Some(JsSubscribeUpdatePong::from_rust(env, oneof_variant_value)?),
+        pong: Some(JsSubscribeUpdatePong::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
         account: None,
         slot: None,
         transaction: None,
@@ -230,7 +248,7 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::BlockMeta(oneof_variant_value) => Ok(Self {
-        block_meta: Some(JsSubscribeUpdateBlockMeta::from_rust(
+        block_meta: Some(JsSubscribeUpdateBlockMeta::from_protobuf_to_js_type(
           env,
           oneof_variant_value,
         )?),
@@ -244,7 +262,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
         entry: None,
       }),
       subscribe_update::UpdateOneof::Entry(oneof_variant_value) => Ok(Self {
-        entry: Some(JsSubscribeUpdateEntry::from_rust(env, oneof_variant_value)?),
+        entry: Some(JsSubscribeUpdateEntry::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
         account: None,
         slot: None,
         transaction: None,
@@ -285,14 +306,14 @@ pub struct JsSubscribeRequest<'env> {
   pub from_slot: ::core::option::Option<String>,
 }
 impl<'env> JsSubscribeRequest<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: SubscribeRequest) -> napi::Result<Self> {
     Ok(Self {
       accounts: value
         .accounts
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterAccounts::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterAccounts::from_protobuf_to_js_type(env, hash_map_entry_value)?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -301,7 +322,7 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterSlots::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterSlots::from_protobuf_to_js_type(env, hash_map_entry_value)?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -310,7 +331,10 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterTransactions::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterTransactions::from_protobuf_to_js_type(
+              env,
+              hash_map_entry_value,
+            )?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -319,7 +343,10 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterTransactions::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterTransactions::from_protobuf_to_js_type(
+              env,
+              hash_map_entry_value,
+            )?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -328,7 +355,7 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterBlocks::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterBlocks::from_protobuf_to_js_type(env, hash_map_entry_value)?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -337,7 +364,10 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterBlocksMeta::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterBlocksMeta::from_protobuf_to_js_type(
+              env,
+              hash_map_entry_value,
+            )?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -346,7 +376,7 @@ impl<'env> JsSubscribeRequest<'env> {
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_value =
-            JsSubscribeRequestFilterEntry::from_rust(env, hash_map_entry_value)?;
+            JsSubscribeRequestFilterEntry::from_protobuf_to_js_type(env, hash_map_entry_value)?;
           Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
         })
         .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
@@ -357,11 +387,15 @@ impl<'env> JsSubscribeRequest<'env> {
       accounts_data_slice: value
         .accounts_data_slice
         .into_iter()
-        .map(|vec_inner_value| JsSubscribeRequestAccountsDataSlice::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsSubscribeRequestAccountsDataSlice::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       ping: value
         .ping
-        .map(|option_inner_value| JsSubscribeRequestPing::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeRequestPing::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       from_slot: value
         .from_slot
@@ -378,7 +412,10 @@ pub struct JsSubscribeRequestFilterAccounts<'env> {
   pub nonempty_txn_signature: ::core::option::Option<bool>,
 }
 impl<'env> JsSubscribeRequestFilterAccounts<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeRequestFilterAccounts) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeRequestFilterAccounts,
+  ) -> napi::Result<Self> {
     Ok(Self {
       account: value
         .account
@@ -394,7 +431,7 @@ impl<'env> JsSubscribeRequestFilterAccounts<'env> {
         .filters
         .into_iter()
         .map(|vec_inner_value| {
-          JsSubscribeRequestFilterAccountsFilter::from_rust(env, vec_inner_value)
+          JsSubscribeRequestFilterAccountsFilter::from_protobuf_to_js_type(env, vec_inner_value)
         })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       nonempty_txn_signature: value
@@ -409,7 +446,7 @@ pub struct JsSubscribeRequestFilterAccountsFilter<'env> {
   pub filter: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterFilter<'env>>,
 }
 impl<'env> JsSubscribeRequestFilterAccountsFilter<'env> {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &'env Env,
     value: SubscribeRequestFilterAccountsFilter,
   ) -> napi::Result<Self> {
@@ -417,7 +454,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilter<'env> {
       filter: value
         .filter
         .map(|option_inner_value| {
-          JsSubscribeRequestFilterAccountsFilterFilter::from_rust(env, option_inner_value)
+          JsSubscribeRequestFilterAccountsFilterFilter::from_protobuf_to_js_type(
+            env,
+            option_inner_value,
+          )
         })
         .transpose()?,
     })
@@ -429,7 +469,7 @@ pub struct JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
   pub data: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterMemcmpData<'env>>,
 }
 impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &'env Env,
     value: SubscribeRequestFilterAccountsFilterMemcmp,
   ) -> napi::Result<Self> {
@@ -438,7 +478,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
       data: value
         .data
         .map(|option_inner_value| {
-          JsSubscribeRequestFilterAccountsFilterMemcmpData::from_rust(env, option_inner_value)
+          JsSubscribeRequestFilterAccountsFilterMemcmpData::from_protobuf_to_js_type(
+            env,
+            option_inner_value,
+          )
         })
         .transpose()?,
     })
@@ -450,7 +493,7 @@ pub struct JsSubscribeRequestFilterAccountsFilterLamports {
   pub cmp: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterLamportsCmp>,
 }
 impl JsSubscribeRequestFilterAccountsFilterLamports {
-  pub fn from_rust(
+  pub fn from_protobuf_to_js_type(
     env: &Env,
     value: SubscribeRequestFilterAccountsFilterLamports,
   ) -> napi::Result<Self> {
@@ -458,7 +501,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamports {
       cmp: value
         .cmp
         .map(|option_inner_value| {
-          JsSubscribeRequestFilterAccountsFilterLamportsCmp::from_rust(env, option_inner_value)
+          JsSubscribeRequestFilterAccountsFilterLamportsCmp::from_protobuf_to_js_type(
+            env,
+            option_inner_value,
+          )
         })
         .transpose()?,
     })
@@ -471,7 +517,10 @@ pub struct JsSubscribeRequestFilterSlots {
   pub interslot_updates: ::core::option::Option<bool>,
 }
 impl JsSubscribeRequestFilterSlots {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterSlots) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterSlots,
+  ) -> napi::Result<Self> {
     Ok(Self {
       filter_by_commitment: value
         .filter_by_commitment
@@ -495,7 +544,10 @@ pub struct JsSubscribeRequestFilterTransactions {
   pub account_required: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 impl JsSubscribeRequestFilterTransactions {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterTransactions) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterTransactions,
+  ) -> napi::Result<Self> {
     Ok(Self {
       vote: value
         .vote
@@ -536,7 +588,10 @@ pub struct JsSubscribeRequestFilterBlocks {
   pub include_entries: ::core::option::Option<bool>,
 }
 impl JsSubscribeRequestFilterBlocks {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterBlocks) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterBlocks,
+  ) -> napi::Result<Self> {
     Ok(Self {
       account_include: value
         .account_include
@@ -562,7 +617,10 @@ impl JsSubscribeRequestFilterBlocks {
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterBlocksMeta {}
 impl JsSubscribeRequestFilterBlocksMeta {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterBlocksMeta) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterBlocksMeta,
+  ) -> napi::Result<Self> {
     Ok(Self {})
   }
 }
@@ -570,7 +628,10 @@ impl JsSubscribeRequestFilterBlocksMeta {
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterEntry {}
 impl JsSubscribeRequestFilterEntry {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterEntry) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterEntry,
+  ) -> napi::Result<Self> {
     Ok(Self {})
   }
 }
@@ -581,7 +642,10 @@ pub struct JsSubscribeRequestAccountsDataSlice {
   pub length: String,
 }
 impl JsSubscribeRequestAccountsDataSlice {
-  pub fn from_rust(env: &Env, value: SubscribeRequestAccountsDataSlice) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestAccountsDataSlice,
+  ) -> napi::Result<Self> {
     Ok(Self {
       offset: Ok::<_, napi::Error>(value.offset.to_string())?,
       length: Ok::<_, napi::Error>(value.length.to_string())?,
@@ -594,7 +658,7 @@ pub struct JsSubscribeRequestPing {
   pub id: i32,
 }
 impl JsSubscribeRequestPing {
-  pub fn from_rust(env: &Env, value: SubscribeRequestPing) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeRequestPing) -> napi::Result<Self> {
     Ok(Self {
       id: Ok::<_, napi::Error>(value.id)?,
     })
@@ -607,7 +671,7 @@ pub struct JsSubscribeUpdate<'env> {
   pub update_oneof: ::core::option::Option<JsSubscribeUpdateUpdateOneof<'env>>,
 }
 impl<'env> JsSubscribeUpdate<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdate) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: SubscribeUpdate) -> napi::Result<Self> {
     Ok(Self {
       filters: value
         .filters
@@ -626,7 +690,9 @@ impl<'env> JsSubscribeUpdate<'env> {
         .transpose()?,
       update_oneof: value
         .update_oneof
-        .map(|option_inner_value| JsSubscribeUpdateUpdateOneof::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeUpdateUpdateOneof::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
@@ -638,11 +704,16 @@ pub struct JsSubscribeUpdateAccount<'env> {
   pub is_startup: bool,
 }
 impl<'env> JsSubscribeUpdateAccount<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateAccount) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateAccount,
+  ) -> napi::Result<Self> {
     Ok(Self {
       account: value
         .account
-        .map(|option_inner_value| JsSubscribeUpdateAccountInfo::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeUpdateAccountInfo::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       is_startup: Ok::<_, napi::Error>(value.is_startup)?,
@@ -661,7 +732,10 @@ pub struct JsSubscribeUpdateAccountInfo<'env> {
   pub txn_signature: ::core::option::Option<BufferSlice<'env>>,
 }
 impl<'env> JsSubscribeUpdateAccountInfo<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateAccountInfo) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateAccountInfo,
+  ) -> napi::Result<Self> {
     Ok(Self {
       pubkey: BufferSlice::copy_from(env, &value.pubkey)?,
       lamports: Ok::<_, napi::Error>(value.lamports.to_string())?,
@@ -686,7 +760,7 @@ pub struct JsSubscribeUpdateSlot {
   pub dead_error: ::core::option::Option<::prost::alloc::string::String>,
 }
 impl JsSubscribeUpdateSlot {
-  pub fn from_rust(env: &Env, value: SubscribeUpdateSlot) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeUpdateSlot) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       parent: value
@@ -707,12 +781,15 @@ pub struct JsSubscribeUpdateTransaction<'env> {
   pub slot: String,
 }
 impl<'env> JsSubscribeUpdateTransaction<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateTransaction) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateTransaction,
+  ) -> napi::Result<Self> {
     Ok(Self {
       transaction: value
         .transaction
         .map(|option_inner_value| {
-          JsSubscribeUpdateTransactionInfo::from_rust(env, option_inner_value)
+          JsSubscribeUpdateTransactionInfo::from_protobuf_to_js_type(env, option_inner_value)
         })
         .transpose()?,
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
@@ -728,17 +805,22 @@ pub struct JsSubscribeUpdateTransactionInfo<'env> {
   pub index: String,
 }
 impl<'env> JsSubscribeUpdateTransactionInfo<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateTransactionInfo) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateTransactionInfo,
+  ) -> napi::Result<Self> {
     Ok(Self {
       signature: BufferSlice::copy_from(env, &value.signature)?,
       is_vote: Ok::<_, napi::Error>(value.is_vote)?,
       transaction: value
         .transaction
-        .map(|option_inner_value| JsTransaction::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsTransaction::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       meta: value
         .meta
-        .map(|option_inner_value| JsTransactionStatusMeta::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsTransactionStatusMeta::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       index: Ok::<_, napi::Error>(value.index.to_string())?,
     })
@@ -753,7 +835,10 @@ pub struct JsSubscribeUpdateTransactionStatus<'env> {
   pub err: ::core::option::Option<JsTransactionError<'env>>,
 }
 impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateTransactionStatus) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateTransactionStatus,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       signature: BufferSlice::copy_from(env, &value.signature)?,
@@ -761,7 +846,9 @@ impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
       index: Ok::<_, napi::Error>(value.index.to_string())?,
       err: value
         .err
-        .map(|option_inner_value| JsTransactionError::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsTransactionError::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
@@ -783,21 +870,26 @@ pub struct JsSubscribeUpdateBlock<'env> {
   pub entries: ::prost::alloc::vec::Vec<JsSubscribeUpdateEntry<'env>>,
 }
 impl<'env> JsSubscribeUpdateBlock<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateBlock) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateBlock,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
       rewards: value
         .rewards
-        .map(|option_inner_value| JsRewards::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsRewards::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       block_time: value
         .block_time
-        .map(|option_inner_value| JsUnixTimestamp::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsUnixTimestamp::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       block_height: value
         .block_height
-        .map(|option_inner_value| JsBlockHeight::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsBlockHeight::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       parent_slot: Ok::<_, napi::Error>(value.parent_slot.to_string())?,
       parent_blockhash: Ok::<_, napi::Error>(value.parent_blockhash)?,
@@ -807,19 +899,25 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
       transactions: value
         .transactions
         .into_iter()
-        .map(|vec_inner_value| JsSubscribeUpdateTransactionInfo::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsSubscribeUpdateTransactionInfo::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       updated_account_count: Ok::<_, napi::Error>(value.updated_account_count.to_string())?,
       accounts: value
         .accounts
         .into_iter()
-        .map(|vec_inner_value| JsSubscribeUpdateAccountInfo::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsSubscribeUpdateAccountInfo::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       entries_count: Ok::<_, napi::Error>(value.entries_count.to_string())?,
       entries: value
         .entries
         .into_iter()
-        .map(|vec_inner_value| JsSubscribeUpdateEntry::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsSubscribeUpdateEntry::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
@@ -838,21 +936,26 @@ pub struct JsSubscribeUpdateBlockMeta {
   pub entries_count: String,
 }
 impl JsSubscribeUpdateBlockMeta {
-  pub fn from_rust(env: &Env, value: SubscribeUpdateBlockMeta) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeUpdateBlockMeta,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
       rewards: value
         .rewards
-        .map(|option_inner_value| JsRewards::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsRewards::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       block_time: value
         .block_time
-        .map(|option_inner_value| JsUnixTimestamp::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsUnixTimestamp::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       block_height: value
         .block_height
-        .map(|option_inner_value| JsBlockHeight::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsBlockHeight::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       parent_slot: Ok::<_, napi::Error>(value.parent_slot.to_string())?,
       parent_blockhash: Ok::<_, napi::Error>(value.parent_blockhash)?,
@@ -873,7 +976,10 @@ pub struct JsSubscribeUpdateEntry<'env> {
   pub starting_transaction_index: String,
 }
 impl<'env> JsSubscribeUpdateEntry<'env> {
-  pub fn from_rust(env: &'env Env, value: SubscribeUpdateEntry) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateEntry,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       index: Ok::<_, napi::Error>(value.index.to_string())?,
@@ -892,7 +998,7 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdatePing {}
 impl JsSubscribeUpdatePing {
-  pub fn from_rust(env: &Env, value: SubscribeUpdatePing) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeUpdatePing) -> napi::Result<Self> {
     Ok(Self {})
   }
 }
@@ -902,7 +1008,7 @@ pub struct JsSubscribeUpdatePong {
   pub id: i32,
 }
 impl JsSubscribeUpdatePong {
-  pub fn from_rust(env: &Env, value: SubscribeUpdatePong) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeUpdatePong) -> napi::Result<Self> {
     Ok(Self {
       id: Ok::<_, napi::Error>(value.id)?,
     })
@@ -912,7 +1018,10 @@ impl JsSubscribeUpdatePong {
 #[derive(Debug, Clone)]
 pub struct JsSubscribeReplayInfoRequest {}
 impl JsSubscribeReplayInfoRequest {
-  pub fn from_rust(env: &Env, value: SubscribeReplayInfoRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeReplayInfoRequest,
+  ) -> napi::Result<Self> {
     Ok(Self {})
   }
 }
@@ -922,7 +1031,10 @@ pub struct JsSubscribeReplayInfoResponse {
   pub first_available: ::core::option::Option<String>,
 }
 impl JsSubscribeReplayInfoResponse {
-  pub fn from_rust(env: &Env, value: SubscribeReplayInfoResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeReplayInfoResponse,
+  ) -> napi::Result<Self> {
     Ok(Self {
       first_available: value
         .first_available
@@ -937,7 +1049,7 @@ pub struct JsPingRequest {
   pub count: i32,
 }
 impl JsPingRequest {
-  pub fn from_rust(env: &Env, value: PingRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: PingRequest) -> napi::Result<Self> {
     Ok(Self {
       count: Ok::<_, napi::Error>(value.count)?,
     })
@@ -949,7 +1061,7 @@ pub struct JsPongResponse {
   pub count: i32,
 }
 impl JsPongResponse {
-  pub fn from_rust(env: &Env, value: PongResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: PongResponse) -> napi::Result<Self> {
     Ok(Self {
       count: Ok::<_, napi::Error>(value.count)?,
     })
@@ -961,7 +1073,10 @@ pub struct JsGetLatestBlockhashRequest {
   pub commitment: ::core::option::Option<i32>,
 }
 impl JsGetLatestBlockhashRequest {
-  pub fn from_rust(env: &Env, value: GetLatestBlockhashRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: GetLatestBlockhashRequest,
+  ) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
         .commitment
@@ -978,7 +1093,10 @@ pub struct JsGetLatestBlockhashResponse {
   pub last_valid_block_height: String,
 }
 impl JsGetLatestBlockhashResponse {
-  pub fn from_rust(env: &Env, value: GetLatestBlockhashResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: GetLatestBlockhashResponse,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
@@ -992,7 +1110,7 @@ pub struct JsGetBlockHeightRequest {
   pub commitment: ::core::option::Option<i32>,
 }
 impl JsGetBlockHeightRequest {
-  pub fn from_rust(env: &Env, value: GetBlockHeightRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetBlockHeightRequest) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
         .commitment
@@ -1007,7 +1125,7 @@ pub struct JsGetBlockHeightResponse {
   pub block_height: String,
 }
 impl JsGetBlockHeightResponse {
-  pub fn from_rust(env: &Env, value: GetBlockHeightResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetBlockHeightResponse) -> napi::Result<Self> {
     Ok(Self {
       block_height: Ok::<_, napi::Error>(value.block_height.to_string())?,
     })
@@ -1019,7 +1137,7 @@ pub struct JsGetSlotRequest {
   pub commitment: ::core::option::Option<i32>,
 }
 impl JsGetSlotRequest {
-  pub fn from_rust(env: &Env, value: GetSlotRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetSlotRequest) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
         .commitment
@@ -1034,7 +1152,7 @@ pub struct JsGetSlotResponse {
   pub slot: String,
 }
 impl JsGetSlotResponse {
-  pub fn from_rust(env: &Env, value: GetSlotResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetSlotResponse) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
     })
@@ -1044,7 +1162,7 @@ impl JsGetSlotResponse {
 #[derive(Debug, Clone)]
 pub struct JsGetVersionRequest {}
 impl JsGetVersionRequest {
-  pub fn from_rust(env: &Env, value: GetVersionRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetVersionRequest) -> napi::Result<Self> {
     Ok(Self {})
   }
 }
@@ -1054,7 +1172,7 @@ pub struct JsGetVersionResponse {
   pub version: ::prost::alloc::string::String,
 }
 impl JsGetVersionResponse {
-  pub fn from_rust(env: &Env, value: GetVersionResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: GetVersionResponse) -> napi::Result<Self> {
     Ok(Self {
       version: Ok::<_, napi::Error>(value.version)?,
     })
@@ -1067,7 +1185,7 @@ pub struct JsIsBlockhashValidRequest {
   pub commitment: ::core::option::Option<i32>,
 }
 impl JsIsBlockhashValidRequest {
-  pub fn from_rust(env: &Env, value: IsBlockhashValidRequest) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: IsBlockhashValidRequest) -> napi::Result<Self> {
     Ok(Self {
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
       commitment: value
@@ -1084,7 +1202,10 @@ pub struct JsIsBlockhashValidResponse {
   pub valid: bool,
 }
 impl JsIsBlockhashValidResponse {
-  pub fn from_rust(env: &Env, value: IsBlockhashValidResponse) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: IsBlockhashValidResponse,
+  ) -> napi::Result<Self> {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       valid: Ok::<_, napi::Error>(value.valid)?,
@@ -1103,7 +1224,7 @@ pub struct JsConfirmedBlock<'env> {
   pub num_partitions: ::core::option::Option<JsNumPartitions>,
 }
 impl<'env> JsConfirmedBlock<'env> {
-  pub fn from_rust(env: &'env Env, value: ConfirmedBlock) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: ConfirmedBlock) -> napi::Result<Self> {
     Ok(Self {
       previous_blockhash: Ok::<_, napi::Error>(value.previous_blockhash)?,
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
@@ -1111,24 +1232,30 @@ impl<'env> JsConfirmedBlock<'env> {
       transactions: value
         .transactions
         .into_iter()
-        .map(|vec_inner_value| JsConfirmedTransaction::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsConfirmedTransaction::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       rewards: value
         .rewards
         .into_iter()
-        .map(|vec_inner_value| JsReward::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsReward::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       block_time: value
         .block_time
-        .map(|option_inner_value| JsUnixTimestamp::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsUnixTimestamp::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       block_height: value
         .block_height
-        .map(|option_inner_value| JsBlockHeight::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsBlockHeight::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       num_partitions: value
         .num_partitions
-        .map(|option_inner_value| JsNumPartitions::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsNumPartitions::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
@@ -1139,15 +1266,20 @@ pub struct JsConfirmedTransaction<'env> {
   pub meta: ::core::option::Option<JsTransactionStatusMeta<'env>>,
 }
 impl<'env> JsConfirmedTransaction<'env> {
-  pub fn from_rust(env: &'env Env, value: ConfirmedTransaction) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: ConfirmedTransaction,
+  ) -> napi::Result<Self> {
     Ok(Self {
       transaction: value
         .transaction
-        .map(|option_inner_value| JsTransaction::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsTransaction::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       meta: value
         .meta
-        .map(|option_inner_value| JsTransactionStatusMeta::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsTransactionStatusMeta::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
@@ -1158,7 +1290,7 @@ pub struct JsTransaction<'env> {
   pub message: ::core::option::Option<JsMessage<'env>>,
 }
 impl<'env> JsTransaction<'env> {
-  pub fn from_rust(env: &'env Env, value: Transaction) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: Transaction) -> napi::Result<Self> {
     Ok(Self {
       signatures: value
         .signatures
@@ -1167,7 +1299,7 @@ impl<'env> JsTransaction<'env> {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       message: value
         .message
-        .map(|option_inner_value| JsMessage::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsMessage::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
     })
   }
@@ -1182,11 +1314,13 @@ pub struct JsMessage<'env> {
   pub address_table_lookups: ::prost::alloc::vec::Vec<JsMessageAddressTableLookup<'env>>,
 }
 impl<'env> JsMessage<'env> {
-  pub fn from_rust(env: &'env Env, value: Message) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: Message) -> napi::Result<Self> {
     Ok(Self {
       header: value
         .header
-        .map(|option_inner_value| JsMessageHeader::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsMessageHeader::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       account_keys: value
         .account_keys
@@ -1197,13 +1331,17 @@ impl<'env> JsMessage<'env> {
       instructions: value
         .instructions
         .into_iter()
-        .map(|vec_inner_value| JsCompiledInstruction::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsCompiledInstruction::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       versioned: Ok::<_, napi::Error>(value.versioned)?,
       address_table_lookups: value
         .address_table_lookups
         .into_iter()
-        .map(|vec_inner_value| JsMessageAddressTableLookup::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| {
+          JsMessageAddressTableLookup::from_protobuf_to_js_type(env, vec_inner_value)
+        })
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
@@ -1216,7 +1354,7 @@ pub struct JsMessageHeader {
   pub num_readonly_unsigned_accounts: u32,
 }
 impl JsMessageHeader {
-  pub fn from_rust(env: &Env, value: MessageHeader) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: MessageHeader) -> napi::Result<Self> {
     Ok(Self {
       num_required_signatures: Ok::<_, napi::Error>(value.num_required_signatures)?,
       num_readonly_signed_accounts: Ok::<_, napi::Error>(value.num_readonly_signed_accounts)?,
@@ -1231,7 +1369,10 @@ pub struct JsMessageAddressTableLookup<'env> {
   pub readonly_indexes: BufferSlice<'env>,
 }
 impl<'env> JsMessageAddressTableLookup<'env> {
-  pub fn from_rust(env: &'env Env, value: MessageAddressTableLookup) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: MessageAddressTableLookup,
+  ) -> napi::Result<Self> {
     Ok(Self {
       account_key: BufferSlice::copy_from(env, &value.account_key)?,
       writable_indexes: BufferSlice::copy_from(env, &value.writable_indexes)?,
@@ -1260,11 +1401,16 @@ pub struct JsTransactionStatusMeta<'env> {
   pub cost_units: ::core::option::Option<String>,
 }
 impl<'env> JsTransactionStatusMeta<'env> {
-  pub fn from_rust(env: &'env Env, value: TransactionStatusMeta) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: TransactionStatusMeta,
+  ) -> napi::Result<Self> {
     Ok(Self {
       err: value
         .err
-        .map(|option_inner_value| JsTransactionError::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsTransactionError::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       fee: Ok::<_, napi::Error>(value.fee.to_string())?,
       pre_balances: value
@@ -1280,7 +1426,7 @@ impl<'env> JsTransactionStatusMeta<'env> {
       inner_instructions: value
         .inner_instructions
         .into_iter()
-        .map(|vec_inner_value| JsInnerInstructions::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsInnerInstructions::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       inner_instructions_none: Ok::<_, napi::Error>(value.inner_instructions_none)?,
       log_messages: value
@@ -1292,17 +1438,17 @@ impl<'env> JsTransactionStatusMeta<'env> {
       pre_token_balances: value
         .pre_token_balances
         .into_iter()
-        .map(|vec_inner_value| JsTokenBalance::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsTokenBalance::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       post_token_balances: value
         .post_token_balances
         .into_iter()
-        .map(|vec_inner_value| JsTokenBalance::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsTokenBalance::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       rewards: value
         .rewards
         .into_iter()
-        .map(|vec_inner_value| JsReward::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsReward::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       loaded_writable_addresses: value
         .loaded_writable_addresses
@@ -1316,7 +1462,7 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       return_data: value
         .return_data
-        .map(|option_inner_value| JsReturnData::from_rust(env, option_inner_value))
+        .map(|option_inner_value| JsReturnData::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
       return_data_none: Ok::<_, napi::Error>(value.return_data_none)?,
       compute_units_consumed: value
@@ -1335,7 +1481,7 @@ pub struct JsTransactionError<'env> {
   pub err: BufferSlice<'env>,
 }
 impl<'env> JsTransactionError<'env> {
-  pub fn from_rust(env: &'env Env, value: TransactionError) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: TransactionError) -> napi::Result<Self> {
     Ok(Self {
       err: BufferSlice::copy_from(env, &value.err)?,
     })
@@ -1347,13 +1493,13 @@ pub struct JsInnerInstructions<'env> {
   pub instructions: ::prost::alloc::vec::Vec<JsInnerInstruction<'env>>,
 }
 impl<'env> JsInnerInstructions<'env> {
-  pub fn from_rust(env: &'env Env, value: InnerInstructions) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: InnerInstructions) -> napi::Result<Self> {
     Ok(Self {
       index: Ok::<_, napi::Error>(value.index)?,
       instructions: value
         .instructions
         .into_iter()
-        .map(|vec_inner_value| JsInnerInstruction::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsInnerInstruction::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
@@ -1366,7 +1512,7 @@ pub struct JsInnerInstruction<'env> {
   pub stack_height: ::core::option::Option<u32>,
 }
 impl<'env> JsInnerInstruction<'env> {
-  pub fn from_rust(env: &'env Env, value: InnerInstruction) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: InnerInstruction) -> napi::Result<Self> {
     Ok(Self {
       program_id_index: Ok::<_, napi::Error>(value.program_id_index)?,
       accounts: BufferSlice::copy_from(env, &value.accounts)?,
@@ -1385,7 +1531,10 @@ pub struct JsCompiledInstruction<'env> {
   pub data: BufferSlice<'env>,
 }
 impl<'env> JsCompiledInstruction<'env> {
-  pub fn from_rust(env: &'env Env, value: CompiledInstruction) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: CompiledInstruction,
+  ) -> napi::Result<Self> {
     Ok(Self {
       program_id_index: Ok::<_, napi::Error>(value.program_id_index)?,
       accounts: BufferSlice::copy_from(env, &value.accounts)?,
@@ -1403,13 +1552,15 @@ pub struct JsTokenBalance {
   pub program_id: ::prost::alloc::string::String,
 }
 impl JsTokenBalance {
-  pub fn from_rust(env: &Env, value: TokenBalance) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: TokenBalance) -> napi::Result<Self> {
     Ok(Self {
       account_index: Ok::<_, napi::Error>(value.account_index)?,
       mint: Ok::<_, napi::Error>(value.mint)?,
       ui_token_amount: value
         .ui_token_amount
-        .map(|option_inner_value| JsUiTokenAmount::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsUiTokenAmount::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
       owner: Ok::<_, napi::Error>(value.owner)?,
       program_id: Ok::<_, napi::Error>(value.program_id)?,
@@ -1425,7 +1576,7 @@ pub struct JsUiTokenAmount {
   pub ui_amount_string: ::prost::alloc::string::String,
 }
 impl JsUiTokenAmount {
-  pub fn from_rust(env: &Env, value: UiTokenAmount) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: UiTokenAmount) -> napi::Result<Self> {
     Ok(Self {
       ui_amount: Ok::<_, napi::Error>(value.ui_amount)?,
       decimals: Ok::<_, napi::Error>(value.decimals)?,
@@ -1440,7 +1591,7 @@ pub struct JsReturnData<'env> {
   pub data: BufferSlice<'env>,
 }
 impl<'env> JsReturnData<'env> {
-  pub fn from_rust(env: &'env Env, value: ReturnData) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: ReturnData) -> napi::Result<Self> {
     Ok(Self {
       program_id: BufferSlice::copy_from(env, &value.program_id)?,
       data: BufferSlice::copy_from(env, &value.data)?,
@@ -1457,7 +1608,7 @@ pub struct JsReward {
   pub commission: ::prost::alloc::string::String,
 }
 impl JsReward {
-  pub fn from_rust(env: &Env, value: Reward) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: Reward) -> napi::Result<Self> {
     Ok(Self {
       pubkey: Ok::<_, napi::Error>(value.pubkey)?,
       lamports: Ok::<_, napi::Error>(value.lamports.to_string())?,
@@ -1474,16 +1625,18 @@ pub struct JsRewards {
   pub num_partitions: ::core::option::Option<JsNumPartitions>,
 }
 impl JsRewards {
-  pub fn from_rust(env: &Env, value: Rewards) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: Rewards) -> napi::Result<Self> {
     Ok(Self {
       rewards: value
         .rewards
         .into_iter()
-        .map(|vec_inner_value| JsReward::from_rust(env, vec_inner_value))
+        .map(|vec_inner_value| JsReward::from_protobuf_to_js_type(env, vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       num_partitions: value
         .num_partitions
-        .map(|option_inner_value| JsNumPartitions::from_rust(env, option_inner_value))
+        .map(|option_inner_value| {
+          JsNumPartitions::from_protobuf_to_js_type(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
@@ -1494,7 +1647,7 @@ pub struct JsUnixTimestamp {
   pub timestamp: String,
 }
 impl JsUnixTimestamp {
-  pub fn from_rust(env: &Env, value: UnixTimestamp) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: UnixTimestamp) -> napi::Result<Self> {
     Ok(Self {
       timestamp: Ok::<_, napi::Error>(value.timestamp.to_string())?,
     })
@@ -1506,7 +1659,7 @@ pub struct JsBlockHeight {
   pub block_height: String,
 }
 impl JsBlockHeight {
-  pub fn from_rust(env: &Env, value: BlockHeight) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: BlockHeight) -> napi::Result<Self> {
     Ok(Self {
       block_height: Ok::<_, napi::Error>(value.block_height.to_string())?,
     })
@@ -1518,7 +1671,7 @@ pub struct JsNumPartitions {
   pub num_partitions: String,
 }
 impl JsNumPartitions {
-  pub fn from_rust(env: &Env, value: NumPartitions) -> napi::Result<Self> {
+  pub fn from_protobuf_to_js_type(env: &Env, value: NumPartitions) -> napi::Result<Self> {
     Ok(Self {
       num_partitions: Ok::<_, napi::Error>(value.num_partitions.to_string())?,
     })
