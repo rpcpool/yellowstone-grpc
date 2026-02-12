@@ -1,11 +1,268 @@
-use napi::bindgen_prelude::{BufferSlice, Env};
+use napi::bindgen_prelude::{BufferSlice, Date, Env};
+use napi_derive::napi;
 use yellowstone_grpc_proto::geyser::*;
 use yellowstone_grpc_proto::prelude::*;
 use yellowstone_grpc_proto::solana::storage::confirmed_block::*;
+#[napi(object)]
+pub struct JsSubscribeRequestFilterAccountsFilterFilter<'env> {
+  pub memcmp: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterMemcmp<'env>>,
+  pub datasize: ::core::option::Option<String>,
+  pub token_account_state: ::core::option::Option<bool>,
+  pub lamports: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterLamports>,
+}
+impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
+  pub fn from_rust(
+    env: &'env Env,
+    value: subscribe_request_filter_accounts_filter::Filter,
+  ) -> napi::Result<Self> {
+    match value {
+      subscribe_request_filter_accounts_filter::Filter::Memcmp(oneof_variant_value) => Ok(Self {
+        memcmp: Some(JsSubscribeRequestFilterAccountsFilterMemcmp::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        datasize: None,
+        token_account_state: None,
+        lamports: None,
+      }),
+      subscribe_request_filter_accounts_filter::Filter::Datasize(oneof_variant_value) => Ok(Self {
+        datasize: Some(Ok::<_, napi::Error>(oneof_variant_value.to_string())?),
+        memcmp: None,
+        token_account_state: None,
+        lamports: None,
+      }),
+      subscribe_request_filter_accounts_filter::Filter::TokenAccountState(oneof_variant_value) => {
+        Ok(Self {
+          token_account_state: Some(Ok::<_, napi::Error>(oneof_variant_value)?),
+          memcmp: None,
+          datasize: None,
+          lamports: None,
+        })
+      }
+      subscribe_request_filter_accounts_filter::Filter::Lamports(oneof_variant_value) => Ok(Self {
+        lamports: Some(JsSubscribeRequestFilterAccountsFilterLamports::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        memcmp: None,
+        datasize: None,
+        token_account_state: None,
+      }),
+    }
+  }
+}
+#[napi(object)]
 #[derive(Debug, Clone)]
-pub struct JsSubscribeRequest {
-  pub accounts:
-    ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterAccounts>,
+pub struct JsSubscribeRequestFilterAccountsFilterLamportsCmp {
+  pub eq: ::core::option::Option<String>,
+  pub ne: ::core::option::Option<String>,
+  pub lt: ::core::option::Option<String>,
+  pub gt: ::core::option::Option<String>,
+}
+impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
+  pub fn from_rust(
+    env: &Env,
+    value: subscribe_request_filter_accounts_filter_lamports::Cmp,
+  ) -> napi::Result<Self> {
+    match value {
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Eq(oneof_variant_value) => Ok(Self {
+        eq: Some(Ok::<_, napi::Error>(oneof_variant_value.to_string())?),
+        ne: None,
+        lt: None,
+        gt: None,
+      }),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Ne(oneof_variant_value) => Ok(Self {
+        ne: Some(Ok::<_, napi::Error>(oneof_variant_value.to_string())?),
+        eq: None,
+        lt: None,
+        gt: None,
+      }),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Lt(oneof_variant_value) => Ok(Self {
+        lt: Some(Ok::<_, napi::Error>(oneof_variant_value.to_string())?),
+        eq: None,
+        ne: None,
+        gt: None,
+      }),
+      subscribe_request_filter_accounts_filter_lamports::Cmp::Gt(oneof_variant_value) => Ok(Self {
+        gt: Some(Ok::<_, napi::Error>(oneof_variant_value.to_string())?),
+        eq: None,
+        ne: None,
+        lt: None,
+      }),
+    }
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
+  pub bytes: ::core::option::Option<BufferSlice<'env>>,
+  pub base58: ::core::option::Option<::prost::alloc::string::String>,
+  pub base64: ::core::option::Option<::prost::alloc::string::String>,
+}
+impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
+  pub fn from_rust(
+    env: &'env Env,
+    value: subscribe_request_filter_accounts_filter_memcmp::Data,
+  ) -> napi::Result<Self> {
+    match value {
+      subscribe_request_filter_accounts_filter_memcmp::Data::Bytes(oneof_variant_value) => {
+        Ok(Self {
+          bytes: Some(BufferSlice::copy_from(env, &oneof_variant_value)?),
+          base58: None,
+          base64: None,
+        })
+      }
+      subscribe_request_filter_accounts_filter_memcmp::Data::Base58(oneof_variant_value) => {
+        Ok(Self {
+          base58: Some(Ok::<_, napi::Error>(oneof_variant_value)?),
+          bytes: None,
+          base64: None,
+        })
+      }
+      subscribe_request_filter_accounts_filter_memcmp::Data::Base64(oneof_variant_value) => {
+        Ok(Self {
+          base64: Some(Ok::<_, napi::Error>(oneof_variant_value)?),
+          bytes: None,
+          base58: None,
+        })
+      }
+    }
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateUpdateOneof<'env> {
+  pub account: ::core::option::Option<JsSubscribeUpdateAccount<'env>>,
+  pub slot: ::core::option::Option<JsSubscribeUpdateSlot>,
+  pub transaction: ::core::option::Option<JsSubscribeUpdateTransaction<'env>>,
+  pub transaction_status: ::core::option::Option<JsSubscribeUpdateTransactionStatus<'env>>,
+  pub block: ::core::option::Option<JsSubscribeUpdateBlock<'env>>,
+  pub ping: ::core::option::Option<JsSubscribeUpdatePing>,
+  pub pong: ::core::option::Option<JsSubscribeUpdatePong>,
+  pub block_meta: ::core::option::Option<JsSubscribeUpdateBlockMeta>,
+  pub entry: ::core::option::Option<JsSubscribeUpdateEntry<'env>>,
+}
+impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
+  pub fn from_rust(env: &'env Env, value: subscribe_update::UpdateOneof) -> napi::Result<Self> {
+    match value {
+      subscribe_update::UpdateOneof::Account(oneof_variant_value) => Ok(Self {
+        account: Some(JsSubscribeUpdateAccount::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Slot(oneof_variant_value) => Ok(Self {
+        slot: Some(JsSubscribeUpdateSlot::from_rust(env, oneof_variant_value)?),
+        account: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Transaction(oneof_variant_value) => Ok(Self {
+        transaction: Some(JsSubscribeUpdateTransaction::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        account: None,
+        slot: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::TransactionStatus(oneof_variant_value) => Ok(Self {
+        transaction_status: Some(JsSubscribeUpdateTransactionStatus::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        account: None,
+        slot: None,
+        transaction: None,
+        block: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Block(oneof_variant_value) => Ok(Self {
+        block: Some(JsSubscribeUpdateBlock::from_rust(env, oneof_variant_value)?),
+        account: None,
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Ping(oneof_variant_value) => Ok(Self {
+        ping: Some(JsSubscribeUpdatePing::from_rust(env, oneof_variant_value)?),
+        account: None,
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        pong: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Pong(oneof_variant_value) => Ok(Self {
+        pong: Some(JsSubscribeUpdatePong::from_rust(env, oneof_variant_value)?),
+        account: None,
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        block_meta: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::BlockMeta(oneof_variant_value) => Ok(Self {
+        block_meta: Some(JsSubscribeUpdateBlockMeta::from_rust(
+          env,
+          oneof_variant_value,
+        )?),
+        account: None,
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        pong: None,
+        entry: None,
+      }),
+      subscribe_update::UpdateOneof::Entry(oneof_variant_value) => Ok(Self {
+        entry: Some(JsSubscribeUpdateEntry::from_rust(env, oneof_variant_value)?),
+        account: None,
+        slot: None,
+        transaction: None,
+        transaction_status: None,
+        block: None,
+        ping: None,
+        pong: None,
+        block_meta: None,
+      }),
+    }
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeRequest<'env> {
+  pub accounts: ::std::collections::HashMap<
+    ::prost::alloc::string::String,
+    JsSubscribeRequestFilterAccounts<'env>,
+  >,
   pub slots:
     ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterSlots>,
   pub transactions: ::std::collections::HashMap<
@@ -27,8 +284,8 @@ pub struct JsSubscribeRequest {
   pub ping: ::core::option::Option<JsSubscribeRequestPing>,
   pub from_slot: ::core::option::Option<String>,
 }
-impl JsSubscribeRequest {
-  pub fn from_rust(env: &Env, value: SubscribeRequest) -> napi::Result<Self> {
+impl<'env> JsSubscribeRequest<'env> {
+  pub fn from_rust(env: &'env Env, value: SubscribeRequest) -> napi::Result<Self> {
     Ok(Self {
       accounts: value
         .accounts
@@ -113,15 +370,15 @@ impl JsSubscribeRequest {
     })
   }
 }
-#[derive(Debug, Clone)]
-pub struct JsSubscribeRequestFilterAccounts {
+#[napi(object)]
+pub struct JsSubscribeRequestFilterAccounts<'env> {
   pub account: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
   pub owner: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-  pub filters: ::prost::alloc::vec::Vec<JsSubscribeRequestFilterAccountsFilter>,
+  pub filters: ::prost::alloc::vec::Vec<JsSubscribeRequestFilterAccountsFilter<'env>>,
   pub nonempty_txn_signature: ::core::option::Option<bool>,
 }
-impl JsSubscribeRequestFilterAccounts {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterAccounts) -> napi::Result<Self> {
+impl<'env> JsSubscribeRequestFilterAccounts<'env> {
+  pub fn from_rust(env: &'env Env, value: SubscribeRequestFilterAccounts) -> napi::Result<Self> {
     Ok(Self {
       account: value
         .account
@@ -147,42 +404,50 @@ impl JsSubscribeRequestFilterAccounts {
     })
   }
 }
-#[derive(Debug, Clone)]
-pub struct JsSubscribeRequestFilterAccountsFilter {
-  pub filter: ::core::option::Option<subscribe_request_filter_accounts_filter::Filter>,
+#[napi(object)]
+pub struct JsSubscribeRequestFilterAccountsFilter<'env> {
+  pub filter: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterFilter<'env>>,
 }
-impl JsSubscribeRequestFilterAccountsFilter {
-  pub fn from_rust(env: &Env, value: SubscribeRequestFilterAccountsFilter) -> napi::Result<Self> {
+impl<'env> JsSubscribeRequestFilterAccountsFilter<'env> {
+  pub fn from_rust(
+    env: &'env Env,
+    value: SubscribeRequestFilterAccountsFilter,
+  ) -> napi::Result<Self> {
     Ok(Self {
       filter: value
         .filter
-        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeRequestFilterAccountsFilterFilter::from_rust(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
 }
-#[derive(Debug, Clone)]
-pub struct JsSubscribeRequestFilterAccountsFilterMemcmp {
+#[napi(object)]
+pub struct JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
   pub offset: String,
-  pub data: ::core::option::Option<subscribe_request_filter_accounts_filter_memcmp::Data>,
+  pub data: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterMemcmpData<'env>>,
 }
-impl JsSubscribeRequestFilterAccountsFilterMemcmp {
+impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
   pub fn from_rust(
-    env: &Env,
+    env: &'env Env,
     value: SubscribeRequestFilterAccountsFilterMemcmp,
   ) -> napi::Result<Self> {
     Ok(Self {
       offset: Ok::<_, napi::Error>(value.offset.to_string())?,
       data: value
         .data
-        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeRequestFilterAccountsFilterMemcmpData::from_rust(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterAccountsFilterLamports {
-  pub cmp: ::core::option::Option<subscribe_request_filter_accounts_filter_lamports::Cmp>,
+  pub cmp: ::core::option::Option<JsSubscribeRequestFilterAccountsFilterLamportsCmp>,
 }
 impl JsSubscribeRequestFilterAccountsFilterLamports {
   pub fn from_rust(
@@ -192,11 +457,14 @@ impl JsSubscribeRequestFilterAccountsFilterLamports {
     Ok(Self {
       cmp: value
         .cmp
-        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .map(|option_inner_value| {
+          JsSubscribeRequestFilterAccountsFilterLamportsCmp::from_rust(env, option_inner_value)
+        })
         .transpose()?,
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterSlots {
   pub filter_by_commitment: ::core::option::Option<bool>,
@@ -216,6 +484,7 @@ impl JsSubscribeRequestFilterSlots {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterTransactions {
   pub vote: ::core::option::Option<bool>,
@@ -258,6 +527,7 @@ impl JsSubscribeRequestFilterTransactions {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterBlocks {
   pub account_include: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
@@ -288,6 +558,7 @@ impl JsSubscribeRequestFilterBlocks {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterBlocksMeta {}
 impl JsSubscribeRequestFilterBlocksMeta {
@@ -295,6 +566,7 @@ impl JsSubscribeRequestFilterBlocksMeta {
     Ok(Self {})
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestFilterEntry {}
 impl JsSubscribeRequestFilterEntry {
@@ -302,6 +574,7 @@ impl JsSubscribeRequestFilterEntry {
     Ok(Self {})
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestAccountsDataSlice {
   pub offset: String,
@@ -315,6 +588,7 @@ impl JsSubscribeRequestAccountsDataSlice {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeRequestPing {
   pub id: i32,
@@ -326,14 +600,14 @@ impl JsSubscribeRequestPing {
     })
   }
 }
-#[derive(Debug, Clone)]
-pub struct JsSubscribeUpdate {
+#[napi(object)]
+pub struct JsSubscribeUpdate<'env> {
   pub filters: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-  pub created_at: ::core::option::Option<::prost_types::Timestamp>,
-  pub update_oneof: ::core::option::Option<subscribe_update::UpdateOneof>,
+  pub created_at: ::core::option::Option<Date<'env>>,
+  pub update_oneof: ::core::option::Option<JsSubscribeUpdateUpdateOneof<'env>>,
 }
-impl JsSubscribeUpdate {
-  pub fn from_rust(env: &Env, value: SubscribeUpdate) -> napi::Result<Self> {
+impl<'env> JsSubscribeUpdate<'env> {
+  pub fn from_rust(env: &'env Env, value: SubscribeUpdate) -> napi::Result<Self> {
     Ok(Self {
       filters: value
         .filters
@@ -342,15 +616,22 @@ impl JsSubscribeUpdate {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       created_at: value
         .created_at
-        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .map(|option_inner_value| {
+          let timestamp_value_for_date_conversion = option_inner_value;
+          let timestamp_millis_for_date_conversion = (timestamp_value_for_date_conversion.seconds
+            * 1000) as f64
+            + (timestamp_value_for_date_conversion.nanos as f64 / 1_000_000.0);
+          env.create_date(timestamp_millis_for_date_conversion)
+        })
         .transpose()?,
       update_oneof: value
         .update_oneof
-        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .map(|option_inner_value| JsSubscribeUpdateUpdateOneof::from_rust(env, option_inner_value))
         .transpose()?,
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateAccount<'env> {
   pub account: ::core::option::Option<JsSubscribeUpdateAccountInfo<'env>>,
   pub slot: String,
@@ -368,6 +649,7 @@ impl<'env> JsSubscribeUpdateAccount<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateAccountInfo<'env> {
   pub pubkey: BufferSlice<'env>,
   pub lamports: String,
@@ -395,6 +677,7 @@ impl<'env> JsSubscribeUpdateAccountInfo<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdateSlot {
   pub slot: String,
@@ -418,6 +701,7 @@ impl JsSubscribeUpdateSlot {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateTransaction<'env> {
   pub transaction: ::core::option::Option<JsSubscribeUpdateTransactionInfo<'env>>,
   pub slot: String,
@@ -435,6 +719,7 @@ impl<'env> JsSubscribeUpdateTransaction<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateTransactionInfo<'env> {
   pub signature: BufferSlice<'env>,
   pub is_vote: bool,
@@ -459,6 +744,7 @@ impl<'env> JsSubscribeUpdateTransactionInfo<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateTransactionStatus<'env> {
   pub slot: String,
   pub signature: BufferSlice<'env>,
@@ -480,6 +766,7 @@ impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateBlock<'env> {
   pub slot: String,
   pub blockhash: ::prost::alloc::string::String,
@@ -537,6 +824,7 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdateBlockMeta {
   pub slot: String,
@@ -575,6 +863,7 @@ impl JsSubscribeUpdateBlockMeta {
     })
   }
 }
+#[napi(object)]
 pub struct JsSubscribeUpdateEntry<'env> {
   pub slot: String,
   pub index: String,
@@ -599,6 +888,7 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdatePing {}
 impl JsSubscribeUpdatePing {
@@ -606,6 +896,7 @@ impl JsSubscribeUpdatePing {
     Ok(Self {})
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdatePong {
   pub id: i32,
@@ -617,6 +908,7 @@ impl JsSubscribeUpdatePong {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeReplayInfoRequest {}
 impl JsSubscribeReplayInfoRequest {
@@ -624,6 +916,7 @@ impl JsSubscribeReplayInfoRequest {
     Ok(Self {})
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeReplayInfoResponse {
   pub first_available: ::core::option::Option<String>,
@@ -638,6 +931,7 @@ impl JsSubscribeReplayInfoResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsPingRequest {
   pub count: i32,
@@ -649,6 +943,7 @@ impl JsPingRequest {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsPongResponse {
   pub count: i32,
@@ -660,6 +955,7 @@ impl JsPongResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetLatestBlockhashRequest {
   pub commitment: ::core::option::Option<i32>,
@@ -674,6 +970,7 @@ impl JsGetLatestBlockhashRequest {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetLatestBlockhashResponse {
   pub slot: String,
@@ -689,6 +986,7 @@ impl JsGetLatestBlockhashResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetBlockHeightRequest {
   pub commitment: ::core::option::Option<i32>,
@@ -703,6 +1001,7 @@ impl JsGetBlockHeightRequest {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetBlockHeightResponse {
   pub block_height: String,
@@ -714,6 +1013,7 @@ impl JsGetBlockHeightResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetSlotRequest {
   pub commitment: ::core::option::Option<i32>,
@@ -728,6 +1028,7 @@ impl JsGetSlotRequest {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetSlotResponse {
   pub slot: String,
@@ -739,6 +1040,7 @@ impl JsGetSlotResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetVersionRequest {}
 impl JsGetVersionRequest {
@@ -746,6 +1048,7 @@ impl JsGetVersionRequest {
     Ok(Self {})
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsGetVersionResponse {
   pub version: ::prost::alloc::string::String,
@@ -757,6 +1060,7 @@ impl JsGetVersionResponse {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsIsBlockhashValidRequest {
   pub blockhash: ::prost::alloc::string::String,
@@ -773,6 +1077,7 @@ impl JsIsBlockhashValidRequest {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsIsBlockhashValidResponse {
   pub slot: String,
@@ -786,6 +1091,7 @@ impl JsIsBlockhashValidResponse {
     })
   }
 }
+#[napi(object)]
 pub struct JsConfirmedBlock<'env> {
   pub previous_blockhash: ::prost::alloc::string::String,
   pub blockhash: ::prost::alloc::string::String,
@@ -827,6 +1133,7 @@ impl<'env> JsConfirmedBlock<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsConfirmedTransaction<'env> {
   pub transaction: ::core::option::Option<JsTransaction<'env>>,
   pub meta: ::core::option::Option<JsTransactionStatusMeta<'env>>,
@@ -845,6 +1152,7 @@ impl<'env> JsConfirmedTransaction<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsTransaction<'env> {
   pub signatures: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
   pub message: ::core::option::Option<JsMessage<'env>>,
@@ -864,6 +1172,7 @@ impl<'env> JsTransaction<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsMessage<'env> {
   pub header: ::core::option::Option<JsMessageHeader>,
   pub account_keys: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
@@ -899,6 +1208,7 @@ impl<'env> JsMessage<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsMessageHeader {
   pub num_required_signatures: u32,
@@ -914,6 +1224,7 @@ impl JsMessageHeader {
     })
   }
 }
+#[napi(object)]
 pub struct JsMessageAddressTableLookup<'env> {
   pub account_key: BufferSlice<'env>,
   pub writable_indexes: BufferSlice<'env>,
@@ -928,6 +1239,7 @@ impl<'env> JsMessageAddressTableLookup<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsTransactionStatusMeta<'env> {
   pub err: ::core::option::Option<JsTransactionError<'env>>,
   pub fee: String,
@@ -1018,6 +1330,7 @@ impl<'env> JsTransactionStatusMeta<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsTransactionError<'env> {
   pub err: BufferSlice<'env>,
 }
@@ -1028,6 +1341,7 @@ impl<'env> JsTransactionError<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsInnerInstructions<'env> {
   pub index: u32,
   pub instructions: ::prost::alloc::vec::Vec<JsInnerInstruction<'env>>,
@@ -1044,6 +1358,7 @@ impl<'env> JsInnerInstructions<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsInnerInstruction<'env> {
   pub program_id_index: u32,
   pub accounts: BufferSlice<'env>,
@@ -1063,6 +1378,7 @@ impl<'env> JsInnerInstruction<'env> {
     })
   }
 }
+#[napi(object)]
 pub struct JsCompiledInstruction<'env> {
   pub program_id_index: u32,
   pub accounts: BufferSlice<'env>,
@@ -1077,6 +1393,7 @@ impl<'env> JsCompiledInstruction<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsTokenBalance {
   pub account_index: u32,
@@ -1099,6 +1416,7 @@ impl JsTokenBalance {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsUiTokenAmount {
   pub ui_amount: f64,
@@ -1116,6 +1434,7 @@ impl JsUiTokenAmount {
     })
   }
 }
+#[napi(object)]
 pub struct JsReturnData<'env> {
   pub program_id: BufferSlice<'env>,
   pub data: BufferSlice<'env>,
@@ -1128,6 +1447,7 @@ impl<'env> JsReturnData<'env> {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsReward {
   pub pubkey: ::prost::alloc::string::String,
@@ -1147,6 +1467,7 @@ impl JsReward {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsRewards {
   pub rewards: ::prost::alloc::vec::Vec<JsReward>,
@@ -1167,6 +1488,7 @@ impl JsRewards {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsUnixTimestamp {
   pub timestamp: String,
@@ -1178,6 +1500,7 @@ impl JsUnixTimestamp {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsBlockHeight {
   pub block_height: String,
@@ -1189,6 +1512,7 @@ impl JsBlockHeight {
     })
   }
 }
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsNumPartitions {
   pub num_partitions: String,

@@ -45,6 +45,7 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 walkdir = "2.5.0"
+napi-derive = "=3.3.0"
 
 
 [profile.release]
