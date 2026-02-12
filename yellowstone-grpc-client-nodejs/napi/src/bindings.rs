@@ -56,8 +56,8 @@ impl Default for JsChannelOptions {
   /// JsChannelOptions {
   ///   grpc_connect_timeout: Duration::from_secs(10),
   ///   grpc_timeout: Some(Duration::from_secs(30)),
-  ///   grpc_initial_connection_window_size: Some(8 * 1024 * 1024), // 8MB
-  ///   grpc_initial_stream_window_size: Some(4 * 1024 * 1024),     // 4MB
+  ///   grpc_initial_connection_window_size: Some(32 * 1024 * 1024), // 32MB
+  ///   grpc_initial_stream_window_size: Some(32 * 1024 * 1024),     // 32MB
   ///   grpc_max_decoding_message_size: Some(1 * 1024 * 1024 * 1024), // 1GB
   ///   grpc_max_encoding_message_size: Some(32 * 1024 * 1024),     // 32MB
   ///   grpc_http2_adaptive_window: Some(true),
@@ -75,8 +75,8 @@ impl Default for JsChannelOptions {
     Self {
       grpc_connect_timeout: Some(10_000),
       grpc_timeout: Some(30_000),
-      grpc_initial_connection_window_size: Some(8 * 1024 * 1024), // 8MB
-      grpc_initial_stream_window_size: Some(4 * 1024 * 1024),     // 4MB
+      grpc_initial_connection_window_size: Some(32 * 1024 * 1024), // 32MB
+      grpc_initial_stream_window_size: Some(32 * 1024 * 1024),     // 32MB
       grpc_max_decoding_message_size: Some(1024 * 1024 * 1024),   // 1GB
       grpc_max_encoding_message_size: Some(32 * 1024 * 1024),     // 32MB
       grpc_http2_adaptive_window: Some(true),

@@ -47,7 +47,12 @@ def helloworld_geyser(rpc_fqdn, x_token):
     # Combined creds will store the channel creds aswell as the call credentials
     combined_creds = grpc.composite_channel_credentials(ssl_creds, call_creds)
 
-    with grpc.secure_channel(rpc_fqdn, credentials=combined_creds) as channel:
+    channel_options = [
+        ('grpc.max_receive_message_length', 1024 * 1024 * 1024),     # 1GB
+        ('grpc.initial_window_size', 32 * 1024 * 1024),              # 32MB stream window
+        ('grpc.initial_connection_window_size', 32 * 1024 * 1024),   # 32MB connection window
+    ]
+    with grpc.secure_channel(rpc_fqdn, credentials=combined_creds, options=channel_options) as channel:
         stub = geyser_pb2_grpc.GeyserStub(channel)
         response = stub.GetSlot(geyser_pb2.GetSlotRequest())
         print(response)
