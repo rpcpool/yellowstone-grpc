@@ -1247,8 +1247,8 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         // Enforce max subscription limit.
-        let id = self.subscribe_id;
-        if id >= self.config_max_subscription_limit {
+        let id = &self.subscribe_id;
+        if id.load(Ordering::SeqCst) >= self.config_max_subscription_limit {
             return Err(Status::resource_exhausted("max subscription limit reached"));
         }
 
