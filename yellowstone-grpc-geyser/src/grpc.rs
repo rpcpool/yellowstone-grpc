@@ -396,6 +396,7 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
+    config_max_subscription_limit: usize,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -499,6 +500,7 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
+            config_max_subscription_limit: config.max_subscription_limit,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -1244,6 +1246,12 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        // Enforce max subscription limit.
+        let id = self.subscribe_id;
+        if id >= self.config_max_subscription_limit {
+            return Err(Status::resource_exhausted("max subscription limit reached"));
+        }
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
         let client_cancellation_token = self.cancellation_token.child_token();
