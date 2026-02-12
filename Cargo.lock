@@ -5286,7 +5286,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "12.0.0"
+version = "12.0.0+solana.3.1.8"
 dependencies = [
  "bytes",
  "futures",
@@ -5299,7 +5299,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "12.0.0"
+version = "12.0.0+solana.3.1.8"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5327,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "12.0.0"
+version = "12.0.0+solana.3.1.8"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.0.0"
+version = "12.0.0+solana.3.1.8"
 dependencies = [
  "anyhow",
  "bytes",
