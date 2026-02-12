@@ -168,9 +168,16 @@ use napi_derive::napi;
         let js_type_ident = &oneof_enum_info.js_type_ident;
         let needs_env = env_required_oneof_rust_paths
             .contains(&oneof_enum_info.rust_full_path_string);
+        let oneof_type_name_string = oneof_enum_info.rust_full_path_string.clone();
 
         let mut js_oneof_field_tokens = Vec::new();
         let mut oneof_match_arm_tokens = Vec::new();
+        let mut oneof_reverse_conversion_tokens = Vec::new();
+        let oneof_field_idents: Vec<syn::Ident> = oneof_enum_info
+            .variant_infos
+            .iter()
+            .map(|variant_info| variant_info.variant_field_ident.clone())
+            .collect();
 
         for variant_info in &oneof_enum_info.variant_infos {
             let variant_field_ident = &variant_info.variant_field_ident;
@@ -185,6 +192,13 @@ use napi_derive::napi;
                     &env_required_struct_names,
                     &oneof_enum_info_by_rust_path,
                     &env_required_oneof_rust_paths,
+                );
+            let variant_reverse_conversion_expression =
+                map_js_value_to_protobuf_conversion_result_expression(
+                    &variant_info.variant_type,
+                    quote!(#variant_value_ident),
+                    TARGET_TYPES,
+                    &oneof_enum_info_by_rust_path,
                 );
 
             js_oneof_field_tokens.push(quote!(
@@ -207,6 +221,20 @@ use napi_derive::napi;
                     })
                 }
             ));
+
+            oneof_reverse_conversion_tokens.push(quote!(
+                if let Some(#variant_value_ident) = #variant_field_ident {
+                    if selected_oneof_variant.is_some() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("Multiple variants set for {}", #oneof_type_name_string),
+                        ));
+                    }
+                    let converted_variant_value = #variant_reverse_conversion_expression?;
+                    selected_oneof_variant =
+                        Some(#rust_oneof_path::#variant_ident(converted_variant_value));
+                }
+            ));
         }
 
         if needs_env {
@@ -223,6 +251,20 @@ use napi_derive::napi;
                     ) -> napi::Result<Self> {
                         match value {
                             #(#oneof_match_arm_tokens,)*
+                        }
+                    }
+
+                    pub fn from_js_to_protobuf_type(self) -> napi::Result<#rust_oneof_path> {
+                        let #js_type_ident { #(#oneof_field_idents,)* } = self;
+                        let mut selected_oneof_variant: ::core::option::Option<#rust_oneof_path> =
+                            None;
+                        #(#oneof_reverse_conversion_tokens)*
+                        match selected_oneof_variant {
+                            Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+                            None => Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!("No variant set for {}", #oneof_type_name_string),
+                            )),
                         }
                     }
                 }
@@ -242,6 +284,20 @@ use napi_derive::napi;
                     ) -> napi::Result<Self> {
                         match value {
                             #(#oneof_match_arm_tokens,)*
+                        }
+                    }
+
+                    pub fn from_js_to_protobuf_type(self) -> napi::Result<#rust_oneof_path> {
+                        let #js_type_ident { #(#oneof_field_idents,)* } = self;
+                        let mut selected_oneof_variant: ::core::option::Option<#rust_oneof_path> =
+                            None;
+                        #(#oneof_reverse_conversion_tokens)*
+                        match selected_oneof_variant {
+                            Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+                            None => Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!("No variant set for {}", #oneof_type_name_string),
+                            )),
                         }
                     }
                 }
@@ -267,6 +323,7 @@ use napi_derive::napi;
 
             let mut js_struct_field_tokens = Vec::new();
             let mut field_conversion_tokens = Vec::new();
+            let mut protobuf_field_conversion_tokens = Vec::new();
 
             for field in s.fields.iter() {
                 let field_ident = field.ident.as_ref().unwrap();
@@ -283,6 +340,18 @@ use napi_derive::napi;
 
                 js_struct_field_tokens.push(quote!(pub #field_ident: #js_field_type_tokens));
                 field_conversion_tokens.push(quote!(#field_ident: #field_conversion_expression?));
+
+                let field_js_value_expression = quote!(self.#field_ident);
+                let field_protobuf_conversion_expression =
+                    map_js_value_to_protobuf_conversion_result_expression(
+                        &field.ty,
+                        field_js_value_expression,
+                        TARGET_TYPES,
+                        &oneof_enum_info_by_rust_path,
+                    );
+                protobuf_field_conversion_tokens.push(quote!(
+                    #field_ident: #field_protobuf_conversion_expression?
+                ));
             }
 
             if needs_env {
@@ -298,6 +367,10 @@ use napi_derive::napi;
                             value: #orig,
                         ) -> napi::Result<Self> {
                             Ok(Self { #(#field_conversion_tokens,)* })
+                        }
+
+                        pub fn from_js_to_protobuf_type(self) -> napi::Result<#orig> {
+                            Ok(#orig { #(#protobuf_field_conversion_tokens,)* })
                         }
                     }
                 });
@@ -315,6 +388,10 @@ use napi_derive::napi;
                             value: #orig,
                         ) -> napi::Result<Self> {
                             Ok(Self { #(#field_conversion_tokens,)* })
+                        }
+
+                        pub fn from_js_to_protobuf_type(self) -> napi::Result<#orig> {
+                            Ok(#orig { #(#protobuf_field_conversion_tokens,)* })
                         }
                     }
                 });
@@ -835,4 +912,164 @@ fn map_type_to_js_type_and_conversion_result_expression(
         quote!(#input_type),
         quote!(Ok::<_, napi::Error>(#input_value_expression)),
     )
+}
+
+fn map_js_value_to_protobuf_conversion_result_expression(
+    protobuf_type: &Type,
+    js_value_expression: proc_macro2::TokenStream,
+    target_type_names: &[&str],
+    oneof_enum_info_by_rust_path: &HashMap<String, OneofEnumInfo>,
+) -> proc_macro2::TokenStream {
+    if let Type::Path(type_path) = protobuf_type {
+        let last_segment = type_path.path.segments.last().unwrap();
+        let type_name = last_segment.ident.to_string();
+        let normalized_type_path_string = type_path_to_normalized_string(type_path);
+
+        if is_prost_types_timestamp_type_path(type_path) {
+            return quote!({
+                let timestamp_millis_value_for_conversion = #js_value_expression.value_of()?;
+                let timestamp_seconds_for_conversion =
+                    (timestamp_millis_value_for_conversion / 1000.0).floor() as i64;
+                let timestamp_nanos_for_conversion = ((timestamp_millis_value_for_conversion
+                    - (timestamp_seconds_for_conversion as f64 * 1000.0))
+                    * 1_000_000.0) as i32;
+                Ok::<_, napi::Error>(::prost_types::Timestamp {
+                    seconds: timestamp_seconds_for_conversion,
+                    nanos: timestamp_nanos_for_conversion,
+                })
+            });
+        }
+
+        if type_name == "u64" {
+            return quote!(#js_value_expression
+                .parse::<u64>()
+                .map_err(|parse_error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("Invalid u64 value: {}", parse_error),
+                    )
+                }));
+        }
+
+        if type_name == "i64" {
+            return quote!(#js_value_expression
+                .parse::<i64>()
+                .map_err(|parse_error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("Invalid i64 value: {}", parse_error),
+                    )
+                }));
+        }
+
+        if type_name == "Vec" {
+            if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                    if matches!(inner_type, Type::Path(inner_path) if inner_path.path.is_ident("u8"))
+                    {
+                        return quote!(Ok::<_, napi::Error>(#js_value_expression.as_ref().to_vec()));
+                    }
+                }
+            }
+        }
+
+        if oneof_enum_info_by_rust_path
+            .contains_key(&normalized_type_path_string)
+        {
+            return quote!(#js_value_expression.from_js_to_protobuf_type());
+        }
+
+        if type_name == "Option" {
+            if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                    let option_inner_value_ident = format_ident!("option_inner_value");
+                    let option_inner_value_expression = quote!(#option_inner_value_ident);
+                    let option_inner_conversion_expression =
+                        map_js_value_to_protobuf_conversion_result_expression(
+                            inner_type,
+                            option_inner_value_expression,
+                            target_type_names,
+                            oneof_enum_info_by_rust_path,
+                        );
+
+                    return quote!(#js_value_expression
+                        .map(|#option_inner_value_ident| #option_inner_conversion_expression)
+                        .transpose());
+                }
+            }
+        }
+
+        if type_name == "Vec" {
+            if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                    let vec_inner_value_ident = format_ident!("vec_inner_value");
+                    let vec_inner_value_expression = quote!(#vec_inner_value_ident);
+                    let vec_inner_conversion_expression =
+                        map_js_value_to_protobuf_conversion_result_expression(
+                            inner_type,
+                            vec_inner_value_expression,
+                            target_type_names,
+                            oneof_enum_info_by_rust_path,
+                        );
+
+                    return quote!(#js_value_expression
+                        .into_iter()
+                        .map(|#vec_inner_value_ident| #vec_inner_conversion_expression)
+                        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>());
+                }
+            }
+        }
+
+        if type_name == "HashMap" {
+            if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                let mut generic_types = args.args.iter().filter_map(|argument| {
+                    if let syn::GenericArgument::Type(inner_type) = argument {
+                        Some(inner_type)
+                    } else {
+                        None
+                    }
+                });
+                let Some(hash_map_key_type) = generic_types.next() else {
+                    return quote!(Ok::<_, napi::Error>(#js_value_expression));
+                };
+                let Some(hash_map_value_type) = generic_types.next() else {
+                    return quote!(Ok::<_, napi::Error>(#js_value_expression));
+                };
+
+                let hash_map_entry_key_ident = format_ident!("hash_map_entry_key");
+                let hash_map_entry_value_ident = format_ident!("hash_map_entry_value");
+                let hash_map_key_value_expression = quote!(#hash_map_entry_key_ident);
+                let hash_map_value_expression = quote!(#hash_map_entry_value_ident);
+                let hash_map_key_conversion_expression =
+                    map_js_value_to_protobuf_conversion_result_expression(
+                        hash_map_key_type,
+                        hash_map_key_value_expression,
+                        target_type_names,
+                        oneof_enum_info_by_rust_path,
+                    );
+                let hash_map_value_conversion_expression =
+                    map_js_value_to_protobuf_conversion_result_expression(
+                        hash_map_value_type,
+                        hash_map_value_expression,
+                        target_type_names,
+                        oneof_enum_info_by_rust_path,
+                    );
+
+                return quote!(#js_value_expression
+                    .into_iter()
+                    .map(|(#hash_map_entry_key_ident, #hash_map_entry_value_ident)| {
+                        let converted_hash_map_key = #hash_map_key_conversion_expression?;
+                        let converted_hash_map_value = #hash_map_value_conversion_expression?;
+                        Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+                    })
+                    .collect::<napi::Result<::std::collections::HashMap<_, _>>>());
+            }
+        }
+
+        if target_type_names.contains(&type_name.as_str()) {
+            return quote!(#js_value_expression.from_js_to_protobuf_type());
+        }
+    }
+
+    quote!(Ok::<_, napi::Error>(#js_value_expression))
 }

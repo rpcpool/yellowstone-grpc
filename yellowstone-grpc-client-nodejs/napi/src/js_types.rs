@@ -54,6 +54,96 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
       }),
     }
   }
+  pub fn from_js_to_protobuf_type(
+    self,
+  ) -> napi::Result<subscribe_request_filter_accounts_filter::Filter> {
+    let JsSubscribeRequestFilterAccountsFilterFilter {
+      memcmp,
+      datasize,
+      token_account_state,
+      lamports,
+    } = self;
+    let mut selected_oneof_variant: ::core::option::Option<
+      subscribe_request_filter_accounts_filter::Filter,
+    > = None;
+    if let Some(oneof_variant_value) = memcmp {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter::Filter"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = datasize {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter::Filter"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Datasize(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = token_account_state {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter::Filter"
+          ),
+        ));
+      }
+      let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
+      selected_oneof_variant = Some(
+        subscribe_request_filter_accounts_filter::Filter::TokenAccountState(
+          converted_variant_value,
+        ),
+      );
+    }
+    if let Some(oneof_variant_value) = lamports {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter::Filter"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Lamports(
+        converted_variant_value,
+      ));
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!(
+          "No variant set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        ),
+      )),
+    }
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -95,6 +185,104 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
       }),
     }
   }
+  pub fn from_js_to_protobuf_type(
+    self,
+  ) -> napi::Result<subscribe_request_filter_accounts_filter_lamports::Cmp> {
+    let JsSubscribeRequestFilterAccountsFilterLamportsCmp { eq, ne, lt, gt } = self;
+    let mut selected_oneof_variant: ::core::option::Option<
+      subscribe_request_filter_accounts_filter_lamports::Cmp,
+    > = None;
+    if let Some(oneof_variant_value) = eq {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_lamports::Cmp"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Eq(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = ne {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_lamports::Cmp"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Ne(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = lt {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_lamports::Cmp"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Lt(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = gt {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_lamports::Cmp"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?;
+      selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Gt(
+        converted_variant_value,
+      ));
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!(
+          "No variant set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        ),
+      )),
+    }
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
@@ -129,6 +317,72 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
           base58: None,
         })
       }
+    }
+  }
+  pub fn from_js_to_protobuf_type(
+    self,
+  ) -> napi::Result<subscribe_request_filter_accounts_filter_memcmp::Data> {
+    let JsSubscribeRequestFilterAccountsFilterMemcmpData {
+      bytes,
+      base58,
+      base64,
+    } = self;
+    let mut selected_oneof_variant: ::core::option::Option<
+      subscribe_request_filter_accounts_filter_memcmp::Data,
+    > = None;
+    if let Some(oneof_variant_value) = bytes {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_memcmp::Data"
+          ),
+        ));
+      }
+      let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value.as_ref().to_vec())?;
+      selected_oneof_variant =
+        Some(subscribe_request_filter_accounts_filter_memcmp::Data::Bytes(converted_variant_value));
+    }
+    if let Some(oneof_variant_value) = base58 {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_memcmp::Data"
+          ),
+        ));
+      }
+      let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
+      selected_oneof_variant = Some(
+        subscribe_request_filter_accounts_filter_memcmp::Data::Base58(converted_variant_value),
+      );
+    }
+    if let Some(oneof_variant_value) = base64 {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_request_filter_accounts_filter_memcmp::Data"
+          ),
+        ));
+      }
+      let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
+      selected_oneof_variant = Some(
+        subscribe_request_filter_accounts_filter_memcmp::Data::Base64(converted_variant_value),
+      );
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!(
+          "No variant set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        ),
+      )),
     }
   }
 }
@@ -277,6 +531,156 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
       }),
     }
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<subscribe_update::UpdateOneof> {
+    let JsSubscribeUpdateUpdateOneof {
+      account,
+      slot,
+      transaction,
+      transaction_status,
+      block,
+      ping,
+      pong,
+      block_meta,
+      entry,
+    } = self;
+    let mut selected_oneof_variant: ::core::option::Option<subscribe_update::UpdateOneof> = None;
+    if let Some(oneof_variant_value) = account {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Account(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = slot {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Slot(converted_variant_value));
+    }
+    if let Some(oneof_variant_value) = transaction {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Transaction(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = transaction_status {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::TransactionStatus(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = block {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Block(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = ping {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Ping(converted_variant_value));
+    }
+    if let Some(oneof_variant_value) = pong {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Pong(converted_variant_value));
+    }
+    if let Some(oneof_variant_value) = block_meta {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::BlockMeta(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = entry {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update::UpdateOneof::Entry(
+        converted_variant_value,
+      ));
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!("No variant set for {}", "subscribe_update::UpdateOneof"),
+      )),
+    }
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeRequest<'env> {
@@ -403,6 +807,97 @@ impl<'env> JsSubscribeRequest<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequest> {
+    Ok(SubscribeRequest {
+      accounts: self
+        .accounts
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      slots: self
+        .slots
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      transactions: self
+        .transactions
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      transactions_status: self
+        .transactions_status
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      blocks: self
+        .blocks
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      blocks_meta: self
+        .blocks_meta
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      entry: self
+        .entry
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      commitment: self
+        .commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      accounts_data_slice: self
+        .accounts_data_slice
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      ping: self
+        .ping
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      from_slot: self
+        .from_slot
+        .map(|option_inner_value| {
+          option_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeRequestFilterAccounts<'env> {
@@ -440,6 +935,29 @@ impl<'env> JsSubscribeRequestFilterAccounts<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterAccounts> {
+    Ok(SubscribeRequestFilterAccounts {
+      account: self
+        .account
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      owner: self
+        .owner
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      filters: self
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      nonempty_txn_signature: self
+        .nonempty_txn_signature
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeRequestFilterAccountsFilter<'env> {
@@ -459,6 +977,14 @@ impl<'env> JsSubscribeRequestFilterAccountsFilter<'env> {
             option_inner_value,
           )
         })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterAccountsFilter> {
+    Ok(SubscribeRequestFilterAccountsFilter {
+      filter: self
+        .filter
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
     })
   }
@@ -486,6 +1012,22 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(
+    self,
+  ) -> napi::Result<SubscribeRequestFilterAccountsFilterMemcmp> {
+    Ok(SubscribeRequestFilterAccountsFilterMemcmp {
+      offset: self.offset.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      data: self
+        .data
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -509,6 +1051,16 @@ impl JsSubscribeRequestFilterAccountsFilterLamports {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(
+    self,
+  ) -> napi::Result<SubscribeRequestFilterAccountsFilterLamports> {
+    Ok(SubscribeRequestFilterAccountsFilterLamports {
+      cmp: self
+        .cmp
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -527,6 +1079,18 @@ impl JsSubscribeRequestFilterSlots {
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
       interslot_updates: value
+        .interslot_updates
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterSlots> {
+    Ok(SubscribeRequestFilterSlots {
+      filter_by_commitment: self
+        .filter_by_commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      interslot_updates: self
         .interslot_updates
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
@@ -578,6 +1142,37 @@ impl JsSubscribeRequestFilterTransactions {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterTransactions> {
+    Ok(SubscribeRequestFilterTransactions {
+      vote: self
+        .vote
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      failed: self
+        .failed
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      signature: self
+        .signature
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      account_include: self
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_exclude: self
+        .account_exclude
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_required: self
+        .account_required
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -612,6 +1207,27 @@ impl JsSubscribeRequestFilterBlocks {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterBlocks> {
+    Ok(SubscribeRequestFilterBlocks {
+      account_include: self
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      include_transactions: self
+        .include_transactions
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      include_accounts: self
+        .include_accounts
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      include_entries: self
+        .include_entries
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -623,6 +1239,9 @@ impl JsSubscribeRequestFilterBlocksMeta {
   ) -> napi::Result<Self> {
     Ok(Self {})
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterBlocksMeta> {
+    Ok(SubscribeRequestFilterBlocksMeta {})
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -633,6 +1252,9 @@ impl JsSubscribeRequestFilterEntry {
     value: SubscribeRequestFilterEntry,
   ) -> napi::Result<Self> {
     Ok(Self {})
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterEntry> {
+    Ok(SubscribeRequestFilterEntry {})
   }
 }
 #[napi(object)]
@@ -651,6 +1273,22 @@ impl JsSubscribeRequestAccountsDataSlice {
       length: Ok::<_, napi::Error>(value.length.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestAccountsDataSlice> {
+    Ok(SubscribeRequestAccountsDataSlice {
+      offset: self.offset.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      length: self.length.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -661,6 +1299,11 @@ impl JsSubscribeRequestPing {
   pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeRequestPing) -> napi::Result<Self> {
     Ok(Self {
       id: Ok::<_, napi::Error>(value.id)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestPing> {
+    Ok(SubscribeRequestPing {
+      id: Ok::<_, napi::Error>(self.id)?,
     })
   }
 }
@@ -696,6 +1339,34 @@ impl<'env> JsSubscribeUpdate<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdate> {
+    Ok(SubscribeUpdate {
+      filters: self
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      created_at: self
+        .created_at
+        .map(|option_inner_value| {
+          let timestamp_millis_value_for_conversion = option_inner_value.value_of()?;
+          let timestamp_seconds_for_conversion =
+            (timestamp_millis_value_for_conversion / 1000.0).floor() as i64;
+          let timestamp_nanos_for_conversion = ((timestamp_millis_value_for_conversion
+            - (timestamp_seconds_for_conversion as f64 * 1000.0))
+            * 1_000_000.0) as i32;
+          Ok::<_, napi::Error>(::prost_types::Timestamp {
+            seconds: timestamp_seconds_for_conversion,
+            nanos: timestamp_nanos_for_conversion,
+          })
+        })
+        .transpose()?,
+      update_oneof: self
+        .update_oneof
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeUpdateAccount<'env> {
@@ -717,6 +1388,21 @@ impl<'env> JsSubscribeUpdateAccount<'env> {
         .transpose()?,
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       is_startup: Ok::<_, napi::Error>(value.is_startup)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateAccount> {
+    Ok(SubscribeUpdateAccount {
+      account: self
+        .account
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      is_startup: Ok::<_, napi::Error>(self.is_startup)?,
     })
   }
 }
@@ -750,6 +1436,36 @@ impl<'env> JsSubscribeUpdateAccountInfo<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateAccountInfo> {
+    Ok(SubscribeUpdateAccountInfo {
+      pubkey: Ok::<_, napi::Error>(self.pubkey.as_ref().to_vec())?,
+      lamports: self.lamports.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      owner: Ok::<_, napi::Error>(self.owner.as_ref().to_vec())?,
+      executable: Ok::<_, napi::Error>(self.executable)?,
+      rent_epoch: self.rent_epoch.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
+      write_version: self.write_version.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      txn_signature: self
+        .txn_signature
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value.as_ref().to_vec()))
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -774,6 +1490,32 @@ impl JsSubscribeUpdateSlot {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateSlot> {
+    Ok(SubscribeUpdateSlot {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      parent: self
+        .parent
+        .map(|option_inner_value| {
+          option_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .transpose()?,
+      status: Ok::<_, napi::Error>(self.status)?,
+      dead_error: self
+        .dead_error
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeUpdateTransaction<'env> {
@@ -793,6 +1535,20 @@ impl<'env> JsSubscribeUpdateTransaction<'env> {
         })
         .transpose()?,
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateTransaction> {
+    Ok(SubscribeUpdateTransaction {
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
     })
   }
 }
@@ -825,6 +1581,26 @@ impl<'env> JsSubscribeUpdateTransactionInfo<'env> {
       index: Ok::<_, napi::Error>(value.index.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateTransactionInfo> {
+    Ok(SubscribeUpdateTransactionInfo {
+      signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
+      is_vote: Ok::<_, napi::Error>(self.is_vote)?,
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      meta: self
+        .meta
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      index: self.index.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeUpdateTransactionStatus<'env> {
@@ -849,6 +1625,28 @@ impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
         .map(|option_inner_value| {
           JsTransactionError::from_protobuf_to_js_type(env, option_inner_value)
         })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateTransactionStatus> {
+    Ok(SubscribeUpdateTransactionStatus {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
+      is_vote: Ok::<_, napi::Error>(self.is_vote)?,
+      index: self.index.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      err: self
+        .err
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
     })
   }
@@ -921,6 +1719,74 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlock> {
+    Ok(SubscribeUpdateBlock {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      blockhash: Ok::<_, napi::Error>(self.blockhash)?,
+      rewards: self
+        .rewards
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      block_time: self
+        .block_time
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      block_height: self
+        .block_height
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
+      executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
+        |parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        },
+      )?,
+      transactions: self
+        .transactions
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      updated_account_count: self
+        .updated_account_count
+        .parse::<u64>()
+        .map_err(|parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        })?,
+      accounts: self
+        .accounts
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      entries: self
+        .entries
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -965,6 +1831,50 @@ impl JsSubscribeUpdateBlockMeta {
       entries_count: Ok::<_, napi::Error>(value.entries_count.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlockMeta> {
+    Ok(SubscribeUpdateBlockMeta {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      blockhash: Ok::<_, napi::Error>(self.blockhash)?,
+      rewards: self
+        .rewards
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      block_time: self
+        .block_time
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      block_height: self
+        .block_height
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
+      executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
+        |parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        },
+      )?,
+      entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsSubscribeUpdateEntry<'env> {
@@ -993,6 +1903,45 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
       )?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateEntry> {
+    Ok(SubscribeUpdateEntry {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      index: self.index.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      num_hashes: self.num_hashes.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      hash: Ok::<_, napi::Error>(self.hash.as_ref().to_vec())?,
+      executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
+        |parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        },
+      )?,
+      starting_transaction_index: self.starting_transaction_index.parse::<u64>().map_err(
+        |parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        },
+      )?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1000,6 +1949,9 @@ pub struct JsSubscribeUpdatePing {}
 impl JsSubscribeUpdatePing {
   pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeUpdatePing) -> napi::Result<Self> {
     Ok(Self {})
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdatePing> {
+    Ok(SubscribeUpdatePing {})
   }
 }
 #[napi(object)]
@@ -1013,6 +1965,11 @@ impl JsSubscribeUpdatePong {
       id: Ok::<_, napi::Error>(value.id)?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdatePong> {
+    Ok(SubscribeUpdatePong {
+      id: Ok::<_, napi::Error>(self.id)?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1023,6 +1980,9 @@ impl JsSubscribeReplayInfoRequest {
     value: SubscribeReplayInfoRequest,
   ) -> napi::Result<Self> {
     Ok(Self {})
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeReplayInfoRequest> {
+    Ok(SubscribeReplayInfoRequest {})
   }
 }
 #[napi(object)]
@@ -1042,6 +2002,21 @@ impl JsSubscribeReplayInfoResponse {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeReplayInfoResponse> {
+    Ok(SubscribeReplayInfoResponse {
+      first_available: self
+        .first_available
+        .map(|option_inner_value| {
+          option_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1054,6 +2029,11 @@ impl JsPingRequest {
       count: Ok::<_, napi::Error>(value.count)?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<PingRequest> {
+    Ok(PingRequest {
+      count: Ok::<_, napi::Error>(self.count)?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1064,6 +2044,11 @@ impl JsPongResponse {
   pub fn from_protobuf_to_js_type(env: &Env, value: PongResponse) -> napi::Result<Self> {
     Ok(Self {
       count: Ok::<_, napi::Error>(value.count)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<PongResponse> {
+    Ok(PongResponse {
+      count: Ok::<_, napi::Error>(self.count)?,
     })
   }
 }
@@ -1079,6 +2064,14 @@ impl JsGetLatestBlockhashRequest {
   ) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
+        .commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetLatestBlockhashRequest> {
+    Ok(GetLatestBlockhashRequest {
+      commitment: self
         .commitment
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
@@ -1103,6 +2096,25 @@ impl JsGetLatestBlockhashResponse {
       last_valid_block_height: Ok::<_, napi::Error>(value.last_valid_block_height.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetLatestBlockhashResponse> {
+    Ok(GetLatestBlockhashResponse {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      blockhash: Ok::<_, napi::Error>(self.blockhash)?,
+      last_valid_block_height: self.last_valid_block_height.parse::<u64>().map_err(
+        |parse_error| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Invalid u64 value: {}", parse_error),
+          )
+        },
+      )?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1113,6 +2125,14 @@ impl JsGetBlockHeightRequest {
   pub fn from_protobuf_to_js_type(env: &Env, value: GetBlockHeightRequest) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
+        .commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetBlockHeightRequest> {
+    Ok(GetBlockHeightRequest {
+      commitment: self
         .commitment
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
@@ -1130,6 +2150,16 @@ impl JsGetBlockHeightResponse {
       block_height: Ok::<_, napi::Error>(value.block_height.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetBlockHeightResponse> {
+    Ok(GetBlockHeightResponse {
+      block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1140,6 +2170,14 @@ impl JsGetSlotRequest {
   pub fn from_protobuf_to_js_type(env: &Env, value: GetSlotRequest) -> napi::Result<Self> {
     Ok(Self {
       commitment: value
+        .commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetSlotRequest> {
+    Ok(GetSlotRequest {
+      commitment: self
         .commitment
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
@@ -1157,6 +2195,16 @@ impl JsGetSlotResponse {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetSlotResponse> {
+    Ok(GetSlotResponse {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1164,6 +2212,9 @@ pub struct JsGetVersionRequest {}
 impl JsGetVersionRequest {
   pub fn from_protobuf_to_js_type(env: &Env, value: GetVersionRequest) -> napi::Result<Self> {
     Ok(Self {})
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetVersionRequest> {
+    Ok(GetVersionRequest {})
   }
 }
 #[napi(object)]
@@ -1175,6 +2226,11 @@ impl JsGetVersionResponse {
   pub fn from_protobuf_to_js_type(env: &Env, value: GetVersionResponse) -> napi::Result<Self> {
     Ok(Self {
       version: Ok::<_, napi::Error>(value.version)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<GetVersionResponse> {
+    Ok(GetVersionResponse {
+      version: Ok::<_, napi::Error>(self.version)?,
     })
   }
 }
@@ -1189,6 +2245,15 @@ impl JsIsBlockhashValidRequest {
     Ok(Self {
       blockhash: Ok::<_, napi::Error>(value.blockhash)?,
       commitment: value
+        .commitment
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<IsBlockhashValidRequest> {
+    Ok(IsBlockhashValidRequest {
+      blockhash: Ok::<_, napi::Error>(self.blockhash)?,
+      commitment: self
         .commitment
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
@@ -1209,6 +2274,17 @@ impl JsIsBlockhashValidResponse {
     Ok(Self {
       slot: Ok::<_, napi::Error>(value.slot.to_string())?,
       valid: Ok::<_, napi::Error>(value.valid)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<IsBlockhashValidResponse> {
+    Ok(IsBlockhashValidResponse {
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      valid: Ok::<_, napi::Error>(self.valid)?,
     })
   }
 }
@@ -1259,6 +2335,40 @@ impl<'env> JsConfirmedBlock<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<ConfirmedBlock> {
+    Ok(ConfirmedBlock {
+      previous_blockhash: Ok::<_, napi::Error>(self.previous_blockhash)?,
+      blockhash: Ok::<_, napi::Error>(self.blockhash)?,
+      parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      transactions: self
+        .transactions
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      rewards: self
+        .rewards
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      block_time: self
+        .block_time
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      block_height: self
+        .block_height
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      num_partitions: self
+        .num_partitions
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsConfirmedTransaction<'env> {
@@ -1283,6 +2393,18 @@ impl<'env> JsConfirmedTransaction<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<ConfirmedTransaction> {
+    Ok(ConfirmedTransaction {
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      meta: self
+        .meta
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsTransaction<'env> {
@@ -1300,6 +2422,19 @@ impl<'env> JsTransaction<'env> {
       message: value
         .message
         .map(|option_inner_value| JsMessage::from_protobuf_to_js_type(env, option_inner_value))
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<Transaction> {
+    Ok(Transaction {
+      signatures: self
+        .signatures
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      message: self
+        .message
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
     })
   }
@@ -1345,6 +2480,31 @@ impl<'env> JsMessage<'env> {
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<Message> {
+    Ok(Message {
+      header: self
+        .header
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      account_keys: self
+        .account_keys
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      recent_blockhash: Ok::<_, napi::Error>(self.recent_blockhash.as_ref().to_vec())?,
+      instructions: self
+        .instructions
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      versioned: Ok::<_, napi::Error>(self.versioned)?,
+      address_table_lookups: self
+        .address_table_lookups
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1359,6 +2519,13 @@ impl JsMessageHeader {
       num_required_signatures: Ok::<_, napi::Error>(value.num_required_signatures)?,
       num_readonly_signed_accounts: Ok::<_, napi::Error>(value.num_readonly_signed_accounts)?,
       num_readonly_unsigned_accounts: Ok::<_, napi::Error>(value.num_readonly_unsigned_accounts)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<MessageHeader> {
+    Ok(MessageHeader {
+      num_required_signatures: Ok::<_, napi::Error>(self.num_required_signatures)?,
+      num_readonly_signed_accounts: Ok::<_, napi::Error>(self.num_readonly_signed_accounts)?,
+      num_readonly_unsigned_accounts: Ok::<_, napi::Error>(self.num_readonly_unsigned_accounts)?,
     })
   }
 }
@@ -1377,6 +2544,13 @@ impl<'env> JsMessageAddressTableLookup<'env> {
       account_key: BufferSlice::copy_from(env, &value.account_key)?,
       writable_indexes: BufferSlice::copy_from(env, &value.writable_indexes)?,
       readonly_indexes: BufferSlice::copy_from(env, &value.readonly_indexes)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<MessageAddressTableLookup> {
+    Ok(MessageAddressTableLookup {
+      account_key: Ok::<_, napi::Error>(self.account_key.as_ref().to_vec())?,
+      writable_indexes: Ok::<_, napi::Error>(self.writable_indexes.as_ref().to_vec())?,
+      readonly_indexes: Ok::<_, napi::Error>(self.readonly_indexes.as_ref().to_vec())?,
     })
   }
 }
@@ -1475,6 +2649,108 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<TransactionStatusMeta> {
+    Ok(TransactionStatusMeta {
+      err: self
+        .err
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      fee: self.fee.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      pre_balances: self
+        .pre_balances
+        .into_iter()
+        .map(|vec_inner_value| {
+          vec_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      post_balances: self
+        .post_balances
+        .into_iter()
+        .map(|vec_inner_value| {
+          vec_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      inner_instructions: self
+        .inner_instructions
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      inner_instructions_none: Ok::<_, napi::Error>(self.inner_instructions_none)?,
+      log_messages: self
+        .log_messages
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      log_messages_none: Ok::<_, napi::Error>(self.log_messages_none)?,
+      pre_token_balances: self
+        .pre_token_balances
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      post_token_balances: self
+        .post_token_balances
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      rewards: self
+        .rewards
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_writable_addresses: self
+        .loaded_writable_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_readonly_addresses: self
+        .loaded_readonly_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      return_data: self
+        .return_data
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      return_data_none: Ok::<_, napi::Error>(self.return_data_none)?,
+      compute_units_consumed: self
+        .compute_units_consumed
+        .map(|option_inner_value| {
+          option_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .transpose()?,
+      cost_units: self
+        .cost_units
+        .map(|option_inner_value| {
+          option_inner_value.parse::<u64>().map_err(|parse_error| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Invalid u64 value: {}", parse_error),
+            )
+          })
+        })
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsTransactionError<'env> {
@@ -1484,6 +2760,11 @@ impl<'env> JsTransactionError<'env> {
   pub fn from_protobuf_to_js_type(env: &'env Env, value: TransactionError) -> napi::Result<Self> {
     Ok(Self {
       err: BufferSlice::copy_from(env, &value.err)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<TransactionError> {
+    Ok(TransactionError {
+      err: Ok::<_, napi::Error>(self.err.as_ref().to_vec())?,
     })
   }
 }
@@ -1500,6 +2781,16 @@ impl<'env> JsInnerInstructions<'env> {
         .instructions
         .into_iter()
         .map(|vec_inner_value| JsInnerInstruction::from_protobuf_to_js_type(env, vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<InnerInstructions> {
+    Ok(InnerInstructions {
+      index: Ok::<_, napi::Error>(self.index)?,
+      instructions: self
+        .instructions
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
@@ -1523,6 +2814,17 @@ impl<'env> JsInnerInstruction<'env> {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<InnerInstruction> {
+    Ok(InnerInstruction {
+      program_id_index: Ok::<_, napi::Error>(self.program_id_index)?,
+      accounts: Ok::<_, napi::Error>(self.accounts.as_ref().to_vec())?,
+      data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
+      stack_height: self
+        .stack_height
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsCompiledInstruction<'env> {
@@ -1539,6 +2841,13 @@ impl<'env> JsCompiledInstruction<'env> {
       program_id_index: Ok::<_, napi::Error>(value.program_id_index)?,
       accounts: BufferSlice::copy_from(env, &value.accounts)?,
       data: BufferSlice::copy_from(env, &value.data)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<CompiledInstruction> {
+    Ok(CompiledInstruction {
+      program_id_index: Ok::<_, napi::Error>(self.program_id_index)?,
+      accounts: Ok::<_, napi::Error>(self.accounts.as_ref().to_vec())?,
+      data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
     })
   }
 }
@@ -1566,6 +2875,18 @@ impl JsTokenBalance {
       program_id: Ok::<_, napi::Error>(value.program_id)?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<TokenBalance> {
+    Ok(TokenBalance {
+      account_index: Ok::<_, napi::Error>(self.account_index)?,
+      mint: Ok::<_, napi::Error>(self.mint)?,
+      ui_token_amount: self
+        .ui_token_amount
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      owner: Ok::<_, napi::Error>(self.owner)?,
+      program_id: Ok::<_, napi::Error>(self.program_id)?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1584,6 +2905,14 @@ impl JsUiTokenAmount {
       ui_amount_string: Ok::<_, napi::Error>(value.ui_amount_string)?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<UiTokenAmount> {
+    Ok(UiTokenAmount {
+      ui_amount: Ok::<_, napi::Error>(self.ui_amount)?,
+      decimals: Ok::<_, napi::Error>(self.decimals)?,
+      amount: Ok::<_, napi::Error>(self.amount)?,
+      ui_amount_string: Ok::<_, napi::Error>(self.ui_amount_string)?,
+    })
+  }
 }
 #[napi(object)]
 pub struct JsReturnData<'env> {
@@ -1595,6 +2924,12 @@ impl<'env> JsReturnData<'env> {
     Ok(Self {
       program_id: BufferSlice::copy_from(env, &value.program_id)?,
       data: BufferSlice::copy_from(env, &value.data)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<ReturnData> {
+    Ok(ReturnData {
+      program_id: Ok::<_, napi::Error>(self.program_id.as_ref().to_vec())?,
+      data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
     })
   }
 }
@@ -1615,6 +2950,25 @@ impl JsReward {
       post_balance: Ok::<_, napi::Error>(value.post_balance.to_string())?,
       reward_type: Ok::<_, napi::Error>(value.reward_type)?,
       commission: Ok::<_, napi::Error>(value.commission)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<Reward> {
+    Ok(Reward {
+      pubkey: Ok::<_, napi::Error>(self.pubkey)?,
+      lamports: self.lamports.parse::<i64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid i64 value: {}", parse_error),
+        )
+      })?,
+      post_balance: self.post_balance.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+      reward_type: Ok::<_, napi::Error>(self.reward_type)?,
+      commission: Ok::<_, napi::Error>(self.commission)?,
     })
   }
 }
@@ -1640,6 +2994,19 @@ impl JsRewards {
         .transpose()?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<Rewards> {
+    Ok(Rewards {
+      rewards: self
+        .rewards
+        .into_iter()
+        .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      num_partitions: self
+        .num_partitions
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1650,6 +3017,16 @@ impl JsUnixTimestamp {
   pub fn from_protobuf_to_js_type(env: &Env, value: UnixTimestamp) -> napi::Result<Self> {
     Ok(Self {
       timestamp: Ok::<_, napi::Error>(value.timestamp.to_string())?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<UnixTimestamp> {
+    Ok(UnixTimestamp {
+      timestamp: self.timestamp.parse::<i64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid i64 value: {}", parse_error),
+        )
+      })?,
     })
   }
 }
@@ -1664,6 +3041,16 @@ impl JsBlockHeight {
       block_height: Ok::<_, napi::Error>(value.block_height.to_string())?,
     })
   }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<BlockHeight> {
+    Ok(BlockHeight {
+      block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
@@ -1674,6 +3061,16 @@ impl JsNumPartitions {
   pub fn from_protobuf_to_js_type(env: &Env, value: NumPartitions) -> napi::Result<Self> {
     Ok(Self {
       num_partitions: Ok::<_, napi::Error>(value.num_partitions.to_string())?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<NumPartitions> {
+    Ok(NumPartitions {
+      num_partitions: self.num_partitions.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
     })
   }
 }
