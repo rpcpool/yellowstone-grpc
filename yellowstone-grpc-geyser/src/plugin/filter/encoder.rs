@@ -9,11 +9,11 @@ use {
 pub struct TransactionEncoder;
 
 impl TransactionEncoder {
-    pub fn pre_encode(tx: &mut MessageTransactionInfo) {
+    pub fn pre_encode(tx: &MessageTransactionInfo) {
         let len = Self::encoded_len(tx);
         let mut buf = Vec::with_capacity(len);
         Self::encode_raw(tx, &mut buf);
-        tx.pre_encoded = Some(Bytes::from(buf));
+        let _ = tx.pre_encoded.set(Bytes::from(buf));
     }
 
     fn encode_raw(tx: &MessageTransactionInfo, buf: &mut impl bytes::BufMut) {
@@ -64,7 +64,7 @@ impl TransactionEncoder {
 pub struct AccountEncoder;
 
 impl AccountEncoder {
-    pub fn pre_encode(account: &mut MessageAccountInfo) {
+    pub fn pre_encode(account: &MessageAccountInfo) {
         let len = Self::encoded_len(account);
         let mut buf = Vec::with_capacity(len);
 
@@ -89,7 +89,7 @@ impl AccountEncoder {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
 
-        account.pre_encoded = Some(Bytes::from(buf));
+        let _ = account.pre_encoded.set(Bytes::from(buf));
     }
 
     pub fn encoded_len(account: &MessageAccountInfo) -> usize {
