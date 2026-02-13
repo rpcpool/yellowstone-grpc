@@ -11,6 +11,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## [Unreleased]
 
 ### Fixes
+- geyser: replace Arc::get_mut with OnceLock for pre-encoding to support shared ownership ([#XXX](https://github.com/rpcpool/yellowstone-grpc/pull/XXX))
 
 ### Features
 

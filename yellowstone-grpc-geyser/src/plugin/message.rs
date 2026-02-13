@@ -13,7 +13,7 @@ use {
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
-        sync::Arc,
+        sync::{Arc, OnceLock},
         time::SystemTime,
     },
     yellowstone_grpc_proto::{
@@ -194,7 +194,7 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
-    pub pre_encoded: Option<Bytes>,
+    pub pre_encoded: OnceLock<Bytes>,
 }
 
 impl MessageAccountInfo {
@@ -210,7 +210,7 @@ impl MessageAccountInfo {
             data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         }
     }
 
@@ -229,12 +229,12 @@ impl MessageAccountInfo {
                     Signature::try_from(sig.as_slice()).map_err(|_| "invalid signature length")
                 })
                 .transpose()?,
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         })
     }
 
-    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
-        self.pre_encoded.as_ref()
+    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.get()
     }
 }
 
@@ -279,7 +279,7 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
-    pub pre_encoded: Option<Bytes>,
+    pub pre_encoded: OnceLock<Bytes>,
 }
 
 impl MessageTransactionInfo {
@@ -311,7 +311,7 @@ impl MessageTransactionInfo {
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         }
     }
 
@@ -326,7 +326,7 @@ impl MessageTransactionInfo {
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
             account_keys: HashSet::new(),
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         })
     }
 
@@ -362,8 +362,8 @@ impl MessageTransactionInfo {
     }
 
     #[inline]
-    pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
-        self.pre_encoded.as_ref()
+    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+        self.pre_encoded.get()
     }
 }
 
