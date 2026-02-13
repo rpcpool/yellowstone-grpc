@@ -23,7 +23,7 @@ use {
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
-        sync::Arc,
+        sync::{Arc, OnceLock},
         time::SystemTime,
     },
     yellowstone_grpc_proto::{
@@ -286,7 +286,7 @@ impl FilteredUpdate {
                         },
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
-                        pre_encoded: None,
+                        pre_encoded: OnceLock::new(),
                     }),
                     slot: msg.slot,
                 })
@@ -1043,7 +1043,7 @@ pub mod tests {
             fs,
             ops::Range,
             str::FromStr,
-            sync::Arc,
+            sync::{Arc, OnceLock},
             time::SystemTime,
         },
         yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
@@ -1097,7 +1097,7 @@ pub mod tests {
                                     data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
-                                    pre_encoded: None,
+                                    pre_encoded: OnceLock::new(),
                                 }));
                             }
                         }
@@ -1205,7 +1205,7 @@ pub mod tests {
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
-                            pre_encoded: None,
+                            pre_encoded: OnceLock::new(),
                         }
                     })
                     .map(Arc::new)
@@ -1315,7 +1315,7 @@ pub mod tests {
                                             data: Bytes::from(data.clone()),
                                             write_version,
                                             txn_signature,
-                                            pre_encoded: None,
+                                            pre_encoded: OnceLock::new(),
                                         };
                                         AccountEncoder::pre_encode(&mut account_with);
 
@@ -1329,7 +1329,7 @@ pub mod tests {
                                             data: Bytes::from(data.clone()),
                                             write_version,
                                             txn_signature,
-                                            pre_encoded: None,
+                                            pre_encoded: OnceLock::new(),
                                         };
 
                                         // Encode both using FilteredUpdateAccount (no slicing)
@@ -1423,7 +1423,7 @@ pub mod tests {
                 meta: tx_arc.meta.clone(),
                 index: tx_arc.index,
                 account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: None,
+                pre_encoded: OnceLock::new(),
             };
 
             // Create version without cache (fallback path)
@@ -1434,14 +1434,14 @@ pub mod tests {
                 meta: tx_arc.meta.clone(),
                 index: tx_arc.index,
                 account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: None,
+                pre_encoded: OnceLock::new(),
             };
 
             // Pre-encode one of them
             TransactionEncoder::pre_encode(&mut tx_with_cache);
 
             assert!(
-                tx_with_cache.pre_encoded.is_some(),
+                tx_with_cache.pre_encoded.get().is_some(),
                 "pre_encode should populate the field"
             );
 
