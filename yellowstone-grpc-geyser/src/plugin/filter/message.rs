@@ -44,7 +44,7 @@ pub const fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
 }
 
 #[inline]
-pub fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
+fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
     encode_key(tag, WireType::LengthDelimited, buf);
     encode_varint(value.len() as u64, buf);
     buf.put(value);
@@ -489,17 +489,6 @@ impl FilteredUpdateAccount {
         data_slice: &FilterAccountsDataSlice,
         buf: &mut impl BufMut,
     ) {
-        // use pre-encoded if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                encode_key(tag, WireType::LengthDelimited, buf);
-                encode_varint(pre_encoded.len() as u64, buf);
-                buf.put_slice(pre_encoded);
-                return;
-            }
-        }
-
-        // fallback: slice-aware encoding
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
 
@@ -527,14 +516,6 @@ impl FilteredUpdateAccount {
         account: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> usize {
-        // use pre-encoded length if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                return pre_encoded.len();
-            }
-        }
-
-        // fallback: calculate with slicing
         let data_len = data_slice.get_slice_len(&account.data);
 
         prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
@@ -1019,7 +1000,7 @@ pub mod tests {
         crate::plugin::{
             convert_to,
             filter::{
-                encoder::{AccountEncoder, TransactionEncoder},
+                encoder::TransactionEncoder,
                 message::{FilteredUpdateAccount, FilteredUpdateTransaction},
                 name::FilterName,
                 FilterAccountsDataSlice,
@@ -1097,7 +1078,6 @@ pub mod tests {
                                     data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
-                                    pre_encoded: None,
                                 }));
                             }
                         }
@@ -1282,88 +1262,6 @@ pub mod tests {
                 .map(|msg| msg.as_subscribe_update()),
             Ok(update)
         );
-    }
-
-    #[test]
-    fn test_account_pre_encoded_matches_manual_encoding() {
-        use {bytes::Bytes, solana_pubkey::Pubkey, solana_signature::Signature};
-
-        // Test various account configurations
-        let pubkeys = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let owners = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let data_samples = [
-            vec![],
-            vec![1, 2, 3, 4],
-            vec![0u8; 1000], // larger account data
-        ];
-
-        for pubkey in &pubkeys {
-            for owner in &owners {
-                for lamports in [0u64, 100, 1_000_000] {
-                    for executable in [false, true] {
-                        for rent_epoch in [0u64, 100] {
-                            for write_version in [0u64, 42] {
-                                for data in &data_samples {
-                                    for txn_signature in [None, Some(Signature::from([0u8; 64]))] {
-                                        // Create account WITH pre-encoding
-                                        let mut account_with = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: None,
-                                        };
-                                        AccountEncoder::pre_encode(&mut account_with);
-
-                                        // Create account WITHOUT pre-encoding (fallback path)
-                                        let account_without = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: None,
-                                        };
-
-                                        // Encode both using FilteredUpdateAccount (no slicing)
-                                        let data_slice = FilterAccountsDataSlice::default();
-
-                                        let mut buf_with = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_with,
-                                            &data_slice,
-                                            &mut buf_with,
-                                        );
-
-                                        let mut buf_without = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_without,
-                                            &data_slice,
-                                            &mut buf_without,
-                                        );
-
-                                        // Must be identical
-                                        assert_eq!(
-                                            buf_with, buf_without,
-                                            "pre-encoded bytes don't match manual encoding"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     #[test]
