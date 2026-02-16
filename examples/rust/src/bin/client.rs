@@ -29,13 +29,16 @@ use {
             subscribe_request_filter_accounts_filter::Filter as AccountsFilterOneof,
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+            subscribe_update::UpdateOneof,
+            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, CommitmentLevel,
+            SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestAccountsDataSlice,
+            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+            SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeRequestPing,
-            SubscribeUpdateAccountInfo, SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccountInfo,
+            SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
         },
         prost::Message,
     },
@@ -48,6 +51,7 @@ type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransac
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
+type DeshredTransactionsFilterMap = HashMap<String, SubscribeRequestFilterDeshredTransactions>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Compression {
@@ -229,6 +233,7 @@ enum Action {
     HealthCheck,
     HealthWatch,
     Subscribe(Box<ActionSubscribe>),
+    SubscribeDeshred(Box<ActionSubscribeDeshred>),
     SubscribeReplayInfo,
     Ping {
         #[clap(long, short, default_value_t = 0)]
@@ -400,6 +405,34 @@ struct ActionSubscribe {
     /// Verify manually implemented encoding against prost
     #[clap(long, default_value_t = false)]
     verify_encoding: bool,
+}
+
+/// Subscribe on deshred transactions (pre-execution)
+#[derive(Debug, Clone, clap::Args)]
+struct ActionSubscribeDeshred {
+    /// Filter vote transactions
+    #[clap(long)]
+    vote: Option<bool>,
+
+    /// Filter by account keys (include) - matches static + ALT-loaded addresses
+    #[clap(long)]
+    account_include: Vec<String>,
+
+    /// Filter by account keys (exclude) - matches static + ALT-loaded addresses
+    #[clap(long)]
+    account_exclude: Vec<String>,
+
+    /// Filter by required account keys - all must be present (static or ALT-loaded)
+    #[clap(long)]
+    account_required: Vec<String>,
+
+    /// Send ping in subscribe request
+    #[clap(long)]
+    ping: Option<i32>,
+
+    /// Show total stat instead of messages
+    #[clap(long, default_value_t = false)]
+    stats: bool,
 }
 
 impl Action {
@@ -589,6 +622,34 @@ impl Action {
             _ => None,
         })
     }
+
+    fn get_subscribe_deshred_request(&self) -> Option<(SubscribeDeshredRequest, bool)> {
+        match self {
+            Self::SubscribeDeshred(args) => {
+                let mut deshred_transactions: DeshredTransactionsFilterMap = HashMap::new();
+                deshred_transactions.insert(
+                    "client".to_string(),
+                    SubscribeRequestFilterDeshredTransactions {
+                        vote: args.vote,
+                        account_include: args.account_include.clone(),
+                        account_exclude: args.account_exclude.clone(),
+                        account_required: args.account_required.clone(),
+                    },
+                );
+
+                let ping = args.ping.map(|id| SubscribeRequestPing { id });
+
+                Some((
+                    SubscribeDeshredRequest {
+                        deshred_transactions,
+                        ping,
+                    },
+                    args.stats,
+                ))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[tokio::main]
@@ -640,6 +701,15 @@ async fn main() -> anyhow::Result<()> {
                         )))?;
 
                     geyser_subscribe(client, request, resub, stats, verify_encoding).await
+                }
+                Action::SubscribeDeshred(_) => {
+                    let (request, stats) = args.action.get_subscribe_deshred_request().ok_or(
+                        backoff::Error::Permanent(anyhow::anyhow!(
+                            "expect subscribe deshred action"
+                        )),
+                    )?;
+
+                    geyser_subscribe_deshred(client, request, stats).await
                 }
                 Action::SubscribeReplayInfo => client
                     .subscribe_replay_info()
@@ -956,6 +1026,106 @@ async fn geyser_subscribe(
         }
     }
     info!("stream closed");
+    Ok(())
+}
+
+async fn geyser_subscribe_deshred(
+    mut client: GeyserGrpcClient<impl Interceptor>,
+    request: SubscribeDeshredRequest,
+    stats: bool,
+) -> anyhow::Result<()> {
+    let pb_multi = MultiProgress::new();
+    let mut pb_txs_c = 0;
+    let pb_txs = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("deshred transactions"))?;
+    let mut pb_pp_c = 0;
+    let pb_pp = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("ping/pong"))?;
+    let mut pb_total_c = 0;
+    let pb_total = crate_progress_bar(&pb_multi, ProgressBarTpl::Total)?;
+
+    let (mut subscribe_tx, mut stream) =
+        client.subscribe_deshred_with_request(Some(request)).await?;
+
+    info!("deshred stream opened");
+    while let Some(message) = stream.next().await {
+        match message {
+            Ok(msg) => {
+                if stats {
+                    let encoded_len = msg.encoded_len() as u64;
+                    let (pb_c, pb) = match msg.update_oneof {
+                        Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
+                        Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
+                        Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
+                        None => {
+                            pb_multi.println("update not found in the deshred message")?;
+                            break;
+                        }
+                    };
+                    *pb_c += 1;
+                    pb.set_message(format_thousands(*pb_c));
+                    pb.inc(encoded_len);
+                    pb_total_c += 1;
+                    pb_total.set_message(format_thousands(pb_total_c));
+                    pb_total.inc(encoded_len);
+
+                    continue;
+                }
+
+                let filters = msg.filters;
+                let created_at: SystemTime = msg
+                    .created_at
+                    .ok_or(anyhow::anyhow!("no created_at in the message"))?
+                    .try_into()
+                    .context("failed to parse created_at")?;
+                match msg.update_oneof {
+                    Some(DeshredUpdateOneof::DeshredTransaction(msg)) => {
+                        let tx = msg
+                            .transaction
+                            .ok_or(anyhow::anyhow!("no transaction in the message"))?;
+                        let loaded_writable: Vec<String> = tx
+                            .loaded_writable_addresses
+                            .iter()
+                            .map(|addr| bs58::encode(addr).into_string())
+                            .collect();
+                        let loaded_readonly: Vec<String> = tx
+                            .loaded_readonly_addresses
+                            .iter()
+                            .map(|addr| bs58::encode(addr).into_string())
+                            .collect();
+                        print_update(
+                            "deshredTransaction",
+                            created_at,
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "signature": Signature::try_from(tx.signature.as_slice()).context("invalid signature")?.to_string(),
+                                "isVote": tx.is_vote,
+                                "loadedWritableAddresses": loaded_writable,
+                                "loadedReadonlyAddresses": loaded_readonly,
+                            }),
+                        );
+                    }
+                    Some(DeshredUpdateOneof::Ping(_)) => {
+                        subscribe_tx
+                            .send(SubscribeDeshredRequest {
+                                ping: Some(SubscribeRequestPing { id: 1 }),
+                                ..Default::default()
+                            })
+                            .await?;
+                    }
+                    Some(DeshredUpdateOneof::Pong(_)) => {}
+                    None => {
+                        error!("update not found in the deshred message");
+                        break;
+                    }
+                }
+            }
+            Err(error) => {
+                error!("error: {error:?}");
+                break;
+            }
+        }
+    }
+    info!("deshred stream closed");
     Ok(())
 }
 
