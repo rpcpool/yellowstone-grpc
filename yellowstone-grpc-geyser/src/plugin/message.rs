@@ -4,6 +4,7 @@ use {
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
         SlotStatus as GeyserSlotStatus,
     },
+    crate::plugin::filter::encoder::{AccountEncoder, TransactionEncoder},
     bytes::Bytes,
     prost_types::Timestamp,
     solana_clock::Slot,
@@ -201,7 +202,7 @@ impl MessageAccountInfo {
     pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
         let shared = info.data.to_vec();
         let data = Bytes::from(shared);
-        Self {
+        let mut account = Self {
             pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
             lamports: info.lamports,
             owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
@@ -211,11 +212,13 @@ impl MessageAccountInfo {
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
             pre_encoded: None,
-        }
+        };
+        AccountEncoder::pre_encode(&mut account);
+        account
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateAccountInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
+        let mut account = Self {
             pubkey: Pubkey::try_from(msg.pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
             lamports: msg.lamports,
             owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
@@ -230,7 +233,9 @@ impl MessageAccountInfo {
                 })
                 .transpose()?,
             pre_encoded: None,
-        })
+        };
+        AccountEncoder::pre_encode(&mut account);
+        Ok(account)
     }
 
     pub const fn get_pre_encoded(&self) -> Option<&Bytes> {
@@ -304,7 +309,7 @@ impl MessageTransactionInfo {
             .copied()
             .collect();
 
-        Self {
+        let mut tx = Self {
             signature: *info.signature,
             is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
@@ -312,11 +317,14 @@ impl MessageTransactionInfo {
             index: info.index,
             account_keys,
             pre_encoded: None,
-        }
+        };
+
+        TransactionEncoder::pre_encode(&mut tx);
+        tx
     }
 
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
+        let mut tx = Self {
             signature: Signature::try_from(msg.signature.as_slice())
                 .map_err(|_| "invalid signature length")?,
             is_vote: msg.is_vote,
@@ -327,7 +335,10 @@ impl MessageTransactionInfo {
             index: msg.index as usize,
             account_keys: HashSet::new(),
             pre_encoded: None,
-        })
+        };
+
+        TransactionEncoder::pre_encode(&mut tx);
+        Ok(tx)
     }
 
     pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {

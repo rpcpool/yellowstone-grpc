@@ -5355,7 +5355,6 @@ dependencies = [
  "prost 0.14.3",
  "prost-types 0.14.3",
  "protoc-bin-vendored",
- "rayon",
  "serde",
  "serde_json",
  "smallvec",
