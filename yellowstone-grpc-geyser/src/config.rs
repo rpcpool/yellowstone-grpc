@@ -143,6 +143,11 @@ pub enum GrpcAddress {
     Unix(PathBuf),
 }
 
+#[derive(Debug, Clone)]
+pub struct GrpcAddresses {
+    pub inner: Vec<GrpcAddress>,
+}
+
 impl<'de> Deserialize<'de> for GrpcAddress {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -168,11 +173,54 @@ impl std::fmt::Display for GrpcAddress {
     }
 }
 
+impl<'de> Deserialize<'de> for GrpcAddresses {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, SeqAccess, Visitor};
+
+        struct AddressesVisitor;
+
+        impl<'de> Visitor<'de> for AddressesVisitor {
+            type Value = GrpcAddresses;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a string or array of addresses")
+            }
+
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
+                if let Some(path) = s.strip_prefix("unix://") {
+                    Ok(GrpcAddresses {
+                        inner: vec![GrpcAddress::Unix(PathBuf::from(path))],
+                    })
+                } else {
+                    s.parse::<SocketAddr>()
+                        .map(|addr| GrpcAddresses {
+                            inner: vec![GrpcAddress::Tcp(addr)],
+                        })
+                        .map_err(de::Error::custom)
+                }
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut addrs = Vec::new();
+                while let Some(addr) = seq.next_element::<GrpcAddress>()? {
+                    addrs.push(addr);
+                }
+                Ok(GrpcAddresses { inner: addrs })
+            }
+        }
+
+        deserializer.deserialize_any(AddressesVisitor)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
-    /// Address of Grpc service.
-    pub address: GrpcAddress,
+    /// Multiple addresses of Grpc service.
+    pub address: GrpcAddresses,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
     /// Possible compression options

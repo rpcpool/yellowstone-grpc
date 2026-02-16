@@ -394,14 +394,14 @@ enum ClientSnapshotReplayError {
     Cancelled,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
-    blocks_meta: Option<BlockMetaStorage>,
-    subscribe_id: AtomicUsize,
-    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
+    blocks_meta: Option<Arc<BlockMetaStorage>>,
+    subscribe_id: Arc<AtomicUsize>,
+    snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -409,6 +409,11 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+}
+
+enum Listener {
+    Tcp(TcpIncoming),
+    Unix(UnixListenerStream),
 }
 
 impl GrpcService {
@@ -425,35 +430,32 @@ impl GrpcService {
         mpsc::UnboundedSender<Message>,
     )> {
         // Bind service address (TCP or Unix domain socket)
-        let (tcp_incoming, uds_incoming) = match &config.address {
-            GrpcAddress::Tcp(addr) => {
-                let incoming = TcpIncoming::bind(*addr)?
-                    .with_nodelay(Some(true))
-                    .with_keepalive(Some(Duration::from_secs(20)));
-                (Some(incoming), None)
-            }
-            GrpcAddress::Unix(path) => {
-                // warn if tls configured (makes no sense for same-machine)
-                if config.tls_config.is_some() {
-                    log::warn!(
-                        "TLS config is ignored for Unix domain socket: {}",
-                        path.display()
-                    );
-                }
+        let mut listeners = Vec::new();
 
-                if let Err(e) = std::fs::remove_file(path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        return Err(e.into());
+        for addr in &config.address.inner {
+            let listener = match addr {
+                GrpcAddress::Tcp(addr) => {
+                    let incoming = TcpIncoming::bind(*addr)?
+                        .with_nodelay(Some(true))
+                        .with_keepalive(Some(Duration::from_secs(20)));
+                    Listener::Tcp(incoming)
+                }
+                GrpcAddress::Unix(path) => {
+                    if config.tls_config.is_some() {
+                        log::warn!("TLS config ignored for UDS: {}", path.display());
                     }
+                    if let Err(e) = std::fs::remove_file(path) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            return Err(e.into());
+                        }
+                    }
+                    let uds = UnixListener::bind(path)?;
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?;
+                    Listener::Unix(UnixListenerStream::new(uds))
                 }
-
-                let uds = UnixListener::bind(path)?;
-
-                // set permissions so HAProxy/Whirligig can connect
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?;
-                (None, Some(UnixListenerStream::new(uds)))
-            }
-        };
+            };
+            listeners.push(listener);
+        }
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -487,34 +489,23 @@ impl GrpcService {
                 (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
             };
 
-        // gRPC server builder with optional TLS
-        let mut server_builder = Server::builder();
-        if let Some(tls_config) = &config.tls_config {
-            let (cert, key) = tokio::try_join!(
-                fs::read(&tls_config.cert_path),
-                fs::read(&tls_config.key_path)
-            )
-            .context("failed to load tls_config files")?;
-            server_builder = server_builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
-                .context("failed to apply tls_config")?;
-        }
-        if let Some(enabled) = config.server_http2_adaptive_window {
-            server_builder = server_builder.http2_adaptive_window(Some(enabled));
-        }
-        if let Some(http2_keepalive_interval) = config.server_http2_keepalive_interval {
-            server_builder =
-                server_builder.http2_keepalive_interval(Some(http2_keepalive_interval));
-        }
-        if let Some(http2_keepalive_timeout) = config.server_http2_keepalive_timeout {
-            server_builder = server_builder.http2_keepalive_timeout(Some(http2_keepalive_timeout));
-        }
-        if let Some(sz) = config.server_initial_connection_window_size {
-            server_builder = server_builder.initial_connection_window_size(sz);
-        }
-        if let Some(sz) = config.server_initial_stream_window_size {
-            server_builder = server_builder.initial_stream_window_size(sz);
-        }
+        // Read TLS identity once (async, must be outside loop)
+        let tls_identity = match &config.tls_config {
+            Some(tls) => {
+                let (cert, key) =
+                    tokio::try_join!(fs::read(&tls.cert_path), fs::read(&tls.key_path))
+                        .context("failed to load tls_config files")?;
+                Some(Identity::from_pem(cert, key))
+            }
+            None => None,
+        };
+
+        // Save HTTP2 settings since theya are Copy
+        let http2_adaptive_window = config.server_http2_adaptive_window;
+        let http2_keepalive_interval = config.server_http2_keepalive_interval;
+        let http2_keepalive_timeout = config.server_http2_keepalive_timeout;
+        let initial_connection_window_size = config.server_initial_connection_window_size;
+        let initial_stream_window_size = config.server_initial_stream_window_size;
 
         let filter_names = Arc::new(Mutex::new(FilterNames::new(
             config.filter_name_size_limit,
@@ -528,9 +519,9 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
-            blocks_meta,
-            subscribe_id: AtomicUsize::new(0),
-            snapshot_rx: Mutex::new(snapshot_rx),
+            blocks_meta: blocks_meta.map(Arc::new),
+            subscribe_id: Arc::new(AtomicUsize::new(0)),
+            snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
@@ -563,43 +554,73 @@ impl GrpcService {
         });
 
         // Run Server
+        let (health_reporter, health_service) = health_reporter();
+        health_reporter.set_serving::<GeyserServer<Self>>().await;
+
         let shutdown_grpc = service_cancellation_token.child_token();
-        task_tracker.spawn(async move {
-            // gRPC Health check service
-            let (health_reporter, health_service) = health_reporter();
-            health_reporter.set_serving::<GeyserServer<Self>>().await;
+        for listener in listeners {
+            let health_service = health_service.clone();
+            let service = service.clone();
+            let shutdown = shutdown_grpc.clone();
+            let x_token = config.x_token.clone();
+            let tls_identity = tls_identity.clone();
 
-            let router = server_builder
-                .layer(interceptor::InterceptorLayer::new(
-                    move |request: Request<()>| {
-                        if let Some(x_token) = &config.x_token {
-                            match request.metadata().get("x-token") {
-                                Some(token) if x_token == token => Ok(request),
-                                _ => Err(Status::unauthenticated("No valid auth token")),
+            task_tracker.spawn(async move {
+                // Build and configure server for this listener
+                let mut builder = Server::builder();
+                if let Some(identity) = tls_identity {
+                    builder = builder
+                        .tls_config(ServerTlsConfig::new().identity(identity))
+                        .expect("tls config failed");
+                }
+                if let Some(enabled) = http2_adaptive_window {
+                    builder = builder.http2_adaptive_window(Some(enabled));
+                }
+                if let Some(interval) = http2_keepalive_interval {
+                    builder = builder.http2_keepalive_interval(Some(interval));
+                }
+                if let Some(timeout) = http2_keepalive_timeout {
+                    builder = builder.http2_keepalive_timeout(Some(timeout));
+                }
+                if let Some(sz) = initial_connection_window_size {
+                    builder = builder.initial_connection_window_size(sz);
+                }
+                if let Some(sz) = initial_stream_window_size {
+                    builder = builder.initial_stream_window_size(sz);
+                }
+
+                let router = builder
+                    .layer(interceptor::InterceptorLayer::new(
+                        move |request: Request<()>| {
+                            if let Some(x_token) = &x_token {
+                                match request.metadata().get("x-token") {
+                                    Some(token) if x_token == token => Ok(request),
+                                    _ => Err(Status::unauthenticated("No valid auth token")),
+                                }
+                            } else {
+                                Ok(request)
                             }
-                        } else {
-                            Ok(request)
-                        }
-                    },
-                ))
-                .add_service(health_service)
-                .add_service(service);
+                        },
+                    ))
+                    .add_service(health_service)
+                    .add_service(service);
 
-            let result = if let Some(incoming) = tcp_incoming {
-                router
-                    .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
-                    .await
-            } else {
-                router
-                    .serve_with_incoming_shutdown(
-                        uds_incoming.expect("uds_incoming must be Some when tcp_incoming is None"),
-                        shutdown_grpc.cancelled(),
-                    )
-                    .await
-            };
+                let result = match listener {
+                    Listener::Tcp(incoming) => {
+                        router
+                            .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                            .await
+                    }
+                    Listener::Unix(incoming) => {
+                        router
+                            .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                            .await
+                    }
+                };
 
-            info!("gRPC server shut down with result: {result:?}");
-        });
+                info!("gRPC server shut down with result: {result:?}");
+            });
+        }
 
         Ok((snapshot_tx, messages_tx))
     }
@@ -1524,5 +1545,46 @@ impl Geyser for GrpcService {
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::FileTypeExt;
+    use tokio::net::{TcpStream, UnixStream};
+
+    #[tokio::test]
+    async fn test_multiple_listeners_tcp_and_uds() {
+        let uds_path = "/tmp/geyser-multi-test.sock";
+        let tcp_addr = "127.0.0.1:19876";
+        
+        let _ = std::fs::remove_file(uds_path);
+
+        let uds_listener = UnixListener::bind(uds_path).unwrap();
+        std::fs::set_permissions(uds_path, std::fs::Permissions::from_mode(0o770)).unwrap();
+        
+        let tcp_listener = tokio::net::TcpListener::bind(tcp_addr).await.unwrap();
+        
+        // check socket file exists
+        let metadata = std::fs::metadata(uds_path).unwrap();
+        assert!(metadata.file_type().is_socket());
+        
+        // test UDS connection
+        let uds_path_clone = uds_path.to_string();
+        let uds_connect = tokio::spawn(async move {
+            UnixStream::connect(&uds_path_clone).await.unwrap()
+        });
+        let (_, _) = uds_listener.accept().await.unwrap();
+        uds_connect.await.unwrap();
+        
+        // test TCP connection
+        let tcp_connect = tokio::spawn(async move {
+            TcpStream::connect(tcp_addr).await.unwrap()
+        });
+        let (_, _) = tcp_listener.accept().await.unwrap();
+        tcp_connect.await.unwrap();
+        
+        std::fs::remove_file(uds_path).unwrap();
     }
 }
