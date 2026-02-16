@@ -64,15 +64,16 @@ tonic-build = "0.14.0"
 tonic-prost = "0.14.0"
 tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
-vergen = "9.0.6"
+vergen = "=9.0.6"
+time = "=0.3.44"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "3.0.14"
-solana-account-decoder = "3.0.14"
+agave-geyser-plugin-interface = "=3.1.8"
+solana-account-decoder = "=3.1.8"
 solana-logger = "3.0.0"
-solana-storage-proto = "3.0.14"
-solana-transaction-context = "3.0.14"
-solana-transaction-status = "3.0.14"
+solana-storage-proto = "=3.1.8"
+solana-transaction-context = "3.1.8"
+solana-transaction-status = "3.1.8"
 
 # Solana SDK
 solana-account = "3.0.0"
