@@ -286,7 +286,6 @@ impl FilteredUpdate {
                         },
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
-                        pre_encoded: None,
                     }),
                     slot: msg.slot,
                 })
@@ -660,15 +659,6 @@ impl prost::Message for FilteredUpdateTransaction {
 
 impl FilteredUpdateTransaction {
     fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
-        // try to use pre-encoded bytes (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            encode_key(tag, WireType::LengthDelimited, buf);
-            encode_varint(pre_encoded.len() as u64, buf);
-            buf.put_slice(pre_encoded);
-            return;
-        }
-
-        // fallback: encode from scratch
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::tx_encoded_len(tx) as u64, buf);
 
@@ -686,11 +676,6 @@ impl FilteredUpdateTransaction {
     }
 
     fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
-        // try to use pre-encoded length (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            return pre_encoded.len();
-        }
-
         let index = tx.index as u64;
 
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
@@ -999,12 +984,7 @@ pub mod tests {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
         crate::plugin::{
             convert_to,
-            filter::{
-                encoder::TransactionEncoder,
-                message::{FilteredUpdateAccount, FilteredUpdateTransaction},
-                name::FilterName,
-                FilterAccountsDataSlice,
-            },
+            filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
                 MessageTransaction, MessageTransactionInfo, SlotStatus,
@@ -1185,7 +1165,6 @@ pub mod tests {
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
-                            pre_encoded: None,
                         }
                     })
                     .map(Arc::new)
@@ -1307,68 +1286,6 @@ pub mod tests {
                 )
             }
         }
-    }
-
-    #[test]
-    fn test_pre_encoded_matches_manual_encoding() {
-        // Get real transactions from fixtures (these have pre_encoded: None)
-        for tx_arc in load_predefined_transactions() {
-            // Clone the transaction info
-            let mut tx_with_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: None,
-            };
-
-            // Create version without cache (fallback path)
-            let tx_without_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: None,
-            };
-
-            // Pre-encode one of them
-            TransactionEncoder::pre_encode(&mut tx_with_cache);
-
-            assert!(
-                tx_with_cache.pre_encoded.is_some(),
-                "pre_encode should populate the field"
-            );
-
-            // Wrap both in FilteredUpdateTransaction and encode via the public Message trait
-            let wrapped_cached = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_with_cache),
-                slot: 42,
-            };
-            let wrapped_manual = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_without_cache),
-                slot: 42,
-            };
-
-            // Encode both using prost::Message::encode_to_vec (public API)
-            let buf_cached = wrapped_cached.encode_to_vec();
-            let buf_manual = wrapped_manual.encode_to_vec();
-
-            // They must be identical
-            assert_eq!(
-                buf_cached, buf_manual,
-                "Pre-encoded bytes differ from manual encoding for tx {:?}",
-                tx_arc.signature
-            );
-        }
-
-        println!(
-            "Tested {} transactions - all match!",
-            load_predefined_transactions().len()
-        );
     }
 
     #[test]

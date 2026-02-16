@@ -1,4 +1,3 @@
-pub mod encoder;
 #[allow(clippy::module_inception)]
 mod filter;
 pub mod limits;
