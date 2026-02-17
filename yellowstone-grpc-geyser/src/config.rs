@@ -446,6 +446,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use crate::config::{GrpcAddress, GrpcAddresses};
+
 
     #[test]
     fn test_deser_config_tokio() {
@@ -471,5 +475,63 @@ mod tests {
         let config: super::ConfigTokio = serde_json::from_str(json_with_null_affinity).unwrap();
         assert_eq!(config.worker_threads, Some(4));
         assert_eq!(config.affinity, None);
+    }
+
+    #[test]
+    fn test_grpc_address_single_tcp() {
+        let json = r#""0.0.0.0:10000""#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 1);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+    }
+
+    #[test]
+    fn test_grpc_address_single_uds() {
+        let json = r#""unix:///var/run/geyser.sock""#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 1);
+        assert!(matches!(&addrs.inner[0], GrpcAddress::Unix(p) if p == Path::new("/var/run/geyser.sock")));
+    }
+
+    #[test]
+    fn test_grpc_address_array_tcp_only() {
+        let json = r#"["0.0.0.0:10000", "0.0.0.0:10001"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 2);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+        assert!(matches!(addrs.inner[1], GrpcAddress::Tcp(addr) if addr.port() == 10001));
+    }
+
+    #[test]
+    fn test_grpc_address_array_uds_only() {
+        let json = r#"["unix:///var/run/a.sock", "unix:///var/run/b.sock"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 2);
+        assert!(matches!(&addrs.inner[0], GrpcAddress::Unix(p) if p == Path::new("/var/run/a.sock")));
+        assert!(matches!(&addrs.inner[1], GrpcAddress::Unix(p) if p == Path::new("/var/run/b.sock")));
+    }
+
+    #[test]
+    fn test_grpc_address_array_mixed() {
+        let json = r#"["0.0.0.0:10000", "unix:///var/run/geyser.sock", "127.0.0.1:10001"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 3);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+        assert!(matches!(&addrs.inner[1], GrpcAddress::Unix(p) if p == Path::new("/var/run/geyser.sock")));
+        assert!(matches!(addrs.inner[2], GrpcAddress::Tcp(addr) if addr.port() == 10001));
+    }
+
+    #[test]
+    fn test_grpc_address_empty_array() {
+        let json = r#"[]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert!(addrs.inner.is_empty());
+    }
+
+    #[test]
+    fn test_grpc_address_invalid_tcp() {
+        let json = r#""not_valid""#;
+        let result: Result<GrpcAddresses, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 }
