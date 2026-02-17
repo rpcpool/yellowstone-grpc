@@ -920,19 +920,28 @@ impl GrpcService {
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
+        metrics::connections_total_inc();
         let mut filter = Filter::default();
 
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         // Ensure cancellation_token is cancelled on exit even if we panic
         let on_drop = OnDrop::new({
             let cancellation_token = cancellation_token.clone();
+            let subscriber_id = subscriber_id.clone();
+            let my_debug_client_tx = debug_client_tx.clone();
             move || {
+                metrics::connections_total_dec();
+                set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
+                set_subscriber_send_bandwidth_load(&subscriber_id, 0);
+                set_subscriber_queue_size(&subscriber_id, 0);
+                DebugClientMessage::maybe_send(&my_debug_client_tx, || {
+                    DebugClientMessage::Removed { id }
+                });
                 cancellation_token.cancel();
             }
         });
 
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
-        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
-        metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
             filter: Box::new(filter.clone()),
@@ -1129,13 +1138,6 @@ impl GrpcService {
                 }
             }
         }
-        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_queue_size(&subscriber_id, 0);
-
-        metrics::connections_total_dec();
-        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
-        metrics::update_subscriptions(&endpoint, Some(&filter), None);
         info!("client #{id}: removed");
         drop(on_drop);
     }

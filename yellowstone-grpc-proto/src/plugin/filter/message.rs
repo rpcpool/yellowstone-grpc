@@ -981,6 +981,7 @@ impl FilteredUpdateEntry {
 }
 
 #[cfg(any(test, feature = "plugin-bench"))]
+#[allow(deprecated)]
 pub mod tests {
     #![cfg_attr(feature = "plugin-bench", allow(dead_code))]
     #![cfg_attr(feature = "plugin-bench", allow(unused_imports))]
@@ -1126,6 +1127,7 @@ pub mod tests {
             .map(|entry| {
                 let path = entry.expect("failed to read `blocks` dir entry").path();
                 let data = fs::read(path).expect("failed to read block");
+                #[allow(deprecated)]
                 generated::ConfirmedBlock::decode(data.as_slice())
                     .expect("failed to decode block")
                     .try_into()

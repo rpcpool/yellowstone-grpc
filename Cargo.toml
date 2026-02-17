@@ -66,6 +66,7 @@ tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "=9.0.6"
 time = "=0.3.44"
+home = "=0.5.11"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "=3.1.8"
