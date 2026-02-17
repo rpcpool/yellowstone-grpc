@@ -1,8 +1,8 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
+        ReplicaEntryInfoV2, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     prost_types::Timestamp,
@@ -383,6 +383,67 @@ impl MessageTransaction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredTransactionInfo {
+    pub signature: Signature,
+    pub is_vote: bool,
+    pub transaction: confirmed_block::Transaction,
+    pub static_account_keys: HashSet<Pubkey>,
+    pub loaded_writable_addresses: Vec<Pubkey>,
+    pub loaded_readonly_addresses: Vec<Pubkey>,
+}
+
+impl MessageDeshredTransactionInfo {
+    pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
+        let static_account_keys: HashSet<Pubkey> = info
+            .transaction
+            .message
+            .static_account_keys()
+            .iter()
+            .copied()
+            .collect();
+
+        let (loaded_writable_addresses, loaded_readonly_addresses) = info
+            .loaded_addresses
+            .map(|la| (la.writable.clone(), la.readonly.clone()))
+            .unwrap_or_default();
+
+        Self {
+            signature: *info.signature,
+            is_vote: info.is_vote,
+            transaction: convert_to::create_transaction(info.transaction),
+            static_account_keys,
+            loaded_writable_addresses,
+            loaded_readonly_addresses,
+        }
+    }
+
+    /// Returns all account keys (static + dynamically loaded from ALTs).
+    pub fn all_account_keys(&self) -> impl Iterator<Item = &Pubkey> {
+        self.static_account_keys
+            .iter()
+            .chain(self.loaded_writable_addresses.iter())
+            .chain(self.loaded_readonly_addresses.iter())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredTransaction {
+    pub transaction: Arc<MessageDeshredTransactionInfo>,
+    pub slot: u64,
+    pub created_at: Timestamp,
+}
+
+impl MessageDeshredTransaction {
+    pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>, slot: Slot) -> Self {
+        Self {
+            transaction: Arc::new(MessageDeshredTransactionInfo::from_geyser(info)),
+            slot,
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageEntry {
     pub slot: u64,
@@ -553,6 +614,7 @@ pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
     Transaction(MessageTransaction),
+    DeshredTransaction(MessageDeshredTransaction),
     Entry(Arc<MessageEntry>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
@@ -565,6 +627,7 @@ impl Message {
             Self::Slot(msg) => msg.slot,
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
+            Self::DeshredTransaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,

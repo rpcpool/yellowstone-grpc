@@ -2,8 +2,9 @@ use {
     crate::plugin::{
         filter::{name::FilterName, FilterAccountsDataSlice},
         message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo,
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+            MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry, MessageSlot,
+            MessageTransaction, MessageTransactionInfo,
         },
     },
     bytes::{
@@ -742,6 +743,205 @@ impl prost::Message for FilteredUpdateTransactionStatus {
                 .err
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateDeshredTransaction {
+    pub transaction: Arc<MessageDeshredTransactionInfo>,
+    pub slot: u64,
+}
+
+impl prost::Message for FilteredUpdateDeshredTransaction {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::tx_encode_raw(1u32, &self.transaction, buf);
+        if self.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction))
+            + if self.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateDeshredTransaction {
+    fn tx_encode_raw(tag: u32, tx: &MessageDeshredTransactionInfo, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
+        }
+        message::encode(3u32, &tx.transaction, buf);
+        for pk in &tx.loaded_writable_addresses {
+            prost_bytes_encode_raw(4u32, pk.as_ref(), buf);
+        }
+        for pk in &tx.loaded_readonly_addresses {
+            prost_bytes_encode_raw(5u32, pk.as_ref(), buf);
+        }
+    }
+
+    fn tx_encoded_len(tx: &MessageDeshredTransactionInfo) -> usize {
+        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + message::encoded_len(3u32, &tx.transaction)
+            + prost_repeated_encoded_len_map!(4u32, tx.loaded_writable_addresses, |pk| pk
+                .as_ref()
+                .len())
+            + prost_repeated_encoded_len_map!(5u32, tx.loaded_readonly_addresses, |pk| pk
+                .as_ref()
+                .len())
+    }
+}
+
+pub type FilteredUpdatesDeshred = SmallVec<[FilteredUpdateDeshred; 2]>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateDeshred {
+    pub filters: FilteredUpdateFilters,
+    pub message: FilteredUpdateDeshredOneof,
+    pub created_at: Timestamp,
+}
+
+impl prost::Message for FilteredUpdateDeshred {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        for name in self.filters.iter().map(|filter| filter.as_ref()) {
+            encode_key(1u32, WireType::LengthDelimited, buf);
+            encode_varint(name.len() as u64, buf);
+            buf.put_slice(name.as_bytes());
+        }
+        self.message.encode_raw(buf);
+        message::encode(5u32, &self.created_at, buf);
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
+            + self.message.encoded_len()
+            + message::encoded_len(5u32, &self.created_at)
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateDeshred {
+    pub const fn new(
+        filters: FilteredUpdateFilters,
+        message: FilteredUpdateDeshredOneof,
+        created_at: Timestamp,
+    ) -> Self {
+        Self {
+            filters,
+            message,
+            created_at,
+        }
+    }
+
+    pub fn new_empty(message: FilteredUpdateDeshredOneof) -> Self {
+        Self::new(
+            FilteredUpdateFilters::new(),
+            message,
+            Timestamp::from(SystemTime::now()),
+        )
+    }
+
+    pub fn ping() -> Self {
+        Self::new_empty(FilteredUpdateDeshredOneof::Ping)
+    }
+
+    pub fn pong(id: i32) -> Self {
+        Self::new_empty(FilteredUpdateDeshredOneof::pong(id))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilteredUpdateDeshredOneof {
+    DeshredTransaction(FilteredUpdateDeshredTransaction), // tag 2
+    Ping,                                                 // tag 3
+    Pong(SubscribeUpdatePong),                            // tag 4
+}
+
+impl FilteredUpdateDeshredOneof {
+    pub fn deshred_transaction(message: &MessageDeshredTransaction) -> Self {
+        Self::DeshredTransaction(FilteredUpdateDeshredTransaction {
+            transaction: Arc::clone(&message.transaction),
+            slot: message.slot,
+        })
+    }
+
+    pub const fn pong(id: i32) -> Self {
+        Self::Pong(SubscribeUpdatePong { id })
+    }
+}
+
+impl prost::Message for FilteredUpdateDeshredOneof {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        match self {
+            Self::DeshredTransaction(msg) => message::encode(2u32, msg, buf),
+            Self::Ping => {
+                encode_key(3u32, WireType::LengthDelimited, buf);
+                encode_varint(0, buf);
+            }
+            Self::Pong(msg) => message::encode(4u32, msg, buf),
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        match self {
+            Self::DeshredTransaction(msg) => message::encoded_len(2u32, msg),
+            Self::Ping => key_len(3u32) + encoded_len_varint(0),
+            Self::Pong(msg) => message::encoded_len(4u32, msg),
+        }
     }
 
     fn merge_field(

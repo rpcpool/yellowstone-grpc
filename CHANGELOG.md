@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## [Triton Extension Patches]
+
+### `deshred-transaction`
+
+- geyser, client, proto: add deshred transaction subscription support with loaded addresses (ALT) via separate `SubscribeDeshred` RPC endpoint (`SubscribeUpdateDeshred` response type, `FilteredUpdateDeshred` server-side encoding, client methods, example CLI command with loaded address output, filtering on static and dynamically loaded account keys via `account_include`, `account_exclude`, `account_required`)
+- geyser: add deshred filter tests (vote, account_include with static/loaded keys, account_exclude, account_required, pong generation)
+- deps: update solana/agave git dependencies to v3.1.8 (`v3.1-triton-public`)
+- deps: add `[patch.crates-io]` for triton fork compatibility
+
 ## [Unreleased]
 
 ## 2026-02-24
