@@ -10,17 +10,24 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2026-03-18
 
-- yellowstone-grpc-client-12.3.0
-- yellowstone-grpc-client-simple-12.3.0
-- yellowstone-grpc-geyser-12.3.0
-- yellowstone-grpc-proto-12.3.0
+- yellowstone-grpc-client-12.3.0+triton-ext
+- yellowstone-grpc-client-simple-12.3.0+triton-ext
+- yellowstone-grpc-geyser-12.3.0+triton-ext
+- yellowstone-grpc-proto-12.3.0+triton-ext
 
 ### Features
 - proto: add `commission_bps` field to `Reward` message (SIMD-0291)
 - geyser: upgrade agave monorepo dependencies to 4.0.0-beta.2
 - geyser: upgrade Solana SDK dependencies to match agave 4.0.0-beta.2
 
-### Breaking
+## [Triton Extension Patches]
+
+### `deshred-transaction`
+
+- geyser, client, proto: add deshred transaction subscription support with loaded addresses (ALT) via separate `SubscribeDeshred` RPC endpoint (`SubscribeUpdateDeshred` response type, `FilteredUpdateDeshred` server-side encoding, client methods, example CLI command with loaded address output, filtering on static and dynamically loaded account keys via `account_include`, `account_exclude`, `account_required`)
+- geyser: add deshred filter tests (vote, account_include with static/loaded keys, account_exclude, account_required, pong generation)
+- deps: update solana/agave git dependencies to v4.0.0-beta.2 (`v4.0.0-beta.2-triton-public`)
+- deps: add `[patch.crates-io]` for triton fork compatibility
 
 ## 2026-03-16
 

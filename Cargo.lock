@@ -69,8 +69,7 @@ dependencies = [
 [[package]]
 name = "agave-feature-set"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "327d54ad01ecd1c2154f35e3c8b719b8ca419641a1f81f8fad0cf671c1f5936a"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -84,12 +83,12 @@ dependencies = [
 [[package]]
 name = "agave-geyser-plugin-interface"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d0603bd729a6685184ea9396fd2f7721471ee1d40fd0ffecbc4381bc1b1bbb8"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "log",
  "solana-clock",
  "solana-hash 4.2.0",
+ "solana-message",
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status",
@@ -99,8 +98,7 @@ dependencies = [
 [[package]]
 name = "agave-reserved-account-keys"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53b5a8845b2e35b2811ccfa2b6122b46cd7ccc672a73f716a2e216c10dc2e256"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.1.0",
@@ -2952,8 +2950,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25acf6344e56568d9c0e4e3db92510352f8b55eaa14159afd1d8732abad81338"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "Inflector",
  "base64",
@@ -2994,8 +2991,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder-client-types"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a6a9272831a559fc30dd7c8f6eba73323eeba59227b0404f5ab7db83d6ae90b"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "base64",
  "bs58",
@@ -3687,8 +3683,7 @@ dependencies = [
 [[package]]
 name = "solana-storage-proto"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e267f0a5c36b06533f715e2d6f3929c471f967234ce2a6bae68a83ba656b661"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "bincode",
  "bs58",
@@ -3712,8 +3707,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0dfaa1a95bfd8027abd35ea2788ca9a5082b91faa66d994b9fbb21e7630cb67"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 
 [[package]]
 name = "solana-system-interface"
@@ -3812,8 +3806,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-context"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f1c93b5c1c513620f90888507a8ccaf30e98891b49f9d04889405849caee56"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "bincode",
  "serde",
@@ -3841,8 +3834,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0304155add4c6ec7ab9a055700022805ea86e8176f5cb7f3975056b83f8d905"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3884,8 +3876,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status-client-types"
 version = "4.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71aaa99eda07474d6827ce1b6a3d9fb3c21d937b054504f01c6f2aa20f271103"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-beta.2-triton-public#56ce69d7ae144cb32cadbe6001fc2a92a61790f7"
 dependencies = [
  "base64",
  "bincode",
@@ -5348,7 +5339,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "12.3.0"
+version = "12.3.0+triton-ext"
 dependencies = [
  "bytes",
  "futures",
@@ -5363,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "12.3.0"
+version = "12.3.0+triton-ext"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5391,7 +5382,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "12.3.0"
+version = "12.3.0+triton-ext"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5457,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.3.0"
+version = "12.3.0+triton-ext"
 dependencies = [
  "anyhow",
  "bytes",
