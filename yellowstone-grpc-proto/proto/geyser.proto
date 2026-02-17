@@ -9,6 +9,7 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  rpc SubscribeDeshred(stream SubscribeDeshredRequest) returns (stream SubscribeUpdateDeshred) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -107,6 +108,18 @@ message SubscribeRequestFilterBlocksMeta {}
 
 message SubscribeRequestFilterEntry {}
 
+// Filter for deshred transactions (transactions received before execution).
+// Deshred transactions are received when entries are formed from shreds,
+// BEFORE any execution occurs. No TransactionStatusMeta is available.
+// Address lookup tables are resolved, so both static account keys and
+// dynamically loaded addresses (from ALTs) are available for filtering.
+message SubscribeRequestFilterDeshredTransactions {
+  optional bool vote = 1;
+  repeated string account_include = 2;
+  repeated string account_exclude = 3;
+  repeated string account_required = 4;
+}
+
 message SubscribeRequestAccountsDataSlice {
   uint64 offset = 1;
   uint64 length = 2;
@@ -114,6 +127,17 @@ message SubscribeRequestAccountsDataSlice {
 
 message SubscribeRequestPing {
   int32 id = 1;
+}
+
+// Request message for the SubscribeDeshred RPC.
+// Subscribes to deshred transactions (transactions received before execution).
+// Deshred transactions are received when entries are formed from shreds,
+// BEFORE any execution occurs. No TransactionStatusMeta is available.
+// Address lookup tables are resolved, so both static and loaded addresses
+// are available for filtering.
+message SubscribeDeshredRequest {
+  map<string, SubscribeRequestFilterDeshredTransactions> deshred_transactions = 1;
+  optional SubscribeRequestPing ping = 2;
 }
 
 message SubscribeUpdate {
@@ -214,10 +238,33 @@ message SubscribeUpdateEntry {
   uint64 starting_transaction_index = 6; // added in v1.18, for solana 1.17 value is always 0
 }
 
+message SubscribeUpdateDeshredTransaction {
+  SubscribeUpdateDeshredTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUpdateDeshredTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
+  repeated bytes loaded_writable_addresses = 4;
+  repeated bytes loaded_readonly_addresses = 5;
+}
+
 message SubscribeUpdatePing {}
 
 message SubscribeUpdatePong {
   int32 id = 1;
+}
+
+message SubscribeUpdateDeshred {
+  repeated string filters = 1;
+  oneof update_oneof {
+    SubscribeUpdateDeshredTransaction deshred_transaction = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+  }
+  google.protobuf.Timestamp created_at = 5;
 }
 
 // non-streaming methods

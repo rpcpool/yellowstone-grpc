@@ -20,7 +20,8 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate,
+        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
+        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
 };
 
@@ -133,6 +134,44 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         request: SubscribeRequest,
     ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
         self.subscribe_with_request(Some(request))
+            .await
+            .map(|(_sink, stream)| stream)
+    }
+
+    // Subscribe Deshred
+    pub async fn subscribe_deshred(
+        &mut self,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>,
+    )> {
+        self.subscribe_deshred_with_request(None).await
+    }
+
+    pub async fn subscribe_deshred_with_request(
+        &mut self,
+        request: Option<SubscribeDeshredRequest>,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError> + use<F>,
+        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>> + use<F>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        if let Some(request) = request {
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        }
+        let response: Response<Streaming<SubscribeUpdateDeshred>> =
+            self.geyser.subscribe_deshred(subscribe_rx).await?;
+        Ok((subscribe_tx, response.into_inner()))
+    }
+
+    pub async fn subscribe_deshred_once(
+        &mut self,
+        request: SubscribeDeshredRequest,
+    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>> {
+        self.subscribe_deshred_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
     }
