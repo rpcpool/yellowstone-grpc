@@ -69,8 +69,7 @@ dependencies = [
 [[package]]
 name = "agave-feature-set"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde74a2d1f2f99a3ea59938d1533c7973c344e47d24c1b645ee81e958c54226a"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -84,12 +83,12 @@ dependencies = [
 [[package]]
 name = "agave-geyser-plugin-interface"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "576ea415982b71940a6773f53ce6073317fbc390a3c13ec75ec044a185e4251b"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "log",
  "solana-clock",
  "solana-hash 4.2.0",
+ "solana-message",
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status",
@@ -99,8 +98,7 @@ dependencies = [
 [[package]]
 name = "agave-reserved-account-keys"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "798e559c514af005950ea81586a3856f9297ecb80a7359057c19bf6717f5f537"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.1.0",
@@ -211,9 +209,9 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "arc-swap"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a07d1f37ff60921c83bdfc7407723bdefe89b44b98a9b772f225c8f9d67141a6"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
 dependencies = [
  "rustversion",
 ]
@@ -343,7 +341,7 @@ dependencies = [
  "getrandom 0.2.17",
  "instant",
  "pin-project-lite",
- "rand 0.8.6",
+ "rand 0.8.5",
  "tokio",
 ]
 
@@ -1851,6 +1849,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2523,7 +2530,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -2557,7 +2564,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2720,9 +2727,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -3227,8 +3234,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff1acff600a621d4445e0610fa71a53bef5390a5e349cfbd30651917593fb57d"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "Inflector",
  "base64",
@@ -3269,8 +3275,7 @@ dependencies = [
 [[package]]
 name = "solana-account-decoder-client-types"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb23fe4d32da6381b9a2b1b285c28fb5c9dc29cbbab40c9c1de24d8a2c5086bd"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "base64",
  "bs58",
@@ -3568,7 +3573,7 @@ checksum = "5ac8be597c9e231b0cab2928ce3bc3e4ee77d9c0ad92977b9d901f3879f25a7a"
 dependencies = [
  "ed25519-dalek",
  "five8",
- "rand 0.8.6",
+ "rand 0.8.5",
  "solana-address 2.6.0",
  "solana-seed-phrase",
  "solana-signature",
@@ -3963,8 +3968,7 @@ dependencies = [
 [[package]]
 name = "solana-storage-proto"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dfda95ca64a9d56a26399149df82eef63e6b7145877f7fb3ae4f0ce99720142"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "bincode",
  "bs58",
@@ -3988,8 +3992,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24ea15c0d91403375e3d017cc09780cf138b629abba4ccaaa7cf66b1afea1059"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 
 [[package]]
 name = "solana-system-interface"
@@ -4088,8 +4091,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-context"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecefe8b30e334e2891ca82da35becd9a3f4c16021d9ca782e2a82adf31084fa3"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "bincode",
  "serde",
@@ -4118,8 +4120,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9d6012dad70ac080f5ccc4a0799ce9e919a8efea98ec06876752fc5334bd44e"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -4161,8 +4162,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-status-client-types"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6886b7bb8fbba5937b4a38fa67ed442d7971629244b8fbd95c7963b2126bc9"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "base64",
  "bincode",
@@ -4226,7 +4226,7 @@ dependencies = [
  "merlin",
  "num-derive",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "serde_json",
@@ -5932,7 +5932,7 @@ dependencies = [
  "prost 0.14.3",
  "prost-types 0.14.3",
  "protoc-bin-vendored",
- "rand 0.8.6",
+ "rand 0.8.5",
  "siphasher",
  "solana-pubkey 4.1.0",
  "thiserror 2.0.18",
