@@ -396,6 +396,7 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
+    config_max_subscription_limit: usize,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -406,6 +407,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    subscription_tracker: Arc<RwLock<HashMap<String, u64>>>,
 }
 
 impl GrpcService {
@@ -499,6 +501,7 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
+            config_max_subscription_limit: config.max_subscription_limit,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -1244,6 +1247,27 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        // Enforce max subscription limit.
+        let x_subscription_id_meta = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        let Some(subscription_id) = x_subscription_id_meta else {
+            return Err(Status::invalid_argument("missing subscription id"));
+        };
+
+        // Unwrap ok here due to poisoning behavior.
+        let open_subscription_count: u64 = self.subscription_tracker.read().await.unwrap();
+
+        if open_subscription_count >= self.config_max_subscription_limit {
+            // Kick them out.
+            return Err(Status::resource_exhausted(
+                "max open subscription limit reached",
+            ));
+        }
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
         let client_cancellation_token = self.cancellation_token.child_token();
@@ -1301,12 +1325,6 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
-
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);

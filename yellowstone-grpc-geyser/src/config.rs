@@ -173,6 +173,12 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub unary_concurrency_limit: usize,
+    /// Configurable limit amount of opened subscriptions allowed per customer
+    #[serde(
+        default = "ConfigGrpc::max_subscription_limit_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub max_subscription_limit: u64,
     /// Enable/disable unary methods
     #[serde(default)]
     pub unary_disabled: bool,
@@ -236,6 +242,10 @@ impl ConfigGrpc {
 
     const fn unary_concurrency_limit_default() -> usize {
         Semaphore::MAX_PERMITS
+    }
+
+    const fn max_subscription_limit_default() -> u64 {
+        10
     }
 
     const fn default_filter_name_size_limit() -> usize {
