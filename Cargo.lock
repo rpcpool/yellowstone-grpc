@@ -68,9 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2846bb4fc0831d112255193a54259fabdc82149f0cd0a72db8922837cc62c0cd"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -82,13 +81,13 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2b906e2711e80506d6e67d3df4768cc47e050871793457e347fce8de6e427c"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "log",
  "solana-clock",
  "solana-hash 3.1.0",
+ "solana-message",
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status",
@@ -97,9 +96,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a55fff3d170fbcf81afc8d30c504a1ae4a6ff64be025ee6c08012f3db2a243fc"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 3.0.0",
@@ -188,7 +186,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -199,7 +197,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1021,7 +1019,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2615,7 +2613,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2628,7 +2626,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2938,9 +2936,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66939b3e7aa0fab7a523bbb0d0518e3cdbb6a9b8675d5ae3a7bba5c1bef98622"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "Inflector",
  "base64",
@@ -2980,9 +2977,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bcf86e96f5e986687edc572033df43723b885c668fa1a3280753232dc8f3656"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "base64",
  "bs58",
@@ -3665,9 +3661,8 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c6304e0da807b148c5fb7606fe2d474c3e871d8165f91178ea0afb6fdcf481"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "bincode",
  "bs58",
@@ -3690,9 +3685,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "641cddc667abba4cf3474d850a073c0a2b439ff0014c445cd09eaf5d79d70bab"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 
 [[package]]
 name = "solana-system-interface"
@@ -3775,9 +3769,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f55a9c2e2af954fae402f08e210c7f01d6a8517ad358f8f0db11ed7de89b02d4"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "bincode",
  "serde",
@@ -3804,9 +3797,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afe59d2c9a9ff1bb05150ebc5b1a945642760977da3715b9e1c403f0a29d3805"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3847,9 +3839,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1341840c0ba1028b918b03c9ba9900019f739ee23946baf76574ec0a5dab8231"
+version = "3.1.13"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#5192da6f7280563ed010c7d34f7ce24bd282068f"
 dependencies = [
  "base64",
  "bincode",
@@ -4229,7 +4220,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4943,7 +4934,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5354,7 +5345,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "12.2.0"
+version = "12.2.0+triton-ext"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
