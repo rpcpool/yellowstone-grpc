@@ -647,6 +647,7 @@ impl Action {
                     SubscribeDeshredRequest {
                         deshred_transactions,
                         ping,
+                        slots: HashMap::new(),
                     },
                     args.stats,
                 ))
@@ -1078,6 +1079,7 @@ async fn geyser_subscribe_deshred(
                         Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
+                        Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_pp_c, &pb_pp),
                         None => {
                             pb_multi.println("update not found in the deshred message")?;
                             break;
@@ -1136,6 +1138,7 @@ async fn geyser_subscribe_deshred(
                             .await?;
                     }
                     Some(DeshredUpdateOneof::Pong(_)) => {}
+                    Some(DeshredUpdateOneof::Slot(_)) => {}
                     None => {
                         error!("update not found in the deshred message");
                         break;
