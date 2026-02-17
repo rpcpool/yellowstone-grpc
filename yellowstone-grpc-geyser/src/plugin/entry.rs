@@ -7,15 +7,15 @@ use {
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
+                Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageDeshredTransaction, MessageSlot,
                 MessageTransaction,
             },
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     solana_pubkey::Pubkey,
     std::{
@@ -322,6 +322,24 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn notify_deshred_transaction(
+        &self,
+        transaction: ReplicaDeshredTransactionInfoVersions,
+        slot: u64,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let ReplicaDeshredTransactionInfoVersions::V0_0_1(transaction) = transaction;
+
+            let message = Message::DeshredTransaction(MessageDeshredTransaction::from_geyser(
+                transaction,
+                slot,
+            ));
+            inner.send_message(message);
+
+            Ok(())
+        })
+    }
+
     fn account_data_notifications_enabled(&self) -> bool {
         true
     }
@@ -335,6 +353,10 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }
 }
