@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
                 .name("subscribe_deshred")
                 .route_name("SubscribeDeshred")
                 .input_type("yellowstone_grpc_proto::geyser::SubscribeDeshredRequest")
-                .output_type("yellowstone_grpc_proto::geyser::SubscribeUpdateDeshred")
+                .output_type("crate::plugin::filter::message::FilteredUpdateDeshred")
                 .codec_path("tonic_prost::ProstCodec")
                 .client_streaming()
                 .server_streaming()
