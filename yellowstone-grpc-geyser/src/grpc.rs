@@ -1254,28 +1254,39 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
-        let subscriber_handle: SubscriberHandle = if let Some(subscription_id) =
-            x_subscription_id_meta
-        {
-            // Use block scope to drop lock early.
-            let (count, cancellation_token) = {
-                let guard = self.subscription_tracker.lock().unwrap();
-                let subscriber_entry = guard
-                    .entry(subscriber_id.clone())
-                    .or_insert_with(|| (Arc::new(AtomicUsize::new(0)), CancellationToken::new()));
-                (subscriber_entry.0.clone(), subscriber_entry.1.clone())
-            };
+        let (subscription_count, subscription_cancel_token): SubscriberHandle =
+            if let Some(subscription_id) = x_subscription_id_meta {
+                // Use block scope to drop lock early.
+                let (count, cancellation_token) = {
+                    let guard = self.subscription_tracker.lock().unwrap();
+                    let subscriber_entry =
+                        guard.entry(subscriber_id.clone()).or_insert_with(|| {
+                            (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
+                        });
+                    (subscriber_entry.0.clone(), subscriber_entry.1.clone())
+                };
 
-            (count, cancellation_token)
-        } else {
-            // No x-subscription-id.
-            //
-            // This branch exists for debugging bypassing subscription limits
-            // when subscriber_id is not present.
-            //
-            // This is only possible if the request happens internally.
-            (0, CancellationToken::new())
-        };
+                let current_count = count.fetch_add(1, Ordering::SeqCst);
+                if current_count >= self.config_max_subscription_limit {
+                    cancellation_token.cancel();
+                    // Remove subscriber from subscription tracker.
+                    let guard = self.subscription_tracker.lock().unwrap();
+                    guard.remove(&subscription_id);
+                    return Err(Status::resource_exhausted(
+                        "exceeded maximum subscription limit. all subscriptions closed.",
+                    ));
+                }
+
+                (count, cancellation_token)
+            } else {
+                // No x-subscription-id.
+                //
+                // This branch exists for debugging bypassing subscription limits
+                // when subscriber_id is not present.
+                //
+                // This is only possible if the request happens internally.
+                (0, CancellationToken::new())
+            };
 
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
