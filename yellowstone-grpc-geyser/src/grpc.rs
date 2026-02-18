@@ -1260,8 +1260,11 @@ impl Geyser for GrpcService {
                 let (count, cancellation_token) = {
                     let guard = self.subscription_tracker.lock().unwrap();
                     let subscriber_entry =
-                        guard.entry(subscriber_id.clone()).or_insert_with(|| {
-                            (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
+                        guard.entry(subscription_id.clone()).or_insert_with(|| {
+                            (
+                                Arc::new(AtomicUsize::new(0)),
+                                self.cancellation_token.child_token(),
+                            )
                         });
                     (subscriber_entry.0.clone(), subscriber_entry.1.clone())
                 };
