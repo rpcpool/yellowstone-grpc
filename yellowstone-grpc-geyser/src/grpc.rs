@@ -382,6 +382,7 @@ enum ReplayedResponse {
 }
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
+type SubscriberHandle = (Arc<AtomicUsize>, CancellationToken);
 
 #[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
@@ -407,7 +408,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
-    subscription_tracker: Arc<RwLock<HashMap<String, u64>>>,
+    subscription_tracker: Arc<Mutex<HashMap<String, SubscriberHandle>>>,
 }
 
 impl GrpcService {
@@ -1253,19 +1254,28 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
-        let Some(subscription_id) = x_subscription_id_meta else {
-            return Err(Status::invalid_argument("missing subscription id"));
+        let subscriber_handle: SubscriberHandle = if let Some(subscription_id) =
+            x_subscription_id_meta
+        {
+            // Use block scope to drop lock early.
+            let (count, cancellation_token) = {
+                let guard = self.subscription_tracker.lock().unwrap();
+                let subscriber_entry = guard
+                    .entry(subscriber_id.clone())
+                    .or_insert_with(|| (Arc::new(AtomicUsize::new(0)), CancellationToken::new()));
+                (subscriber_entry.0.clone(), subscriber_entry.1.clone())
+            };
+
+            (count, cancellation_token)
+        } else {
+            // No x-subscription-id.
+            //
+            // This branch exists for debugging bypassing subscription limits
+            // when subscriber_id is not present.
+            //
+            // This is only possible if the request happens internally.
+            (0, CancellationToken::new())
         };
-
-        // Unwrap ok here due to poisoning behavior.
-        let open_subscription_count: u64 = self.subscription_tracker.read().await.unwrap();
-
-        if open_subscription_count >= self.config_max_subscription_limit {
-            // Kick them out.
-            return Err(Status::resource_exhausted(
-                "max open subscription limit reached",
-            ));
-        }
 
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
