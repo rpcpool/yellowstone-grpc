@@ -1,10 +1,7 @@
 use {
     crate::{
         config::ConfigGrpc,
-        metrics::{
-            self, set_subscriber_queue_size, set_subscriber_recv_bandwidth_load,
-            set_subscriber_send_bandwidth_load, DebugClientMessage,
-        },
+        metrics::{self, set_subscriber_queue_size, DebugClientMessage},
         plugin::{
             filter::{
                 limits::FilterLimits,
@@ -18,16 +15,12 @@ use {
             },
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        util::{
-            ema::{EmaReactivity, DEFAULT_EMA_WINDOW},
-            stream::{
-                load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
-                TrafficWeighted,
-            },
-        },
+        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
+    bytesize::ByteSize,
     log::{error, info},
     prost_types::Timestamp,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
@@ -93,38 +86,6 @@ struct BlockMetaStorageInner {
     processed: Option<u64>,
     confirmed: Option<u64>,
     finalized: Option<u64>,
-}
-
-impl TrafficWeighted for FilteredUpdate {
-    fn weight(&self) -> u32 {
-        self.encoded_len() as u32
-    }
-}
-
-impl TrafficWeighted for yellowstone_grpc_proto::geyser::SubscribeUpdateDeshred {
-    fn weight(&self) -> u32 {
-        self.encoded_len() as u32
-    }
-}
-
-impl TrafficWeighted for Status {
-    fn weight(&self) -> u32 {
-        // Rough estimate of the size of a Status message, we don't really care about the exact size
-        self.message().len() as u32
-    }
-}
-
-impl<T, E> TrafficWeighted for Result<T, E>
-where
-    T: TrafficWeighted,
-    E: TrafficWeighted,
-{
-    fn weight(&self) -> u32 {
-        match self {
-            Ok(item) => item.weight(),
-            Err(err) => err.weight(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -416,7 +377,6 @@ impl ClientSession {
         let filter = Filter::default();
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
-        metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
             filter: Box::new(filter.clone()),
@@ -436,10 +396,7 @@ impl ClientSession {
 
 impl Drop for ClientSession {
     fn drop(&mut self) {
-        set_subscriber_recv_bandwidth_load(&self.subscriber_id, 0);
-        set_subscriber_send_bandwidth_load(&self.subscriber_id, 0);
         set_subscriber_queue_size(&self.subscriber_id, 0);
-        metrics::connections_total_dec();
         metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
         metrics::update_subscriptions(&self.endpoint, Some(&self.filter), None);
         DebugClientMessage::maybe_send(&self.debug_client_tx, || DebugClientMessage::Removed {
@@ -486,6 +443,13 @@ impl GrpcService {
         let incoming = TcpIncoming::bind(config.address)?
             .with_nodelay(Some(true))
             .with_keepalive(Some(Duration::from_secs(20)));
+
+        let spy_incoming_config = SpyIncomingConfig {
+            traffic_reporting_threshold: config
+                .traffic_reporting_byte_threhsold
+                .unwrap_or_else(|| ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD)),
+        };
+        let spy_incoming = SpyIncoming::new(incoming, spy_incoming_config);
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -615,7 +579,7 @@ impl GrpcService {
                 ))
                 .add_service(health_service)
                 .add_service(service)
-                .serve_with_incoming_shutdown(incoming, shutdown_grpc.cancelled())
+                .serve_with_incoming_shutdown(spy_incoming, shutdown_grpc.cancelled())
                 .await;
             info!("gRPC server shut down with result: {result:?}");
         });
@@ -1026,16 +990,6 @@ impl GrpcService {
         }
 
         'outer: loop {
-            set_subscriber_send_bandwidth_load(
-                &session.subscriber_id,
-                stream_tx.estimated_send_rate().per_second() as i64,
-            );
-
-            set_subscriber_recv_bandwidth_load(
-                &session.subscriber_id,
-                stream_tx.estimated_consuming_rate().per_second() as i64,
-            );
-
             set_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size());
 
             tokio::select! {
@@ -1182,8 +1136,6 @@ impl GrpcService {
                                 }
                             }
                         }
-                    } else {
-                        stream_tx.no_load();
                     }
 
                     if commitment == CommitmentLevel::Processed && session.debug_client_tx.is_some() {
@@ -1287,7 +1239,6 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
-
         let client_cancellation_token = self.cancellation_token.child_token();
         if client_cancellation_token.is_cancelled() {
             return Err(Status::unavailable("server is shutting down"));
@@ -1300,20 +1251,11 @@ impl Geyser for GrpcService {
             None
         };
 
-        let client_stats_settings = StatsSettings::default()
-            .tx_ema_reactivity(EmaReactivity::Reactive)
-            .tx_ema_window(DEFAULT_EMA_WINDOW)
-            .rx_ema_reactivity(EmaReactivity::Reactive)
-            .rx_ema_window(DEFAULT_EMA_WINDOW);
-
-        let (stream_tx, stream_rx) = load_aware_channel(
-            if snapshot_rx.is_some() {
-                self.config_snapshot_client_channel_capacity
-            } else {
-                self.config_channel_capacity
-            },
-            client_stats_settings,
-        );
+        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_rx.is_some() {
+            self.config_snapshot_client_channel_capacity
+        } else {
+            self.config_channel_capacity
+        });
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -1543,7 +1485,7 @@ mod tests {
         super::*,
         crate::{
             plugin::filter::{limits::FilterLimits, name::FilterNames, Filter},
-            util::stream::{load_aware_channel, StatsSettings},
+            util::stream::load_aware_channel,
         },
         yellowstone_grpc_proto::prelude::{SubscribeRequest, SubscribeRequestFilterSlots},
     };
@@ -1594,7 +1536,7 @@ mod tests {
         let tt = TaskTracker::new();
         let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(16, StatsSettings::default());
+        let (stream_tx, stream_rx) = load_aware_channel(16);
         let (half_close_tx, half_close_rx) = oneshot::channel();
 
         // mirrors the incoming handler spawned in subscribe()

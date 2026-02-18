@@ -3,6 +3,7 @@ use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
     },
+    bytesize::ByteSize,
     serde::{de, Deserialize, Deserializer},
     std::{
         collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
@@ -209,6 +210,13 @@ pub struct ConfigGrpc {
     pub server_initial_connection_window_size: Option<u32>,
     #[serde(default)]
     pub server_initial_stream_window_size: Option<u32>,
+
+    ///
+    /// After how many bytes a TCP connection should update its traffic metrics for prometheus.
+    /// If not set, it uses the default 64KiB threshold.
+    ///
+    #[serde(default)]
+    pub traffic_reporting_byte_threhsold: Option<ByteSize>,
 }
 
 impl ConfigGrpc {
