@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- geyser: replace `OnDrop` with `ClientSession` RAII guard in `client_loop`, fixing missed cleanup on early-exit paths ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+
 ### Features
 
 - proto: add `SubscribeDeshred` RPC with dedicated `SubscribeUpdateDeshred` response type, deshred transaction messages with loaded addresses (ALT) ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
