@@ -27,7 +27,7 @@ base64 = "0.22.1"
 bincode = "1.3.3"
 bs58 = "0.5.1"
 bytes = "1.10.1"
-cargo-lock = "10.1.0"
+cargo-lock = "11.0.0"
 chrono = "0.4.26"
 clap = "4.5.42"
 criterion = "0.7.0"
@@ -48,8 +48,8 @@ local-ip-address = "0.6.1"
 log = "0.4.17"
 maplit = "1.0.2"
 prometheus = "0.14.0"
-prost = "0.14.0"
-prost-types = "0.14.0"
+prost = "0.14.2"
+prost-types = "0.14.2"
 prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 serde = "1.0.145"
@@ -59,33 +59,33 @@ thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
 tokio-util = "0.7.0"
-tonic = "0.14.0"
-tonic-build = "0.14.0"
-tonic-prost = "0.14.0"
-tonic-prost-build = "0.14.0"
-tonic-health = "0.14.0"
+tonic = "=0.14.2"
+tonic-build = "=0.14.2"
+tonic-prost = "=0.14.2"
+tonic-prost-build = "=0.14.2"
+tonic-health = "=0.14.2"
+# we need to pin vergen to 9.0.6 to avoid a build failure due to MSRV issues in newer versions of vergen
 vergen = "=9.0.6"
-time = "=0.3.44"
-home = "=0.5.11"
+
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "=3.1.8"
 solana-account-decoder = "=3.1.8"
 solana-logger = "3.0.0"
 solana-storage-proto = "=3.1.8"
-solana-transaction-context = "3.1.8"
-solana-transaction-status = "3.1.8"
+solana-transaction-context = "~3.1.0"
+solana-transaction-status = "~3.1.0"
+solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
+solana-transaction = "3.0.1"
 
 # Solana SDK
 solana-account = "3.0.0"
 solana-clock = "3.0.0"
-solana-hash = "3.0.0"
+solana-hash = "4.0.0"
 solana-keypair = "3.0.1"
-solana-message = { version = "3.0.1", features = ["bincode", "blake3"] }
-solana-pubkey = "3.0.0"
+solana-pubkey = "4.0.0"
 solana-signature = "3.1.0"
 solana-signer = "3.0.0"
-solana-transaction = "3.0.1"
 solana-transaction-error = "3.0.0"
 
 # Solana Misc
@@ -103,3 +103,10 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+
+
+# we need to pin with patches to avoid build failures due to MSRV issues in newer versions of these dependencies
+[patch.crates-io]
+# home = { package = "home", version = "=0.5.1" 4
+# home = { git = "https://github.com/rust-lang//cargo", tag = "home-0.5.11" }
+time = { git = "https://github.com/time-rs/time", tag = "v0.3.44"}
