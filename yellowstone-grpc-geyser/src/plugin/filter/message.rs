@@ -1,12 +1,9 @@
 use {
-    crate::{
-        metrics,
-        plugin::{
-            filter::{name::FilterName, FilterAccountsDataSlice},
-            message::{
-                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
-            },
+    crate::plugin::{
+        filter::{name::FilterName, FilterAccountsDataSlice},
+        message::{
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
+            MessageSlot, MessageTransaction, MessageTransactionInfo,
         },
     },
     bytes::{
@@ -26,7 +23,7 @@ use {
     std::{
         collections::HashSet,
         ops::{Deref, DerefMut},
-        sync::{Arc, OnceLock},
+        sync::Arc,
         time::SystemTime,
     },
     yellowstone_grpc_proto::{
@@ -47,7 +44,7 @@ pub const fn prost_field_encoded_len(tag: u32, len: usize) -> usize {
 }
 
 #[inline]
-pub fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
+fn prost_bytes_encode_raw(tag: u32, value: &[u8], buf: &mut impl BufMut) {
     encode_key(tag, WireType::LengthDelimited, buf);
     encode_varint(value.len() as u64, buf);
     buf.put(value);
@@ -289,7 +286,6 @@ impl FilteredUpdate {
                         },
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
-                        pre_encoded: OnceLock::new(),
                     }),
                     slot: msg.slot,
                 })
@@ -492,19 +488,6 @@ impl FilteredUpdateAccount {
         data_slice: &FilterAccountsDataSlice,
         buf: &mut impl BufMut,
     ) {
-        // use pre-encoded if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                metrics::pre_encoded_cache_hit("account");
-                encode_key(tag, WireType::LengthDelimited, buf);
-                encode_varint(pre_encoded.len() as u64, buf);
-                buf.put_slice(pre_encoded);
-                return;
-            }
-            metrics::pre_encoded_cache_miss("account");
-        }
-
-        // fallback: slice-aware encoding
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
 
@@ -532,14 +515,6 @@ impl FilteredUpdateAccount {
         account: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> usize {
-        // use pre-encoded length if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                return pre_encoded.len();
-            }
-        }
-
-        // fallback: calculate with slicing
         let data_len = data_slice.get_slice_len(&account.data);
 
         prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
@@ -684,18 +659,6 @@ impl prost::Message for FilteredUpdateTransaction {
 
 impl FilteredUpdateTransaction {
     fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
-        // try to use pre-encoded bytes (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            metrics::pre_encoded_cache_hit("txn");
-            encode_key(tag, WireType::LengthDelimited, buf);
-            encode_varint(pre_encoded.len() as u64, buf);
-            buf.put_slice(pre_encoded);
-            return;
-        }
-
-        metrics::pre_encoded_cache_miss("txn");
-
-        // fallback: encode from scratch
         encode_key(tag, WireType::LengthDelimited, buf);
         encode_varint(Self::tx_encoded_len(tx) as u64, buf);
 
@@ -713,11 +676,6 @@ impl FilteredUpdateTransaction {
     }
 
     fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
-        // try to use pre-encoded length (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            return pre_encoded.len();
-        }
-
         let index = tx.index as u64;
 
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
@@ -1026,12 +984,7 @@ pub mod tests {
         super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
         crate::plugin::{
             convert_to,
-            filter::{
-                encoder::{AccountEncoder, TransactionEncoder},
-                message::{FilteredUpdateAccount, FilteredUpdateTransaction},
-                name::FilterName,
-                FilterAccountsDataSlice,
-            },
+            filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
                 MessageTransaction, MessageTransactionInfo, SlotStatus,
@@ -1051,7 +1004,7 @@ pub mod tests {
             fs,
             ops::Range,
             str::FromStr,
-            sync::{Arc, OnceLock},
+            sync::Arc,
             time::SystemTime,
         },
         yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
@@ -1105,7 +1058,6 @@ pub mod tests {
                                     data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
-                                    pre_encoded: OnceLock::new(),
                                 }));
                             }
                         }
@@ -1213,7 +1165,6 @@ pub mod tests {
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
                             account_keys: HashSet::new(),
-                            pre_encoded: OnceLock::new(),
                         }
                     })
                     .map(Arc::new)
@@ -1293,88 +1244,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_account_pre_encoded_matches_manual_encoding() {
-        use {bytes::Bytes, solana_pubkey::Pubkey, solana_signature::Signature};
-
-        // Test various account configurations
-        let pubkeys = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let owners = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let data_samples = [
-            vec![],
-            vec![1, 2, 3, 4],
-            vec![0u8; 1000], // larger account data
-        ];
-
-        for pubkey in &pubkeys {
-            for owner in &owners {
-                for lamports in [0u64, 100, 1_000_000] {
-                    for executable in [false, true] {
-                        for rent_epoch in [0u64, 100] {
-                            for write_version in [0u64, 42] {
-                                for data in &data_samples {
-                                    for txn_signature in [None, Some(Signature::from([0u8; 64]))] {
-                                        // Create account WITH pre-encoding
-                                        let account_with = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: OnceLock::new(),
-                                        };
-                                        AccountEncoder::pre_encode(&account_with);
-
-                                        // Create account WITHOUT pre-encoding (fallback path)
-                                        let account_without = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: OnceLock::new(),
-                                        };
-
-                                        // Encode both using FilteredUpdateAccount (no slicing)
-                                        let data_slice = FilterAccountsDataSlice::default();
-
-                                        let mut buf_with = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_with,
-                                            &data_slice,
-                                            &mut buf_with,
-                                        );
-
-                                        let mut buf_without = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_without,
-                                            &data_slice,
-                                            &mut buf_without,
-                                        );
-
-                                        // Must be identical
-                                        assert_eq!(
-                                            buf_with, buf_without,
-                                            "pre-encoded bytes don't match manual encoding"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn test_message_account() {
         for (msg, data_slice) in create_accounts() {
             encode_decode_cmp(&["123"], FilteredUpdateOneof::account(&msg, data_slice));
@@ -1417,68 +1286,6 @@ pub mod tests {
                 )
             }
         }
-    }
-
-    #[test]
-    fn test_pre_encoded_matches_manual_encoding() {
-        // Get real transactions from fixtures (these have pre_encoded: None)
-        for tx_arc in load_predefined_transactions() {
-            // Clone the transaction info
-            let tx_with_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: OnceLock::new(),
-            };
-
-            // Create version without cache (fallback path)
-            let tx_without_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: OnceLock::new(),
-            };
-
-            // Pre-encode one of them
-            TransactionEncoder::pre_encode(&tx_with_cache);
-
-            assert!(
-                tx_with_cache.pre_encoded.get().is_some(),
-                "pre_encode should populate the field"
-            );
-
-            // Wrap both in FilteredUpdateTransaction and encode via the public Message trait
-            let wrapped_cached = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_with_cache),
-                slot: 42,
-            };
-            let wrapped_manual = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_without_cache),
-                slot: 42,
-            };
-
-            // Encode both using prost::Message::encode_to_vec (public API)
-            let buf_cached = wrapped_cached.encode_to_vec();
-            let buf_manual = wrapped_manual.encode_to_vec();
-
-            // They must be identical
-            assert_eq!(
-                buf_cached, buf_manual,
-                "Pre-encoded bytes differ from manual encoding for tx {:?}",
-                tx_arc.signature
-            );
-        }
-
-        println!(
-            "Tested {} transactions - all match!",
-            load_predefined_transactions().len()
-        );
     }
 
     #[test]

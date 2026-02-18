@@ -126,24 +126,6 @@ lazy_static::lazy_static! {
         )
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
-
-    pub static ref GEYSER_BATCH_SIZE: Histogram = Histogram::with_opts(
-        HistogramOpts::new(
-            "yellowstone_geyser_batch_size",
-            "Size of processed message batches"
-        )
-        .buckets(vec![1.0, 4.0, 8.0, 16.0, 24.0, 31.0])
-    ).unwrap();
-
-    static ref PRE_ENCODED_CACHE_HIT: IntCounterVec = IntCounterVec::new(
-        Opts::new("yellowstone_grpc_pre_encoded_cache_hit", "Pre-encoded cache hits by message type"),
-        &["type"]
-    ).unwrap();
-
-    static ref PRE_ENCODED_CACHE_MISS: IntCounterVec = IntCounterVec::new(
-        Opts::new("yellowstone_grpc_pre_encoded_cache_miss", "Pre-encoded cache misses by message type"),
-        &["type"]
-    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -295,10 +277,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
-            register!(GEYSER_BATCH_SIZE);
             register!(GRPC_CLIENT_DISCONNECTS);
-            register!(PRE_ENCODED_CACHE_HIT);
-            register!(PRE_ENCODED_CACHE_MISS);
 
             VERSION
                 .with_label_values(&[
@@ -515,14 +494,6 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
     GRPC_CLIENT_DISCONNECTS
         .with_label_values(&[subscriber_id.as_ref(), reason])
         .inc();
-}
-
-pub fn pre_encoded_cache_hit(msg_type: &str) {
-    PRE_ENCODED_CACHE_HIT.with_label_values(&[msg_type]).inc();
-}
-
-pub fn pre_encoded_cache_miss(msg_type: &str) {
-    PRE_ENCODED_CACHE_MISS.with_label_values(&[msg_type]).inc();
 }
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
