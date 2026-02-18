@@ -14,6 +14,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto: add `SubscribeDeshred` RPC with dedicated `SubscribeUpdateDeshred` response type, deshred transaction messages with loaded addresses (ALT) ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+- client: add `subscribe_deshred`, `subscribe_deshred_with_request`, `subscribe_deshred_once` methods returning `SubscribeUpdateDeshred` stream ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+- geyser: add `SubscribeDeshred` stub (returns `unimplemented` on non-triton-ext servers) ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+
 ### Breaking
 
 ## 2026-02-06

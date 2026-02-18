@@ -62,8 +62,8 @@ use {
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
             GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest,
-            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeReplayInfoRequest,
-            SubscribeReplayInfoResponse, SubscribeRequest,
+            IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest,
+            SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
     },
@@ -98,6 +98,12 @@ struct BlockMetaStorageInner {
 }
 
 impl TrafficWeighted for FilteredUpdate {
+    fn weight(&self) -> u32 {
+        self.encoded_len() as u32
+    }
+}
+
+impl TrafficWeighted for yellowstone_grpc_proto::geyser::SubscribeUpdateDeshred {
     fn weight(&self) -> u32 {
         self.encoded_len() as u32
     }
@@ -1239,6 +1245,8 @@ impl GrpcService {
 #[tonic::async_trait]
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
+    type SubscribeDeshredStream =
+        LoadAwareReceiver<TonicResult<yellowstone_grpc_proto::geyser::SubscribeUpdateDeshred>>;
 
     async fn subscribe(
         &self,
@@ -1382,6 +1390,15 @@ impl Geyser for GrpcService {
         ));
 
         Ok(Response::new(stream_rx))
+    }
+
+    async fn subscribe_deshred(
+        &self,
+        _request: Request<Streaming<SubscribeDeshredRequest>>,
+    ) -> TonicResult<Response<Self::SubscribeDeshredStream>> {
+        Err(Status::unimplemented(
+            "SubscribeDeshred is not available on this server",
+        ))
     }
 
     async fn subscribe_first_available_slot(
