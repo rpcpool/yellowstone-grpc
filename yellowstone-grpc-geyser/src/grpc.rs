@@ -25,7 +25,6 @@ use {
                 load_aware_channel, LoadAwareReceiver, LoadAwareSender, StatsSettings,
                 TrafficWeighted,
             },
-            sync::OnDrop,
         },
         version::GrpcVersionInfo,
     },
@@ -395,6 +394,61 @@ enum ClientSnapshotReplayError {
     ClientGrpcConnectionClosed,
     #[error("client session is cancelled by plugin")]
     Cancelled,
+}
+
+struct ClientSession {
+    id: usize,
+    subscriber_id: String,
+    endpoint: String,
+    filter: Filter,
+    debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+    cancellation_token: CancellationToken,
+    disconnect_reason: &'static str,
+}
+
+impl ClientSession {
+    fn new(
+        id: usize,
+        subscriber_id: Option<String>,
+        endpoint: String,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        let filter = Filter::default();
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
+        metrics::update_subscriptions(&endpoint, None, Some(&filter));
+        metrics::connections_total_inc();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
+            id,
+            filter: Box::new(filter.clone()),
+        });
+        info!("client #{id}: new");
+        Self {
+            id,
+            subscriber_id,
+            endpoint,
+            filter,
+            debug_client_tx,
+            cancellation_token,
+            disconnect_reason: "unknown",
+        }
+    }
+}
+
+impl Drop for ClientSession {
+    fn drop(&mut self) {
+        set_subscriber_recv_bandwidth_load(&self.subscriber_id, 0);
+        set_subscriber_send_bandwidth_load(&self.subscriber_id, 0);
+        set_subscriber_queue_size(&self.subscriber_id, 0);
+        metrics::connections_total_dec();
+        metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
+        metrics::update_subscriptions(&self.endpoint, Some(&self.filter), None);
+        DebugClientMessage::maybe_send(&self.debug_client_tx, || DebugClientMessage::Removed {
+            id: self.id,
+        });
+        info!("client #{}: removed ({})", self.id, self.disconnect_reason);
+        self.cancellation_token.cancel();
+    }
 }
 
 #[derive(Debug)]
@@ -934,34 +988,18 @@ impl GrpcService {
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
-        let mut filter = Filter::default();
-
-        // Ensure cancellation_token is cancelled on exit even if we panic
-        let on_drop = OnDrop::new({
-            let cancellation_token = cancellation_token.clone();
-            move || {
-                cancellation_token.cancel();
-            }
-        });
-
-        metrics::update_subscriptions(&endpoint, None, Some(&filter));
-        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
-        metrics::connections_total_inc();
-        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
-            id,
-            filter: Box::new(filter.clone()),
-        });
-        info!("client #{id}: new");
+        let mut session = ClientSession::new(id, subscriber_id, endpoint, debug_client_tx, cancellation_token);
+        let cancellation_token = session.cancellation_token.clone();
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{id}: snapshot requested");
             let result = Self::client_loop_snapshot(
                 id,
-                &endpoint,
+                &session.endpoint,
                 stream_tx.clone(),
                 &mut client_rx,
                 snapshot_rx,
-                &mut filter,
+                &mut session.filter,
                 cancellation_token.clone(),
             )
             .await;
@@ -970,15 +1008,15 @@ impl GrpcService {
                     info!("client #{id}: snapshot stream ended");
                 }
                 Err(ClientSnapshotReplayError::Cancelled) => {
-                    metrics::incr_client_disconnect(&subscriber_id, "server_shutdown");
                     let _ = stream_tx.try_send(Err(Status::internal(
                         "server is shutting down try again later",
                     )));
+                    session.disconnect_reason = "server_shutdown";
                     return;
                 }
                 Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
                     info!("client #{id}: grpc connection closed");
-                    metrics::incr_client_disconnect(&subscriber_id, "client_closed");
+                    session.disconnect_reason = "client_closed";
                     return;
                 }
             }
@@ -988,22 +1026,22 @@ impl GrpcService {
 
         'outer: loop {
             set_subscriber_send_bandwidth_load(
-                &subscriber_id,
+                &session.subscriber_id,
                 stream_tx.estimated_send_rate().per_second() as i64,
             );
 
             set_subscriber_recv_bandwidth_load(
-                &subscriber_id,
+                &session.subscriber_id,
                 stream_tx.estimated_consuming_rate().per_second() as i64,
             );
 
-            set_subscriber_queue_size(&subscriber_id, stream_tx.queue_size());
+            set_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size());
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("client #{id}: cancelled");
-                    metrics::incr_client_disconnect(&subscriber_id, "server_shutdown");
                     let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
+                    session.disconnect_reason = "server_shutdown";
                     break 'outer;
                 }
                 mut message = client_rx.recv() => {
@@ -1023,9 +1061,9 @@ impl GrpcService {
 
                     match message {
                         Some(Some((from_slot, filter_new))) => {
-                            metrics::update_subscriptions(&endpoint, Some(&filter), Some(&filter_new));
-                            filter = filter_new;
-                            DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(filter.clone()) });
+                            metrics::update_subscriptions(&session.endpoint, Some(&session.filter), Some(&filter_new));
+                            session.filter = filter_new;
+                            DebugClientMessage::maybe_send(&session.debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(session.filter.clone()) });
                             info!("client #{id}: filter updated");
 
                             if let Some(from_slot) = from_slot {
@@ -1034,16 +1072,18 @@ impl GrpcService {
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                     });
+                                    session.disconnect_reason = "from_slot_unsupported";
                                     break 'outer;
                                 };
 
                                 let (tx, rx) = oneshot::channel();
-                                let commitment = filter.get_commitment_level();
+                                let commitment = session.filter.get_commitment_level();
                                 if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
                                     error!("client #{id}: failed to send from_slot request");
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
                                     });
+                                    session.disconnect_reason = "replay_error";
                                     break 'outer;
                                 }
 
@@ -1051,13 +1091,13 @@ impl GrpcService {
                                     Ok(ReplayedResponse::Messages(messages)) => messages,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{id}: broadcast from {from_slot} is not available");
-                                        metrics::incr_client_disconnect(&subscriber_id, "slot_unavailable");
                                         task_tracker.spawn(async move {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
                                             );
                                             let _ = stream_tx.send(Err(Status::internal(message))).await;
                                         });
+                                        session.disconnect_reason = "slot_unavailable";
                                         break 'outer;
                                     },
                                     Err(_error) => {
@@ -1065,22 +1105,23 @@ impl GrpcService {
                                         task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                         });
+                                        session.disconnect_reason = "replay_error";
                                         break 'outer;
                                     }
                                 };
 
                                 messages.sort_by_key(|msg| msg.0);
                                 for (_msgid, message) in messages.iter() {
-                                    for message in filter.get_updates(message, Some(commitment)) {
+                                    for message in session.filter.get_updates(message, Some(commitment)) {
                                         let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                         match stream_tx.send(Ok(message)).await {
                                             Ok(()) => {
-                                                metrics::incr_grpc_message_sent_counter(&subscriber_id);
-                                                metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                                metrics::incr_grpc_bytes_sent(&session.subscriber_id, proto_size);
                                             }
                                             Err(mpsc::error::SendError(_)) => {
                                                 error!("client #{id}: stream closed");
-                                                metrics::incr_client_disconnect(&subscriber_id, "client_closed");
+                                                session.disconnect_reason = "client_closed";
                                                 break 'outer;
                                             }
                                         }
@@ -1089,11 +1130,11 @@ impl GrpcService {
                             }
                         }
                         Some(None) => {
-                            metrics::incr_client_disconnect(&subscriber_id, "client_disconnect");
+                            session.disconnect_reason = "client_disconnect";
                             break 'outer;
                         },
                         None => {
-                            metrics::incr_client_disconnect(&subscriber_id, "client_disconnect");
+                            session.disconnect_reason = "client_disconnect";
                             break 'outer;
                         }
                     }
@@ -1102,38 +1143,39 @@ impl GrpcService {
                     let (commitment, messages) = match message {
                         Ok((commitment, messages)) => (commitment, messages),
                         Err(broadcast::error::RecvError::Closed) => {
+                            session.disconnect_reason = "broadcast_closed";
                             break 'outer;
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             info!("client #{id}: lagged to receive geyser messages");
-                            metrics::incr_client_disconnect(&subscriber_id, "client_broadcast_lag");
                             task_tracker.spawn(async move {
                                 let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                             });
+                            session.disconnect_reason = "client_broadcast_lag";
                             break 'outer;
                         }
                     };
 
-                    if commitment == filter.get_commitment_level() {
+                    if commitment == session.filter.get_commitment_level() {
                         for (_msgid, message) in messages.iter() {
-                            for message in filter.get_updates(message, Some(commitment)) {
+                            for message in session.filter.get_updates(message, Some(commitment)) {
                                 let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                 match stream_tx.try_send(Ok(message)) {
                                     Ok(()) => {
-                                        metrics::incr_grpc_message_sent_counter(&subscriber_id);
-                                        metrics::incr_grpc_bytes_sent(&subscriber_id, proto_size);
+                                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                        metrics::incr_grpc_bytes_sent(&session.subscriber_id, proto_size);
                                     }
                                     Err(mpsc::error::TrySendError::Full(_)) => {
                                         error!("client #{id}: lagged to send an update");
-                                        metrics::incr_client_disconnect(&subscriber_id, "client_channel_full");
                                         task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                         });
+                                        session.disconnect_reason = "client_channel_full";
                                         break 'outer;
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
                                         error!("client #{id}: stream closed");
-                                        metrics::incr_client_disconnect(&subscriber_id, "client_closed");
+                                        session.disconnect_reason = "client_closed";
                                         break 'outer;
                                     }
                                 }
@@ -1143,25 +1185,16 @@ impl GrpcService {
                         stream_tx.no_load();
                     }
 
-                    if commitment == CommitmentLevel::Processed && debug_client_tx.is_some() {
+                    if commitment == CommitmentLevel::Processed && session.debug_client_tx.is_some() {
                         for message in messages.iter() {
                             if let Message::Slot(slot_message) = &message.1 {
-                                DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
+                                DebugClientMessage::maybe_send(&session.debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
                             }
                         }
                     }
                 }
             }
         }
-        set_subscriber_recv_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_send_bandwidth_load(&subscriber_id, 0);
-        set_subscriber_queue_size(&subscriber_id, 0);
-
-        metrics::connections_total_dec();
-        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::Removed { id });
-        metrics::update_subscriptions(&endpoint, Some(&filter), None);
-        info!("client #{id}: removed");
-        drop(on_drop);
     }
 
     async fn client_loop_snapshot(
