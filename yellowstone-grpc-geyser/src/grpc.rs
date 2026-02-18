@@ -1267,7 +1267,9 @@ impl Geyser for GrpcService {
                 };
 
                 let current_count = count.fetch_add(1, Ordering::SeqCst);
+                // Limit reached.
                 if current_count >= self.config_max_subscription_limit {
+                    // Signal cancellation of subscription.
                     cancellation_token.cancel();
                     // Remove subscriber from subscription tracker.
                     let guard = self.subscription_tracker.lock().unwrap();
