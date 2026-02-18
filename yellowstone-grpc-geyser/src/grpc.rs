@@ -1254,7 +1254,7 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
-        let (subscription_count, subscription_cancel_token): SubscriberHandle =
+        let (subscription_count, subscription_cancellation_token): SubscriberHandle =
             if let Some(subscription_id) = x_subscription_id_meta {
                 // Use block scope to drop lock early.
                 let (count, cancellation_token) = {
@@ -1357,6 +1357,9 @@ impl Geyser for GrpcService {
                 tokio::select! {
                     _ = incoming_cancellation_token.cancelled() => {
                         info!("client #{id}: filter receiver cancelled");
+                        break;
+                    }
+                    _ = subscription_cancellation_token.cancelled() => {
                         break;
                     }
                     message = request.get_mut().message() => match message {
