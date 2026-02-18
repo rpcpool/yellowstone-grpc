@@ -406,6 +406,35 @@ struct ClientSession {
     disconnect_reason: &'static str,
 }
 
+impl ClientSession {
+    fn new(
+        id: usize,
+        subscriber_id: Option<String>,
+        endpoint: String,
+        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        let filter = Filter::default();
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
+        metrics::update_subscriptions(&endpoint, None, Some(&filter));
+        metrics::connections_total_inc();
+        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
+            id,
+            filter: Box::new(filter.clone()),
+        });
+        info!("client #{id} ({subscriber_id}): new");
+        Self {
+            id,
+            subscriber_id,
+            endpoint,
+            filter,
+            debug_client_tx,
+            cancellation_token,
+            disconnect_reason: "unknown",
+        }
+    }
+}
+
 impl Drop for ClientSession {
     fn drop(&mut self) {
         set_subscriber_recv_bandwidth_load(&self.subscriber_id, 0);
@@ -417,7 +446,10 @@ impl Drop for ClientSession {
         DebugClientMessage::maybe_send(&self.debug_client_tx, || DebugClientMessage::Removed {
             id: self.id,
         });
-        info!("client #{}: removed ({})", self.id, self.disconnect_reason);
+        info!(
+            "client #{} ({}): removed ({})",
+            self.id, self.subscriber_id, self.disconnect_reason
+        );
         self.cancellation_token.cancel();
     }
 }
@@ -959,30 +991,14 @@ impl GrpcService {
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
-        let filter = Filter::default();
-        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
-
-        let mut session = ClientSession {
+        let mut session = ClientSession::new(
             id,
             subscriber_id,
             endpoint,
-            filter,
             debug_client_tx,
             cancellation_token,
-            disconnect_reason: "unknown",
-        };
-
+        );
         let cancellation_token = session.cancellation_token.clone();
-
-        metrics::update_subscriptions(&session.endpoint, None, Some(&session.filter));
-        metrics::connections_total_inc();
-        DebugClientMessage::maybe_send(&session.debug_client_tx, || {
-            DebugClientMessage::UpdateFilter {
-                id,
-                filter: Box::new(session.filter.clone()),
-            }
-        });
-        info!("client #{id}: new");
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{id}: snapshot requested");
