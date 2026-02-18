@@ -3,5 +3,3 @@ pub mod ema;
 pub mod stream;
 #[cfg(test)]
 pub(crate) mod testkit;
-
-pub mod sync;
