@@ -4,7 +4,6 @@ use {
         message::Message,
     },
     rayon::{ThreadPool, ThreadPoolBuilder},
-    std::sync::Arc,
     tokio::sync::{mpsc, oneshot},
 };
 
@@ -56,20 +55,16 @@ impl ParallelEncoder {
         log::info!("exiting encoder bridge loop");
     }
 
-    fn encode_message(msg: &mut Message) {
+    fn encode_message(msg: &Message) {
         match msg {
             Message::Transaction(tx) => {
-                if let Some(tx_info) = Arc::get_mut(&mut tx.transaction) {
-                    if tx_info.pre_encoded.is_none() {
-                        TransactionEncoder::pre_encode(tx_info);
-                    }
+                if tx.transaction.pre_encoded.get().is_none() {
+                    TransactionEncoder::pre_encode(&tx.transaction);
                 }
             }
             Message::Account(acc) => {
-                if let Some(acc_info) = Arc::get_mut(&mut acc.account) {
-                    if acc_info.pre_encoded.is_none() {
-                        AccountEncoder::pre_encode(acc_info);
-                    }
+                if acc.account.pre_encoded.get().is_none() {
+                    AccountEncoder::pre_encode(&acc.account);
                 }
             }
             _ => {}
@@ -118,7 +113,10 @@ mod tests {
         prost_types::Timestamp,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        std::time::SystemTime,
+        std::{
+            sync::{Arc, OnceLock},
+            time::SystemTime,
+        },
     };
 
     fn create_test_transaction() -> Message {
@@ -129,7 +127,7 @@ mod tests {
             meta: Default::default(),
             index: 0,
             account_keys: Default::default(),
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         };
         Message::Transaction(MessageTransaction {
             transaction: Arc::new(tx_info),
@@ -148,7 +146,7 @@ mod tests {
             data: Bytes::from(vec![1, 2, 3]),
             write_version: 1,
             txn_signature: None,
-            pre_encoded: None,
+            pre_encoded: OnceLock::new(),
         };
         Message::Account(MessageAccount {
             account: Arc::new(acc_info),
@@ -170,7 +168,7 @@ mod tests {
         for (_msgid, msg) in encoded {
             if let Message::Transaction(tx) = msg {
                 assert!(
-                    tx.transaction.pre_encoded.is_some(),
+                    tx.transaction.pre_encoded.get().is_some(),
                     "transaction should be encoded"
                 );
             }
@@ -189,7 +187,7 @@ mod tests {
         for (_msgid, msg) in encoded {
             if let Message::Account(acc) = msg {
                 assert!(
-                    acc.account.pre_encoded.is_some(),
+                    acc.account.pre_encoded.get().is_some(),
                     "account should be encoded"
                 );
             }

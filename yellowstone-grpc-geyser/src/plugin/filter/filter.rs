@@ -1131,7 +1131,7 @@ mod tests {
         solana_transaction_status::TransactionStatusMeta,
         std::{
             collections::HashMap,
-            sync::Arc,
+            sync::{Arc, OnceLock},
             time::{Duration, SystemTime},
         },
         yellowstone_grpc_proto::geyser::{
@@ -1191,7 +1191,7 @@ mod tests {
                 meta,
                 index: 1,
                 account_keys,
-                pre_encoded: None,
+                pre_encoded: OnceLock::new(),
             }),
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),

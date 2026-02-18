@@ -11,6 +11,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## [Unreleased]
 
 ### Fixes
+- geyser: replace Arc::get_mut with OnceLock for pre-encoding to support shared ownership, added metrics for pre-encode hit/miss ([#683](https://github.com/rpcpool/yellowstone-grpc/pull/683))
 
 - geyser: replace `OnDrop` with `ClientSession` RAII guard in `client_loop`, fixing missed cleanup on early-exit paths ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
 
