@@ -27,9 +27,10 @@ use {
     solana_pubkey::Pubkey,
     std::{
         collections::{BTreeMap, HashMap},
+        net::SocketAddr,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc,
+            Arc, LazyLock, Mutex as StdMutex,
         },
         time::SystemTime,
     },
@@ -42,7 +43,7 @@ use {
     tonic::{
         service::interceptor,
         transport::{
-            server::{Server, TcpIncoming},
+            server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
             Identity, ServerTlsConfig,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
@@ -348,6 +349,10 @@ enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
+static CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR: LazyLock<
+    StdMutex<HashMap<SocketAddr, usize>>,
+> = LazyLock::new(|| StdMutex::new(HashMap::new()));
+
 #[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
     #[error("gRPC connection closed")]
@@ -364,6 +369,7 @@ struct ClientSession {
     debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     cancellation_token: CancellationToken,
     disconnect_reason: &'static str,
+    maybe_remote_peer_sk_addr: Option<SocketAddr>,
 }
 
 impl ClientSession {
@@ -371,11 +377,26 @@ impl ClientSession {
         id: usize,
         subscriber_id: Option<String>,
         endpoint: String,
+        maybe_remote_peer_sk_addr: Option<SocketAddr>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
     ) -> Self {
         let filter = Filter::default();
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
+        if let Some(remote_peer_sk_addr) = maybe_remote_peer_sk_addr {
+            let mut subscriptions_per_remote_addr =
+                CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR
+                    .lock()
+                    .expect("CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR mutex poisoned");
+            let count = subscriptions_per_remote_addr
+                .entry(remote_peer_sk_addr)
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
+                remote_peer_sk_addr.to_string(),
+                *count as u64,
+            );
+        }
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
@@ -390,12 +411,48 @@ impl ClientSession {
             debug_client_tx,
             cancellation_token,
             disconnect_reason: "unknown",
+            maybe_remote_peer_sk_addr,
         }
+    }
+
+    fn set_filter(&mut self, new_filter: Filter) {
+        metrics::update_subscriptions(&self.endpoint, Some(&self.filter), Some(&new_filter));
+        DebugClientMessage::maybe_send(&self.debug_client_tx, || {
+            DebugClientMessage::UpdateFilter {
+                id: self.id,
+                filter: Box::new(new_filter.clone()),
+            }
+        });
+        self.filter = new_filter;
     }
 }
 
 impl Drop for ClientSession {
     fn drop(&mut self) {
+        if let Some(remote_peer_sk_addr) = self.maybe_remote_peer_sk_addr {
+            let mut subscriptions_per_remote_addr =
+                CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR
+                    .lock()
+                    .expect("CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR mutex poisoned");
+            if let Some(count) = subscriptions_per_remote_addr.get_mut(&remote_peer_sk_addr) {
+                if *count > 1 {
+                    *count -= 1;
+                    metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
+                        remote_peer_sk_addr.to_string(),
+                        *count as u64,
+                    );
+                } else {
+                    subscriptions_per_remote_addr.remove(&remote_peer_sk_addr);
+                    metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
+                        remote_peer_sk_addr.to_string(),
+                        0,
+                    );
+                    metrics::remove_grpc_concurrent_subscribe_per_tcp_connection(
+                        remote_peer_sk_addr.to_string(),
+                    );
+                }
+            }
+        }
         set_subscriber_queue_size(&self.subscriber_id, 0);
         metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
         metrics::update_subscriptions(&self.endpoint, Some(&self.filter), None);
@@ -944,6 +1001,7 @@ impl GrpcService {
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
+        maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
@@ -951,6 +1009,7 @@ impl GrpcService {
             id,
             subscriber_id,
             endpoint,
+            maybe_remote_peer_sk_addr,
             debug_client_tx,
             cancellation_token,
         );
@@ -1016,9 +1075,7 @@ impl GrpcService {
 
                     match message {
                         Some(Some((from_slot, filter_new))) => {
-                            metrics::update_subscriptions(&session.endpoint, Some(&session.filter), Some(&filter_new));
-                            session.filter = filter_new;
-                            DebugClientMessage::maybe_send(&session.debug_client_tx, || DebugClientMessage::UpdateFilter { id, filter: Box::new(session.filter.clone()) });
+                            session.set_filter(filter_new);
                             info!("client #{id}: filter updated");
 
                             if let Some(from_slot) = from_slot {
@@ -1238,6 +1295,17 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        let maybe_remote_peer_sk_addr = request
+            .extensions()
+            .get::<TcpConnectInfo>()
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<TlsConnectInfo<TcpConnectInfo>>()
+                    .map(|tls_info| tls_info.get_ref())
+            })
+            .and_then(|info| info.remote_addr());
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
         let client_cancellation_token = self.cancellation_token.child_token();
         if client_cancellation_token.is_cancelled() {
@@ -1361,6 +1429,7 @@ impl Geyser for GrpcService {
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
+            maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
         ));
@@ -1556,6 +1625,7 @@ mod tests {
             client_rx,
             None,
             broadcast_tx.subscribe(),
+            None,
             None,
             None,
             ct.clone(),

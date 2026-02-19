@@ -105,6 +105,14 @@ lazy_static::lazy_static! {
         &["subscriber_id", "reason"]
     ).unwrap();
 
+    static ref GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_concurrent_subscribe_per_tcp_connection",
+            "Current concurrent subscriptions per remote TCP peer socket address"
+        ),
+        &["remote_peer_sk_addr"]
+    ).unwrap();
+
     static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "geyser_account_update_data_size_kib",
@@ -294,6 +302,7 @@ impl PrometheusService {
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
             register!(GRPC_CLIENT_DISCONNECTS);
+            register!(GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION);
             register!(TOTAL_TRAFFIC_SENT);
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
 
@@ -502,6 +511,21 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
         .inc();
 }
 
+pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
+    remote_peer_sk_addr: S,
+    size: u64,
+) {
+    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
+        .with_label_values(&[remote_peer_sk_addr.as_ref()])
+        .set(size as i64);
+}
+
+pub fn remove_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(remote_peer_sk_addr: S) {
+    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
+        .remove_label_values(&[remote_peer_sk_addr.as_ref()])
+        .expect("remove_label_values");
+}
+
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
 pub fn reset_metrics() {
     // Reset gauge metrics to 0
@@ -514,6 +538,7 @@ pub fn reset_metrics() {
     SLOT_STATUS_PLUGIN.reset();
     INVALID_FULL_BLOCKS.reset();
     GRPC_SUBSCRIBER_QUEUE_SIZE.reset();
+    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
 
     // Reset counter vectors (clears all label combinations)
     MISSED_STATUS_MESSAGE.reset();
