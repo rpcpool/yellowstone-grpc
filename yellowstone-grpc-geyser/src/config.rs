@@ -178,7 +178,7 @@ pub struct ConfigGrpc {
         default = "ConfigGrpc::max_subscription_limit_default",
         deserialize_with = "deserialize_int_str"
     )]
-    pub max_subscription_limit: u64,
+    pub max_subscription_limit: usize,
     /// Enable/disable unary methods
     #[serde(default)]
     pub unary_disabled: bool,
@@ -244,8 +244,8 @@ impl ConfigGrpc {
         Semaphore::MAX_PERMITS
     }
 
-    const fn max_subscription_limit_default() -> u64 {
-        10
+    const fn max_subscription_limit_default() -> usize {
+        100
     }
 
     const fn default_filter_name_size_limit() -> usize {
