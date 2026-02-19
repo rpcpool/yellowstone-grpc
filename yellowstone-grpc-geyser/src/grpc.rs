@@ -921,7 +921,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         id: usize,
-        subscriber_id: String,
+        subscriber_id: Option<String>,
         endpoint: String,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
@@ -943,6 +943,7 @@ impl GrpcService {
         });
 
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
+        let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         metrics::connections_total_inc();
         DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
             id,
@@ -1439,7 +1440,7 @@ impl Geyser for GrpcService {
 
         self.task_tracker.spawn(Self::client_loop(
             id,
-            subscriber_id,
+            x_subscription_id_meta,
             endpoint,
             stream_tx,
             client_rx,
