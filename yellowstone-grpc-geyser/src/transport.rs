@@ -161,7 +161,11 @@ where
         let maybe_remote_peer_ip_string = maybe_remote_peer_addr.map(|addr| addr.ip().to_string());
         if let Some(remote_peer_ip_str) = maybe_remote_peer_ip_string.as_deref() {
             increment_active_connections_for_remote_ip(remote_peer_ip_str);
+            // We initialize the traffic metric for this remote ip with 0,
+            // so that it appears in the prometheus metrics immediately, even before any traffic is sent to properly track the connection lifecycle in the metrics.
+            metrics::add_traffic_sent_per_remote_ip(remote_peer_ip_str, 0);
         }
+
         Self {
             wrappee: io,
             remote_peer_ip_str: maybe_remote_peer_ip_string,

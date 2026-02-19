@@ -1327,7 +1327,8 @@ impl Geyser for GrpcService {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
-        let ping_cancellation_token = client_cancellation_token.child_token();
+        let ping_cancellation_token = client_cancellation_token.clone();
+        let ping_client_cancel = client_cancellation_token.clone();
         self.task_tracker.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
@@ -1340,6 +1341,16 @@ impl Geyser for GrpcService {
                         let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
                         log::info!("client #{id}: sending ping");
                         if ping_stream_tx.send(Ok(msg)).await.is_err() {
+                            //
+                            // It's really important to send cancel ping for one edge-case where someone
+                            // subscribe without any filter:
+                            //
+                            // When someone subscribe without any filter, this can create a "zombie" client loop that
+                            // does reject every geyser event thus we never write to the HTTP/2 stream and we never detect that the client TCP connection is closed.
+                            // By sending a ping every 10 seconds, we can detect if the client is still alive and if it's not,
+                            // we can cancel the client loop.
+                            ping_client_cancel.cancel();
+                            info!("detected dead client #{id}");
                             break;
                         }
                     }
