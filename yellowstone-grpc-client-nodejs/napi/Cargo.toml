@@ -11,7 +11,7 @@ path = "src/lib.rs"
 # This is an independent workspace, not part of the parent workspace
 
 [dependencies]
-napi = { version = "=3.4.0", features = ["async", "napi9", "serde-json", "web_stream", "compat-mode"] }
+napi = { version = "=3.4.0", features = ["async", "napi9", "serde-json", "web_stream", "compat-mode", "dyn-symbols"] }
 napi-derive = "=3.3.0"
 napi-derive-backend = "=3.0.0"
 serde = { version = "1.0", features = ["derive"] }

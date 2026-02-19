@@ -21,6 +21,8 @@ use yellowstone_grpc_proto::prelude::*;
 use crate::client::GrpcClient;
 
 mod js_types;
+#[cfg(test)]
+mod js_types_tests;
 
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
