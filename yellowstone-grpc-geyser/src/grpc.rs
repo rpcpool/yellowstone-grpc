@@ -1254,11 +1254,13 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
+        let subscription_tracker_ref = self.subscription_tracker.clone();
+
         let (subscription_count, subscription_cancellation_token): SubscriberHandle =
             if let Some(subscription_id) = x_subscription_id_meta {
                 // Use block scope to drop lock early.
                 let (count, cancellation_token) = {
-                    let guard = self.subscription_tracker.lock().unwrap();
+                    let guard = subscription_tracker_ref.lock().unwrap();
                     let subscriber_entry =
                         guard.entry(subscription_id.clone()).or_insert_with(|| {
                             (
@@ -1275,7 +1277,7 @@ impl Geyser for GrpcService {
                     // Signal cancellation of subscription.
                     cancellation_token.cancel();
                     // Remove subscriber from subscription tracker.
-                    let guard = self.subscription_tracker.lock().unwrap();
+                    let guard = subscription_tracker_ref.lock().unwrap();
                     guard.remove(&subscription_id);
                     return Err(Status::resource_exhausted(
                         "exceeded maximum subscription limit. all subscriptions closed.",
@@ -1358,6 +1360,28 @@ impl Geyser for GrpcService {
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
         self.task_tracker.spawn(async move {
+            // Subscription drop guard.
+            //
+            // Decrements subscription tracker on drop.
+            if let Some(subscription_id) = x_subscription_id_meta {
+                let subscription_tracker_local_ref = subscription_tracker_ref.clone();
+                let _subscription_drop_guard = OnDrop::new(|| {
+                    // Block scope to drop lock early.
+                    let count = {
+                        let guard = subscription_tracker_local_ref.lock().unwrap();
+                        let subscriber_entry = guard.entry(subscription_id.clone());
+                        subscriber_entry.0.clone()
+                    };
+
+                    let prev_count = count.fetch_sub(1, Ordering::SeqCst);
+
+                    if prev_count == 1 {
+                        let mut guard = subscription_tracker_local_ref.lock().unwrap();
+                        guard.remove(&subscription_id);
+                    }
+                });
+            }
+
             loop {
                 tokio::select! {
                     _ = incoming_cancellation_token.cancelled() => {
