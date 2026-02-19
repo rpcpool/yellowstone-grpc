@@ -27,6 +27,7 @@
     "snapshot_client_channel_capacity": "50_000_000",
     "channel_capacity": "100_000",
     "unary_concurrency_limit": 100,
+    "max_subscription_limit": 100,
     "unary_disabled": false,
     "x_token": null,
     "replay_stored_slots": 0,
