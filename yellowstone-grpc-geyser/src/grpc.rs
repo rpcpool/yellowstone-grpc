@@ -513,6 +513,7 @@ impl GrpcService {
             filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            subscription_tracker: Arc::new(Mutex::new(HashMap::new())),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -1257,11 +1258,12 @@ impl Geyser for GrpcService {
 
         let subscription_tracker_ref = self.subscription_tracker.clone();
 
+        let x_sub_clone = x_subscription_id_meta.clone();
         let (subscription_count, subscription_cancellation_token): SubscriberHandle =
-            if let Some(subscription_id) = x_subscription_id_meta {
+            if let Some(subscription_id) = x_sub_clone {
                 // Use block scope to drop lock early.
                 let (count, cancellation_token) = {
-                    let guard = subscription_tracker_ref.lock().unwrap();
+                    let mut guard = subscription_tracker_ref.lock().await;
                     let subscriber_entry =
                         guard.entry(subscription_id.clone()).or_insert_with(|| {
                             (
@@ -1278,7 +1280,7 @@ impl Geyser for GrpcService {
                     // Signal cancellation of subscription.
                     cancellation_token.cancel();
                     // Remove subscriber from subscription tracker.
-                    let guard = subscription_tracker_ref.lock().unwrap();
+                    let mut guard = subscription_tracker_ref.lock().await;
                     guard.remove(&subscription_id);
                     return Err(Status::resource_exhausted(
                         "exceeded maximum subscription limit. all subscriptions closed.",
@@ -1293,7 +1295,7 @@ impl Geyser for GrpcService {
                 // when subscriber_id is not present.
                 //
                 // This is only possible if the request happens internally.
-                (0, CancellationToken::new())
+                (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
             };
 
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
@@ -1360,26 +1362,23 @@ impl Geyser for GrpcService {
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
+        let x_sub_clone = x_subscription_id_meta.clone();
         self.task_tracker.spawn(async move {
             // Subscription drop guard.
             //
             // Decrements subscription tracker on drop.
-            if let Some(subscription_id) = x_subscription_id_meta {
+            if let Some(subscription_id) = x_sub_clone {
                 let subscription_tracker_local_ref = subscription_tracker_ref.clone();
                 let _subscription_drop_guard = OnDrop::new(|| {
-                    // Block scope to drop lock early.
-                    let count = {
-                        let guard = subscription_tracker_local_ref.lock().unwrap();
-                        let subscriber_entry = guard.entry(subscription_id.clone());
-                        subscriber_entry.0.clone()
-                    };
+                    // Spawn a cleanup task.
+                    tokio::spawn(async move {
+                        let prev_count = subscription_count.fetch_sub(1, Ordering::SeqCst);
 
-                    let prev_count = count.fetch_sub(1, Ordering::SeqCst);
-
-                    if prev_count == 1 {
-                        let mut guard = subscription_tracker_local_ref.lock().unwrap();
-                        guard.remove(&subscription_id);
-                    }
+                        if prev_count == 1 {
+                            let mut guard = subscription_tracker_local_ref.lock().await;
+                            guard.remove(&subscription_id);
+                        }
+                    });
                 });
             }
 
@@ -1440,7 +1439,7 @@ impl Geyser for GrpcService {
 
         self.task_tracker.spawn(Self::client_loop(
             id,
-            x_subscription_id_meta,
+            x_subscription_id_meta.clone(),
             endpoint,
             stream_tx,
             client_rx,
