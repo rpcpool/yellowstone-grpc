@@ -386,6 +386,7 @@ enum ReplayedResponse {
 }
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
+type SubscriberHandle = (Arc<AtomicUsize>, CancellationToken);
 
 #[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
@@ -458,6 +459,7 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
+    config_max_subscription_limit: usize,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -468,6 +470,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    subscription_tracker: Arc<Mutex<HashMap<String, SubscriberHandle>>>,
 }
 
 impl GrpcService {
@@ -560,6 +563,7 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
+            config_max_subscription_limit: config.max_subscription_limit,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -570,6 +574,7 @@ impl GrpcService {
             filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            subscription_tracker: Arc::new(Mutex::new(HashMap::new())),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -1286,6 +1291,55 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        // Enforce max subscription limit.
+        let x_subscription_id_meta = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        let subscription_tracker_ref = self.subscription_tracker.clone();
+
+        let x_sub_clone = x_subscription_id_meta.clone();
+        let (subscription_count, subscription_cancellation_token): SubscriberHandle =
+            if let Some(subscription_id) = x_sub_clone {
+                // Use block scope to drop lock early.
+                let (count, cancellation_token) = {
+                    let mut guard = subscription_tracker_ref.lock().await;
+                    let subscriber_entry =
+                        guard.entry(subscription_id.clone()).or_insert_with(|| {
+                            (
+                                Arc::new(AtomicUsize::new(0)),
+                                self.cancellation_token.child_token(),
+                            )
+                        });
+                    (subscriber_entry.0.clone(), subscriber_entry.1.clone())
+                };
+
+                let current_count = count.fetch_add(1, Ordering::SeqCst);
+                // Limit reached.
+                if current_count >= self.config_max_subscription_limit {
+                    // Signal cancellation of subscription.
+                    cancellation_token.cancel();
+                    // Remove subscriber from subscription tracker.
+                    let mut guard = subscription_tracker_ref.lock().await;
+                    guard.remove(&subscription_id);
+                    return Err(Status::resource_exhausted(
+                        "exceeded maximum subscription limit. all subscriptions closed.",
+                    ));
+                }
+
+                (count, cancellation_token)
+            } else {
+                // No x-subscription-id.
+                //
+                // This branch exists for debugging bypassing subscription limits
+                // when subscriber_id is not present.
+                //
+                // This is only possible if the request happens internally.
+                (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
+            };
+
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
         let client_cancellation_token = self.cancellation_token.child_token();
@@ -1344,23 +1398,39 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
 
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
-
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
+        let x_sub_clone = x_subscription_id_meta.clone();
         self.task_tracker.spawn(async move {
+            // Subscription drop guard.
+            //
+            // Decrements subscription tracker on drop.
+            if let Some(subscription_id) = x_sub_clone {
+                let subscription_tracker_local_ref = subscription_tracker_ref.clone();
+                let _subscription_drop_guard = OnDrop::new(|| {
+                    // Spawn a cleanup task.
+                    tokio::spawn(async move {
+                        let prev_count = subscription_count.fetch_sub(1, Ordering::SeqCst);
+
+                        if prev_count == 1 {
+                            let mut guard = subscription_tracker_local_ref.lock().await;
+                            guard.remove(&subscription_id);
+                        }
+                    });
+                });
+            }
+
             loop {
                 tokio::select! {
                     _ = incoming_cancellation_token.cancelled() => {
                         info!("client #{id}: filter receiver cancelled");
+                        break;
+                    }
+                    _ = subscription_cancellation_token.cancelled() => {
                         break;
                     }
                     message = request.get_mut().message() => match message {
@@ -1411,7 +1481,7 @@ impl Geyser for GrpcService {
 
         self.task_tracker.spawn(Self::client_loop(
             id,
-            subscriber_id,
+            x_subscription_id_meta.clone(),
             endpoint,
             stream_tx,
             client_rx,
