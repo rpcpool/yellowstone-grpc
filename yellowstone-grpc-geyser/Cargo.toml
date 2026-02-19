@@ -23,6 +23,7 @@ base64 = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
 bytes = { workspace = true }
+bytesize = { workspace = true, features = ["serde"]}
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
