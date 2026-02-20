@@ -49,6 +49,7 @@ local-ip-address = "0.6.1"
 log = "0.4.17"
 maplit = "1.0.2"
 prometheus = "0.14.0"
+pin-project = "1.1.10"
 prost = "0.14.0"
 prost-types = "0.14.0"
 prost_011 = { package = "prost", version = "0.11.9" }
@@ -60,6 +61,7 @@ thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
 tokio-util = "0.7.0"
+tower-layer = "0.3.3"
 tonic = "0.14.0"
 tonic-build = "0.14.0"
 tonic-prost = "0.14.0"
@@ -103,4 +105,3 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
-
