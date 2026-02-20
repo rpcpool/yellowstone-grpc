@@ -1258,48 +1258,67 @@ impl Geyser for GrpcService {
         info!("x-subscription-id: {x_subscription_id_meta:?}");
 
         let subscription_tracker_ref = self.subscription_tracker.clone();
+        info!("subscription_tracker stored at memory {subscription_tracker_ref:p}");
 
         let x_sub_clone = x_subscription_id_meta.clone();
-        let (subscription_count, subscription_cancellation_token): SubscriberHandle =
-            if let Some(subscription_id) = x_sub_clone {
-                // Use block scope to drop lock early.
-                let (count, cancellation_token) = {
-                    let mut guard = subscription_tracker_ref.lock().await;
-                    let subscriber_entry =
-                        guard.entry(subscription_id.clone()).or_insert_with(|| {
-                            (
-                                Arc::new(AtomicUsize::new(0)),
-                                self.cancellation_token.child_token(),
-                            )
-                        });
-                    (subscriber_entry.0.clone(), subscriber_entry.1.clone())
-                };
-
-                let prev_count = count.fetch_add(1, Ordering::SeqCst);
-                info!("prev_count: {prev_count:?}");
-                info!("current_count: {count:?}");
-                // Limit reached.
-                if prev_count >= self.config_max_subscription_limit {
-                    // Signal cancellation of subscription.
-                    cancellation_token.cancel();
-                    // Remove subscriber from subscription tracker.
-                    let mut guard = subscription_tracker_ref.lock().await;
-                    guard.remove(&subscription_id);
-                    return Err(Status::resource_exhausted(
-                        "exceeded maximum subscription limit. all subscriptions closed.",
-                    ));
-                }
-
-                (count, cancellation_token)
-            } else {
-                // No x-subscription-id.
-                //
-                // This branch exists for debugging bypassing subscription limits
-                // when subscriber_id is not present.
-                //
-                // This is only possible if the request happens internally.
-                (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
+        let (subscription_count, subscription_cancellation_token): SubscriberHandle = if let Some(
+            subscription_id,
+        ) =
+            x_sub_clone
+        {
+            // Use block scope to drop lock early.
+            let (count, cancellation_token) = {
+                let mut guard = subscription_tracker_ref.lock().await;
+                info!(
+                    "subscription_tracker contains {subscription_id} before: {}",
+                    guard.contains_key(&subscription_id)
+                );
+                let subscriber_entry = guard.entry(subscription_id.clone()).or_insert_with(|| {
+                    (
+                        Arc::new(AtomicUsize::new(0)),
+                        self.cancellation_token.child_token(),
+                    )
+                });
+                info!("entry for subscription id {x_subscription_id_meta:?}: {subscriber_entry:?}");
+                (subscriber_entry.0.clone(), subscriber_entry.1.clone())
             };
+
+            let guard = subscription_tracker_ref.lock().await;
+            info!(
+                "subscription_tracker contains {subscription_id} after: {}",
+                guard.contains_key(&subscription_id)
+            );
+            info!("number of entries in subscription_tracker: {}", guard.len());
+            drop(guard);
+
+            info!("count for subscription id {x_subscription_id_meta:?}: {count:?}");
+            info!("cancellation_token for subscription id {x_subscription_id_meta:?}: {cancellation_token:?}");
+
+            let prev_count = count.fetch_add(1, Ordering::SeqCst);
+            info!("prev_count: {prev_count:?}");
+            info!("current_count: {count:?}");
+            // Limit reached.
+            if prev_count >= self.config_max_subscription_limit {
+                // Signal cancellation of subscription.
+                cancellation_token.cancel();
+                // Remove subscriber from subscription tracker.
+                let mut guard = subscription_tracker_ref.lock().await;
+                guard.remove(&subscription_id);
+                return Err(Status::resource_exhausted(
+                    "exceeded maximum subscription limit. all subscriptions closed.",
+                ));
+            }
+
+            (count, cancellation_token)
+        } else {
+            // No x-subscription-id.
+            //
+            // This branch exists for debugging bypassing subscription limits
+            // when subscriber_id is not present.
+            //
+            // This is only possible if the request happens internally.
+            (Arc::new(AtomicUsize::new(0)), CancellationToken::new())
+        };
 
         let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
 
