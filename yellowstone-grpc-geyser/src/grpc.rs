@@ -1279,7 +1279,7 @@ impl Geyser for GrpcService {
                 info!("prev_count: {prev_count:?}");
                 info!("current_count: {count:?}");
                 // Limit reached.
-                if current_count >= self.config_max_subscription_limit {
+                if prev_count >= self.config_max_subscription_limit {
                     // Signal cancellation of subscription.
                     cancellation_token.cancel();
                     // Remove subscriber from subscription tracker.
