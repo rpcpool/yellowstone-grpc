@@ -1255,6 +1255,7 @@ impl Geyser for GrpcService {
             .get("x-subscription-id")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+        info!("x-subscription-id: {x_subscription_id_meta:?}");
 
         let subscription_tracker_ref = self.subscription_tracker.clone();
 
@@ -1275,6 +1276,8 @@ impl Geyser for GrpcService {
                 };
 
                 let current_count = count.fetch_add(1, Ordering::SeqCst);
+                info!("prev_count: {prev_count:?}");
+                info!("current_count: {count:?}");
                 // Limit reached.
                 if current_count >= self.config_max_subscription_limit {
                     // Signal cancellation of subscription.
