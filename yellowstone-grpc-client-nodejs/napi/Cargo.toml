@@ -46,6 +46,7 @@ quote = "1"
 proc-macro2 = "1"
 walkdir = "2.5.0"
 napi-derive = "=3.3.0"
+yellowstone-grpc-proto = "11.0.0"
 
 
 [profile.release]

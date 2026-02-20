@@ -6,9 +6,96 @@ use std::{
 use quote::{format_ident, quote};
 use syn::{punctuated::Punctuated, Item, Path, Type};
 
+fn resolve_proto_out_dir() -> Option<PathBuf> {
+    let out_dir = std::env::var_os("OUT_DIR")
+        .map(PathBuf::from)
+        .expect("OUT_DIR is not set; build script must run under Cargo");
+
+    let build_dir = out_dir
+        .ancestors()
+        .nth(2)
+        .map(PathBuf::from)
+        .expect("Failed to derive target/*/build directory from OUT_DIR");
+
+    let required_files = ["geyser.rs", "solana.storage.confirmed_block.rs"];
+    let mut candidate_out_dirs: Vec<(PathBuf, Option<std::time::SystemTime>)> = Vec::new();
+
+    let build_dir_entries = match fs::read_dir(&build_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            println!(
+                "cargo:warning=Typegen skipped: failed to read Cargo build directory at {}: {}",
+                build_dir.display(),
+                error
+            );
+            return None;
+        }
+    };
+
+    for entry in build_dir_entries {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(error) => {
+                println!(
+                    "cargo:warning=Typegen skipped entry in {}: {}",
+                    build_dir.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        let file_type = match entry.file_type() {
+            Ok(value) => value,
+            Err(error) => {
+                println!(
+                    "cargo:warning=Typegen skipped path {}: {}",
+                    entry.path().display(),
+                    error
+                );
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let dir_name = entry.file_name();
+        let dir_name = dir_name.to_string_lossy();
+        if !dir_name.starts_with("yellowstone-grpc-proto-") {
+            continue;
+        }
+
+        let out_dir_candidate = entry.path().join("out");
+        if required_files
+            .iter()
+            .all(|file_name| out_dir_candidate.join(file_name).is_file())
+        {
+            let modified_at = fs::metadata(&out_dir_candidate)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            candidate_out_dirs.push((out_dir_candidate, modified_at));
+        }
+    }
+
+    candidate_out_dirs.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.0.cmp(&left.0))
+    });
+
+    let selected = candidate_out_dirs.into_iter().next().map(|(out_dir, _)| out_dir);
+    if selected.is_none() {
+        println!(
+            "cargo:warning=Typegen skipped: could not locate yellowstone-grpc-proto generated files in {}",
+            build_dir.display()
+        );
+    }
+    selected
+}
+
 pub fn generate_types() {
-    const INPUT_ROOT: &str =
-        "target/debug/build/yellowstone-grpc-proto-56c108b3dc3af5d6/out/";
     const OUTPUT_FILE: &str = "src/js_types.rs";
 
     const TARGET_TYPES: &[&str] = &[
@@ -41,9 +128,13 @@ pub fn generate_types() {
         "IsBlockhashValidRequest","IsBlockhashValidResponse",
     ];
 
+    let input_root = match resolve_proto_out_dir() {
+        Some(path) => path,
+        None => return,
+    };
     let files = [
-        PathBuf::from(INPUT_ROOT).join("geyser.rs"),
-        PathBuf::from(INPUT_ROOT).join("solana.storage.confirmed_block.rs"),
+        input_root.join("geyser.rs"),
+        input_root.join("solana.storage.confirmed_block.rs"),
     ];
 
     // --------------------------------------------------
