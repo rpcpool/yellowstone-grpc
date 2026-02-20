@@ -1,6 +1,7 @@
 use {
     crate::{
         config::ConfigGrpc,
+        metered::MeteredLayer,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
         },
@@ -624,6 +625,7 @@ impl GrpcService {
             health_reporter.set_serving::<GeyserServer<Self>>().await;
 
             let result = server_builder
+                .layer(MeteredLayer::new())
                 .layer(interceptor::InterceptorLayer::new(
                     move |request: Request<()>| {
                         if let Some(x_token) = &config.x_token {

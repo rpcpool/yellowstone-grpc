@@ -1,5 +1,6 @@
 pub mod config;
 pub mod grpc;
+pub mod metered;
 pub mod metrics;
 pub mod plugin;
 pub mod transport;

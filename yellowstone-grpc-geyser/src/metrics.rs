@@ -143,12 +143,32 @@ lazy_static::lazy_static! {
         &["method"]
     ).unwrap();
 
+    static ref GRPC_SERVICE_OUTBOUND_BYTES: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "yellowstone_grpc_service_outbound_bytes",
+            "Current emitted bytes by tonic service response bodies per active subscriber stream"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
 }
 
 pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
     GRPC_METHOD_CALL_COUNT
         .with_label_values(&[method.as_ref()])
         .inc();
+}
+
+pub fn add_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S, bytes: u64) {
+    GRPC_SERVICE_OUTBOUND_BYTES
+        .with_label_values(&[subscriber_id.as_ref()])
+        .add(bytes as i64);
+}
+
+pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S) {
+    GRPC_SERVICE_OUTBOUND_BYTES
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(0);
 }
 
 pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
@@ -322,6 +342,7 @@ impl PrometheusService {
             register!(TOTAL_TRAFFIC_SENT);
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
             register!(GRPC_METHOD_CALL_COUNT);
+            register!(GRPC_SERVICE_OUTBOUND_BYTES);
 
             VERSION
                 .with_label_values(&[
@@ -564,6 +585,7 @@ pub fn reset_metrics() {
     GRPC_CLIENT_DISCONNECTS.reset();
     TOTAL_TRAFFIC_SENT.reset();
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
+    GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_METHOD_CALL_COUNT.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
