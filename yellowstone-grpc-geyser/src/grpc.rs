@@ -1275,7 +1275,7 @@ impl Geyser for GrpcService {
                     (subscriber_entry.0.clone(), subscriber_entry.1.clone())
                 };
 
-                let current_count = count.fetch_add(1, Ordering::SeqCst);
+                let prev_count = count.fetch_add(1, Ordering::SeqCst);
                 info!("prev_count: {prev_count:?}");
                 info!("current_count: {count:?}");
                 // Limit reached.
