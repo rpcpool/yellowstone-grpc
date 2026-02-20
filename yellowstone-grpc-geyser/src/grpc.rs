@@ -1,7 +1,9 @@
 use {
     crate::{
         config::ConfigGrpc,
-        metrics::{self, set_subscriber_queue_size, DebugClientMessage},
+        metrics::{
+            self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
+        },
         plugin::{
             filter::{
                 limits::FilterLimits,
@@ -1295,6 +1297,7 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        incr_grpc_method_call_count("subscribe");
         let maybe_remote_peer_sk_addr = request
             .extensions()
             .get::<TcpConnectInfo>()
@@ -1327,7 +1330,8 @@ impl Geyser for GrpcService {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
-        let ping_cancellation_token = client_cancellation_token.child_token();
+        let ping_cancellation_token = client_cancellation_token.clone();
+        let ping_client_cancel = client_cancellation_token.clone();
         self.task_tracker.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
@@ -1340,6 +1344,16 @@ impl Geyser for GrpcService {
                         let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
                         log::info!("client #{id}: sending ping");
                         if ping_stream_tx.send(Ok(msg)).await.is_err() {
+                            //
+                            // It's really important to send cancel ping for one edge-case where someone
+                            // subscribe without any filter:
+                            //
+                            // When someone subscribe without any filter, this can create a "zombie" client loop that
+                            // does reject every geyser event thus we never write to the HTTP/2 stream and we never detect that the client TCP connection is closed.
+                            // By sending a ping every 10 seconds, we can detect if the client is still alive and if it's not,
+                            // we can cancel the client loop.
+                            ping_client_cancel.cancel();
+                            info!("detected dead client #{id}");
                             break;
                         }
                     }
@@ -1441,6 +1455,7 @@ impl Geyser for GrpcService {
         &self,
         _request: Request<Streaming<SubscribeDeshredRequest>>,
     ) -> TonicResult<Response<Self::SubscribeDeshredStream>> {
+        incr_grpc_method_call_count("subscribe_deshred");
         Err(Status::unimplemented(
             "SubscribeDeshred is not available on this server",
         ))
@@ -1450,6 +1465,7 @@ impl Geyser for GrpcService {
         &self,
         _request: Request<SubscribeReplayInfoRequest>,
     ) -> Result<Response<SubscribeReplayInfoResponse>, Status> {
+        incr_grpc_method_call_count("subscribe_first_available_slot");
         let response = SubscribeReplayInfoResponse {
             first_available: self
                 .replay_first_available_slot
@@ -1460,6 +1476,7 @@ impl Geyser for GrpcService {
     }
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PongResponse>, Status> {
+        incr_grpc_method_call_count("ping");
         let count = request.get_ref().count;
         let response = PongResponse { count };
         Ok(Response::new(response))
@@ -1469,6 +1486,7 @@ impl Geyser for GrpcService {
         &self,
         request: Request<GetLatestBlockhashRequest>,
     ) -> Result<Response<GetLatestBlockhashResponse>, Status> {
+        incr_grpc_method_call_count("get_latest_blockhash");
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1492,6 +1510,7 @@ impl Geyser for GrpcService {
         &self,
         request: Request<GetBlockHeightRequest>,
     ) -> Result<Response<GetBlockHeightResponse>, Status> {
+        incr_grpc_method_call_count("get_block_height");
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1512,6 +1531,7 @@ impl Geyser for GrpcService {
         &self,
         request: Request<GetSlotRequest>,
     ) -> Result<Response<GetSlotResponse>, Status> {
+        incr_grpc_method_call_count("get_slot");
         if let Some(blocks_meta) = &self.blocks_meta {
             blocks_meta
                 .get_block(
@@ -1528,6 +1548,7 @@ impl Geyser for GrpcService {
         &self,
         request: Request<IsBlockhashValidRequest>,
     ) -> Result<Response<IsBlockhashValidResponse>, Status> {
+        incr_grpc_method_call_count("is_blockhash_valid");
         if let Some(blocks_meta) = &self.blocks_meta {
             let req = request.get_ref();
             blocks_meta
@@ -1542,6 +1563,7 @@ impl Geyser for GrpcService {
         &self,
         _request: Request<GetVersionRequest>,
     ) -> Result<Response<GetVersionResponse>, Status> {
+        incr_grpc_method_call_count("get_version");
         Ok(Response::new(GetVersionResponse {
             version: serde_json::to_string(&GrpcVersionInfo::default()).unwrap(),
         }))

@@ -133,6 +133,22 @@ lazy_static::lazy_static! {
         ),
         &["remote_ip"]
     ).unwrap();
+
+
+    static ref GRPC_METHOD_CALL_COUNT: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_method_call_count",
+            "Total number of calls to GetVersion gRPC method"
+        ),
+        &["method"]
+    ).unwrap();
+
+}
+
+pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
+    GRPC_METHOD_CALL_COUNT
+        .with_label_values(&[method.as_ref()])
+        .inc();
 }
 
 pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
@@ -305,6 +321,7 @@ impl PrometheusService {
             register!(GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION);
             register!(TOTAL_TRAFFIC_SENT);
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
+            register!(GRPC_METHOD_CALL_COUNT);
 
             VERSION
                 .with_label_values(&[
@@ -547,6 +564,7 @@ pub fn reset_metrics() {
     GRPC_CLIENT_DISCONNECTS.reset();
     TOTAL_TRAFFIC_SENT.reset();
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
+    GRPC_METHOD_CALL_COUNT.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
