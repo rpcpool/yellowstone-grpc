@@ -18,9 +18,9 @@ use tokio::{
 };
 use yellowstone_grpc_proto::prelude::*;
 
-use crate::client::GrpcClient;
+use crate::{client::GrpcClient, js_types::{JsSubscribeRequest, JsSubscribeUpdate}};
 
-mod js_types;
+pub mod js_types;
 #[cfg(test)]
 mod js_types_tests;
 
@@ -115,7 +115,10 @@ impl DuplexStream {
   ///
   /// Retrieve one SubscribeUpdate from the worker.
   #[napi]
-  pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Object<'env>>> {
+  pub fn read<'env>(
+    &self,
+    env: &'env Env,
+  ) -> Result<PromiseRaw<'env, JsSubscribeUpdate<'env>>> {
     let readable = self.readable.clone();
 
     env.spawn_future_with_callback(
@@ -125,7 +128,9 @@ impl DuplexStream {
           None => Err(napi::Error::from_reason("No update available")),
         }
       },
-      move |env, update| utils::to_js_update(env, update),
+      move |environment, subscribe_update| {
+        JsSubscribeUpdate::from_protobuf_to_js_type(environment, subscribe_update)
+      },
     )
   }
 
@@ -133,9 +138,9 @@ impl DuplexStream {
   ///
   /// Take in SubscribeRequest and send to the worker.
   #[napi]
-  pub fn write(&self, env: &Env, chunk: Object) -> Result<()> {
-    let request: SubscribeRequest = utils::js_to_subscribe_request(env, chunk)?;
-    if let Err(e) = self.writable.send(request) {
+  pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
+    let protobuf_subscribe_request: SubscribeRequest = request.from_js_to_protobuf_type()?;
+    if let Err(e) = self.writable.send(protobuf_subscribe_request) {
       return Err(napi::Error::from_reason(e.to_string()));
     }
     Ok(())
