@@ -41,6 +41,7 @@ import type {
 
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
+import { JsSubscribeRequest } from "../napi";
 
 export default class Client {
   _insecureEndpoint: string;
@@ -197,7 +198,7 @@ class ClientDuplexStream extends Duplex {
 
   _write(chunk: object, _encoding: any, callback: any) {
     try {
-      this._napiDuplexStream.write(chunk);
+      this._napiDuplexStream.write(chunk as JsSubscribeRequest);
       callback();
     } catch (err) {
       callback(err);
