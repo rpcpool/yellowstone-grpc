@@ -1,6 +1,11 @@
-import { JsSubscribeRequest } from "../napi";
 import Client from "../src"
 import {
+  GetBlockHeightResponse,
+  GetLatestBlockhashResponse,
+  GetSlotResponse,
+  GetVersionResponse,
+  IsBlockhashValidResponse,
+  PongResponse,
   SubscribeUpdate,
   SubscribeUpdateAccount,
   SubscribeUpdateBlock,
@@ -8,6 +13,8 @@ import {
   SubscribeUpdateEntry,
   SubscribeUpdatePing,
   SubscribeUpdatePong,
+  SubscribeReplayInfoResponse,
+  SubscribeRequest,
   SubscribeUpdateSlot,
   SubscribeUpdateTransaction,
   SubscribeUpdateTransactionInfo,
@@ -155,14 +162,6 @@ function isChannelClosedError(error: any): boolean {
   return message.toLowerCase().includes("channel closed");
 }
 
-function toSubscribeUpdateEnvelope(subscribe_update_response: any): any {
-  return {
-    filters: subscribe_update_response?.filters ?? [],
-    createdAt: subscribe_update_response?.createdAt,
-    ...(subscribe_update_response?.updateOneof ?? {}),
-  };
-}
-
 describe("subscribe response schema tests", () => {
   const TEST_TIMEOUT = 100000;
 
@@ -183,7 +182,7 @@ describe("subscribe response schema tests", () => {
   test("account", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       accounts: {
         client: {
           account: [],
@@ -203,7 +202,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForAccount = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.account),
+      (data) => Boolean(data?.account),
       TEST_TIMEOUT,
     );
 
@@ -221,12 +220,13 @@ describe("subscribe response schema tests", () => {
     //
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.account).toBe("object");
-    expect(typeof subscribe_update_response.updateOneof.account.slot).toBe("string");
-    expect(typeof subscribe_update_response.updateOneof.account.isStartup).toBe("boolean");
-    expect(typeof subscribe_update_response.updateOneof.account.account).toBe("object");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.account).toBe("object");
+    expect(typeof subscribe_update_response.account.slot).toBe("string");
+    expect(typeof subscribe_update_response.account.isStartup).toBe("boolean");
+    expect(typeof subscribe_update_response.account.account).toBe("object");
 
-    const account = subscribe_update_response.updateOneof.account.account;
+    const account = subscribe_update_response.account.account;
     expect(account.pubkey).toBeInstanceOf(Buffer);
     expect(account.owner).toBeInstanceOf(Buffer);
     expect(account.data).toBeInstanceOf(Buffer);
@@ -237,13 +237,13 @@ describe("subscribe response schema tests", () => {
 
     const decodedAccount = expectEncodeDecodeRoundTrip(
       SubscribeUpdateAccount,
-      subscribe_update_response.updateOneof.account,
+      subscribe_update_response.account,
     );
     expect(decodedAccount.account).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.account).toBeDefined();
 
@@ -252,7 +252,7 @@ describe("subscribe response schema tests", () => {
   test("slot", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       slots: {
         client: {}
       },
@@ -268,7 +268,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForSlot = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.slot),
+      (data) => Boolean(data?.slot),
       TEST_TIMEOUT,
     );
 
@@ -286,19 +286,20 @@ describe("subscribe response schema tests", () => {
     //
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.slot).toBe("object");
-    expect(typeof subscribe_update_response.updateOneof.slot.slot).toBe("string");
-    expect(typeof subscribe_update_response.updateOneof.slot.status).toBe("number");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.slot).toBe("object");
+    expect(typeof subscribe_update_response.slot.slot).toBe("string");
+    expect(typeof subscribe_update_response.slot.status).toBe("number");
 
     const decodedSlot = expectEncodeDecodeRoundTrip(
       SubscribeUpdateSlot,
-      subscribe_update_response.updateOneof.slot,
+      subscribe_update_response.slot,
     );
     expect(decodedSlot.slot).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.slot).toBeDefined();
 
@@ -307,7 +308,7 @@ describe("subscribe response schema tests", () => {
   test("transaction", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       transactions: {
         client: {
           accountExclude: [],
@@ -327,7 +328,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForTransaction = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.transaction?.transaction),
+      (data) => Boolean(data?.transaction?.transaction),
       TEST_TIMEOUT,
     );
 
@@ -345,17 +346,18 @@ describe("subscribe response schema tests", () => {
     //
     // See issue here: https://github.com/jestjs/jest/issues/2549
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.transaction).toBe("object");
-    expect(typeof subscribe_update_response.updateOneof.transaction.slot).toBe("string");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.transaction).toBe("object");
+    expect(typeof subscribe_update_response.transaction.slot).toBe("string");
 
-    const tx = subscribe_update_response.updateOneof.transaction.transaction;
+    const tx = subscribe_update_response.transaction.transaction;
     expect(tx.signature).toBeInstanceOf(Buffer);
     expect(typeof tx.transaction).toBe("object");
     expect(typeof tx.meta).toBe("object");
     expect(typeof tx.index).toBe("string");
     expect(typeof tx.isVote).toBe("boolean");
 
-    const txMeta = subscribe_update_response.updateOneof.transaction.transaction.meta;
+    const txMeta = subscribe_update_response.transaction.transaction.meta;
     expect(Object.prototype.toString.call(txMeta.preBalances)).toBe("[object Array]");
     expect(Object.prototype.toString.call(txMeta.postBalances)).toBe("[object Array]");
     expect(Object.prototype.toString.call(txMeta.innerInstructions)).toBe("[object Array]");
@@ -372,7 +374,7 @@ describe("subscribe response schema tests", () => {
     expect(typeof txMeta.fee).toBe("string");
     expect(typeof txMeta.costUnits).toBe("string");
 
-    const innerTx = subscribe_update_response.updateOneof.transaction.transaction.transaction;
+    const innerTx = subscribe_update_response.transaction.transaction.transaction;
     expect(Object.prototype.toString.call(innerTx.signatures)).toBe("[object Array]");
     expect(typeof innerTx.message).toBe("object");
     expect(Object.prototype.toString.call(innerTx.message.accountKeys)).toBe("[object Array]");
@@ -387,19 +389,19 @@ describe("subscribe response schema tests", () => {
 
     const decodedTransaction = expectEncodeDecodeRoundTrip(
       SubscribeUpdateTransaction,
-      subscribe_update_response.updateOneof.transaction,
+      subscribe_update_response.transaction,
     );
     expect(decodedTransaction.transaction).toBeDefined();
 
     const decodedTransactionInfo = expectEncodeDecodeRoundTrip(
       SubscribeUpdateTransactionInfo,
-      subscribe_update_response.updateOneof.transaction.transaction,
+      subscribe_update_response.transaction.transaction,
     );
     expect(decodedTransactionInfo.signature).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.transaction).toBeDefined();
 
@@ -408,7 +410,7 @@ describe("subscribe response schema tests", () => {
   test("transactionStatus", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       transactionsStatus: {
         client: {
           accountExclude: [],
@@ -428,7 +430,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForTransactionStatus = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.transactionStatus),
+      (data) => Boolean(data?.transactionStatus),
       TEST_TIMEOUT,
     );
 
@@ -442,21 +444,22 @@ describe("subscribe response schema tests", () => {
 
     expect(subscribe_update_response.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.transactionStatus).toBe("object");
-    expect(typeof subscribe_update_response.updateOneof.transactionStatus.slot).toBe("string");
-    expect(subscribe_update_response.updateOneof.transactionStatus.signature).toBeInstanceOf(Buffer);
-    expect(typeof subscribe_update_response.updateOneof.transactionStatus.isVote).toBe("boolean");
-    expect(typeof subscribe_update_response.updateOneof.transactionStatus.index).toBe("string");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.transactionStatus).toBe("object");
+    expect(typeof subscribe_update_response.transactionStatus.slot).toBe("string");
+    expect(subscribe_update_response.transactionStatus.signature).toBeInstanceOf(Buffer);
+    expect(typeof subscribe_update_response.transactionStatus.isVote).toBe("boolean");
+    expect(typeof subscribe_update_response.transactionStatus.index).toBe("string");
 
     const decodedTransactionStatus = expectEncodeDecodeRoundTrip(
       SubscribeUpdateTransactionStatus,
-      subscribe_update_response.updateOneof.transactionStatus,
+      subscribe_update_response.transactionStatus,
     );
     expect(decodedTransactionStatus.signature).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.transactionStatus).toBeDefined();
   }, TEST_TIMEOUT);
@@ -464,7 +467,7 @@ describe("subscribe response schema tests", () => {
   test("block", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       blocks: {
         client: {
           accountInclude: [],
@@ -485,7 +488,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForBlock = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.block),
+      (data) => Boolean(data?.block),
       TEST_TIMEOUT,
     );
 
@@ -499,9 +502,10 @@ describe("subscribe response schema tests", () => {
 
     expect(subscribe_update_response.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.block).toBe("object");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.block).toBe("object");
 
-    const block = subscribe_update_response.updateOneof.block;
+    const block = subscribe_update_response.block;
     expect(typeof block.slot).toBe("string");
     expect(typeof block.blockhash).toBe("string");
     expect(typeof block.parentSlot).toBe("string");
@@ -515,13 +519,13 @@ describe("subscribe response schema tests", () => {
 
     const decodedBlock = expectEncodeDecodeRoundTrip(
       SubscribeUpdateBlock,
-      subscribe_update_response.updateOneof.block,
+      subscribe_update_response.block,
     );
     expect(decodedBlock.blockhash).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.block).toBeDefined();
   }, TEST_TIMEOUT);
@@ -529,7 +533,7 @@ describe("subscribe response schema tests", () => {
   test("blockMeta", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       blocksMeta: {
         client: {}
       },
@@ -545,7 +549,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForBlockMeta = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.blockMeta),
+      (data) => Boolean(data?.blockMeta),
       TEST_TIMEOUT,
     );
 
@@ -567,9 +571,10 @@ describe("subscribe response schema tests", () => {
 
     expect(subscribe_update_response.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.blockMeta).toBe("object");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.blockMeta).toBe("object");
 
-    const blockMeta = subscribe_update_response.updateOneof.blockMeta;
+    const blockMeta = subscribe_update_response.blockMeta;
     expect(typeof blockMeta.slot).toBe("string");
     expect(typeof blockMeta.blockhash).toBe("string");
     expect(typeof blockMeta.parentSlot).toBe("string");
@@ -579,13 +584,13 @@ describe("subscribe response schema tests", () => {
 
     const decodedBlockMeta = expectEncodeDecodeRoundTrip(
       SubscribeUpdateBlockMeta,
-      subscribe_update_response.updateOneof.blockMeta,
+      subscribe_update_response.blockMeta,
     );
     expect(decodedBlockMeta.blockhash).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.blockMeta).toBeDefined();
   }, TEST_TIMEOUT);
@@ -593,7 +598,7 @@ describe("subscribe response schema tests", () => {
   test("entry", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       entry: {
         client: {}
       },
@@ -609,7 +614,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForEntry = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.entry),
+      (data) => Boolean(data?.entry),
       TEST_TIMEOUT,
     );
 
@@ -631,9 +636,10 @@ describe("subscribe response schema tests", () => {
 
     expect(subscribe_update_response.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect(typeof subscribe_update_response.updateOneof.entry).toBe("object");
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    expect(typeof subscribe_update_response.entry).toBe("object");
 
-    const entry = subscribe_update_response.updateOneof.entry;
+    const entry = subscribe_update_response.entry;
     expect(typeof entry.slot).toBe("string");
     expect(typeof entry.index).toBe("string");
     expect(typeof entry.numHashes).toBe("string");
@@ -643,13 +649,13 @@ describe("subscribe response schema tests", () => {
 
     const decodedEntry = expectEncodeDecodeRoundTrip(
       SubscribeUpdateEntry,
-      subscribe_update_response.updateOneof.entry,
+      subscribe_update_response.entry,
     );
     expect(decodedEntry.hash).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.entry).toBeDefined();
   }, TEST_TIMEOUT);
@@ -657,7 +663,7 @@ describe("subscribe response schema tests", () => {
   test("ping/pong", async () => {
     let subscribe_update_response: any;
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       accounts: {},
       slots: {},
       transactions: {},
@@ -674,7 +680,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForPingOrPong = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.pong || data?.updateOneof?.ping),
+      (data) => Boolean(data?.pong || data?.ping),
       TEST_TIMEOUT,
     );
 
@@ -688,8 +694,9 @@ describe("subscribe response schema tests", () => {
 
     expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
 
-    const pong = subscribe_update_response.updateOneof?.pong;
-    const ping = subscribe_update_response.updateOneof?.ping;
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    const pong = subscribe_update_response.pong;
+    const ping = subscribe_update_response.ping;
 
     if (pong) {
       expect(typeof pong).toBe("object");
@@ -701,7 +708,7 @@ describe("subscribe response schema tests", () => {
 
       const decodedEnvelope = expectEncodeDecodeRoundTrip(
         SubscribeUpdate,
-        toSubscribeUpdateEnvelope(subscribe_update_response),
+        subscribe_update_response,
       );
       expect(decodedEnvelope.pong).toBeDefined();
       return;
@@ -714,14 +721,14 @@ describe("subscribe response schema tests", () => {
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.ping).toBeDefined();
   }, TEST_TIMEOUT);
 
   test("SubscribeUpdateTransactionInfo encode", async () => {
     const subscribe_duplex_stream = await client.subscribe();
-    const request: JsSubscribeRequest = {
+    const request: SubscribeRequest = {
       transactions: {
         client: {
           accountExclude: [],
@@ -741,7 +748,7 @@ describe("subscribe response schema tests", () => {
 
     const waitForTransactionInfo = waitForSubscribeUpdateMatchingPredicate(
       subscribe_duplex_stream,
-      (data) => Boolean(data?.updateOneof?.transaction?.transaction),
+      (data) => Boolean(data?.transaction?.transaction),
       TEST_TIMEOUT,
     );
 
@@ -753,13 +760,14 @@ describe("subscribe response schema tests", () => {
 
     const subscribe_update_response = await waitForTransactionInfo;
 
-    const tx_info = subscribe_update_response.updateOneof.transaction.transaction;
+    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+    const tx_info = subscribe_update_response.transaction.transaction;
     const decoded = expectEncodeDecodeRoundTrip(SubscribeUpdateTransactionInfo, tx_info);
     expect(decoded.signature).toBeDefined();
 
     const decodedEnvelope = expectEncodeDecodeRoundTrip(
       SubscribeUpdate,
-      toSubscribeUpdateEnvelope(subscribe_update_response),
+      subscribe_update_response,
     );
     expect(decodedEnvelope.transaction).toBeDefined();
   }, TEST_TIMEOUT)
@@ -790,28 +798,43 @@ describe("unary response schema tests", () => {
     expect(typeof response.blockhash).toBe("string");
     expect(typeof response.lastValidBlockHeight).toBe("string");
     expect(response.blockhash.length).toBeGreaterThan(0);
+
+    const decoded = expectEncodeDecodeRoundTrip(GetLatestBlockhashResponse, response);
+    expect(decoded.blockhash).toBe(response.blockhash);
   }, TEST_TIMEOUT);
 
   test("ping", async () => {
     const pingCount = 7;
     const response = await client.ping(pingCount);
 
-    expect(typeof response).toBe("number");
-    expect(response).toBe(pingCount);
+    expect(typeof response).toBe("object");
+    expect(typeof response.count).toBe("number");
+    expect(response.count).toBe(pingCount);
+
+    const decoded = expectEncodeDecodeRoundTrip(PongResponse, response);
+    expect(decoded.count).toBe(pingCount);
   }, TEST_TIMEOUT);
 
   test("getBlockHeight", async () => {
     const response = await client.getBlockHeight(2);
 
-    expect(typeof response).toBe("string");
-    expect(response.length).toBeGreaterThan(0);
+    expect(typeof response).toBe("object");
+    expect(typeof response.blockHeight).toBe("string");
+    expect(response.blockHeight.length).toBeGreaterThan(0);
+
+    const decoded = expectEncodeDecodeRoundTrip(GetBlockHeightResponse, response);
+    expect(decoded.blockHeight).toBe(response.blockHeight);
   }, TEST_TIMEOUT);
 
   test("getSlot", async () => {
     const response = await client.getSlot(2);
 
-    expect(typeof response).toBe("string");
-    expect(response.length).toBeGreaterThan(0);
+    expect(typeof response).toBe("object");
+    expect(typeof response.slot).toBe("string");
+    expect(response.slot.length).toBeGreaterThan(0);
+
+    const decoded = expectEncodeDecodeRoundTrip(GetSlotResponse, response);
+    expect(decoded.slot).toBe(response.slot);
   }, TEST_TIMEOUT);
 
   test("isBlockhashValid", async () => {
@@ -821,13 +844,20 @@ describe("unary response schema tests", () => {
     expect(typeof response).toBe("object");
     expect(typeof response.slot).toBe("string");
     expect(typeof response.valid).toBe("boolean");
+
+    const decoded = expectEncodeDecodeRoundTrip(IsBlockhashValidResponse, response);
+    expect(decoded.valid).toBe(response.valid);
   }, TEST_TIMEOUT);
 
   test("getVersion", async () => {
     const response = await client.getVersion();
 
-    expect(typeof response).toBe("string");
-    expect(response.length).toBeGreaterThan(0);
+    expect(typeof response).toBe("object");
+    expect(typeof response.version).toBe("string");
+    expect(response.version.length).toBeGreaterThan(0);
+
+    const decoded = expectEncodeDecodeRoundTrip(GetVersionResponse, response);
+    expect(decoded.version).toBe(response.version);
   }, TEST_TIMEOUT);
 
   test("subscribeReplayInfo", async () => {
@@ -837,5 +867,8 @@ describe("unary response schema tests", () => {
     if (response.firstAvailable !== undefined && response.firstAvailable !== null) {
       expect(typeof response.firstAvailable).toBe("string");
     }
+
+    const decoded = expectEncodeDecodeRoundTrip(SubscribeReplayInfoResponse, response, true);
+    expect(decoded).toBeDefined();
   }, TEST_TIMEOUT);
 });

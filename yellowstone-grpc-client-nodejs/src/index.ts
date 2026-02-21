@@ -1,7 +1,28 @@
 /** TypeScript/JavaScript client for gRPC Geyser. */
 
 // Import generated gRPC client and types.
-import { SubscribeUpdateTransactionInfo } from "./grpc/geyser";
+import {
+  GetBlockHeightResponse as GetBlockHeightResponseMessage,
+  GetLatestBlockhashResponse as GetLatestBlockhashResponseMessage,
+  GetSlotResponse as GetSlotResponseMessage,
+  GetVersionResponse as GetVersionResponseMessage,
+  IsBlockhashValidResponse as IsBlockhashValidResponseMessage,
+  PongResponse as PongResponseMessage,
+  SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
+  SubscribeUpdateTransactionInfo,
+} from "./grpc/geyser";
+import type {
+  CommitmentLevel,
+  GetBlockHeightResponse,
+  GetLatestBlockhashResponse,
+  GetSlotResponse,
+  GetVersionResponse,
+  IsBlockhashValidResponse,
+  PongResponse,
+  SubscribeReplayInfoResponse,
+  SubscribeRequest,
+  SubscribeUpdate,
+} from "./grpc/geyser";
 
 // Reexport automatically generated types
 export {
@@ -43,6 +64,24 @@ import { Duplex } from "stream";
 import * as napi from "./napi/index";
 import { JsSubscribeRequest } from "../napi";
 
+function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate {
+  const oneof = update.updateOneof ?? {};
+
+  return {
+    filters: update.filters ?? [],
+    createdAt: update.createdAt,
+    account: oneof.account as any,
+    slot: oneof.slot as any,
+    transaction: oneof.transaction as any,
+    transactionStatus: oneof.transactionStatus as any,
+    block: oneof.block as any,
+    ping: oneof.ping as any,
+    pong: oneof.pong as any,
+    blockMeta: oneof.blockMeta as any,
+    entry: oneof.entry as any,
+  } as SubscribeUpdate;
+}
+
 export default class Client {
   _insecureEndpoint: string;
   _insecureXToken: string | undefined;
@@ -69,8 +108,8 @@ export default class Client {
   }
 
   async getLatestBlockhash(
-    commitment?: number,
-  ): Promise<napi.JsGetLatestBlockhashResponse> {
+    commitment?: CommitmentLevel,
+  ): Promise<GetLatestBlockhashResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -79,10 +118,15 @@ export default class Client {
       commitment: commitment ?? null,
     };
 
-    return await this._grpcClient.getLatestBlockhash(request);
+    const response = await this._grpcClient.getLatestBlockhash(request);
+    return GetLatestBlockhashResponseMessage.fromPartial({
+      slot: response.slot,
+      blockhash: response.blockhash,
+      lastValidBlockHeight: response.lastValidBlockHeight,
+    });
   }
 
-  async ping(count: number): Promise<number> {
+  async ping(count: number): Promise<PongResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -91,10 +135,13 @@ export default class Client {
       count,
     };
 
-    return (await this._grpcClient.ping(request)).count;
+    const response = await this._grpcClient.ping(request);
+    return PongResponseMessage.fromPartial({
+      count: response.count,
+    });
   }
 
-  async getBlockHeight(commitment?: number): Promise<string> {
+  async getBlockHeight(commitment?: CommitmentLevel): Promise<GetBlockHeightResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -103,10 +150,13 @@ export default class Client {
       commitment,
     };
 
-    return (await this._grpcClient.getBlockHeight(request)).blockHeight;
+    const response = await this._grpcClient.getBlockHeight(request);
+    return GetBlockHeightResponseMessage.fromPartial({
+      blockHeight: response.blockHeight,
+    });
   }
 
-  async getSlot(commitment?: number): Promise<string> {
+  async getSlot(commitment?: CommitmentLevel): Promise<GetSlotResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -115,13 +165,16 @@ export default class Client {
       commitment,
     };
 
-    return (await this._grpcClient.getSlot(request)).slot;
+    const response = await this._grpcClient.getSlot(request);
+    return GetSlotResponseMessage.fromPartial({
+      slot: response.slot,
+    });
   }
 
   async isBlockhashValid(
     blockhash: string,
-    commitment?: number,
-  ): Promise<napi.JsIsBlockhashValidResponse> {
+    commitment?: CommitmentLevel,
+  ): Promise<IsBlockhashValidResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
@@ -131,30 +184,44 @@ export default class Client {
       commitment,
     };
 
-    return await this._grpcClient.isBlockhashValid(request);
+    const response = await this._grpcClient.isBlockhashValid(request);
+    return IsBlockhashValidResponseMessage.fromPartial({
+      slot: response.slot,
+      valid: response.valid,
+    });
   }
 
-  async getVersion(): Promise<string> {
+  async getVersion(): Promise<GetVersionResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
 
     const request: napi.JsGetVersionRequest = {};
 
-    return (await this._grpcClient.getVersion(request)).version;
+    const response = await this._grpcClient.getVersion(request);
+    return GetVersionResponseMessage.fromPartial({
+      version: response.version,
+    });
   }
 
-  async subscribeReplayInfo(): Promise<napi.JsSubscribeReplayInfoResponse> {
+  async subscribeReplayInfo(): Promise<SubscribeReplayInfoResponse> {
     if (!this._grpcClient) {
       throw new Error("Client not connected. Call connect() first");
     }
 
     const request: napi.JsSubscribeReplayInfoRequest = {};
 
-    return await this._grpcClient.subscribeReplayInfo(request);
+    const response = await this._grpcClient.subscribeReplayInfo(request);
+    return SubscribeReplayInfoResponseMessage.fromPartial({
+      firstAvailable: response.firstAvailable,
+    });
   }
 
   async subscribe(): Promise<ClientDuplexStream> {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+
     // Inner stream.Duplex config passed to both stream.Readable and Writable.
     // See: https://nodejs.org/en/blog/feature/streams2#new-streamduplexoptions
     const options = {
@@ -214,8 +281,10 @@ class ClientDuplexStream extends Duplex {
           return;
         }
 
+        const grpcUpdate = fromJsSubscribeUpdate(update);
+
         // Respect backpressure: only pull again if consumer accepted push.
-        const canContinue = this.push(update);
+        const canContinue = this.push(grpcUpdate);
         if (canContinue) {
           this._pullNextUpdate();
         }
@@ -249,7 +318,7 @@ class ClientDuplexStream extends Duplex {
   }
 
   _write(
-    chunk: object,
+    chunk: SubscribeRequest,
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void,
   ) {
