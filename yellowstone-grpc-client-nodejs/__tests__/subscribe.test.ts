@@ -14,6 +14,50 @@ import {
   SubscribeUpdateTransactionStatus,
 } from "../src/grpc/geyser";
 
+function closeStreamAndWait(stream: any, timeoutMs = 2500): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const settleOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      stream.off("close", onClosedOrEnded);
+      stream.off("end", onClosedOrEnded);
+      stream.off("error", onError);
+      stream.off("finish", onFinish);
+    };
+
+    const onClosedOrEnded = () => settleOnce();
+    const onError = () => settleOnce();
+    const onFinish = () => {
+      // Writable side finished; wait for close/end unless timeout hits.
+    };
+
+    const timeoutId = setTimeout(settleOnce, timeoutMs);
+
+    stream.on("close", onClosedOrEnded);
+    stream.on("end", onClosedOrEnded);
+    stream.on("error", onError);
+    stream.on("finish", onFinish);
+
+    try {
+      stream.end();
+    } catch {}
+
+    try {
+      stream.destroy();
+    } catch {}
+  });
+}
+
 function waitForSubscribeUpdateMatchingPredicate(
   stream: any,
   predicate: (data: any) => boolean,
@@ -46,13 +90,10 @@ function waitForSubscribeUpdateMatchingPredicate(
         if (unmatchedUpdates >= maxUnmatchedUpdates) {
           settleOnce(() => {
             cleanup();
-            stream.end();
-            stream.destroy();
-            reject(
-              new Error(
-                `No matching subscribe update after ${unmatchedUpdates} updates (timeout ${timeoutMs}ms)`,
-              ),
+            const error = new Error(
+              `No matching subscribe update after ${unmatchedUpdates} updates (timeout ${timeoutMs}ms)`,
             );
+            void closeStreamAndWait(stream).finally(() => reject(error));
           });
         }
         return;
@@ -60,32 +101,30 @@ function waitForSubscribeUpdateMatchingPredicate(
 
       settleOnce(() => {
         cleanup();
-        stream.end();
-        stream.destroy();
-        resolve(data);
+        void closeStreamAndWait(stream).finally(() => resolve(data));
       });
     };
 
     const onError = (error: Error) => {
       settleOnce(() => {
         cleanup();
-        reject(error);
+        void closeStreamAndWait(stream).finally(() => reject(error));
       });
     };
 
     const onEndOrClose = () => {
       settleOnce(() => {
         cleanup();
-        reject(new Error("Stream ended before receiving expected subscribe update"));
+        const error = new Error("Stream ended before receiving expected subscribe update");
+        void closeStreamAndWait(stream).finally(() => reject(error));
       });
     };
 
     const timeoutId = setTimeout(() => {
       settleOnce(() => {
         cleanup();
-        stream.end();
-        stream.destroy();
-        reject(new Error(`Timed out waiting for expected subscribe update after ${timeoutMs}ms`));
+        const error = new Error(`Timed out waiting for expected subscribe update after ${timeoutMs}ms`);
+        void closeStreamAndWait(stream).finally(() => reject(error));
       });
     }, timeoutMs);
 
