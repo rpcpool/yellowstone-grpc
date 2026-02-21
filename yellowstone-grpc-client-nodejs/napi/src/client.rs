@@ -91,6 +91,16 @@ pub struct GrpcClient {
 
 #[napi]
 impl GrpcClient {
+  // Implementation note:
+  // Every unary method follows the same pattern:
+  // 1. clone the type-erased holder
+  // 2. downcast to the concrete `ClientHolder<InterceptorXToken>`
+  // 3. execute the async gRPC call under a mutex guard
+  // 4. convert protobuf response to generated JS type in callback
+  //
+  // `spawn_future_with_callback` is used so `Env` never crosses the async
+  // boundary, which avoids `Send` issues with napi handles.
+
   /// Creates a new gRPC client and establishes a connection.
   ///
   /// This is an async factory method that:
@@ -355,6 +365,11 @@ impl GrpcClient {
     )
   }
 
+  /// Creates a subscription stream bound to this client connection.
+  ///
+  /// The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
+  /// which handles Node stream lifecycle and protobuf-shape normalization.
+  //
   // subscribe should only be available via the `GrpcClient`
   #[allow(private_interfaces)]
   #[napi]

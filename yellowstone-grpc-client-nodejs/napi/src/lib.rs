@@ -1,7 +1,14 @@
-//! N-API stream.Duplex Engine
+//! N-API stream engine for Yellowstone subscriptions.
 //!
-//! This module provides the gateway for the JS
-//! runtime to interact with Rust's async runtime.
+//! This module exposes a `DuplexStream` type used by the JS SDK wrapper.
+//! The Rust side owns the gRPC subscribe task and bridges:
+//! - JS writes (`SubscribeRequest`) -> gRPC sink
+//! - gRPC stream (`SubscribeUpdate`) -> JS reads
+//!
+//! Design goals:
+//! - Keep JS-facing API small and stable (`read` / `write`)
+//! - Convert all protobuf <-> JS objects through generated `js_types`
+//! - Stop worker tasks deterministically when JS drops stream handles
 mod bindings;
 mod client;
 mod encoding;
@@ -43,7 +50,9 @@ fn init_crypto_provider() {
 /// will `_read()` from and `_write()` to.
 #[napi]
 struct DuplexStream {
+  /// Read side consumed by `read()`. Each message is delivered exactly once.
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
+  /// Write side used by `write()`. Requests are forwarded to gRPC task.
   writable: UnboundedSender<SubscribeRequest>,
 }
 
@@ -57,8 +66,9 @@ impl DuplexStream {
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
 
+    // Spawn one worker per `subscribe()` call. The worker owns both sides of
+    // the gRPC bidirectional stream and forwards data between JS and gRPC.
     env.spawn_future(async move {
-
       let holder = client_holder
       .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
       .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
@@ -83,7 +93,8 @@ impl DuplexStream {
                 return Err(napi::Error::from_reason(e.to_string()))
               }
             } else {
-              // JS side dropped the stream writer; terminate this subscription worker.
+              // JS writable side dropped: no more requests can be sent.
+              // Exit worker so the upstream gRPC stream is torn down as well.
               break;
             }
           },
@@ -101,6 +112,7 @@ impl DuplexStream {
             }
           }
 
+          // Upstream stream ended and no more outbound requests exist.
           else => { break; }
         }
       }
@@ -116,7 +128,8 @@ impl DuplexStream {
 
   /// Read JS Accesspoint.
   ///
-  /// Retrieve one SubscribeUpdate from the worker.
+  /// Retrieve one `SubscribeUpdate` from the worker and convert it to
+  /// the generated N-API JS representation (`JsSubscribeUpdate`).
   #[napi]
   pub fn read<'env>(
     &self,
@@ -128,6 +141,8 @@ impl DuplexStream {
       async move {
         match readable.lock().await.recv().await {
           Some(update) => Ok(update),
+          // Channel close indicates worker termination; JS wrapper treats this
+          // as stream end and destroys the Node duplex stream.
           None => Err(napi::Error::from_reason("No update available")),
         }
       },
@@ -139,7 +154,8 @@ impl DuplexStream {
 
   /// Write JS Accesspoint.
   ///
-  /// Take in SubscribeRequest and send to the worker.
+  /// Accept a JS request object, convert to protobuf, then enqueue for the
+  /// worker to forward to the gRPC request sink.
   #[napi]
   pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
     let protobuf_subscribe_request: SubscribeRequest = request.from_js_to_protobuf_type()?;
