@@ -104,6 +104,8 @@ func grpc_connect(address string, plaintext bool) *grpc.ClientConn {
 	}
 
 	opts = append(opts, grpc.WithKeepaliveParams(kacp))
+	opts = append(opts, grpc.WithInitialWindowSize(32*1024*1024))     // 32MB stream window
+	opts = append(opts, grpc.WithInitialConnWindowSize(32*1024*1024)) // 32MB connection window
 
 	log.Println("Starting grpc client, connecting to", address)
 	conn, err := grpc.Dial(address, opts...)

@@ -93,7 +93,7 @@ solana-transaction-error = "3.0.0"
 spl-token-2022-interface = "2.0.0"
 
 # Yellowstone
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.0.0" }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.1.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.0.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.0.0", default-features = false }
 

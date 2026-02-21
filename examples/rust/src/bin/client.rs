@@ -101,11 +101,11 @@ struct Args {
     #[clap(long)]
     http2_keep_alive_interval_ms: Option<u64>,
 
-    /// Sets the max connection-level flow control for HTTP2, default is 65,535
+    /// Sets the max connection-level flow control for HTTP2. Library default is 32MB if not specified.
     #[clap(long)]
     initial_connection_window_size: Option<u32>,
 
-    ///Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control, default is 65,535
+    /// Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control. Library default is 32MB if not specified.
     #[clap(long)]
     initial_stream_window_size: Option<u32>,
 

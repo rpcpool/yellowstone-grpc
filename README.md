@@ -133,6 +133,23 @@ It's possible to add limits for filters in the config. If the `filters` field is
 
 #### GetVersion
 
+### System Tuning
+
+For high-throughput subscriptions, increase the Linux TCP receive buffer sizes. This can improve bandwidth by 5x+ on high-latency connections.
+
+Apply immediately:
+
+```bash
+sudo sysctl -w net.core.rmem_max=33554432 net.ipv4.tcp_rmem="4096 87380 33554432"
+```
+
+To persist across reboots, add to `/etc/sysctl.conf`:
+
+```
+net.core.rmem_max=33554432
+net.ipv4.tcp_rmem=4096 87380 33554432
+```
+
 ### Examples
 
    - [Go](examples/golang)
