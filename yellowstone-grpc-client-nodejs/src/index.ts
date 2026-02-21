@@ -180,28 +180,89 @@ export default class Client {
 
 class ClientDuplexStream extends Duplex {
   _napiDuplexStream: napi.DuplexStream;
+  _readInFlight: boolean;
+  _isClosed: boolean;
+  _isDestroying: boolean;
+  _terminalErrorSeen: boolean;
 
   constructor(stream: napi.DuplexStream, options: object | undefined) {
     super({ ...options });
     this._napiDuplexStream = stream;
+    this._readInFlight = false;
+    this._isClosed = false;
+    this._isDestroying = false;
+    this._terminalErrorSeen = false;
+
+    this.once("close", () => {
+      this._isClosed = true;
+    });
   }
 
-  async _read(_size: number) {
-    try {
-      const update = await this._napiDuplexStream.read();
-      this.push(update);
-    } catch (err) {
-      this.push(null); // Signal end of stream
-      this.destroy(err); // Handle resource cleanup
+  _pullNextUpdate() {
+    if (this._isClosed || this._isDestroying || this._readInFlight) {
+      return;
     }
+
+    this._readInFlight = true;
+
+    this._napiDuplexStream
+      .read()
+      .then((update) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        // Respect backpressure: only pull again if consumer accepted push.
+        const canContinue = this.push(update);
+        if (canContinue) {
+          this._pullNextUpdate();
+        }
+      })
+      .catch((err) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        if (this._terminalErrorSeen) {
+          return;
+        }
+        this._terminalErrorSeen = true;
+
+        this.push(null); // Signal end of stream
+        this.destroy(err as Error); // Handle resource cleanup once
+      });
   }
 
-  _write(chunk: object, _encoding: any, callback: any) {
+  _read(_size: number) {
+    this._pullNextUpdate();
+  }
+
+  _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    this._isDestroying = true;
+    this._isClosed = true;
+    this._terminalErrorSeen = true;
+    callback(error);
+  }
+
+  _write(
+    chunk: object,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    if (this._isClosed || this._isDestroying) {
+      callback(new Error("Cannot write to a closed subscription stream"));
+      return;
+    }
+
     try {
       this._napiDuplexStream.write(chunk as JsSubscribeRequest);
       callback();
     } catch (err) {
-      callback(err);
+      callback(err as Error);
     }
   }
 }

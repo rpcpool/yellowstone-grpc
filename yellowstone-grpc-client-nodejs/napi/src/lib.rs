@@ -82,6 +82,9 @@ impl DuplexStream {
               if let Err(e) = stream_tx.send(request).await {
                 return Err(napi::Error::from_reason(e.to_string()))
               }
+            } else {
+              // JS side dropped the stream writer; terminate this subscription worker.
+              break;
             }
           },
 
