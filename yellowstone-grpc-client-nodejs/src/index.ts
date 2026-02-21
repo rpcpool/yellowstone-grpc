@@ -64,6 +64,11 @@ import { Duplex } from "stream";
 import * as napi from "./napi/index";
 import { JsSubscribeRequest } from "../napi";
 
+/**
+ * Convert N-API `JsSubscribeUpdate` shape (with `updateOneof`) into the
+ * generated protobuf-friendly SDK shape (`SubscribeUpdate`) where the oneof
+ * variants are top-level optional fields.
+ */
 function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate {
   const oneof = update.updateOneof ?? {};
 
@@ -99,7 +104,7 @@ export default class Client {
   }
 
   async connect(): Promise<void> {
-    // Use the factory method to create the client
+    // Establish one persistent native gRPC client reused by all calls.
     this._grpcClient = await napi.GrpcClient.new(
       this._insecureEndpoint,
       this._insecureXToken,
@@ -233,6 +238,8 @@ export default class Client {
       // highWaterMark: 16
     };
 
+    // Native stream produces N-API generated JS objects; wrapper below adapts
+    // to public protobuf-generated SDK shapes and Node stream semantics.
     const stream = this._grpcClient.subscribe();
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
@@ -247,9 +254,13 @@ export default class Client {
 
 class ClientDuplexStream extends Duplex {
   _napiDuplexStream: napi.DuplexStream;
+  // Prevent overlapping native reads: a single pending read at a time.
   _readInFlight: boolean;
+  // Closed once Node emits `close`.
   _isClosed: boolean;
+  // Set during destroy path to short-circuit late async completions.
   _isDestroying: boolean;
+  // Ensure we surface at most one terminal error per stream instance.
   _terminalErrorSeen: boolean;
 
   constructor(stream: napi.DuplexStream, options: object | undefined) {
@@ -311,6 +322,7 @@ class ClientDuplexStream extends Duplex {
   }
 
   _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    // Mark terminal state first so late read completions are ignored.
     this._isDestroying = true;
     this._isClosed = true;
     this._terminalErrorSeen = true;
