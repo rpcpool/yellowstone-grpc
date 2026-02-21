@@ -14,13 +14,15 @@ export declare class DuplexStream {
   /**
    * Read JS Accesspoint.
    *
-   * Retrieve one SubscribeUpdate from the worker.
+   * Retrieve one `SubscribeUpdate` from the worker and convert it to
+   * the generated N-API JS representation (`JsSubscribeUpdate`).
    */
   read(): Promise<JsSubscribeUpdate>
   /**
    * Write JS Accesspoint.
    *
-   * Take in SubscribeRequest and send to the worker.
+   * Accept a JS request object, convert to protobuf, then enqueue for the
+   * worker to forward to the gRPC request sink.
    */
   write(request: JsSubscribeRequest): void
 }
@@ -51,6 +53,12 @@ export declare class GrpcClient {
   isBlockhashValid(request: JsIsBlockhashValidRequest): Promise<JsIsBlockhashValidResponse>
   getVersion(getVersionRequest: JsGetVersionRequest): Promise<JsGetVersionResponse>
   subscribeReplayInfo(subscribeReplayInfoRequest: JsSubscribeReplayInfoRequest): Promise<JsSubscribeReplayInfoResponse>
+  /**
+   * Creates a subscription stream bound to this client connection.
+   *
+   * The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
+   * which handles Node stream lifecycle and protobuf-shape normalization.
+   */
   subscribe(): DuplexStream
 }
 

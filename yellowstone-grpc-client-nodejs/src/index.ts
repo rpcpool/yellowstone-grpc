@@ -62,7 +62,13 @@ import type {
 
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
-import { JsSubscribeRequest } from "../napi";
+
+/**
+ * Public channel options accepted by the SDK constructor.
+ * This is sourced from the native N-API constructor signature to avoid
+ * duplicating option fields in this file.
+ */
+export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
 
 /**
  * Convert N-API `JsSubscribeUpdate` shape (with `updateOneof`) into the
@@ -88,19 +94,26 @@ function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate 
 }
 
 export default class Client {
-  _insecureEndpoint: string;
-  _insecureXToken: string | undefined;
-  _channelOptions: napi.JsChannelOptions | undefined;
-  _grpcClient: napi.GrpcClient | null = null;
+  private _insecureEndpoint: string;
+  private _insecureXToken: string | undefined;
+  private _channelOptions: ChannelOptions | undefined;
+  private _grpcClient: unknown | null = null;
 
   constructor(
     endpoint: string,
     xToken: string | undefined,
-    channel_options: napi.JsChannelOptions | undefined,
+    channel_options: ChannelOptions | undefined,
   ) {
     this._insecureEndpoint = endpoint;
     this._insecureXToken = xToken;
     this._channelOptions = channel_options;
+  }
+
+  private _connectedGrpcClient(): napi.GrpcClient {
+    if (!this._grpcClient) {
+      throw new Error("Client not connected. Call connect() first");
+    }
+    return this._grpcClient as napi.GrpcClient;
   }
 
   async connect(): Promise<void> {
@@ -115,15 +128,13 @@ export default class Client {
   async getLatestBlockhash(
     commitment?: CommitmentLevel,
   ): Promise<GetLatestBlockhashResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsGetLatestBlockhashRequest = {
       commitment: commitment ?? null,
     };
 
-    const response = await this._grpcClient.getLatestBlockhash(request);
+    const response = await grpcClient.getLatestBlockhash(request);
     return GetLatestBlockhashResponseMessage.fromPartial({
       slot: response.slot,
       blockhash: response.blockhash,
@@ -132,45 +143,39 @@ export default class Client {
   }
 
   async ping(count: number): Promise<PongResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsPingRequest = {
       count,
     };
 
-    const response = await this._grpcClient.ping(request);
+    const response = await grpcClient.ping(request);
     return PongResponseMessage.fromPartial({
       count: response.count,
     });
   }
 
   async getBlockHeight(commitment?: CommitmentLevel): Promise<GetBlockHeightResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsGetBlockHeightRequest = {
       commitment,
     };
 
-    const response = await this._grpcClient.getBlockHeight(request);
+    const response = await grpcClient.getBlockHeight(request);
     return GetBlockHeightResponseMessage.fromPartial({
       blockHeight: response.blockHeight,
     });
   }
 
   async getSlot(commitment?: CommitmentLevel): Promise<GetSlotResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsGetSlotRequest = {
       commitment,
     };
 
-    const response = await this._grpcClient.getSlot(request);
+    const response = await grpcClient.getSlot(request);
     return GetSlotResponseMessage.fromPartial({
       slot: response.slot,
     });
@@ -180,16 +185,14 @@ export default class Client {
     blockhash: string,
     commitment?: CommitmentLevel,
   ): Promise<IsBlockhashValidResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsIsBlockhashValidRequest = {
       blockhash,
       commitment,
     };
 
-    const response = await this._grpcClient.isBlockhashValid(request);
+    const response = await grpcClient.isBlockhashValid(request);
     return IsBlockhashValidResponseMessage.fromPartial({
       slot: response.slot,
       valid: response.valid,
@@ -197,35 +200,29 @@ export default class Client {
   }
 
   async getVersion(): Promise<GetVersionResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsGetVersionRequest = {};
 
-    const response = await this._grpcClient.getVersion(request);
+    const response = await grpcClient.getVersion(request);
     return GetVersionResponseMessage.fromPartial({
       version: response.version,
     });
   }
 
   async subscribeReplayInfo(): Promise<SubscribeReplayInfoResponse> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     const request: napi.JsSubscribeReplayInfoRequest = {};
 
-    const response = await this._grpcClient.subscribeReplayInfo(request);
+    const response = await grpcClient.subscribeReplayInfo(request);
     return SubscribeReplayInfoResponseMessage.fromPartial({
       firstAvailable: response.firstAvailable,
     });
   }
 
   async subscribe(): Promise<ClientDuplexStream> {
-    if (!this._grpcClient) {
-      throw new Error("Client not connected. Call connect() first");
-    }
+    const grpcClient = this._connectedGrpcClient();
 
     // Inner stream.Duplex config passed to both stream.Readable and Writable.
     // See: https://nodejs.org/en/blog/feature/streams2#new-streamduplexoptions
@@ -240,7 +237,7 @@ export default class Client {
 
     // Native stream produces N-API generated JS objects; wrapper below adapts
     // to public protobuf-generated SDK shapes and Node stream semantics.
-    const stream = this._grpcClient.subscribe();
+    const stream = grpcClient.subscribe();
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {
@@ -252,18 +249,18 @@ export default class Client {
   }
 }
 
-class ClientDuplexStream extends Duplex {
-  _napiDuplexStream: napi.DuplexStream;
+export class ClientDuplexStream extends Duplex {
+  private _napiDuplexStream: unknown;
   // Prevent overlapping native reads: a single pending read at a time.
-  _readInFlight: boolean;
+  private _readInFlight: boolean;
   // Closed once Node emits `close`.
-  _isClosed: boolean;
+  private _isClosed: boolean;
   // Set during destroy path to short-circuit late async completions.
-  _isDestroying: boolean;
+  private _isDestroying: boolean;
   // Ensure we surface at most one terminal error per stream instance.
-  _terminalErrorSeen: boolean;
+  private _terminalErrorSeen: boolean;
 
-  constructor(stream: napi.DuplexStream, options: object | undefined) {
+  constructor(stream: unknown, options: object | undefined) {
     super({ ...options });
     this._napiDuplexStream = stream;
     this._readInFlight = false;
@@ -283,7 +280,7 @@ class ClientDuplexStream extends Duplex {
 
     this._readInFlight = true;
 
-    this._napiDuplexStream
+    (this._napiDuplexStream as napi.DuplexStream)
       .read()
       .then((update) => {
         this._readInFlight = false;
@@ -340,7 +337,9 @@ class ClientDuplexStream extends Duplex {
     }
 
     try {
-      this._napiDuplexStream.write(chunk as JsSubscribeRequest);
+      (this._napiDuplexStream as napi.DuplexStream).write(
+        chunk as unknown as napi.JsSubscribeRequest,
+      );
       callback();
     } catch (err) {
       callback(err as Error);
