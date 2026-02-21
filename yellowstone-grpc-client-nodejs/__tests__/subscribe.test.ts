@@ -20,6 +20,7 @@ import {
   SubscribeUpdateTransactionInfo,
   SubscribeUpdateTransactionStatus,
 } from "../src/grpc/geyser";
+import * as geyser from "../src/grpc/geyser";
 
 function closeStreamAndWait(stream: any, timeoutMs = 2500): Promise<void> {
   return new Promise((resolve) => {
@@ -160,6 +161,22 @@ function expectEncodeDecodeRoundTrip(messageFns: any, payload: any, allowEmpty =
 function isChannelClosedError(error: any): boolean {
   const message = String(error?.message ?? error ?? "");
   return message.toLowerCase().includes("channel closed");
+}
+
+function getAllGeyserMessageFns(): Array<[string, any]> {
+  return Object.entries(geyser)
+    .filter(([, value]) => {
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+
+      return (
+        typeof (value as any).encode === "function" &&
+        typeof (value as any).decode === "function" &&
+        typeof (value as any).fromPartial === "function"
+      );
+    })
+    .sort(([left], [right]) => left.localeCompare(right));
 }
 
 describe("subscribe response schema tests", () => {
@@ -871,4 +888,27 @@ describe("unary response schema tests", () => {
     const decoded = expectEncodeDecodeRoundTrip(SubscribeReplayInfoResponse, response, true);
     expect(decoded).toBeDefined();
   }, TEST_TIMEOUT);
+});
+
+describe("grpc message encode/decode tests", () => {
+  const allMessageFns = getAllGeyserMessageFns();
+
+  test("has message fns to validate", () => {
+    expect(allMessageFns.length).toBeGreaterThan(0);
+  });
+
+  test.each(allMessageFns)("%s encode/decode", (messageName, messageFns) => {
+    const partialValue = messageFns.fromPartial({});
+    const encoded = messageFns.encode(partialValue).finish();
+    const decoded = messageFns.decode(encoded);
+
+    expect(messageName).toBeTruthy();
+    expect(encoded).toBeInstanceOf(Uint8Array);
+    expect(encoded.length).toBeGreaterThanOrEqual(0);
+    expect(decoded).toBeDefined();
+
+    const reencoded = messageFns.encode(decoded).finish();
+    expect(reencoded).toBeInstanceOf(Uint8Array);
+    expect(reencoded.length).toBeGreaterThanOrEqual(0);
+  });
 });
