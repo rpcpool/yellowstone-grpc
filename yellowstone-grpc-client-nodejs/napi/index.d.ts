@@ -130,20 +130,8 @@ export interface JsGetBlockHeightRequest {
   commitment?: number
 }
 
-export interface JsGetBlockHeightRequest {
-  commitment?: number
-}
-
 export interface JsGetBlockHeightResponse {
   blockHeight: string
-}
-
-export interface JsGetBlockHeightResponse {
-  blockHeight: string
-}
-
-export interface JsGetLatestBlockhashRequest {
-  commitment?: number
 }
 
 export interface JsGetLatestBlockhashRequest {
@@ -156,16 +144,6 @@ export interface JsGetLatestBlockhashResponse {
   lastValidBlockHeight: string
 }
 
-export interface JsGetLatestBlockhashResponse {
-  slot: string
-  blockhash: string
-  lastValidBlockHeight: string
-}
-
-export interface JsGetSlotRequest {
-  commitment?: number
-}
-
 export interface JsGetSlotRequest {
   commitment?: number
 }
@@ -174,20 +152,8 @@ export interface JsGetSlotResponse {
   slot: string
 }
 
-export interface JsGetSlotResponse {
-  slot: string
-}
-
 export interface JsGetVersionRequest {
 
-}
-
-export interface JsGetVersionRequest {
-
-}
-
-export interface JsGetVersionResponse {
-  version: string
 }
 
 export interface JsGetVersionResponse {
@@ -209,16 +175,6 @@ export interface JsInnerInstructions {
 export interface JsIsBlockhashValidRequest {
   blockhash: string
   commitment?: number
-}
-
-export interface JsIsBlockhashValidRequest {
-  blockhash: string
-  commitment?: number
-}
-
-export interface JsIsBlockhashValidResponse {
-  slot: string
-  valid: boolean
 }
 
 export interface JsIsBlockhashValidResponse {
@@ -255,14 +211,6 @@ export interface JsPingRequest {
   count: number
 }
 
-export interface JsPingRequest {
-  count: number
-}
-
-export interface JsPongResponse {
-  count: number
-}
-
 export interface JsPongResponse {
   count: number
 }
@@ -287,14 +235,6 @@ export interface JsRewards {
 
 export interface JsSubscribeReplayInfoRequest {
 
-}
-
-export interface JsSubscribeReplayInfoRequest {
-
-}
-
-export interface JsSubscribeReplayInfoResponse {
-  firstAvailable?: string
 }
 
 export interface JsSubscribeReplayInfoResponse {

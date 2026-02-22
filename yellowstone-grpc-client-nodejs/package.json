@@ -1,6 +1,6 @@
 {
   "name": "@triton-one/yellowstone-grpc",
-  "version": "5.0.2",
+  "version": "5.0.3",
   "license": "Apache-2.0",
   "author": "Triton One",
   "description": "Yellowstone gRPC Geyser Node.js Client",
@@ -39,10 +39,10 @@
     "@solana/rpc-types": "=5.1.0"
   },
   "optionalDependencies": {
-    "@triton-one/yellowstone-grpc-napi-linux-x64-gnu": "0.0.6",
-    "@triton-one/yellowstone-grpc-napi-linux-x64-musl": "0.0.6",
-    "@triton-one/yellowstone-grpc-napi-darwin-arm64": "0.0.6",
-    "@triton-one/yellowstone-grpc-napi-darwin-x64": "0.0.6"
+    "@triton-one/yellowstone-grpc-napi-linux-x64-gnu": "0.0.7",
+    "@triton-one/yellowstone-grpc-napi-linux-x64-musl": "0.0.7",
+    "@triton-one/yellowstone-grpc-napi-darwin-arm64": "0.0.7",
+    "@triton-one/yellowstone-grpc-napi-darwin-x64": "0.0.7"
   },
   "devDependencies": {
     "@babel/core": "^7.28.5",
