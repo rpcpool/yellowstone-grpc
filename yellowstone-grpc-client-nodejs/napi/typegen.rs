@@ -1,3 +1,47 @@
+//! Type generator for `src/js_types.rs`.
+//!
+//! - We open the protobuf-generated Rust files.
+//! - We read their type shapes (structs + oneofs).
+//! - We build matching JS-facing N-API structs named `Js*`.
+//! - We generate two converter functions for each type:
+//!   - protobuf -> JS
+//!   - JS -> protobuf
+//! - We write all generated code into `src/js_types.rs`.
+//! - We run `rustfmt` so the generated file is readable.
+//!
+//! Why this file exists:
+//! - Writing these mappings by hand is large and error-prone.
+//! - Proto files evolve over time, and generation keeps Rust/JS bindings in sync.
+//! - Conversion rules are centralized here (e.g. `u64` <-> string for JS safety).
+//!
+//! Type mapping rules used by this generator:
+//!
+//! Protobuf Rust -> JS wrapper:
+//! - `u64` and `i64` -> `String`
+//!   (JS numbers cannot safely represent all 64-bit integers).
+//! - `prost_types::Timestamp` -> `Date<'env>`
+//!   (`seconds`/`nanos` are converted into milliseconds).
+//! - `Vec<u8>` -> `BufferSlice<'env>`
+//!   (byte buffers are represented as N-API buffer slices).
+//! - `Option<T>` -> `Option<JsT>`
+//!   (recursive conversion of `T`).
+//! - `Vec<T>` -> `Vec<JsT>`
+//!   (recursive conversion of each element).
+//! - `HashMap<K, V>` -> `HashMap<K, JsV>`
+//!   (keys are kept as-is; values convert recursively).
+//! - protobuf `oneof` enum -> generated `Js...` object with one optional field per variant.
+//! - protobuf target struct in `TARGET_TYPES` -> generated `Js{StructName}`.
+//! - Any other type -> unchanged passthrough.
+//!
+//! JS wrapper -> Protobuf Rust:
+//! - `String` -> `u64`/`i64` via `parse()` (returns `InvalidArg` on parse failure).
+//! - `Date` -> `prost_types::Timestamp`
+//!   (milliseconds split back into `seconds` + `nanos`).
+//! - `BufferSlice` -> `Vec<u8>`.
+//! - `Option<T>`, `Vec<T>`, `HashMap<K, V>` convert recursively.
+//! - generated `Js...` wrappers for structs and oneofs call `from_js_to_protobuf_type()`.
+//! - Any other type -> unchanged passthrough.
+
 use quote::{format_ident, quote};
 use std::{
   collections::{HashMap, HashSet},
@@ -7,6 +51,17 @@ use std::{
 };
 use syn::{punctuated::Punctuated, Item, Path, Type};
 
+/// Finds the freshest `yellowstone-grpc-proto` Cargo build output directory.
+///
+/// Cargo builds dependencies in hashed directories under `target/*/build`.
+/// This function:
+/// 1. Starts from this crate's `OUT_DIR`.
+/// 2. Walks up to the shared build directory.
+/// 3. Finds candidate `yellowstone-grpc-proto-*` folders.
+/// 4. Keeps candidates containing required generated files.
+/// 5. Picks the most recently modified candidate.
+///
+/// Returns `None` (with `cargo:warning`) if nothing usable is found.
 fn resolve_proto_out_dir() -> Option<PathBuf> {
   let out_dir = std::env::var_os("OUT_DIR")
     .map(PathBuf::from)
@@ -94,6 +149,14 @@ fn resolve_proto_out_dir() -> Option<PathBuf> {
   selected
 }
 
+/// Generates `src/js_types.rs` from protobuf-generated Rust source.
+///
+/// High-level pipeline:
+/// 1. Locate protobuf-generated source files in Cargo's build output.
+/// 2. Build metadata for target structs and oneofs.
+/// 3. Determine which generated types need `'env`.
+/// 4. Emit Rust code for JS wrapper structs and conversion methods.
+/// 5. Write file header + generated code and format with `rustfmt`.
 pub fn generate_types() {
   const OUTPUT_FILE: &str = "src/js_types.rs";
   const GENERATED_FILE_HEADER: &str = concat!(
@@ -169,13 +232,24 @@ pub fn generate_types() {
     Some(path) => path,
     None => return,
   };
+
+  // Input files produced by `yellowstone-grpc-proto`.
+  // `geyser.rs` includes most RPC types, and confirmed block data lives
+  // in a separate generated file.
   let files = [
     input_root.join("geyser.rs"),
     input_root.join("solana.storage.confirmed_block.rs"),
   ];
 
   // --------------------------------------------------
-  // PASS 1 — detect lifetime requirements
+  // PASS 1 — detect lifetime requirements.
+  //
+  // Some generated JS types need an `Env` lifetime (`'env`) because they contain
+  // N-API handles like `BufferSlice<'env>` or `Date<'env>`.
+  //
+  // This pass computes that requirement graph:
+  // - direct requirement: type contains bytes/timestamp
+  // - transitive requirement: type references another type that requires `'env`
   // --------------------------------------------------
 
   let mut env_required_struct_names: HashSet<String> = HashSet::new();
@@ -224,7 +298,8 @@ pub fn generate_types() {
     }
   }
 
-  // Propagate transitively
+  // Keep propagating until stable, so nested containers and referenced structs
+  // all get the correct lifetime requirement.
   let mut changed = true;
   while changed {
     changed = false;
@@ -266,7 +341,13 @@ pub fn generate_types() {
   }
 
   // --------------------------------------------------
-  // PASS 2 — generate
+  // PASS 2 — generate code.
+  //
+  // We emit:
+  // - shared imports
+  // - oneof wrappers (as JS objects with one active field)
+  // - target struct wrappers
+  // - conversion methods in both directions
   // --------------------------------------------------
 
   let mut output = proc_macro2::TokenStream::new();
@@ -520,6 +601,7 @@ pub fn generate_types() {
     }
   }
 
+  // Convert tokens into source text, then normalize known path prefixes.
   let mut code = output.to_string();
 
   code = code.replace(
@@ -534,6 +616,7 @@ pub fn generate_types() {
   let generated_code = format!("{GENERATED_FILE_HEADER}{code}");
   fs::write(OUTPUT_FILE, generated_code).unwrap();
 
+  // Keep generated output readable and stable for diffs.
   match Command::new("rustfmt").arg(OUTPUT_FILE).status() {
     Ok(status) if !status.success() => {
       println!(
@@ -551,16 +634,23 @@ pub fn generate_types() {
   }
 }
 
+/// Metadata for a protobuf `oneof` enum we discovered in generated source.
 struct OneofEnumInfo {
-  rust_full_path_segments: Vec<String>,
+  /// Canonical Rust path, e.g. `subscribe_update::UpdateOneof`.
   rust_full_path_string: String,
+  /// Generated JS wrapper type identifier, e.g. `JsSubscribeUpdateUpdateOneof`.
   js_type_ident: syn::Ident,
+  /// Variants in declaration order.
   variant_infos: Vec<OneofEnumVariantInfo>,
 }
 
+/// Metadata for one variant inside a protobuf `oneof`.
 struct OneofEnumVariantInfo {
+  /// Rust enum variant name.
   variant_ident: syn::Ident,
+  /// JS field name for the variant in snake_case.
   variant_field_ident: syn::Ident,
+  /// Wrapped payload type for this variant.
   variant_type: Type,
 }
 
@@ -587,6 +677,7 @@ fn collect_oneof_enum_infos_from_items(
         }
       }
       Item::Enum(enum_item) => {
+        // Only process enums generated from `#[derive(Oneof)]`.
         if !is_prost_oneof_enum(&enum_item.attrs) {
           continue;
         }
@@ -627,7 +718,6 @@ fn collect_oneof_enum_infos_from_items(
         oneof_enum_info_by_rust_path.insert(
           rust_full_path_string.clone(),
           OneofEnumInfo {
-            rust_full_path_segments,
             rust_full_path_string,
             js_type_ident,
             variant_infos,
@@ -639,6 +729,7 @@ fn collect_oneof_enum_infos_from_items(
   }
 }
 
+/// Returns true when an enum has `#[derive(..., Oneof, ...)]`.
 fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
   for attribute in attributes {
     if attribute.path().is_ident("derive") {
@@ -658,6 +749,10 @@ fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
   false
 }
 
+/// Builds a JS type name from a Rust module/type path.
+///
+/// Example:
+/// `["subscribe_update", "UpdateOneof"]` -> `JsSubscribeUpdateUpdateOneof`.
 fn build_js_type_name_from_path_segments(path_segments: &[String]) -> String {
   let mut js_type_name_parts = Vec::new();
   for segment in path_segments {
@@ -666,6 +761,7 @@ fn build_js_type_name_from_path_segments(path_segments: &[String]) -> String {
   format!("Js{}", js_type_name_parts.join(""))
 }
 
+/// Converts either snake_case or PascalCase identifiers into PascalCase.
 fn convert_module_or_type_identifier_to_pascal_case(module_or_type_identifier: &str) -> String {
   if module_or_type_identifier.contains('_') {
     module_or_type_identifier
@@ -693,6 +789,7 @@ fn convert_module_or_type_identifier_to_pascal_case(module_or_type_identifier: &
   }
 }
 
+/// Converts a PascalCase enum variant name into snake_case field name.
 fn convert_pascal_case_identifier_to_snake_case(identifier: &str) -> String {
   let mut snake_case_identifier = String::new();
   for (char_index, identifier_char) in identifier.chars().enumerate() {
@@ -708,6 +805,7 @@ fn convert_pascal_case_identifier_to_snake_case(identifier: &str) -> String {
   snake_case_identifier
 }
 
+/// Normalizes paths by dropping leading `crate::`, `super::`, or `self::`.
 fn type_path_to_normalized_string(type_path: &syn::TypePath) -> String {
   let mut path_segment_strings: Vec<String> = type_path
     .path
@@ -726,6 +824,7 @@ fn type_path_to_normalized_string(type_path: &syn::TypePath) -> String {
   path_segment_strings.join("::")
 }
 
+/// Detects `prost_types::Timestamp`.
 fn is_prost_types_timestamp_type_path(type_path: &syn::TypePath) -> bool {
   let path_segment_strings: Vec<String> = type_path
     .path
@@ -743,6 +842,9 @@ fn is_prost_types_timestamp_type_path(type_path: &syn::TypePath) -> bool {
     && path_segment_strings[last_index - 1] == "prost_types"
 }
 
+/// Returns true when a type directly or transitively contains `Vec<u8>` or timestamp.
+///
+/// `Vec<u8>` and timestamps map to N-API handle-backed types, so these require `Env`.
 fn type_contains_vec_u8_recursively(type_to_inspect: &Type) -> bool {
   match type_to_inspect {
     Type::Path(type_path) => {
@@ -788,6 +890,7 @@ fn type_contains_vec_u8_recursively(type_to_inspect: &Type) -> bool {
   }
 }
 
+/// Returns true when a type references another target type that requires `Env`.
 fn type_references_env_required_target_recursively(
   type_to_inspect: &Type,
   env_required_struct_names: &HashSet<String>,
@@ -855,6 +958,22 @@ fn type_references_env_required_target_recursively(
   }
 }
 
+/// Maps protobuf Rust type -> generated JS type + conversion expression.
+///
+/// The returned tuple is:
+/// - JS type token stream
+/// - expression producing `napi::Result<that JS type>`
+///
+/// Rule order matters and is implemented exactly in this function:
+/// 1. `prost_types::Timestamp` -> `Date<'env>`
+/// 2. `u64`/`i64` -> `String`
+/// 3. `Vec<u8>` -> `BufferSlice<'env>`
+/// 4. Known protobuf oneof path -> generated `Js...` wrapper
+/// 5. `Option<T>` recursion
+/// 6. `Vec<T>` recursion
+/// 7. `HashMap<K, V>` recursion on value type
+/// 8. `TARGET_TYPES` struct -> generated `Js{Type}`
+/// 9. fallback passthrough (`T` -> `T`)
 fn map_type_to_js_type_and_conversion_result_expression(
   input_type: &Type,
   input_value_expression: proc_macro2::TokenStream,
@@ -1037,6 +1156,21 @@ fn map_type_to_js_type_and_conversion_result_expression(
   )
 }
 
+/// Maps generated JS value -> protobuf value conversion expression.
+///
+/// The returned expression always evaluates to `napi::Result<protobuf_type>`.
+///
+/// Rule order mirrors the forward direction:
+/// 1. `Date` -> `prost_types::Timestamp`
+/// 2. `String` -> `u64`
+/// 3. `String` -> `i64`
+/// 4. `BufferSlice` -> `Vec<u8>`
+/// 5. Known protobuf oneof path <- generated `Js...` wrapper
+/// 6. `Option<T>` recursion
+/// 7. `Vec<T>` recursion
+/// 8. `HashMap<K, V>` recursion on key and value
+/// 9. `TARGET_TYPES` struct <- generated `Js{Type}` wrapper
+/// 10. fallback passthrough (`T` -> `T`)
 fn map_js_value_to_protobuf_conversion_result_expression(
   protobuf_type: &Type,
   js_value_expression: proc_macro2::TokenStream,
