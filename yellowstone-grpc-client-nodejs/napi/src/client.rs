@@ -27,19 +27,22 @@
 // - Type erasure with `Any` allows us to store it without exposing generics to NAPI
 // - Downcast is safe because we control the type at creation time
 
+use napi::bindgen_prelude::PromiseRaw;
+use napi::Env;
 use napi_derive::napi;
 use std::sync::Arc;
 use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
 use crate::{
-  bindings::{
-    JsChannelOptions, JsGetBlockHeightRequest, JsGetBlockHeightResponse,
-    JsGetLatestBlockhashRequest, JsGetLatestBlockhashResponse, JsGetSlotRequest, JsGetSlotResponse,
-    JsGetVersionRequest, JsGetVersionResponse, JsIsBlockhashValidRequest,
-    JsIsBlockhashValidResponse, JsPingRequest, JsPongResponse, JsSubscribeReplayInfoRequest,
-    JsSubscribeReplayInfoResponse,
+  bindings::JsChannelOptions,
+  init_crypto_provider,
+  js_types::{
+    JsGetBlockHeightRequest, JsGetBlockHeightResponse, JsGetLatestBlockhashRequest,
+    JsGetLatestBlockhashResponse, JsGetSlotRequest, JsGetSlotResponse, JsGetVersionRequest,
+    JsGetVersionResponse, JsIsBlockhashValidRequest, JsIsBlockhashValidResponse, JsPingRequest,
+    JsPongResponse, JsSubscribeReplayInfoRequest, JsSubscribeReplayInfoResponse,
   },
-  init_crypto_provider, utils,
+  utils,
 };
 
 /// Internal module containing the generic client holder implementation.
@@ -88,6 +91,16 @@ pub struct GrpcClient {
 
 #[napi]
 impl GrpcClient {
+  // Implementation note:
+  // Every unary method follows the same pattern:
+  // 1. clone the type-erased holder
+  // 2. downcast to the concrete `ClientHolder<InterceptorXToken>`
+  // 3. execute the async gRPC call under a mutex guard
+  // 4. convert protobuf response to generated JS type in callback
+  //
+  // `spawn_future_with_callback` is used so `Env` never crosses the async
+  // boundary, which avoids `Send` issues with napi handles.
+
   /// Creates a new gRPC client and establishes a connection.
   ///
   /// This is an async factory method that:
@@ -124,169 +137,236 @@ impl GrpcClient {
   }
 
   #[napi]
-  pub async fn get_latest_blockhash(
+  pub fn get_latest_blockhash<'env>(
     &self,
+    environment: &'env Env,
     request: JsGetLatestBlockhashRequest,
-  ) -> napi::Result<JsGetLatestBlockhashResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
-
-    let mut grpc_client = holder.client.lock().await;
-
-    let commitment = request
+  ) -> napi::Result<PromiseRaw<'env, JsGetLatestBlockhashResponse>> {
+    let grpc_client_holder = self.holder.clone();
+    let commitment_level_option = request
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let pb_response = grpc_client
-      .get_latest_blockhash(commitment)
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    let js_response = utils::get_latest_blockhash_response_to_js(pb_response);
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-    Ok(js_response)
+        let protobuf_response = grpc_client_guard
+          .get_latest_blockhash(commitment_level_option)
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsGetLatestBlockhashResponse::from_protobuf_to_js_type(
+          callback_environment,
+          protobuf_response,
+        )
+      },
+    )
   }
 
   #[napi]
-  pub async fn ping(&self, request: JsPingRequest) -> napi::Result<JsPongResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
-
-    let mut grpc_client = holder.client.lock().await;
-
-    let pb_response = grpc_client
-      .ping(request.count)
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    let js_response = utils::pong_response_to_js(pb_response);
-
-    Ok(js_response)
-  }
-
-  #[napi]
-  pub async fn get_block_height(
+  pub fn ping<'env>(
     &self,
+    environment: &'env Env,
+    request: JsPingRequest,
+  ) -> napi::Result<PromiseRaw<'env, JsPongResponse>> {
+    let grpc_client_holder = self.holder.clone();
+    let ping_count = request.count;
+
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
+
+        let protobuf_response = grpc_client_guard
+          .ping(ping_count)
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsPongResponse::from_protobuf_to_js_type(callback_environment, protobuf_response)
+      },
+    )
+  }
+
+  #[napi]
+  pub fn get_block_height<'env>(
+    &self,
+    environment: &'env Env,
     request: JsGetBlockHeightRequest,
-  ) -> napi::Result<JsGetBlockHeightResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
-
-    let mut grpc_client = holder.client.lock().await;
-
-    let commitment = request
+  ) -> napi::Result<PromiseRaw<'env, JsGetBlockHeightResponse>> {
+    let grpc_client_holder = self.holder.clone();
+    let commitment_level_option = request
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let pb_response = grpc_client
-      .get_block_height(commitment)
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    let js_response = utils::get_block_height_response_to_js(pb_response);
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-    Ok(js_response)
+        let protobuf_response = grpc_client_guard
+          .get_block_height(commitment_level_option)
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsGetBlockHeightResponse::from_protobuf_to_js_type(callback_environment, protobuf_response)
+      },
+    )
   }
 
   #[napi]
-  pub async fn get_slot(&self, request: JsGetSlotRequest) -> napi::Result<JsGetSlotResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
-
-    let mut grpc_client = holder.client.lock().await;
-
-    let commitment = request
-      .commitment
-      .and_then(|c| CommitmentLevel::try_from(c).ok());
-
-    let pb_response = grpc_client
-      .get_slot(commitment)
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    let js_response = utils::get_slot_response_to_js(pb_response);
-
-    Ok(js_response)
-  }
-
-  #[napi]
-  pub async fn is_blockhash_valid(
+  pub fn get_slot<'env>(
     &self,
+    environment: &'env Env,
+    request: JsGetSlotRequest,
+  ) -> napi::Result<PromiseRaw<'env, JsGetSlotResponse>> {
+    let grpc_client_holder = self.holder.clone();
+    let commitment_level_option = request
+      .commitment
+      .and_then(|c| CommitmentLevel::try_from(c).ok());
+
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
+
+        let protobuf_response = grpc_client_guard
+          .get_slot(commitment_level_option)
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsGetSlotResponse::from_protobuf_to_js_type(callback_environment, protobuf_response)
+      },
+    )
+  }
+
+  #[napi]
+  pub fn is_blockhash_valid<'env>(
+    &self,
+    environment: &'env Env,
     request: JsIsBlockhashValidRequest,
-  ) -> napi::Result<JsIsBlockhashValidResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
-
-    let mut grpc_client = holder.client.lock().await;
-
-    let commitment = request
+  ) -> napi::Result<PromiseRaw<'env, JsIsBlockhashValidResponse>> {
+    let grpc_client_holder = self.holder.clone();
+    let blockhash_value = request.blockhash;
+    let commitment_level_option = request
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let pb_response = grpc_client
-      .is_blockhash_valid(request.blockhash, commitment)
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    let js_response = utils::is_blockhash_valid_response_to_js(pb_response);
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-    Ok(js_response)
+        let protobuf_response = grpc_client_guard
+          .is_blockhash_valid(blockhash_value, commitment_level_option)
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsIsBlockhashValidResponse::from_protobuf_to_js_type(
+          callback_environment,
+          protobuf_response,
+        )
+      },
+    )
   }
 
   #[napi]
-  pub async fn get_version(
+  pub fn get_version<'env>(
     &self,
-    _request: JsGetVersionRequest,
-  ) -> napi::Result<JsGetVersionResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+    environment: &'env Env,
+    _get_version_request: JsGetVersionRequest,
+  ) -> napi::Result<PromiseRaw<'env, JsGetVersionResponse>> {
+    let grpc_client_holder = self.holder.clone();
 
-    let mut grpc_client = holder.client.lock().await;
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    let pb_response = grpc_client
-      .get_version()
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-    let js_response = utils::get_version_response_to_js(pb_response);
+        let protobuf_response = grpc_client_guard
+          .get_version()
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
 
-    Ok(js_response)
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsGetVersionResponse::from_protobuf_to_js_type(callback_environment, protobuf_response)
+      },
+    )
   }
 
   #[napi]
-  pub async fn subscribe_replay_info(
+  pub fn subscribe_replay_info<'env>(
     &self,
-    _request: JsSubscribeReplayInfoRequest,
-  ) -> napi::Result<JsSubscribeReplayInfoResponse> {
-    let holder = self
-      .holder
-      .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+    environment: &'env Env,
+    _subscribe_replay_info_request: JsSubscribeReplayInfoRequest,
+  ) -> napi::Result<PromiseRaw<'env, JsSubscribeReplayInfoResponse>> {
+    let grpc_client_holder = self.holder.clone();
 
-    let mut grpc_client = holder.client.lock().await;
+    environment.spawn_future_with_callback(
+      async move {
+        let grpc_client_holder = grpc_client_holder
+          .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    let pb_response = grpc_client
-      .subscribe_replay_info()
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-    let js_response = utils::subscribe_replay_info_response_to_js(pb_response);
+        let protobuf_response = grpc_client_guard
+          .subscribe_replay_info()
+          .await
+          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
 
-    Ok(js_response)
+        Ok(protobuf_response)
+      },
+      move |callback_environment, protobuf_response| {
+        JsSubscribeReplayInfoResponse::from_protobuf_to_js_type(
+          callback_environment,
+          protobuf_response,
+        )
+      },
+    )
   }
 
+  /// Creates a subscription stream bound to this client connection.
+  ///
+  /// The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
+  /// which handles Node stream lifecycle and protobuf-shape normalization.
+  //
   // subscribe should only be available via the `GrpcClient`
   #[allow(private_interfaces)]
   #[napi]
