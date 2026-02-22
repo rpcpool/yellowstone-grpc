@@ -24,6 +24,7 @@ export declare class DuplexStream {
    * Accept a JS request object, convert to protobuf, then enqueue for the
    * worker to forward to the gRPC request sink.
    */
+  close(): void
   write(request: JsSubscribeRequest): void
 }
 
