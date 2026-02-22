@@ -323,6 +323,15 @@ export class ClientDuplexStream extends Duplex {
     this._isDestroying = true;
     this._isClosed = true;
     this._terminalErrorSeen = true;
+
+    // Explicitly stop the native worker so it does not outlive JS stream state.
+    try {
+      const nativeStream = this._napiDuplexStream as { close?: () => void };
+      if (typeof nativeStream.close === "function") {
+        nativeStream.close();
+      }
+    } catch {}
+
     callback(error);
   }
 

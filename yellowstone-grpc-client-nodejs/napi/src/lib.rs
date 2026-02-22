@@ -17,15 +17,20 @@ mod utils;
 use futures_util::{SinkExt, StreamExt};
 use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
-use std::sync::Arc;
-use std::sync::Once;
-use tokio::{
-  sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-  sync::Mutex,
+use std::sync::{
+  atomic::{AtomicBool, Ordering},
+  Arc, Mutex as StdMutex, Once,
+};
+use tokio::sync::{
+  mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+  oneshot, Mutex,
 };
 use yellowstone_grpc_proto::prelude::*;
 
-use crate::{client::GrpcClient, js_types::{JsSubscribeRequest, JsSubscribeUpdate}};
+use crate::{
+  client::GrpcClient,
+  js_types::{JsSubscribeRequest, JsSubscribeUpdate},
+};
 
 pub mod js_types;
 #[cfg(test)]
@@ -53,7 +58,11 @@ struct DuplexStream {
   /// Read side consumed by `read()`. Each message is delivered exactly once.
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
   /// Write side used by `write()`. Requests are forwarded to gRPC task.
-  writable: UnboundedSender<SubscribeRequest>,
+  writable: Arc<StdMutex<Option<UnboundedSender<SubscribeRequest>>>>,
+  /// One-shot shutdown signal for the worker spawned by `subscribe()`.
+  shutdown_tx: Arc<StdMutex<Option<oneshot::Sender<()>>>>,
+  /// Set once JS has started destroying this stream.
+  is_closing: Arc<AtomicBool>,
 }
 
 #[napi]
@@ -65,6 +74,11 @@ impl DuplexStream {
     // TODO : Fine tune unbounded channels.
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+    let shutdown_tx = Arc::new(StdMutex::new(Some(shutdown_tx)));
+    let is_closing = Arc::new(AtomicBool::new(false));
+    let is_closing_worker = is_closing.clone();
 
     // Spawn one worker per `subscribe()` call. The worker owns both sides of
     // the gRPC bidirectional stream and forwards data between JS and gRPC.
@@ -85,11 +99,19 @@ impl DuplexStream {
 
       loop {
         tokio::select! {
+          // Explicit shutdown from JS destroy/close path.
+          _ = &mut shutdown_rx => {
+            break;
+          },
+
           // 1. SubscribeRequest is received from self.write().
           // 2. SubscribeRequest is propagated to Geyser client's sender.
           req_option = writable_rx.recv() => {
             if let Some(request) = req_option {
               if let Err(e) = stream_tx.send(request).await {
+                if is_closing_worker.load(Ordering::Relaxed) {
+                  break;
+                }
                 return Err(napi::Error::from_reason(e.to_string()))
               }
             } else {
@@ -101,19 +123,23 @@ impl DuplexStream {
 
           // 1. SubscribeUpdate is received from Geyser client's receiver.
           // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
-          Some(update_result) = stream_rx.next() => {
-            let update = match update_result {
-              Ok(u) => u,
-              Err(e) => return Err(napi::Error::from_reason(e.to_string()))
-            };
-
-            if let Err(e) = readable_tx.send(update) {
-              return Err(napi::Error::from_reason(e.to_string()))
+          maybe_update_result = stream_rx.next() => {
+            match maybe_update_result {
+              Some(Ok(update)) => {
+                // JS reader side disappeared; no point continuing the worker.
+                if readable_tx.send(update).is_err() {
+                  break;
+                }
+              }
+              Some(Err(e)) => {
+                if is_closing_worker.load(Ordering::Relaxed) {
+                  break;
+                }
+                return Err(napi::Error::from_reason(e.to_string()))
+              }
+              None => break,
             }
           }
-
-          // Upstream stream ended and no more outbound requests exist.
-          else => { break; }
         }
       }
 
@@ -122,7 +148,9 @@ impl DuplexStream {
 
     Ok(Self {
       readable: Arc::new(Mutex::new(readable_rx)),
-      writable: writable_tx,
+      writable,
+      shutdown_tx,
+      is_closing,
     })
   }
 
@@ -131,10 +159,7 @@ impl DuplexStream {
   /// Retrieve one `SubscribeUpdate` from the worker and convert it to
   /// the generated N-API JS representation (`JsSubscribeUpdate`).
   #[napi]
-  pub fn read<'env>(
-    &self,
-    env: &'env Env,
-  ) -> Result<PromiseRaw<'env, JsSubscribeUpdate<'env>>> {
+  pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, JsSubscribeUpdate<'env>>> {
     let readable = self.readable.clone();
 
     env.spawn_future_with_callback(
@@ -157,9 +182,46 @@ impl DuplexStream {
   /// Accept a JS request object, convert to protobuf, then enqueue for the
   /// worker to forward to the gRPC request sink.
   #[napi]
+  pub fn close(&self) -> Result<()> {
+    self.is_closing.store(true, Ordering::Relaxed);
+
+    let mut shutdown_guard = self
+      .shutdown_tx
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire shutdown lock"))?;
+    if let Some(shutdown_tx) = shutdown_guard.take() {
+      let _ = shutdown_tx.send(());
+    }
+    drop(shutdown_guard);
+
+    let mut writable_guard = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    *writable_guard = None;
+
+    Ok(())
+  }
+
+  #[napi]
   pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
+    if self.is_closing.load(Ordering::Relaxed) {
+      return Err(napi::Error::from_reason(
+        "Cannot write to a closing subscription stream",
+      ));
+    }
+
     let protobuf_subscribe_request: SubscribeRequest = request.from_js_to_protobuf_type()?;
-    if let Err(e) = self.writable.send(protobuf_subscribe_request) {
+
+    let writable = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?
+      .as_ref()
+      .cloned()
+      .ok_or_else(|| napi::Error::from_reason("Cannot write to a closed subscription stream"))?;
+
+    if let Err(e) = writable.send(protobuf_subscribe_request) {
       return Err(napi::Error::from_reason(e.to_string()));
     }
     Ok(())
