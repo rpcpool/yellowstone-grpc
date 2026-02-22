@@ -228,10 +228,7 @@ impl GrpcClient {
         Ok(protobuf_response)
       },
       move |callback_environment, protobuf_response| {
-        JsGetBlockHeightResponse::from_protobuf_to_js_type(
-          callback_environment,
-          protobuf_response,
-        )
+        JsGetBlockHeightResponse::from_protobuf_to_js_type(callback_environment, protobuf_response)
       },
     )
   }

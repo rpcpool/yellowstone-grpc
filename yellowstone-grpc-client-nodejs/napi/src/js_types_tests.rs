@@ -2,8 +2,7 @@ use crate::js_types::*;
 use napi::bindgen_prelude::Env;
 use std::collections::HashMap;
 use yellowstone_grpc_proto::geyser::{
-  subscribe_request_filter_accounts_filter,
-  subscribe_request_filter_accounts_filter_lamports,
+  subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
   subscribe_request_filter_accounts_filter_memcmp, subscribe_update,
 };
 use yellowstone_grpc_proto::prelude::*;
@@ -47,7 +46,10 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   assert_conversion_signatures_for_env_type!(JsConfirmedTransaction, ConfirmedTransaction);
   assert_conversion_signatures_for_env_type!(JsTransaction, Transaction);
   assert_conversion_signatures_for_env_type!(JsMessage, Message);
-  assert_conversion_signatures_for_env_type!(JsMessageAddressTableLookup, MessageAddressTableLookup);
+  assert_conversion_signatures_for_env_type!(
+    JsMessageAddressTableLookup,
+    MessageAddressTableLookup
+  );
   assert_conversion_signatures_for_env_type!(JsTransactionStatusMeta, TransactionStatusMeta);
   assert_conversion_signatures_for_env_type!(JsTransactionError, TransactionError);
   assert_conversion_signatures_for_env_type!(JsInnerInstructions, InnerInstructions);
@@ -73,7 +75,10 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     JsSubscribeUpdateAccountInfo,
     SubscribeUpdateAccountInfo
   );
-  assert_conversion_signatures_for_env_type!(JsSubscribeUpdateTransaction, SubscribeUpdateTransaction);
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateTransaction,
+    SubscribeUpdateTransaction
+  );
   assert_conversion_signatures_for_env_type!(
     JsSubscribeUpdateTransactionInfo,
     SubscribeUpdateTransactionInfo
@@ -101,24 +106,36 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     JsSubscribeRequestFilterAccountsFilterLamports,
     SubscribeRequestFilterAccountsFilterLamports
   );
-  assert_conversion_signatures_for_non_env_type!(JsSubscribeRequestFilterSlots, SubscribeRequestFilterSlots);
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeRequestFilterSlots,
+    SubscribeRequestFilterSlots
+  );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterTransactions,
     SubscribeRequestFilterTransactions
   );
-  assert_conversion_signatures_for_non_env_type!(JsSubscribeRequestFilterBlocks, SubscribeRequestFilterBlocks);
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeRequestFilterBlocks,
+    SubscribeRequestFilterBlocks
+  );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterBlocksMeta,
     SubscribeRequestFilterBlocksMeta
   );
-  assert_conversion_signatures_for_non_env_type!(JsSubscribeRequestFilterEntry, SubscribeRequestFilterEntry);
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeRequestFilterEntry,
+    SubscribeRequestFilterEntry
+  );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestAccountsDataSlice,
     SubscribeRequestAccountsDataSlice
   );
   assert_conversion_signatures_for_non_env_type!(JsSubscribeRequestPing, SubscribeRequestPing);
   assert_conversion_signatures_for_non_env_type!(JsSubscribeUpdateSlot, SubscribeUpdateSlot);
-  assert_conversion_signatures_for_non_env_type!(JsSubscribeUpdateBlockMeta, SubscribeUpdateBlockMeta);
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeUpdateBlockMeta,
+    SubscribeUpdateBlockMeta
+  );
   assert_conversion_signatures_for_non_env_type!(JsSubscribeUpdatePing, SubscribeUpdatePing);
   assert_conversion_signatures_for_non_env_type!(JsSubscribeUpdatePong, SubscribeUpdatePong);
   assert_conversion_signatures_for_non_env_type!(
@@ -145,8 +162,14 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   assert_conversion_signatures_for_non_env_type!(JsGetSlotResponse, GetSlotResponse);
   assert_conversion_signatures_for_non_env_type!(JsGetVersionRequest, GetVersionRequest);
   assert_conversion_signatures_for_non_env_type!(JsGetVersionResponse, GetVersionResponse);
-  assert_conversion_signatures_for_non_env_type!(JsIsBlockhashValidRequest, IsBlockhashValidRequest);
-  assert_conversion_signatures_for_non_env_type!(JsIsBlockhashValidResponse, IsBlockhashValidResponse);
+  assert_conversion_signatures_for_non_env_type!(
+    JsIsBlockhashValidRequest,
+    IsBlockhashValidRequest
+  );
+  assert_conversion_signatures_for_non_env_type!(
+    JsIsBlockhashValidResponse,
+    IsBlockhashValidResponse
+  );
 }
 
 #[test]
@@ -168,7 +191,9 @@ fn js_subscribe_request_accounts_data_slice_rejects_invalid_u64_strings() {
     offset: "not_a_number".to_string(),
     length: "20".to_string(),
   };
-  let conversion_error = js_accounts_data_slice_value.from_js_to_protobuf_type().unwrap_err();
+  let conversion_error = js_accounts_data_slice_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid u64 value"));
 }
@@ -184,7 +209,10 @@ fn js_get_latest_blockhash_response_parses_u64_strings_for_numeric_fields() {
     .from_js_to_protobuf_type()
     .unwrap();
   assert_eq!(protobuf_get_latest_blockhash_response_value.slot, 101);
-  assert_eq!(protobuf_get_latest_blockhash_response_value.last_valid_block_height, 202);
+  assert_eq!(
+    protobuf_get_latest_blockhash_response_value.last_valid_block_height,
+    202
+  );
 }
 
 #[test]
@@ -192,7 +220,9 @@ fn js_unix_timestamp_rejects_invalid_i64_string() {
   let js_unix_timestamp_value = JsUnixTimestamp {
     timestamp: "not_i64".to_string(),
   };
-  let conversion_error = js_unix_timestamp_value.from_js_to_protobuf_type().unwrap_err();
+  let conversion_error = js_unix_timestamp_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid i64 value"));
 }
@@ -235,7 +265,9 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_multiple_var
     lt: None,
     gt: None,
   };
-  let conversion_error = js_lamports_cmp_value.from_js_to_protobuf_type().unwrap_err();
+  let conversion_error = js_lamports_cmp_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
 }
@@ -248,7 +280,9 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_missing_vari
     lt: None,
     gt: None,
   };
-  let conversion_error = js_lamports_cmp_value.from_js_to_protobuf_type().unwrap_err();
+  let conversion_error = js_lamports_cmp_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("No variant set"));
 }
@@ -331,7 +365,9 @@ fn js_subscribe_update_update_oneof_rejects_multiple_variants() {
     block_meta: None,
     entry: None,
   };
-  let conversion_error = js_update_oneof_value.from_js_to_protobuf_type().unwrap_err();
+  let conversion_error = js_update_oneof_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
 }
@@ -367,9 +403,13 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
     from_slot: Some("42".to_string()),
   };
 
-  let protobuf_subscribe_request_value = js_subscribe_request_value.from_js_to_protobuf_type().unwrap();
+  let protobuf_subscribe_request_value = js_subscribe_request_value
+    .from_js_to_protobuf_type()
+    .unwrap();
   assert_eq!(protobuf_subscribe_request_value.accounts.len(), 1);
-  assert!(protobuf_subscribe_request_value.accounts.contains_key("primary"));
+  assert!(protobuf_subscribe_request_value
+    .accounts
+    .contains_key("primary"));
   assert_eq!(
     protobuf_subscribe_request_value
       .accounts
@@ -380,7 +420,10 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
     1
   );
   assert_eq!(protobuf_subscribe_request_value.commitment, Some(1));
-  assert_eq!(protobuf_subscribe_request_value.accounts_data_slice.len(), 1);
+  assert_eq!(
+    protobuf_subscribe_request_value.accounts_data_slice.len(),
+    1
+  );
   assert_eq!(protobuf_subscribe_request_value.ping.unwrap().id, 7);
   assert_eq!(protobuf_subscribe_request_value.from_slot, Some(42));
 }
@@ -425,30 +468,40 @@ fn js_confirmed_block_from_js_to_protobuf_type_handles_empty_vectors() {
 
 #[test]
 fn js_transaction_status_meta_parses_u64_vector_fields() {
-  let js_transaction_status_meta_value: JsTransactionStatusMeta<'static> = JsTransactionStatusMeta {
-    err: None,
-    fee: "10".to_string(),
-    pre_balances: vec!["1".to_string(), "2".to_string()],
-    post_balances: vec!["3".to_string()],
-    inner_instructions: Vec::new(),
-    inner_instructions_none: false,
-    log_messages: vec!["log".to_string()],
-    log_messages_none: false,
-    pre_token_balances: Vec::new(),
-    post_token_balances: Vec::new(),
-    rewards: Vec::new(),
-    loaded_writable_addresses: Vec::new(),
-    loaded_readonly_addresses: Vec::new(),
-    return_data: None,
-    return_data_none: true,
-    compute_units_consumed: Some("5".to_string()),
-    cost_units: None,
-  };
+  let js_transaction_status_meta_value: JsTransactionStatusMeta<'static> =
+    JsTransactionStatusMeta {
+      err: None,
+      fee: "10".to_string(),
+      pre_balances: vec!["1".to_string(), "2".to_string()],
+      post_balances: vec!["3".to_string()],
+      inner_instructions: Vec::new(),
+      inner_instructions_none: false,
+      log_messages: vec!["log".to_string()],
+      log_messages_none: false,
+      pre_token_balances: Vec::new(),
+      post_token_balances: Vec::new(),
+      rewards: Vec::new(),
+      loaded_writable_addresses: Vec::new(),
+      loaded_readonly_addresses: Vec::new(),
+      return_data: None,
+      return_data_none: true,
+      compute_units_consumed: Some("5".to_string()),
+      cost_units: None,
+    };
   let protobuf_transaction_status_meta_value = js_transaction_status_meta_value
     .from_js_to_protobuf_type()
     .unwrap();
   assert_eq!(protobuf_transaction_status_meta_value.fee, 10);
-  assert_eq!(protobuf_transaction_status_meta_value.pre_balances, vec![1, 2]);
-  assert_eq!(protobuf_transaction_status_meta_value.post_balances, vec![3]);
-  assert_eq!(protobuf_transaction_status_meta_value.compute_units_consumed, Some(5));
+  assert_eq!(
+    protobuf_transaction_status_meta_value.pre_balances,
+    vec![1, 2]
+  );
+  assert_eq!(
+    protobuf_transaction_status_meta_value.post_balances,
+    vec![3]
+  );
+  assert_eq!(
+    protobuf_transaction_status_meta_value.compute_units_consumed,
+    Some(5)
+  );
 }

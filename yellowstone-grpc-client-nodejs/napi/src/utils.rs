@@ -20,12 +20,11 @@ pub async fn get_client_builder(
   };
 
   if endpoint.starts_with("https://") {
-    grpc_client_builder = match grpc_client_builder
-      .tls_config(ClientTlsConfig::new().with_enabled_roots())
-    {
-      Ok(builder) => builder,
-      Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
-    };
+    grpc_client_builder =
+      match grpc_client_builder.tls_config(ClientTlsConfig::new().with_enabled_roots()) {
+        Ok(builder) => builder,
+        Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
+      };
   }
 
   let default_channel_options = JsChannelOptions::default();
@@ -67,8 +66,8 @@ pub async fn get_client_builder(
 
   if let Some(channel_options_override) = channel_options {
     if let Some(grpc_connect_timeout_millis) = channel_options_override.grpc_connect_timeout {
-      grpc_client_builder =
-        grpc_client_builder.connect_timeout(Duration::from_millis(grpc_connect_timeout_millis as u64));
+      grpc_client_builder = grpc_client_builder
+        .connect_timeout(Duration::from_millis(grpc_connect_timeout_millis as u64));
     }
     if let Some(grpc_buffer_size) = channel_options_override.grpc_buffer_size {
       grpc_client_builder = grpc_client_builder.buffer_size(grpc_buffer_size as usize);
@@ -76,9 +75,9 @@ pub async fn get_client_builder(
     if let Some(grpc_http2_keep_alive_interval_millis) =
       channel_options_override.grpc_http2_keep_alive_interval
     {
-      grpc_client_builder = grpc_client_builder.http2_keep_alive_interval(
-        Duration::from_millis(grpc_http2_keep_alive_interval_millis as u64),
-      );
+      grpc_client_builder = grpc_client_builder.http2_keep_alive_interval(Duration::from_millis(
+        grpc_http2_keep_alive_interval_millis as u64,
+      ));
     }
     if let Some(grpc_initial_connection_window_size) =
       channel_options_override.grpc_initial_connection_window_size
@@ -93,12 +92,13 @@ pub async fn get_client_builder(
         grpc_client_builder.initial_stream_window_size(grpc_initial_stream_window_size);
     }
     if let Some(grpc_keep_alive_timeout_millis) = channel_options_override.grpc_keep_alive_timeout {
-      grpc_client_builder =
-        grpc_client_builder.keep_alive_timeout(Duration::from_millis(grpc_keep_alive_timeout_millis as u64));
+      grpc_client_builder = grpc_client_builder
+        .keep_alive_timeout(Duration::from_millis(grpc_keep_alive_timeout_millis as u64));
     }
     if let Some(grpc_tcp_keepalive_millis) = channel_options_override.grpc_tcp_keepalive {
-      grpc_client_builder =
-        grpc_client_builder.tcp_keepalive(Some(Duration::from_millis(grpc_tcp_keepalive_millis as u64)));
+      grpc_client_builder = grpc_client_builder.tcp_keepalive(Some(Duration::from_millis(
+        grpc_tcp_keepalive_millis as u64,
+      )));
     }
     if let Some(grpc_timeout_millis) = channel_options_override.grpc_timeout {
       grpc_client_builder =
@@ -116,7 +116,8 @@ pub async fn get_client_builder(
       grpc_client_builder =
         grpc_client_builder.max_encoding_message_size(grpc_max_encoding_message_size as usize);
     }
-    if let Some(grpc_set_x_request_snapshot) = channel_options_override.grpc_set_x_request_snapshot {
+    if let Some(grpc_set_x_request_snapshot) = channel_options_override.grpc_set_x_request_snapshot
+    {
       grpc_client_builder = grpc_client_builder.set_x_request_snapshot(grpc_set_x_request_snapshot);
     }
     if let Some(grpc_http2_adaptive_window) = channel_options_override.grpc_http2_adaptive_window {
