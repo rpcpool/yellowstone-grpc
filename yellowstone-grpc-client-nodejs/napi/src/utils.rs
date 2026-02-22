@@ -9,7 +9,9 @@ pub async fn get_client_builder(
   x_token: Option<String>,
   channel_options: Option<JsChannelOptions>,
 ) -> Result<GeyserGrpcBuilder> {
-  let mut grpc_client_builder = match GeyserGrpcBuilder::from_shared(endpoint.clone()) {
+  let use_tls = endpoint.starts_with("https://");
+
+  let mut grpc_client_builder = match GeyserGrpcBuilder::from_shared(endpoint) {
     Ok(builder) => builder,
     Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
   };
@@ -19,7 +21,7 @@ pub async fn get_client_builder(
     Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
   };
 
-  if endpoint.starts_with("https://") {
+  if use_tls {
     grpc_client_builder =
       match grpc_client_builder.tls_config(ClientTlsConfig::new().with_enabled_roots()) {
         Ok(builder) => builder,
