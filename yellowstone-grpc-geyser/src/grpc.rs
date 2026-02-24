@@ -475,7 +475,7 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
-    config_max_subscription_limit: AtomicUsize,
+    config_max_subscription_limit: usize,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -486,6 +486,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    subscription_tracker: Arc<Mutex<HashMap<String, AtomicUsize>>>,
 }
 
 impl GrpcService {
@@ -585,7 +586,7 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
-            config_max_subscription_limit: AtomicUsize::new(config.max_subscription_limit),
+            config_max_subscription_limit: config.max_subscription_limit,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -596,6 +597,7 @@ impl GrpcService {
             filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            subscription_tracker: Arc::new(Mutex::new(HashMap::new())),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -1301,6 +1303,26 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        let subscriber_id = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        // If over max sub limit, kick out attempt.
+        if let Some(id) = subscriber_id.clone() {
+            let subscription_tracker_ref = self.subscription_tracker.clone();
+            let mut tracker = subscription_tracker_ref.lock().await;
+            let count = tracker.entry(id).or_insert_with(|| AtomicUsize::new(0));
+            count.fetch_add(1, Ordering::SeqCst);
+
+            if count.load(Ordering::SeqCst) > self.config_max_subscription_limit {
+                return Err(Status::resource_exhausted(
+                    "max subscription limit exceeded",
+                ));
+            }
+        } // Lock dropped here.
+
         incr_grpc_method_call_count("subscribe");
         let maybe_remote_peer_sk_addr = request
             .extensions()
@@ -1371,12 +1393,6 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
-
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
