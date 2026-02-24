@@ -176,7 +176,7 @@ pub struct ConfigGrpc {
     pub unary_concurrency_limit: usize,
     /// Configurable limit amount of opened subscriptions allowed per GrpcServer (Geyser)
     #[serde(
-        default = "ConfigGrpc::max_subscription_limit",
+        default = "ConfigGrpc::max_subscription_limit_default",
         deserialize_with = "deserialize_int_str"
     )]
     pub max_subscription_limit: usize,
