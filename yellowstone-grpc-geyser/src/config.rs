@@ -247,7 +247,7 @@ impl ConfigGrpc {
     }
 
     const fn max_subscription_limit_default() -> usize {
-        10
+        100
     }
 
     const fn default_filter_name_size_limit() -> usize {
