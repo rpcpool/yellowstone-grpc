@@ -470,6 +470,8 @@ impl Drop for ClientSession {
     }
 }
 
+type SubscriptionTracker = Arc<Mutex<HashMap<String, AtomicUsize>>>;
+
 #[derive(Debug)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
@@ -486,7 +488,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
-    subscription_tracker: Arc<Mutex<HashMap<String, AtomicUsize>>>,
+    subscription_tracker: SubscriptionTracker,
 }
 
 impl GrpcService {
@@ -1012,7 +1014,24 @@ impl GrpcService {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        subscription_tracker: SubscriptionTracker,
     ) {
+        if let Some(id) = subscriber_id {
+            let _subscription_tracker_drop_guard = OnDrop::new(|| {
+                task_tracker.spawn(async move {
+                    let tracker = subscription_tracker.lock().await;
+                    // Unwrap ok. It must exist due to previous check.
+                    // If not, something's very wrong and we should know.
+                    let count = tracker.get(&id).unwrap();
+                    count.fetch_sub(1, Ordering::SeqCst);
+
+                    if count.load(Ordering::SeqCst) <= 0 {
+                        tracker.remove(&id)
+                    }
+                });
+            });
+        }
+
         let mut session = ClientSession::new(
             id,
             subscriber_id,
@@ -1466,6 +1485,7 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
+            self.subscription_tracker.clone(),
         ));
 
         Ok(Response::new(stream_rx))
