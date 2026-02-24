@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 12.0.0
-    "yellowstone-grpc-client", # 12.0.0
-    "yellowstone-grpc-geyser", # 12.0.0
-    "yellowstone-grpc-proto", # 12.0.0
+    "examples/rust", # 12.1.0
+    "yellowstone-grpc-client", # 12.1.0
+    "yellowstone-grpc-geyser", # 12.1.0
+    "yellowstone-grpc-proto", # 12.1.0
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
@@ -93,9 +93,9 @@ solana-transaction-error = "3.0.0"
 spl-token-2022-interface = "2.0.0"
 
 # Yellowstone
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.0.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.0.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.1.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.1.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.1.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

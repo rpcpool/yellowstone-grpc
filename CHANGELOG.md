@@ -10,16 +10,26 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-### Fixes
-- geyser: replace Arc::get_mut with OnceLock for pre-encoding to support shared ownership, added metrics for pre-encode hit/miss ([#683](https://github.com/rpcpool/yellowstone-grpc/pull/683))
+## 2026-02-24
 
-- geyser: replace `OnDrop` with `ClientSession` RAII guard in `client_loop`, fixing missed cleanup on early-exit paths ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+- yellowstone-grpc-client-12.1.0
+- yellowstone-grpc-client-simple-12.1.0
+- yellowstone-grpc-geyser-12.1.0
+- yellowstone-grpc-proto-12.1.0
+
+### Fixes
+
+- geyser: replace `OnDrop` with `ClientSession` RAII guard in `client_loop`, fixing missed cleanup on early-exit paths ([#687](https://github.com/rpcpool/yellowstone-grpc/pull/687)), ([#690](https://github.com/rpcpool/yellowstone-grpc/pull/690))
+- geyser: fix ping and traffic metric ([#698](https://github.com/rpcpool/yellowstone-grpc/pull/698))
+- geyser: revert encoding optimization commits ([#696](https://github.com/rpcpool/yellowstone-grpc/pull/696))
 
 ### Features
 
-- proto: add `SubscribeDeshred` RPC with dedicated `SubscribeUpdateDeshred` response type, deshred transaction messages with loaded addresses (ALT) ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
-- client: add `subscribe_deshred`, `subscribe_deshred_with_request`, `subscribe_deshred_once` methods returning `SubscribeUpdateDeshred` stream ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
-- geyser: add `SubscribeDeshred` stub (returns `unimplemented` on non-triton-ext servers) ([#TBD](https://github.com/rpcpool/yellowstone-grpc/pull/TBD))
+- proto: add `SubscribeDeshred` RPC with dedicated `SubscribeUpdateDeshred` response type, deshred transaction messages with loaded addresses (ALT) ([#684](https://github.com/rpcpool/yellowstone-grpc/pull/684))
+- client: add `subscribe_deshred`, `subscribe_deshred_with_request`, `subscribe_deshred_once` methods returning `SubscribeUpdateDeshred` stream ([#684](https://github.com/rpcpool/yellowstone-grpc/pull/684))
+- geyser: add `SubscribeDeshred` stub (returns `unimplemented` on non-triton-ext servers) ([#684](https://github.com/rpcpool/yellowstone-grpc/pull/684))
+- geyser: spy incoming connections ([#697](https://github.com/rpcpool/yellowstone-grpc/pull/697))
+- geyser: implemented metered traffic tracking ([#699](https://github.com/rpcpool/yellowstone-grpc/pull/699))
 
 ### Breaking
 
