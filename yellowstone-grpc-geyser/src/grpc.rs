@@ -3,8 +3,8 @@ use {
         config::ConfigGrpc,
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_kick_count_inc, DebugClientMessage,
+            self, grpc_subscription_kick_count_inc, incr_grpc_method_call_count,
+            set_subscriber_queue_size, DebugClientMessage,
         },
         plugin::{
             filter::{
@@ -1341,7 +1341,7 @@ impl Geyser for GrpcService {
                 // Kick if not dryrun, else log.
                 if self.config_max_subscription_limit_dryrun {
                     // Log.
-                    subscription_kick_count_inc(&id);
+                    grpc_subscription_kick_count_inc(&id);
                 } else {
                     // Kick.
                     return Err(Status::resource_exhausted(

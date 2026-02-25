@@ -151,6 +151,13 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_KICK_C: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_kick_count",
+            "Total number of calls to GetVersion gRPC method"
+        ),
+        &["method"]
+    ).unwrap();
 }
 
 pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
@@ -511,7 +518,7 @@ pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
 }
 
-pub fn subscription_kick_count_inc(subscriber_id: &str) {
+pub fn grpc_subscription_kick_count_inc(subscriber_id: &str) {
     // Mock for now.
     info!("incrementing kick count for {subscriber_id}");
 }
