@@ -1221,10 +1221,11 @@ impl GrpcService {
         if let Some(subscriber_id) = subscriber_id {
             let mut tracker = subscription_tracker.lock().await;
             if let Some(count) = tracker.get_mut(&subscriber_id) {
-                info!("decrementing subscription tracker count for {subscriber_id:?}");
+                info!("decrementing subscription tracker count ({count}) for {subscriber_id:?}");
                 *count -= 1;
                 info!("new count for {subscriber_id:?} is {count}");
                 if *count <= 0 {
+                    info!("no more open clients for {subscriber_id:?} removing from tracker");
                     tracker.remove(&subscriber_id);
                 }
             }
@@ -1331,7 +1332,7 @@ impl Geyser for GrpcService {
             let mut tracker = subscription_tracker_ref.lock().await;
             let count = tracker.entry(id).or_insert_with(|| 0);
             if *count == self.config_max_subscription_limit {
-                info!("{subscriber_id:?} reached max subscription limit. kicking.");
+                info!("{subscriber_id:?} reached max subscription limit. kicking");
                 return Err(Status::resource_exhausted(
                     "max subscription limit exceeded",
                 ));
