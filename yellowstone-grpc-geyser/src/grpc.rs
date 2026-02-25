@@ -1675,6 +1675,7 @@ mod tests {
     async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
+        let st = Arc::new(Mutex::new(HashMap::new()));
         let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
@@ -1702,6 +1703,7 @@ mod tests {
             None,
             ct.clone(),
             tt.clone(),
+            st.clone(),
         ));
 
         // yield so incoming_handler sends the filter and client_loop
