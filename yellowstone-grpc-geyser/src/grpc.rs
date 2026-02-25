@@ -1335,7 +1335,7 @@ impl Geyser for GrpcService {
             let count = tracker.entry(id.clone()).or_insert_with(|| 0);
 
             // Check limit.
-            if *count == self.config_max_subscription_limit {
+            if *count >= self.config_max_subscription_limit {
                 info!("{subscriber_id:?} reached max subscription limit. kicking");
 
                 // Kick if not dryrun, else log.
