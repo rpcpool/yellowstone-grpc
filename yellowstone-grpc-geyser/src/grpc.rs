@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigGrpc,
+        config::{ConfigGrpc, GrpcAddress},
         metered::MeteredLayer,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
@@ -32,6 +32,8 @@ use {
     std::{
         collections::{BTreeMap, HashMap},
         net::SocketAddr,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc, LazyLock, Mutex as StdMutex,
@@ -40,11 +42,14 @@ use {
     },
     tokio::{
         fs,
+        net::UnixListener,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration, Instant},
     },
+    tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
+        metadata::AsciiMetadataValue,
         service::interceptor,
         transport::{
             server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
@@ -52,7 +57,7 @@ use {
         },
         Request, Response, Result as TonicResult, Status, Streaming,
     },
-    tonic_health::server::health_reporter,
+    tonic_health::{pb::health_server::HealthServer, server::health_reporter},
     yellowstone_grpc_proto::{
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
@@ -488,7 +493,30 @@ impl Drop for ClientSession {
     }
 }
 
-#[derive(Debug)]
+enum Listener {
+    Tcp(TcpIncoming),
+    Unix(PathBuf, UnixListenerStream), // path needed to remove the socket file on exit
+}
+
+#[derive(Clone)]
+struct XTokenInterceptor {
+    x_token: Option<AsciiMetadataValue>,
+}
+
+impl interceptor::Interceptor for XTokenInterceptor {
+    fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+        if let Some(x_token) = &self.x_token {
+            match request.metadata().get("x-token") {
+                Some(token) if token == x_token => Ok(request),
+                _ => Err(Status::unauthenticated("No valid auth token")),
+            }
+        } else {
+            Ok(request)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
@@ -496,9 +524,9 @@ pub struct GrpcService {
     subscription_limit: usize,
     subscription_limit_enforce: bool,
     subscription_tracker: SubscriptionTracker,
-    blocks_meta: Option<BlockMetaStorage>,
-    subscribe_id: AtomicUsize,
-    snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
+    blocks_meta: Option<Arc<BlockMetaStorage>>,
+    subscribe_id: Arc<AtomicUsize>,
+    snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -520,17 +548,35 @@ impl GrpcService {
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
     )> {
-        // Bind service address
-        let incoming = TcpIncoming::bind(config.address)?
-            .with_nodelay(Some(true))
-            .with_keepalive(Some(Duration::from_secs(20)));
-
-        let spy_incoming_config = SpyIncomingConfig {
-            traffic_reporting_threshold: config
-                .traffic_reporting_byte_threhsold
-                .unwrap_or_else(|| ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD)),
-        };
-        let spy_incoming = SpyIncoming::new(incoming, spy_incoming_config);
+        // Bind all configured addresses (TCP or Unix domain socket)
+        let mut listeners = Vec::new();
+        for addr in &config.address.inner {
+            let listener = match addr {
+                GrpcAddress::Tcp(addr) => {
+                    let incoming = TcpIncoming::bind(*addr)?
+                        .with_nodelay(Some(true))
+                        .with_keepalive(Some(Duration::from_secs(20)));
+                    Listener::Tcp(incoming)
+                }
+                GrpcAddress::Unix { path, mode } => {
+                    if config.tls_config.is_some() {
+                        log::warn!(
+                            "TLS config is ignored for Unix domain socket: {}",
+                            path.display()
+                        );
+                    }
+                    if let Err(e) = std::fs::remove_file(path) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            return Err(e.into());
+                        }
+                    }
+                    let uds = UnixListener::bind(path)?;
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode))?;
+                    Listener::Unix(path.clone(), UnixListenerStream::new(uds))
+                }
+            };
+            listeners.push(listener);
+        }
 
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
@@ -555,7 +601,6 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
-        // attempt to prevent spam of geyser loop with capacity eq 1
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {
                 (None, None, None)
@@ -564,34 +609,28 @@ impl GrpcService {
                 (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
             };
 
-        // gRPC server builder with optional TLS
-        let mut server_builder = Server::builder();
-        if let Some(tls_config) = &config.tls_config {
-            let (cert, key) = tokio::try_join!(
-                fs::read(&tls_config.cert_path),
-                fs::read(&tls_config.key_path)
-            )
-            .context("failed to load tls_config files")?;
-            server_builder = server_builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
-                .context("failed to apply tls_config")?;
-        }
-        if let Some(enabled) = config.server_http2_adaptive_window {
-            server_builder = server_builder.http2_adaptive_window(Some(enabled));
-        }
-        if let Some(http2_keepalive_interval) = config.server_http2_keepalive_interval {
-            server_builder =
-                server_builder.http2_keepalive_interval(Some(http2_keepalive_interval));
-        }
-        if let Some(http2_keepalive_timeout) = config.server_http2_keepalive_timeout {
-            server_builder = server_builder.http2_keepalive_timeout(Some(http2_keepalive_timeout));
-        }
-        if let Some(sz) = config.server_initial_connection_window_size {
-            server_builder = server_builder.initial_connection_window_size(sz);
-        }
-        if let Some(sz) = config.server_initial_stream_window_size {
-            server_builder = server_builder.initial_stream_window_size(sz);
-        }
+        // Read TLS identity once (async, before per-listener loop)
+        let tls_identity = match &config.tls_config {
+            Some(tls) => {
+                let (cert, key) =
+                    tokio::try_join!(fs::read(&tls.cert_path), fs::read(&tls.key_path))
+                        .context("failed to load tls_config files")?;
+                Some(Identity::from_pem(cert, key))
+            }
+            None => None,
+        };
+
+        // Capture traffic reporting threshold before config is moved
+        let traffic_reporting_threshold = config
+            .traffic_reporting_byte_threhsold
+            .unwrap_or_else(|| ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD));
+
+        // Save HTTP/2 settings (all Copy) for use inside spawned tasks
+        let http2_adaptive_window = config.server_http2_adaptive_window;
+        let http2_keepalive_interval = config.server_http2_keepalive_interval;
+        let http2_keepalive_timeout = config.server_http2_keepalive_timeout;
+        let initial_connection_window_size = config.server_initial_connection_window_size;
+        let initial_stream_window_size = config.server_initial_stream_window_size;
 
         let filter_names = Arc::new(Mutex::new(FilterNames::new(
             config.filter_name_size_limit,
@@ -599,7 +638,7 @@ impl GrpcService {
             config.filter_names_cleanup_interval,
         )));
 
-        // Create Server
+        // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
@@ -608,9 +647,9 @@ impl GrpcService {
             subscription_limit: config.subscription_limit,
             subscription_limit_enforce: config.subscription_limit_enforce,
             subscription_tracker: Arc::new(StdMutex::new(HashMap::new())),
-            blocks_meta,
-            subscribe_id: AtomicUsize::new(0),
-            snapshot_rx: Mutex::new(snapshot_rx),
+            blocks_meta: blocks_meta.map(Arc::new),
+            subscribe_id: Arc::new(AtomicUsize::new(0)),
+            snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
@@ -641,33 +680,48 @@ impl GrpcService {
             .await;
         });
 
-        // Run Server
-        let shutdown_grpc = service_cancellation_token.child_token();
-        task_tracker.spawn(async move {
-            // gRPC Health check service
-            let (health_reporter, health_service) = health_reporter();
-            health_reporter.set_serving::<GeyserServer<Self>>().await;
+        // Health check service
+        let (health_reporter, health_service) = health_reporter();
+        health_reporter.set_serving::<GeyserServer<Self>>().await;
 
-            let result = server_builder
-                .layer(MeteredLayer::new())
-                .layer(interceptor::InterceptorLayer::new(
-                    move |request: Request<()>| {
-                        if let Some(x_token) = &config.x_token {
-                            match request.metadata().get("x-token") {
-                                Some(token) if x_token == token => Ok(request),
-                                _ => Err(Status::unauthenticated("No valid auth token")),
-                            }
-                        } else {
-                            Ok(request)
-                        }
-                    },
-                ))
-                .add_service(health_service)
-                .add_service(service)
-                .serve_with_incoming_shutdown(spy_incoming, shutdown_grpc.cancelled())
-                .await;
-            info!("gRPC server shut down with result: {result:?}");
-        });
+        let x_token = config
+            .x_token
+            .map(|t| t.parse::<AsciiMetadataValue>())
+            .transpose()
+            .context("invalid x_token value")?;
+
+        let shutdown_grpc = service_cancellation_token.child_token();
+
+        // Spawn one server task per listener
+        for listener in listeners {
+            let shutdown = shutdown_grpc.clone();
+            let tls_identity = tls_identity.clone();
+            let x_token = x_token.clone();
+            let health_service = health_service.clone();
+            let service = service.clone();
+
+            task_tracker.spawn(async move {
+                if let Err(e) = GrpcService::serve_listener(
+                    listener,
+                    tls_identity,
+                    http2_adaptive_window,
+                    http2_keepalive_interval,
+                    http2_keepalive_timeout,
+                    initial_connection_window_size,
+                    initial_stream_window_size,
+                    x_token,
+                    health_service,
+                    service,
+                    traffic_reporting_threshold,
+                    shutdown.clone(),
+                )
+                .await
+                {
+                    error!("gRPC listener failed: {e}");
+                    shutdown.cancel();
+                }
+            });
+        }
 
         Ok((snapshot_tx, messages_tx))
     }
@@ -1312,6 +1366,101 @@ impl GrpcService {
         }
 
         Ok(())
+    }
+
+    async fn serve_listener<H>(
+        listener: Listener,
+        tls_identity: Option<Identity>,
+        http2_adaptive_window: Option<bool>,
+        http2_keepalive_interval: Option<Duration>,
+        http2_keepalive_timeout: Option<Duration>,
+        initial_connection_window_size: Option<u32>,
+        initial_stream_window_size: Option<u32>,
+        x_token: Option<AsciiMetadataValue>,
+        health_service: HealthServer<H>,
+        service: GeyserServer<GrpcService>,
+        traffic_reporting_threshold: ByteSize,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()>
+    where
+        H: tonic_health::pb::health_server::Health,
+    {
+        let mut builder = Server::builder();
+
+        // TLS only applies to TCP — UDS is local IPC, no encryption needed
+        if matches!(listener, Listener::Tcp(_)) {
+            if let Some(identity) = tls_identity {
+                builder = builder
+                    .tls_config(ServerTlsConfig::new().identity(identity))
+                    .context("failed to apply tls_config")?;
+            }
+        }
+
+        if let Some(enabled) = http2_adaptive_window {
+            builder = builder.http2_adaptive_window(Some(enabled));
+        }
+        if let Some(interval) = http2_keepalive_interval {
+            builder = builder.http2_keepalive_interval(Some(interval));
+        }
+        if let Some(timeout) = http2_keepalive_timeout {
+            builder = builder.http2_keepalive_timeout(Some(timeout));
+        }
+        if let Some(sz) = initial_connection_window_size {
+            builder = builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = initial_stream_window_size {
+            builder = builder.initial_stream_window_size(sz);
+        }
+
+        let router = builder
+            .layer(MeteredLayer::new())
+            .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
+                x_token,
+            }))
+            .add_service(health_service)
+            .add_service(service);
+
+        // Capture address before match consumes listener
+        let addr = match &listener {
+            Listener::Tcp(incoming) => incoming
+                .local_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| "unknown".to_owned()),
+            Listener::Unix(path, _) => format!("unix://{}", path.display()),
+        };
+
+        info!("gRPC server listening on {addr}");
+
+        let result = match listener {
+            Listener::Tcp(incoming) => {
+                let spy = SpyIncoming::new(
+                    incoming,
+                    SpyIncomingConfig {
+                        traffic_reporting_threshold,
+                    },
+                );
+                router
+                    .serve_with_incoming_shutdown(spy, shutdown.cancelled())
+                    .await
+                    .context("TCP listener error")
+            }
+            Listener::Unix(path, incoming) => {
+                let result = router
+                    .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                    .await
+                    .context("UDS listener error");
+
+                if let Err(e) = std::fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::warn!("failed to remove socket file {}: {e}", path.display());
+                    }
+                }
+                result
+            }
+        };
+
+        info!("gRPC server on {addr} shut down with result: {result:?}");
+        result
     }
 }
 
