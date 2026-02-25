@@ -1,6 +1,7 @@
 use {
     crate::{
         config::ConfigGrpc,
+        geyser_server::GeyserServer,
         metered::MeteredLayer,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
@@ -16,7 +17,7 @@ use {
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo, SlotStatus,
             },
-            proto::geyser_server::{Geyser, GeyserServer},
+            proto::geyser_server::Geyser,
         },
         transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},

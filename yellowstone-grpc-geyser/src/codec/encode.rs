@@ -14,7 +14,7 @@
 //! In short: this keeps tonic-compatible wire framing while avoiding unnecessary serialization.
 
 use {
-    crate::codec::PreEncoded,
+    crate::codec::{Encode, EncodeOutput},
     bytes::{Buf, BufMut, Bytes, BytesMut},
     http::HeaderMap,
     http_body::{Body, Frame},
@@ -29,7 +29,7 @@ use {
     },
     tokio_stream::{adapters::Fuse, Stream, StreamExt},
     tonic::{
-        codec::{CompressionEncoding, Encoder, SingleMessageCompressionOverride, HEADER_SIZE},
+        codec::{CompressionEncoding, SingleMessageCompressionOverride, HEADER_SIZE},
         Status,
     },
 };
@@ -67,6 +67,23 @@ impl EncodedBytes {
         }
     }
 
+    fn next_chunk(&mut self) -> Option<Bytes> {
+        if self.header_pos < HEADER_SIZE {
+            let chunk = Bytes::copy_from_slice(&self.header[self.header_pos..]);
+            self.remaining -= HEADER_SIZE - self.header_pos;
+            self.header_pos = HEADER_SIZE;
+            return Some(chunk);
+        }
+
+        if self.payload_pos < self.payload.len() {
+            let chunk = self.payload.slice(self.payload_pos..);
+            self.remaining -= self.payload.len() - self.payload_pos;
+            self.payload_pos = self.payload.len();
+            return Some(chunk);
+        }
+
+        None
+    }
 }
 
 impl Buf for EncodedBytes {
@@ -124,6 +141,21 @@ impl EncodedBatch {
     fn is_empty(&self) -> bool {
         self.remaining == 0
     }
+
+    fn next_chunk(&mut self) -> Option<Bytes> {
+        loop {
+            let front = self.parts.front_mut()?;
+            if let Some(chunk) = front.next_chunk() {
+                self.remaining -= chunk.len();
+                if front.remaining() == 0 {
+                    self.parts.pop_front();
+                }
+                return Some(chunk);
+            }
+            self.parts.pop_front();
+        }
+    }
+
 }
 
 impl Buf for EncodedBatch {
@@ -169,6 +201,8 @@ struct PreEncodedBytes<T, U> {
     source: Fuse<U>,
     compression_encoding: Option<CompressionEncoding>,
     max_message_size: Option<usize>,
+    encoder: T,
+    encode_buf: BytesMut,
     compression_buf: BytesMut,
     staged: EncodedBatch,
     error: Option<Status>,
@@ -180,6 +214,7 @@ where
     U: Stream,
 {
     fn new(
+        encoder: T,
         source: U,
         compression_encoding: Option<CompressionEncoding>,
         compression_override: SingleMessageCompressionOverride,
@@ -196,6 +231,8 @@ where
             source: source.fuse(),
             compression_encoding,
             max_message_size,
+            encoder,
+            encode_buf: BytesMut::with_capacity(DEFAULT_CODEC_BUFFER_SIZE),
             compression_buf: BytesMut::with_capacity(DEFAULT_CODEC_BUFFER_SIZE),
             staged: EncodedBatch::default(),
             error: None,
@@ -207,9 +244,8 @@ where
 
 impl<T, U> Stream for PreEncodedBytes<T, U>
 where
-    T: Encoder<Error = Status>,
-    T::Item: PreEncoded,
-    <T::Item as PreEncoded>::Error: Display,
+    T: Encode,
+    T::Error: Into<Status> + Display,
     U: Stream<Item = Result<T::Item, Status>>,
 {
     type Item = Result<EncodedBatch, Status>;
@@ -229,12 +265,13 @@ where
                     return Poll::Ready(Some(Ok(std::mem::take(this.staged))));
                 }
                 Poll::Ready(Some(Ok(item))) => {
-                    let payload = match item.pre_encoded() {
-                        Ok(payload) => payload,
+                    this.encode_buf.clear();
+                    let payload = match this.encoder.encode(item, this.encode_buf) {
+                        Ok(EncodeOutput::Bytes(bytes)) => bytes,
+                        Ok(EncodeOutput::Buffer) => this.encode_buf.split().freeze(),
                         Err(err) => {
-                            return Poll::Ready(Some(Err(Status::internal(format!(
-                                "Error encoding: {err}"
-                            )))));
+                            let status: Status = err.into();
+                            return Poll::Ready(Some(Err(status)));
                         }
                     };
                     let encoded = match encode_item(
@@ -370,19 +407,19 @@ pub struct EncodeBody<T, U> {
 #[derive(Debug)]
 struct EncodeState {
     error: Option<Status>,
+    pending: Option<EncodedBatch>,
     is_end_stream: bool,
 }
 
 impl<T, U> EncodeBody<T, U>
 where
-    T: Encoder<Error = Status>,
-    T::Item: PreEncoded,
-    <T::Item as PreEncoded>::Error: Display,
+    T: Encode,
+    T::Error: Into<Status> + Display,
     U: Stream<Item = Result<T::Item, Status>>,
 {
     /// Turns a stream of grpc results (message or error status) into [EncodeBody] for servers.
     pub fn new_server(
-        _encoder: T,
+        encoder: T,
         source: U,
         compression_encoding: Option<CompressionEncoding>,
         compression_override: SingleMessageCompressionOverride,
@@ -390,6 +427,7 @@ where
     ) -> Self {
         Self {
             inner: PreEncodedBytes::new(
+                encoder,
                 source,
                 compression_encoding,
                 compression_override,
@@ -397,6 +435,7 @@ where
             ),
             state: EncodeState {
                 error: None,
+                pending: None,
                 is_end_stream: false,
             },
         }
@@ -419,12 +458,11 @@ impl EncodeState {
 
 impl<T, U> Body for EncodeBody<T, U>
 where
-    T: Encoder<Error = Status>,
-    T::Item: PreEncoded,
-    <T::Item as PreEncoded>::Error: Display,
+    T: Encode,
+    T::Error: Into<Status> + Display,
     U: Stream<Item = Result<T::Item, Status>>,
 {
-    type Data = EncodedBatch;
+    type Data = Bytes;
     type Error = Status;
 
     fn is_end_stream(&self) -> bool {
@@ -435,29 +473,40 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let self_proj = self.project();
+        let mut self_proj = self.project();
 
-        match ready!(self_proj.inner.poll_next(cx)) {
-            Some(Ok(d)) => {
-                if d.is_empty() {
-                    Poll::Ready(None)
-                } else {
-                    Some(Ok(Frame::data(d))).into()
+        loop {
+            if let Some(pending) = self_proj.state.pending.as_mut() {
+                if let Some(chunk) = pending.next_chunk() {
+                    return Poll::Ready(Some(Ok(Frame::data(chunk))));
+                }
+                self_proj.state.pending = None;
+            }
+
+            match ready!(self_proj.inner.as_mut().poll_next(cx)) {
+                Some(Ok(d)) => {
+                    if d.is_empty() {
+                        continue;
+                    }
+                    self_proj.state.pending = Some(d);
+                }
+                Some(Err(status)) => {
+                    self_proj.state.is_end_stream = true;
+                    let mut headers = HeaderMap::with_capacity(8);
+                    return Poll::Ready(match status.add_header(&mut headers) {
+                        Ok(()) => Some(Ok(Frame::trailers(headers))),
+                        Err(status) => Some(Err(status)),
+                    });
+                }
+                None => {
+                    return Poll::Ready(
+                        self_proj
+                            .state
+                            .trailers()
+                            .map(|t| t.map(Frame::trailers)),
+                    )
                 }
             }
-            Some(Err(status)) => {
-                self_proj.state.is_end_stream = true;
-                let mut headers = HeaderMap::with_capacity(8);
-                match status.add_header(&mut headers) {
-                    Ok(()) => Some(Ok(Frame::trailers(headers))).into(),
-                    Err(status) => Some(Err(status)).into(),
-                }
-            }
-            None => self_proj
-                .state
-                .trailers()
-                .map(|t| t.map(Frame::trailers))
-                .into(),
         }
     }
 }
@@ -466,30 +515,54 @@ where
 mod tests {
     use {
         super::*,
+        crate::codec::{MaybeEncoded, MaybeEncodedEncoder},
         std::io,
-        tonic::codec::EncodeBuf,
     };
 
     #[derive(Debug, Clone)]
     struct DummyItem(Bytes);
 
-    impl PreEncoded for DummyItem {
-        type Error = io::Error;
-
-        fn pre_encoded(&self) -> Result<Bytes, Self::Error> {
-            Ok(self.0.clone())
-        }
-    }
-
     #[derive(Debug, Clone, Copy)]
     struct DummyEncoder;
 
-    impl Encoder for DummyEncoder {
+    impl Encode for DummyEncoder {
         type Item = DummyItem;
-        type Error = Status;
+        type Error = io::Error;
 
-        fn encode(&mut self, _item: Self::Item, _dst: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
-            Ok(())
+        fn encode(
+            &mut self,
+            item: Self::Item,
+            _dst: &mut BytesMut,
+        ) -> Result<EncodeOutput, Self::Error> {
+            Ok(EncodeOutput::Bytes(item.0))
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum MixedItem {
+        Pre(Bytes),
+        Raw(Bytes),
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct MixedEncoder;
+
+    impl Encode for MixedEncoder {
+        type Item = MixedItem;
+        type Error = io::Error;
+
+        fn encode(
+            &mut self,
+            item: Self::Item,
+            dst: &mut BytesMut,
+        ) -> Result<EncodeOutput, Self::Error> {
+            match item {
+                MixedItem::Pre(bytes) => Ok(EncodeOutput::Bytes(bytes)),
+                MixedItem::Raw(bytes) => {
+                    dst.extend_from_slice(bytes.as_ref());
+                    Ok(EncodeOutput::Buffer)
+                }
+            }
         }
     }
 
@@ -584,18 +657,26 @@ mod tests {
             .expect("first frame ok");
         assert!(frame.is_data());
 
-        let frame = body
-            .frame()
-            .await
-            .expect("second frame exists")
-            .expect("second frame ok");
-        let trailers = frame.into_trailers().expect("trailers frame");
-        assert_eq!(
-            trailers
-                .get(Status::GRPC_STATUS)
-                .expect("grpc-status present"),
-            "13"
-        );
+        loop {
+            let frame = body
+                .frame()
+                .await
+                .expect("next frame exists")
+                .expect("next frame ok");
+            match frame.into_data() {
+                Ok(_data) => continue,
+                Err(frame) => {
+                    let trailers = frame.into_trailers().expect("trailers frame");
+                    assert_eq!(
+                        trailers
+                            .get(Status::GRPC_STATUS)
+                            .expect("grpc-status present"),
+                        "13"
+                    );
+                    break;
+                }
+            }
+        }
     }
 
     fn parse_grpc_payloads(mut bytes: Bytes) -> Vec<Bytes> {
@@ -628,26 +709,110 @@ mod tests {
             None,
         );
 
-        let frame = body
-            .frame()
-            .await
-            .expect("first frame exists")
-            .expect("first frame ok");
-        let mut data = frame.into_data().expect("data frame");
-        let payloads = parse_grpc_payloads(data.copy_to_bytes(data.remaining()));
+        let mut raw = BytesMut::new();
+        loop {
+            let frame = body
+                .frame()
+                .await
+                .expect("expected data or trailers frame")
+                .expect("frame ok");
+            match frame.into_data() {
+                Ok(data) => {
+                    raw.extend_from_slice(data.as_ref());
+                    continue;
+                }
+                Err(frame) => {
+                    let trailers = frame.into_trailers().expect("trailers frame");
+                    assert_eq!(
+                        trailers
+                            .get(Status::GRPC_STATUS)
+                            .expect("grpc-status present"),
+                        "13"
+                    );
+                    break;
+                }
+            }
+        }
+        let payloads = parse_grpc_payloads(raw.freeze());
         assert_eq!(payloads, vec![Bytes::from_static(b"first"), Bytes::from_static(b"second")]);
+    }
+
+    #[tokio::test]
+    async fn server_body_supports_mixed_preencoded_and_buffer_paths() {
+        use http_body_util::BodyExt as _;
+
+        let source = tokio_stream::iter(vec![
+            Ok(MixedItem::Pre(Bytes::from_static(b"pre"))),
+            Ok(MixedItem::Raw(Bytes::from_static(b"raw"))),
+        ]);
+        let mut body = EncodeBody::new_server(
+            MixedEncoder,
+            source,
+            None,
+            SingleMessageCompressionOverride::default(),
+            None,
+        );
 
         let frame = body
             .frame()
             .await
-            .expect("second frame exists")
-            .expect("second frame ok");
-        let trailers = frame.into_trailers().expect("trailers frame");
+            .expect("frame exists")
+            .expect("frame ok");
+        let mut raw = BytesMut::new();
+        if let Ok(data) = frame.into_data() {
+            raw.extend_from_slice(data.as_ref());
+        }
+        loop {
+            let maybe = body.frame().await;
+            let Some(frame) = maybe else { break };
+            let frame = frame.expect("frame ok");
+            match frame.into_data() {
+                Ok(data) => raw.extend_from_slice(data.as_ref()),
+                Err(_) => break,
+            }
+        }
+        let payloads = parse_grpc_payloads(raw.freeze());
+        assert_eq!(payloads, vec![Bytes::from_static(b"pre"), Bytes::from_static(b"raw")]);
+    }
+
+    #[tokio::test]
+    async fn server_body_supports_maybe_encoded_bytes_or_values() {
+        use http_body_util::BodyExt as _;
+
+        let source = tokio_stream::iter(vec![
+            Ok(MaybeEncoded::Bytes(Bytes::from_static(b"already"))),
+            Ok(MaybeEncoded::Value(DummyItem(Bytes::from_static(b"custom")))),
+        ]);
+        let mut body = EncodeBody::new_server(
+            MaybeEncodedEncoder(DummyEncoder),
+            source,
+            None,
+            SingleMessageCompressionOverride::default(),
+            None,
+        );
+
+        let frame = body
+            .frame()
+            .await
+            .expect("frame exists")
+            .expect("frame ok");
+        let mut raw = BytesMut::new();
+        if let Ok(data) = frame.into_data() {
+            raw.extend_from_slice(data.as_ref());
+        }
+        loop {
+            let maybe = body.frame().await;
+            let Some(frame) = maybe else { break };
+            let frame = frame.expect("frame ok");
+            match frame.into_data() {
+                Ok(data) => raw.extend_from_slice(data.as_ref()),
+                Err(_) => break,
+            }
+        }
+        let payloads = parse_grpc_payloads(raw.freeze());
         assert_eq!(
-            trailers
-                .get(Status::GRPC_STATUS)
-                .expect("grpc-status present"),
-            "13"
+            payloads,
+            vec![Bytes::from_static(b"already"), Bytes::from_static(b"custom")]
         );
     }
 }

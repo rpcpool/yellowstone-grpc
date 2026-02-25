@@ -1,8 +1,11 @@
 use std::{error::Error, sync::Arc, task::{Context, Poll}};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
+use http_body_util::{combinators::UnsyncBoxBody, BodyExt};
 use hyper::body::Body;
+use prost::Message as ProstMessage;
 use tonic::{codec::{CompressionEncoding, EnabledCompressionEncodings}, service::interceptor::InterceptedService};
+use tonic::server::StreamingService;
 use tower_service::Service;
 
 use std::future::Future;
@@ -10,7 +13,10 @@ use std::pin::Pin;
 type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 use http;
 
-use crate::plugin::proto::geyser_server::Geyser;
+use crate::{
+    codec::{encode::EncodeBody, Encode, EncodeOutput},
+    plugin::{filter::message::FilteredUpdate, proto::geyser_server::Geyser},
+};
 
 pub type BoxFuture<T, E> = self::Pin<Box<dyn self::Future<Output = Result<T, E>> + Send + 'static>>;
 
@@ -35,6 +41,7 @@ impl<T> GeyserServer<T> {
             max_encoding_message_size: None,
         }
     }
+    #[allow(dead_code)]
     pub fn with_interceptor<F>(
         inner: T,
         interceptor: F,
@@ -75,13 +82,130 @@ impl<T> GeyserServer<T> {
 }
 
 
-pub struct ZeroCopyBuf {
-    header: [u8; 0],
-    bytes: Bytes,
+
+pub struct GeyserBody {
+    inner: UnsyncBoxBody<Bytes, tonic::Status>,
 }
 
-pub enum GeyserBody {
-    TonicBody(tonic::body::Body),
+impl GeyserBody {
+    fn new<B>(body: B) -> Self
+    where
+        B: http_body::Body<Data = Bytes, Error = tonic::Status> + Send + 'static,
+    {
+        Self {
+            inner: body.boxed_unsync(),
+        }
+    }
+}
+
+impl Default for GeyserBody {
+    fn default() -> Self {
+        Self::new(http_body_util::Empty::<Bytes>::new().map_err(|err| match err {}))
+    }
+}
+
+impl http_body::Body for GeyserBody {
+    type Data = Bytes;
+    type Error = tonic::Status;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+fn wrap_tonic_body<B>(body: B) -> GeyserBody
+where
+    B: http_body::Body<Data = Bytes, Error = tonic::Status> + Send + 'static,
+{
+    GeyserBody::new(body)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SubscribeEncoder;
+
+impl Encode for SubscribeEncoder {
+    type Item = FilteredUpdate;
+    type Error = tonic::Status;
+
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut bytes::BytesMut,
+    ) -> Result<EncodeOutput, Self::Error> {
+        item.encode(dst)
+            .map_err(|error| tonic::Status::internal(format!("Error encoding: {error}")))?;
+        Ok(EncodeOutput::Buffer)
+    }
+}
+
+fn accepted_response_encoding(
+    headers: &http::HeaderMap,
+    enabled: EnabledCompressionEncodings,
+) -> Option<CompressionEncoding> {
+    let value = headers.get("grpc-accept-encoding")?.to_str().ok()?;
+    for encoding in value.split(',').map(|s| s.trim()) {
+        match encoding {
+            "gzip" if enabled.is_enabled(CompressionEncoding::Gzip) => {
+                return Some(CompressionEncoding::Gzip)
+            }
+            "zstd" if enabled.is_enabled(CompressionEncoding::Zstd) => {
+                return Some(CompressionEncoding::Zstd)
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn request_encoding_if_supported(
+    headers: &http::HeaderMap,
+    enabled: EnabledCompressionEncodings,
+) -> Result<Option<CompressionEncoding>, tonic::Status> {
+    let Some(value) = headers.get("grpc-encoding") else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| tonic::Status::unimplemented("invalid grpc-encoding header"))?;
+
+    match value {
+        "identity" => Ok(None),
+        "gzip" if enabled.is_enabled(CompressionEncoding::Gzip) => {
+            Ok(Some(CompressionEncoding::Gzip))
+        }
+        "zstd" if enabled.is_enabled(CompressionEncoding::Zstd) => {
+            Ok(Some(CompressionEncoding::Zstd))
+        }
+        other => Err(tonic::Status::unimplemented(format!(
+            "Content is compressed with `{other}` which isn't supported"
+        ))),
+    }
+}
+
+fn insert_response_encoding_header(
+    headers: &mut http::HeaderMap,
+    encoding: CompressionEncoding,
+) {
+    let value = match encoding {
+        CompressionEncoding::Gzip => "gzip",
+        CompressionEncoding::Zstd => "zstd",
+        _ => return,
+    };
+    headers.insert(
+        "grpc-encoding",
+        http::HeaderValue::from_static(value),
+    );
 }
 
 impl<T, B> Service<http::Request<B>> for GeyserServer<T>
@@ -90,7 +214,7 @@ where
     B: Body + std::marker::Send + 'static,
     B::Error: Into<StdError> + std::marker::Send + 'static,
 {
-    type Response = http::Response<tonic::body::Body>;
+    type Response = http::Response<GeyserBody>;
     type Error = std::convert::Infallible;
     type Future = BoxFuture<Self::Response, Self::Error>;
     fn poll_ready(
@@ -136,19 +260,58 @@ where
                 let max_encoding_message_size = self.max_encoding_message_size;
                 let inner = self.inner.clone();
                 let fut = async move {
-                    let method = SubscribeSvc(inner);
-                    let codec = tonic_prost::ProstCodec::default();
-                    let mut grpc = tonic::server::Grpc::new(codec)
-                        .apply_compression_config(
-                            accept_compression_encodings,
-                            send_compression_encodings,
-                        )
-                        .apply_max_message_size_config(
+                    let mut method = SubscribeSvc(inner);
+                    let accept_encoding =
+                        accepted_response_encoding(req.headers(), send_compression_encodings);
+                    let request_encoding = match request_encoding_if_supported(
+                        req.headers(),
+                        accept_compression_encodings,
+                    ) {
+                        Ok(encoding) => encoding,
+                        Err(status) => return Ok(status.into_http::<GeyserBody>()),
+                    };
+
+                    let request = req.map(|body| {
+                        tonic::Streaming::new_request(
+                            tonic_prost::ProstDecoder::<
+                                yellowstone_grpc_proto::geyser::SubscribeRequest,
+                            >::default(),
+                            body,
+                            request_encoding,
                             max_decoding_message_size,
-                            max_encoding_message_size,
-                        );
-                    let res = grpc.streaming(method, req).await;
-                    Ok(res)
+                        )
+                    });
+                    let request = tonic::Request::from_http(request);
+
+                    let response = match method.call(request).await {
+                        Ok(response) => response,
+                        Err(status) => return Ok(status.into_http::<GeyserBody>()),
+                    };
+
+                    let (metadata, body, extensions) = response.into_parts();
+                    let mut response = http::Response::new(GeyserBody::default());
+                    *response.version_mut() = http::Version::HTTP_2;
+                    *response.headers_mut() = metadata.into_headers();
+                    *response.extensions_mut() = extensions;
+
+                    response.headers_mut().insert(
+                        http::header::CONTENT_TYPE,
+                        tonic::metadata::GRPC_CONTENT_TYPE,
+                    );
+                    if let Some(encoding) = accept_encoding {
+                        insert_response_encoding_header(response.headers_mut(), encoding);
+                    }
+
+                    let body = EncodeBody::new_server(
+                        SubscribeEncoder,
+                        body,
+                        accept_encoding,
+                        tonic::codec::SingleMessageCompressionOverride::default(),
+                        max_encoding_message_size,
+                    );
+                    *response.body_mut() = GeyserBody::new(body);
+
+                    Ok(response)
                 };
                 Box::pin(fut)
 
@@ -202,7 +365,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.streaming(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -254,7 +417,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -302,7 +465,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -350,7 +513,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -398,7 +561,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -446,7 +609,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -494,7 +657,7 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
@@ -542,15 +705,13 @@ where
                             max_encoding_message_size,
                         );
                     let res = grpc.unary(method, req).await;
-                    Ok(res)
+                    Ok(res.map(wrap_tonic_body))
                 };
                 Box::pin(fut)
             }
             _ => {
                 Box::pin(async move {
-                    let mut response = http::Response::new(
-                        tonic::body::Body::default(),
-                    );
+                    let mut response = http::Response::new(GeyserBody::default());
                     let headers = response.headers_mut();
                     headers
                         .insert(
