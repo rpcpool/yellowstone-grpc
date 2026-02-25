@@ -1331,6 +1331,7 @@ impl Geyser for GrpcService {
             let mut tracker = subscription_tracker_ref.lock().await;
             let count = tracker.entry(id).or_insert_with(|| 0);
             if *count == self.config_max_subscription_limit {
+                info!("{subscriber_id:?} reached max subscription limit. kicking.");
                 return Err(Status::resource_exhausted(
                     "max subscription limit exceeded",
                 ));
