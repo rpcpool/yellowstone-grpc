@@ -5350,10 +5350,12 @@ dependencies = [
  "clap",
  "criterion",
  "crossbeam-channel",
+ "flate2",
  "futures",
  "git-version",
  "hostname",
  "http",
+ "http-body",
  "http-body-util",
  "humantime-serde",
  "hyper",
@@ -5395,8 +5397,10 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tower-layer",
+ "tower-service",
  "vergen",
  "yellowstone-grpc-proto",
+ "zstd",
 ]
 
 [[package]]

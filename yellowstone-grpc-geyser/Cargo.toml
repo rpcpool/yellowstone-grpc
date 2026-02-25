@@ -27,8 +27,10 @@ bytesize = { workspace = true, features = ["serde"]}
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
+flate2 = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
@@ -46,9 +48,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tower-layer = { workspace = true }
+tower-service = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
+zstd = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
