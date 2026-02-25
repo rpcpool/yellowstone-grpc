@@ -1014,10 +1014,11 @@ impl GrpcService {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        subscription_tracker: SubscriptionTracker,
     ) {
         let mut session = ClientSession::new(
             id,
-            subscriber_id,
+            subscriber_id.clone(),
             endpoint,
             maybe_remote_peer_sk_addr,
             debug_client_tx,
@@ -1212,6 +1213,17 @@ impl GrpcService {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // Decrement SubscriptionTracker when client_loop ends.
+        if let Some(subscriber_id) = subscriber_id {
+            let mut tracker = subscription_tracker.lock().await;
+            if let Some(count) = tracker.get_mut(&subscriber_id) {
+                *count -= 1;
+                if *count <= 0 {
+                    tracker.remove(&subscriber_id);
                 }
             }
         }
@@ -1467,6 +1479,7 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
+            self.subscription_tracker.clone(),
         ));
 
         Ok(Response::new(stream_rx))
