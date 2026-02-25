@@ -3,7 +3,8 @@ use {
         config::ConfigGrpc,
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
+            self, incr_grpc_method_call_count, set_subscriber_queue_size,
+            subscription_kick_count_inc, DebugClientMessage,
         },
         plugin::{
             filter::{
@@ -1328,17 +1329,23 @@ impl Geyser for GrpcService {
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
-        // If over max sub limit, kick out attempt.
         if let Some(id) = subscriber_id.clone() {
             let subscription_tracker_ref = self.subscription_tracker.clone();
             let mut tracker = subscription_tracker_ref.lock().await;
-            let count = tracker.entry(id).or_insert_with(|| 0);
-            if *count == self.config_max_subscription_limit {
+            let count = tracker.entry(id.clone()).or_insert_with(|| 0);
+
+            // Check limit. Kick if not dryrun, else log.
+            if *count == self.config_max_subscription_limit
+                && !self.config_max_subscription_limit_dryrun
+            {
                 info!("{subscriber_id:?} reached max subscription limit. kicking");
                 return Err(Status::resource_exhausted(
                     "max subscription limit exceeded",
                 ));
+            } else {
+                subscription_kick_count_inc(&id);
             }
+
             info!("incrementing subscription tracker count for {subscriber_id:?}");
             *count += 1;
             info!("new count for {subscriber_id:?} is {count}");

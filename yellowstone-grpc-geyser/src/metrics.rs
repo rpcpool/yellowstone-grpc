@@ -511,6 +511,11 @@ pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
 }
 
+pub fn subscription_kick_count_inc(subscriber_id: &str) {
+    // Mock for now.
+    info!("incrementing kick count for {subscriber_id}");
+}
+
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
