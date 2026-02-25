@@ -1,6 +1,6 @@
 use {
     crate::metrics,
-    bytes::Bytes,
+    bytes::{Buf, Bytes},
     http::{Request, Response},
     hyper::body::{Frame, SizeHint},
     pin_project::{pin_project, pinned_drop},
@@ -11,10 +11,7 @@ use {
         sync::{LazyLock, Mutex},
         task::{ready, Context, Poll},
     },
-    tonic::{
-        body::Body as TonicBody,
-        codegen::{Body as HttpBody, Service, StdError},
-    },
+    tonic::codegen::{Body as HttpBody, Service, StdError},
     tower_layer::Layer,
 };
 
@@ -110,9 +107,9 @@ impl<B> PinnedDrop for MeteredBody<B> {
 
 impl<B> HttpBody for MeteredBody<B>
 where
-    B: HttpBody<Data = Bytes>,
+    B: HttpBody,
 {
-    type Data = Bytes;
+    type Data = B::Data;
     type Error = B::Error;
 
     fn poll_frame(
@@ -123,7 +120,10 @@ where
         match ready!(this.inner.as_mut().poll_frame(cx)) {
             Some(Ok(frame)) => {
                 if let Some(data) = frame.data_ref() {
-                    metrics::add_grpc_service_outbound_bytes(this.subscriber_id, data.len() as u64);
+                    metrics::add_grpc_service_outbound_bytes(
+                        this.subscriber_id,
+                        data.remaining() as u64,
+                    );
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
@@ -144,10 +144,10 @@ where
 impl<F, B, E> Future for MeteredFuture<F, B, E>
 where
     F: Future<Output = Result<Response<B>, E>>,
-    B: HttpBody<Data = Bytes> + Send + 'static,
+    B: HttpBody + Send + 'static,
     B::Error: Into<StdError>,
 {
-    type Output = Result<Response<TonicBody>, E>;
+    type Output = Result<Response<MeteredBody<B>>, E>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -161,10 +161,7 @@ where
                     inner: body,
                     subscriber_id,
                 };
-                Poll::Ready(Ok(Response::from_parts(
-                    parts,
-                    TonicBody::new(metered_body),
-                )))
+                Poll::Ready(Ok(Response::from_parts(parts, metered_body)))
             }
             Err(e) => Poll::Ready(Err(e)),
         }
@@ -178,7 +175,7 @@ where
     ResBody: HttpBody<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<StdError>,
 {
-    type Response = Response<TonicBody>;
+    type Response = Response<MeteredBody<ResBody>>;
     type Error = S::Error;
     type Future = MeteredFuture<S::Future, ResBody, S::Error>;
 
@@ -208,11 +205,12 @@ mod tests {
         super::*,
         futures::{future, stream},
         http::Uri,
-        http_body_util::BodyExt,
+        http_body_util::{combinators::BoxBody, BodyExt},
         hyper::body::Frame,
         std::{convert::Infallible, sync::LazyLock},
         tokio::sync::Mutex,
         tokio_util::{sync::CancellationToken, task::TaskTracker},
+        tonic::codegen::Service,
     };
 
     static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -223,7 +221,7 @@ mod tests {
     }
 
     impl Service<Request<()>> for StubService {
-        type Response = Response<TonicBody>;
+        type Response = Response<BoxBody<Bytes, Infallible>>;
         type Error = Infallible;
         type Future = future::Ready<Result<Self::Response, Self::Error>>;
 
@@ -237,8 +235,8 @@ mod tests {
                 .clone()
                 .into_iter()
                 .map(|bytes| Ok::<Frame<Bytes>, Infallible>(Frame::data(bytes)));
-            let body = http_body_util::StreamBody::new(stream::iter(frames));
-            future::ready(Ok(Response::new(TonicBody::new(body))))
+            let body = http_body_util::StreamBody::new(stream::iter(frames)).boxed();
+            future::ready(Ok(Response::new(body)))
         }
     }
 
