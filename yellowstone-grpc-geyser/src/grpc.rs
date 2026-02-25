@@ -470,7 +470,7 @@ impl Drop for ClientSession {
     }
 }
 
-type SubscriptionTracker = Arc<Mutex<HashMap<String, AtomicUsize>>>;
+type SubscriptionTracker = Arc<Mutex<HashMap<String, usize>>>;
 
 #[derive(Debug)]
 pub struct GrpcService {
@@ -1014,24 +1014,7 @@ impl GrpcService {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-        subscription_tracker: SubscriptionTracker,
     ) {
-        if let Some(id) = subscriber_id {
-            let _subscription_tracker_drop_guard = OnDrop::new(|| {
-                task_tracker.spawn(async move {
-                    let tracker = subscription_tracker.lock().await;
-                    // Unwrap ok. It must exist due to previous check.
-                    // If not, something's very wrong and we should know.
-                    let count = tracker.get(&id).unwrap();
-                    count.fetch_sub(1, Ordering::SeqCst);
-
-                    if count.load(Ordering::SeqCst) <= 0 {
-                        tracker.remove(&id)
-                    }
-                });
-            });
-        }
-
         let mut session = ClientSession::new(
             id,
             subscriber_id,
@@ -1332,14 +1315,13 @@ impl Geyser for GrpcService {
         if let Some(id) = subscriber_id.clone() {
             let subscription_tracker_ref = self.subscription_tracker.clone();
             let mut tracker = subscription_tracker_ref.lock().await;
-            let count = tracker.entry(id).or_insert_with(|| AtomicUsize::new(0));
-            count.fetch_add(1, Ordering::SeqCst);
-
-            if count.load(Ordering::SeqCst) > self.config_max_subscription_limit {
+            let count = tracker.entry(id).or_insert_with(|| 0);
+            if *count == self.config_max_subscription_limit {
                 return Err(Status::resource_exhausted(
                     "max subscription limit exceeded",
                 ));
             }
+            *count += 1;
         } // Lock dropped here.
 
         incr_grpc_method_call_count("subscribe");
@@ -1485,7 +1467,6 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
-            self.subscription_tracker.clone(),
         ));
 
         Ok(Response::new(stream_rx))
