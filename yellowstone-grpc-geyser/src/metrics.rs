@@ -151,12 +151,12 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
-    static ref GRPC_KICK_C: IntCounterVec = IntCounterVec::new(
+    static ref GRPC_SUBSCRIPTION_KICK_COUNT: IntCounterVec = IntCounterVec::new(
         Opts::new(
             "yellowstone_grpc_kick_count",
-            "Total number of calls to GetVersion gRPC method"
+            "Total number of times a subscriber id is kicked by going over max subscription limit"
         ),
-        &["method"]
+        &["subscriber_id"]
     ).unwrap();
 }
 

@@ -1337,13 +1337,10 @@ impl Geyser for GrpcService {
             // Check limit.
             if *count >= self.config_max_subscription_limit {
                 info!("{subscriber_id:?} reached max subscription limit. kicking");
+                grpc_subscription_kick_count_inc(&id);
 
-                // Kick if not dryrun, else log.
-                if self.config_max_subscription_limit_dryrun {
-                    // Log.
-                    grpc_subscription_kick_count_inc(&id);
-                } else {
-                    // Kick.
+                // Kick if not dryrun.
+                if !self.config_max_subscription_limit_dryrun {
                     return Err(Status::resource_exhausted(
                         "max subscription limit exceeded",
                     ));
