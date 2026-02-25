@@ -30,6 +30,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - geyser: add `SubscribeDeshred` stub (returns `unimplemented` on non-triton-ext servers) ([#684](https://github.com/rpcpool/yellowstone-grpc/pull/684))
 - geyser: spy incoming connections ([#697](https://github.com/rpcpool/yellowstone-grpc/pull/697))
 - geyser: implemented metered traffic tracking ([#699](https://github.com/rpcpool/yellowstone-grpc/pull/699))
+- geyser: add Unix domain socket support for multiple gRPC listener ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
 
 ### Breaking
 

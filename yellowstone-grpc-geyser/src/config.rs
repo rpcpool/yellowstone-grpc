@@ -6,7 +6,12 @@ use {
     bytesize::ByteSize,
     serde::{de, Deserialize, Deserializer},
     std::{
-        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        collections::HashSet,
+        fmt,
+        fs::read_to_string,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
@@ -133,11 +138,90 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
     Ok(vec)
 }
 
+#[derive(Debug, Clone)]
+pub enum GrpcAddress {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+pub struct GrpcAddresses {
+    pub inner: Vec<GrpcAddress>,
+}
+
+impl<'de> Deserialize<'de> for GrpcAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if let Some(path) = s.strip_prefix("unix://") {
+            Ok(GrpcAddress::Unix(PathBuf::from(path)))
+        } else {
+            s.parse::<SocketAddr>()
+                .map(GrpcAddress::Tcp)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+impl std::fmt::Display for GrpcAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrpcAddress::Tcp(addr) => write!(f, "{addr}"),
+            GrpcAddress::Unix(path) => write!(f, "unix://{}", path.display()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for GrpcAddresses {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, SeqAccess, Visitor};
+
+        struct AddressesVisitor;
+
+        impl<'de> Visitor<'de> for AddressesVisitor {
+            type Value = GrpcAddresses;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a string or array of addresses")
+            }
+
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
+                if let Some(path) = s.strip_prefix("unix://") {
+                    Ok(GrpcAddresses {
+                        inner: vec![GrpcAddress::Unix(PathBuf::from(path))],
+                    })
+                } else {
+                    s.parse::<SocketAddr>()
+                        .map(|addr| GrpcAddresses {
+                            inner: vec![GrpcAddress::Tcp(addr)],
+                        })
+                        .map_err(de::Error::custom)
+                }
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut addrs = Vec::new();
+                while let Some(addr) = seq.next_element::<GrpcAddress>()? {
+                    addrs.push(addr);
+                }
+                Ok(GrpcAddresses { inner: addrs })
+            }
+        }
+
+        deserializer.deserialize_any(AddressesVisitor)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
-    /// Address of Grpc service.
-    pub address: SocketAddr,
+    /// Multiple addresses of Grpc service.
+    pub address: GrpcAddresses,
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
     /// Possible compression options
@@ -360,6 +444,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use {
+        crate::config::{GrpcAddress, GrpcAddresses},
+        std::path::Path,
+    };
 
     #[test]
     fn test_deser_config_tokio() {
@@ -385,5 +473,71 @@ mod tests {
         let config: super::ConfigTokio = serde_json::from_str(json_with_null_affinity).unwrap();
         assert_eq!(config.worker_threads, Some(4));
         assert_eq!(config.affinity, None);
+    }
+
+    #[test]
+    fn test_grpc_address_single_tcp() {
+        let json = r#""0.0.0.0:10000""#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 1);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+    }
+
+    #[test]
+    fn test_grpc_address_single_uds() {
+        let json = r#""unix:///var/run/geyser.sock""#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 1);
+        assert!(
+            matches!(&addrs.inner[0], GrpcAddress::Unix(p) if p == Path::new("/var/run/geyser.sock"))
+        );
+    }
+
+    #[test]
+    fn test_grpc_address_array_tcp_only() {
+        let json = r#"["0.0.0.0:10000", "0.0.0.0:10001"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 2);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+        assert!(matches!(addrs.inner[1], GrpcAddress::Tcp(addr) if addr.port() == 10001));
+    }
+
+    #[test]
+    fn test_grpc_address_array_uds_only() {
+        let json = r#"["unix:///var/run/a.sock", "unix:///var/run/b.sock"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 2);
+        assert!(
+            matches!(&addrs.inner[0], GrpcAddress::Unix(p) if p == Path::new("/var/run/a.sock"))
+        );
+        assert!(
+            matches!(&addrs.inner[1], GrpcAddress::Unix(p) if p == Path::new("/var/run/b.sock"))
+        );
+    }
+
+    #[test]
+    fn test_grpc_address_array_mixed() {
+        let json = r#"["0.0.0.0:10000", "unix:///var/run/geyser.sock", "127.0.0.1:10001"]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert_eq!(addrs.inner.len(), 3);
+        assert!(matches!(addrs.inner[0], GrpcAddress::Tcp(addr) if addr.port() == 10000));
+        assert!(
+            matches!(&addrs.inner[1], GrpcAddress::Unix(p) if p == Path::new("/var/run/geyser.sock"))
+        );
+        assert!(matches!(addrs.inner[2], GrpcAddress::Tcp(addr) if addr.port() == 10001));
+    }
+
+    #[test]
+    fn test_grpc_address_empty_array() {
+        let json = r#"[]"#;
+        let addrs: GrpcAddresses = serde_json::from_str(json).unwrap();
+        assert!(addrs.inner.is_empty());
+    }
+
+    #[test]
+    fn test_grpc_address_invalid_tcp() {
+        let json = r#""not_valid""#;
+        let result: Result<GrpcAddresses, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 }
