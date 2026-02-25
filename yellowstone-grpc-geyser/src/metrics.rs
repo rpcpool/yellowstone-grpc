@@ -350,6 +350,7 @@ impl PrometheusService {
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
             register!(GRPC_METHOD_CALL_COUNT);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
+            register!(GRPC_SUBSCRIPTION_KICK_COUNT);
 
             VERSION
                 .with_label_values(&[
@@ -518,9 +519,10 @@ pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
 }
 
-pub fn grpc_subscription_kick_count_inc(subscriber_id: &str) {
-    // Mock for now.
-    info!("incrementing kick count for {subscriber_id}");
+pub fn grpc_subscription_kick_count_inc<S: AsRef<str>>(subscriber_id: S) {
+    GRPC_SUBSCRIPTION_KICK_COUNT
+        .with_label_values(&[subscriber_id.as_ref()])
+        .inc()
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
@@ -599,6 +601,7 @@ pub fn reset_metrics() {
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_METHOD_CALL_COUNT.reset();
+    GRPC_SUBSCRIPTION_KICK_COUNT.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
