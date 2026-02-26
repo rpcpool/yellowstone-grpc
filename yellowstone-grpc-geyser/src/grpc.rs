@@ -3,7 +3,8 @@ use {
         config::ConfigGrpc,
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
+            self, grpc_subscription_kick_count_inc, incr_grpc_method_call_count,
+            set_subscriber_queue_size, DebugClientMessage,
         },
         plugin::{
             filter::{
@@ -470,11 +471,15 @@ impl Drop for ClientSession {
     }
 }
 
+type SubscriptionTracker = Arc<Mutex<HashMap<String, usize>>>;
+
 #[derive(Debug)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
+    config_max_subscription_limit: usize,
+    config_max_subscription_limit_dryrun: bool,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -485,6 +490,7 @@ pub struct GrpcService {
     filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    subscription_tracker: SubscriptionTracker,
 }
 
 impl GrpcService {
@@ -584,6 +590,8 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
+            config_max_subscription_limit: config.max_subscription_limit,
+            config_max_subscription_limit_dryrun: config.max_subscription_limit_dryrun,
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -594,6 +602,7 @@ impl GrpcService {
             filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            subscription_tracker: Arc::new(Mutex::new(HashMap::new())),
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -1008,10 +1017,11 @@ impl GrpcService {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        subscription_tracker: SubscriptionTracker,
     ) {
         let mut session = ClientSession::new(
             id,
-            subscriber_id,
+            subscriber_id.clone(),
             endpoint,
             maybe_remote_peer_sk_addr,
             debug_client_tx,
@@ -1209,6 +1219,20 @@ impl GrpcService {
                 }
             }
         }
+
+        // Decrement SubscriptionTracker when client_loop ends.
+        if let Some(subscriber_id) = subscriber_id {
+            let mut tracker = subscription_tracker.lock().await;
+            if let Some(count) = tracker.get_mut(&subscriber_id) {
+                info!("decrementing subscription tracker count ({count}) for {subscriber_id:?}");
+                *count = count.saturating_sub(1);
+                info!("new count for {subscriber_id:?} is {count}");
+                if *count == 0 {
+                    info!("no more open clients for {subscriber_id:?} removing from tracker");
+                    tracker.remove(&subscriber_id);
+                }
+            }
+        }
     }
 
     async fn client_loop_snapshot(
@@ -1299,6 +1323,35 @@ impl Geyser for GrpcService {
         &self,
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
+        let subscriber_id = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        if let Some(id) = subscriber_id.clone() {
+            let subscription_tracker_ref = Arc::clone(&self.subscription_tracker);
+            let mut tracker = subscription_tracker_ref.lock().await;
+            let count = tracker.entry(id.clone()).or_insert_with(|| 0);
+
+            // Check limit.
+            if *count >= self.config_max_subscription_limit {
+                info!("{subscriber_id:?} reached max subscription limit. kicking");
+                grpc_subscription_kick_count_inc(&id);
+
+                // Kick if not dryrun.
+                if !self.config_max_subscription_limit_dryrun {
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
+                }
+            }
+
+            info!("incrementing subscription tracker count for {subscriber_id:?}");
+            *count += 1;
+            info!("new count for {subscriber_id:?} is {count}");
+        } // Lock dropped here.
+
         incr_grpc_method_call_count("subscribe");
         let maybe_remote_peer_sk_addr = request
             .extensions()
@@ -1369,12 +1422,6 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
-
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
@@ -1448,6 +1495,7 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
+            Arc::clone(&self.subscription_tracker),
         ));
 
         Ok(Response::new(stream_rx))
@@ -1627,6 +1675,7 @@ mod tests {
     async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
+        let st = Arc::new(Mutex::new(HashMap::new()));
         let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
@@ -1654,6 +1703,7 @@ mod tests {
             None,
             ct.clone(),
             tt.clone(),
+            Arc::clone(&st),
         ));
 
         // yield so incoming_handler sends the filter and client_loop
