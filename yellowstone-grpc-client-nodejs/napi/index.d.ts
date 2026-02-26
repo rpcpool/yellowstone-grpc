@@ -14,15 +14,18 @@ export declare class DuplexStream {
   /**
    * Read JS Accesspoint.
    *
-   * Retrieve one SubscribeUpdate from the worker.
+   * Retrieve one `SubscribeUpdate` from the worker and convert it to
+   * the generated N-API JS representation (`JsSubscribeUpdate`).
    */
-  read(): Promise<object>
+  read(): Promise<JsSubscribeUpdate>
   /**
    * Write JS Accesspoint.
    *
-   * Take in SubscribeRequest and send to the worker.
+   * Accept a JS request object, convert to protobuf, then enqueue for the
+   * worker to forward to the gRPC request sink.
    */
-  write(chunk: object): void
+  close(): void
+  write(request: JsSubscribeRequest): void
 }
 
 /**
@@ -49,14 +52,24 @@ export declare class GrpcClient {
   getBlockHeight(request: JsGetBlockHeightRequest): Promise<JsGetBlockHeightResponse>
   getSlot(request: JsGetSlotRequest): Promise<JsGetSlotResponse>
   isBlockhashValid(request: JsIsBlockhashValidRequest): Promise<JsIsBlockhashValidResponse>
-  getVersion(request: JsGetVersionRequest): Promise<JsGetVersionResponse>
-  subscribeReplayInfo(request: JsSubscribeReplayInfoRequest): Promise<JsSubscribeReplayInfoResponse>
+  getVersion(getVersionRequest: JsGetVersionRequest): Promise<JsGetVersionResponse>
+  subscribeReplayInfo(subscribeReplayInfoRequest: JsSubscribeReplayInfoRequest): Promise<JsSubscribeReplayInfoResponse>
+  /**
+   * Creates a subscription stream bound to this client connection.
+   *
+   * The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
+   * which handles Node stream lifecycle and protobuf-shape normalization.
+   */
   subscribe(): DuplexStream
 }
 
 export declare function decodeTxError(err: Array<number>): string
 
 export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
+
+export interface JsBlockHeight {
+  blockHeight: string
+}
 
 /**
  * ChannelOptions from JS.
@@ -86,9 +99,31 @@ export interface JsChannelOptions {
   grpcTcpNodelay?: boolean
 }
 
+export interface JsCompiledInstruction {
+  programIdIndex: number
+  accounts: Buffer
+  data: Buffer
+}
+
 export declare const enum JsCompressionAlgorithm {
   Gzip = 0,
   Zstd = 1
+}
+
+export interface JsConfirmedBlock {
+  previousBlockhash: string
+  blockhash: string
+  parentSlot: string
+  transactions: Array<JsConfirmedTransaction>
+  rewards: Array<JsReward>
+  blockTime?: JsUnixTimestamp
+  blockHeight?: JsBlockHeight
+  numPartitions?: JsNumPartitions
+}
+
+export interface JsConfirmedTransaction {
+  transaction?: JsTransaction
+  meta?: JsTransactionStatusMeta
 }
 
 export interface JsGetBlockHeightRequest {
@@ -125,6 +160,18 @@ export interface JsGetVersionResponse {
   version: string
 }
 
+export interface JsInnerInstruction {
+  programIdIndex: number
+  accounts: Buffer
+  data: Buffer
+  stackHeight?: number
+}
+
+export interface JsInnerInstructions {
+  index: number
+  instructions: Array<JsInnerInstruction>
+}
+
 export interface JsIsBlockhashValidRequest {
   blockhash: string
   commitment?: number
@@ -135,6 +182,31 @@ export interface JsIsBlockhashValidResponse {
   valid: boolean
 }
 
+export interface JsMessage {
+  header?: JsMessageHeader
+  accountKeys: Array<Buffer>
+  recentBlockhash: Buffer
+  instructions: Array<JsCompiledInstruction>
+  versioned: boolean
+  addressTableLookups: Array<JsMessageAddressTableLookup>
+}
+
+export interface JsMessageAddressTableLookup {
+  accountKey: Buffer
+  writableIndexes: Buffer
+  readonlyIndexes: Buffer
+}
+
+export interface JsMessageHeader {
+  numRequiredSignatures: number
+  numReadonlySignedAccounts: number
+  numReadonlyUnsignedAccounts: number
+}
+
+export interface JsNumPartitions {
+  numPartitions: string
+}
+
 export interface JsPingRequest {
   count: number
 }
@@ -143,12 +215,278 @@ export interface JsPongResponse {
   count: number
 }
 
+export interface JsReturnData {
+  programId: Buffer
+  data: Buffer
+}
+
+export interface JsReward {
+  pubkey: string
+  lamports: string
+  postBalance: string
+  rewardType: number
+  commission: string
+}
+
+export interface JsRewards {
+  rewards: Array<JsReward>
+  numPartitions?: JsNumPartitions
+}
+
 export interface JsSubscribeReplayInfoRequest {
 
 }
 
 export interface JsSubscribeReplayInfoResponse {
   firstAvailable?: string
+}
+
+export interface JsSubscribeRequest {
+  accounts: Record<string, JsSubscribeRequestFilterAccounts>
+  slots: Record<string, JsSubscribeRequestFilterSlots>
+  transactions: Record<string, JsSubscribeRequestFilterTransactions>
+  transactionsStatus: Record<string, JsSubscribeRequestFilterTransactions>
+  blocks: Record<string, JsSubscribeRequestFilterBlocks>
+  blocksMeta: Record<string, JsSubscribeRequestFilterBlocksMeta>
+  entry: Record<string, JsSubscribeRequestFilterEntry>
+  commitment?: number
+  accountsDataSlice: Array<JsSubscribeRequestAccountsDataSlice>
+  ping?: JsSubscribeRequestPing
+  fromSlot?: string
+}
+
+export interface JsSubscribeRequestAccountsDataSlice {
+  offset: string
+  length: string
+}
+
+export interface JsSubscribeRequestFilterAccounts {
+  account: Array<string>
+  owner: Array<string>
+  filters: Array<JsSubscribeRequestFilterAccountsFilter>
+  nonemptyTxnSignature?: boolean
+}
+
+export interface JsSubscribeRequestFilterAccountsFilter {
+  filter?: JsSubscribeRequestFilterAccountsFilterFilter
+}
+
+export interface JsSubscribeRequestFilterAccountsFilterFilter {
+  memcmp?: JsSubscribeRequestFilterAccountsFilterMemcmp
+  datasize?: string
+  tokenAccountState?: boolean
+  lamports?: JsSubscribeRequestFilterAccountsFilterLamports
+}
+
+export interface JsSubscribeRequestFilterAccountsFilterLamports {
+  cmp?: JsSubscribeRequestFilterAccountsFilterLamportsCmp
+}
+
+export interface JsSubscribeRequestFilterAccountsFilterLamportsCmp {
+  eq?: string
+  ne?: string
+  lt?: string
+  gt?: string
+}
+
+export interface JsSubscribeRequestFilterAccountsFilterMemcmp {
+  offset: string
+  data?: JsSubscribeRequestFilterAccountsFilterMemcmpData
+}
+
+export interface JsSubscribeRequestFilterAccountsFilterMemcmpData {
+  bytes?: Buffer
+  base58?: string
+  base64?: string
+}
+
+export interface JsSubscribeRequestFilterBlocks {
+  accountInclude: Array<string>
+  includeTransactions?: boolean
+  includeAccounts?: boolean
+  includeEntries?: boolean
+}
+
+export interface JsSubscribeRequestFilterBlocksMeta {
+
+}
+
+export interface JsSubscribeRequestFilterEntry {
+
+}
+
+export interface JsSubscribeRequestFilterSlots {
+  filterByCommitment?: boolean
+  interslotUpdates?: boolean
+}
+
+export interface JsSubscribeRequestFilterTransactions {
+  vote?: boolean
+  failed?: boolean
+  signature?: string
+  accountInclude: Array<string>
+  accountExclude: Array<string>
+  accountRequired: Array<string>
+}
+
+export interface JsSubscribeRequestPing {
+  id: number
+}
+
+export interface JsSubscribeUpdate {
+  filters: Array<string>
+  createdAt?: Date
+  updateOneof?: JsSubscribeUpdateUpdateOneof
+}
+
+export interface JsSubscribeUpdateAccount {
+  account?: JsSubscribeUpdateAccountInfo
+  slot: string
+  isStartup: boolean
+}
+
+export interface JsSubscribeUpdateAccountInfo {
+  pubkey: Buffer
+  lamports: string
+  owner: Buffer
+  executable: boolean
+  rentEpoch: string
+  data: Buffer
+  writeVersion: string
+  txnSignature?: Buffer
+}
+
+export interface JsSubscribeUpdateBlock {
+  slot: string
+  blockhash: string
+  rewards?: JsRewards
+  blockTime?: JsUnixTimestamp
+  blockHeight?: JsBlockHeight
+  parentSlot: string
+  parentBlockhash: string
+  executedTransactionCount: string
+  transactions: Array<JsSubscribeUpdateTransactionInfo>
+  updatedAccountCount: string
+  accounts: Array<JsSubscribeUpdateAccountInfo>
+  entriesCount: string
+  entries: Array<JsSubscribeUpdateEntry>
+}
+
+export interface JsSubscribeUpdateBlockMeta {
+  slot: string
+  blockhash: string
+  rewards?: JsRewards
+  blockTime?: JsUnixTimestamp
+  blockHeight?: JsBlockHeight
+  parentSlot: string
+  parentBlockhash: string
+  executedTransactionCount: string
+  entriesCount: string
+}
+
+export interface JsSubscribeUpdateEntry {
+  slot: string
+  index: string
+  numHashes: string
+  hash: Buffer
+  executedTransactionCount: string
+  startingTransactionIndex: string
+}
+
+export interface JsSubscribeUpdatePing {
+
+}
+
+export interface JsSubscribeUpdatePong {
+  id: number
+}
+
+export interface JsSubscribeUpdateSlot {
+  slot: string
+  parent?: string
+  status: number
+  deadError?: string
+}
+
+export interface JsSubscribeUpdateTransaction {
+  transaction?: JsSubscribeUpdateTransactionInfo
+  slot: string
+}
+
+export interface JsSubscribeUpdateTransactionInfo {
+  signature: Buffer
+  isVote: boolean
+  transaction?: JsTransaction
+  meta?: JsTransactionStatusMeta
+  index: string
+}
+
+export interface JsSubscribeUpdateTransactionStatus {
+  slot: string
+  signature: Buffer
+  isVote: boolean
+  index: string
+  err?: JsTransactionError
+}
+
+export interface JsSubscribeUpdateUpdateOneof {
+  account?: JsSubscribeUpdateAccount
+  slot?: JsSubscribeUpdateSlot
+  transaction?: JsSubscribeUpdateTransaction
+  transactionStatus?: JsSubscribeUpdateTransactionStatus
+  block?: JsSubscribeUpdateBlock
+  ping?: JsSubscribeUpdatePing
+  pong?: JsSubscribeUpdatePong
+  blockMeta?: JsSubscribeUpdateBlockMeta
+  entry?: JsSubscribeUpdateEntry
+}
+
+export interface JsTokenBalance {
+  accountIndex: number
+  mint: string
+  uiTokenAmount?: JsUiTokenAmount
+  owner: string
+  programId: string
+}
+
+export interface JsTransaction {
+  signatures: Array<Buffer>
+  message?: JsMessage
+}
+
+export interface JsTransactionError {
+  err: Buffer
+}
+
+export interface JsTransactionStatusMeta {
+  err?: JsTransactionError
+  fee: string
+  preBalances: Array<string>
+  postBalances: Array<string>
+  innerInstructions: Array<JsInnerInstructions>
+  innerInstructionsNone: boolean
+  logMessages: Array<string>
+  logMessagesNone: boolean
+  preTokenBalances: Array<JsTokenBalance>
+  postTokenBalances: Array<JsTokenBalance>
+  rewards: Array<JsReward>
+  loadedWritableAddresses: Array<Buffer>
+  loadedReadonlyAddresses: Array<Buffer>
+  returnData?: JsReturnData
+  returnDataNone: boolean
+  computeUnitsConsumed?: string
+  costUnits?: string
+}
+
+export interface JsUiTokenAmount {
+  uiAmount: number
+  decimals: number
+  amount: string
+  uiAmountString: string
+}
+
+export interface JsUnixTimestamp {
+  timestamp: string
 }
 
 export declare const enum WasmUiTransactionEncoding {
