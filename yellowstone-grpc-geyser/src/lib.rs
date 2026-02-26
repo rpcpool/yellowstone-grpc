@@ -2,6 +2,7 @@ pub mod config;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;
+pub mod parallel;
 pub mod plugin;
 pub mod transport;
 pub(crate) mod util;
