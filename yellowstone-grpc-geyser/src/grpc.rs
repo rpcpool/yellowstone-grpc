@@ -1225,7 +1225,7 @@ impl GrpcService {
             let mut tracker = subscription_tracker.lock().await;
             if let Some(count) = tracker.get_mut(&subscriber_id) {
                 info!("decrementing subscription tracker count ({count}) for {subscriber_id:?}");
-                *count -= count.saturating_sub(1);
+                *count = count.saturating_sub(1);
                 info!("new count for {subscriber_id:?} is {count}");
                 if *count == 0 {
                     info!("no more open clients for {subscriber_id:?} removing from tracker");
