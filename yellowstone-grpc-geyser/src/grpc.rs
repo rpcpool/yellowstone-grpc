@@ -1227,7 +1227,7 @@ impl GrpcService {
                 info!("decrementing subscription tracker count ({count}) for {subscriber_id:?}");
                 *count -= count.saturating_sub(1);
                 info!("new count for {subscriber_id:?} is {count}");
-                if *count <= 0 {
+                if *count == 0 {
                     info!("no more open clients for {subscriber_id:?} removing from tracker");
                     tracker.remove(&subscriber_id);
                 }
@@ -1330,7 +1330,7 @@ impl Geyser for GrpcService {
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         if let Some(id) = subscriber_id.clone() {
-            let subscription_tracker_ref = self.subscription_tracker.clone();
+            let subscription_tracker_ref = Arc::clone(&self.subscription_tracker);
             let mut tracker = subscription_tracker_ref.lock().await;
             let count = tracker.entry(id.clone()).or_insert_with(|| 0);
 
@@ -1495,7 +1495,7 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
-            self.subscription_tracker.clone(),
+            Arc::clone(&self.subscription_tracker),
         ));
 
         Ok(Response::new(stream_rx))
@@ -1703,7 +1703,7 @@ mod tests {
             None,
             ct.clone(),
             tt.clone(),
-            st.clone(),
+            Arc::clone(&st),
         ));
 
         // yield so incoming_handler sends the filter and client_loop
