@@ -88,11 +88,26 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_send_bandwidth_load",
+            "Current Send load we send to subscriber channel (in bytes per second)"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
 
     static ref GRPC_SUBSCRIBER_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "grpc_subscriber_queue_size",
             "Current size of subscriber channel queue"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref GRPC_SUBCRIBER_RX_LOAD: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_subscriber_recv_bandwidth_load",
+            "Current Receiver rate of subscriber channel (in bytes per second)"
         ),
         &["subscriber_id"]
     ).unwrap();
@@ -105,14 +120,6 @@ lazy_static::lazy_static! {
         &["subscriber_id", "reason"]
     ).unwrap();
 
-    static ref GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION: IntGaugeVec = IntGaugeVec::new(
-        Opts::new(
-            "grpc_concurrent_subscribe_per_tcp_connection",
-            "Current concurrent subscriptions per remote TCP peer socket address"
-        ),
-        &["remote_peer_sk_addr"]
-    ).unwrap();
-
     static ref GEYSER_ACCOUNT_UPDATE_RECEIVED: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "geyser_account_update_data_size_kib",
@@ -121,73 +128,95 @@ lazy_static::lazy_static! {
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
 
+    pub static ref GEYSER_BATCH_SIZE: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "yellowstone_geyser_batch_size",
+            "Size of processed message batches"
+        )
+        .buckets(vec![1.0, 4.0, 8.0, 16.0, 24.0, 31.0])
+    ).unwrap();
+
+    static ref PRE_ENCODED_CACHE_HIT: IntCounterVec = IntCounterVec::new(
+        Opts::new("yellowstone_grpc_pre_encoded_cache_hit", "Pre-encoded cache hits by message type"),
+        &["type"]
+    ).unwrap();
+
+    static ref PRE_ENCODED_CACHE_MISS: IntCounterVec = IntCounterVec::new(
+        Opts::new("yellowstone_grpc_pre_encoded_cache_miss", "Pre-encoded cache misses by message type"),
+        &["type"]
+    ).unwrap();
+
+    static ref PRE_ENCODED_CACHE_SKIP: IntCounterVec = IntCounterVec::new(
+        Opts::new("yellowstone_grpc_pre_encoded_cache_skip", "Pre-encoded cache skips due to unempty data slices"),
+        &["type"]
+    ).unwrap();
+
+    static ref PRE_ENCODE_POPULATED_ON_ARRIVAL: IntCounterVec = IntCounterVec::new(
+    Opts::new("yellowstone_grpc_pre_encode_populated_on_arrival", "OnceLock already populated when subscriber encodes"),
+    &["type"]
+).unwrap();
+
+static ref PRE_ENCODE_EMPTY_ON_ARRIVAL: IntCounterVec = IntCounterVec::new(
+    Opts::new("yellowstone_grpc_pre_encode_empty_on_arrival", "OnceLock empty when subscriber encodes"),
+    &["type"]
+).unwrap();
+
+static ref PARALLEL_ENCODER_LATENCY_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_parallel_encoder_latency_us",
+        "Time spent in parallel encoder encode() in microseconds"
+    )
+    .buckets(vec![10.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0])
+).unwrap();
+
+static ref PARALLEL_ENCODER_QUEUE_DEPTH: IntGauge = IntGauge::new(
+    "yellowstone_grpc_parallel_encoder_queue_depth",
+    "Number of batches waiting to be encoded"
+).unwrap();
+
+static ref FAST_PATH_TIME_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_fast_path_time_us",
+        "Time spent in pre-encoded cache hit path in microseconds"
+    )
+    .buckets(vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0])
+).unwrap();
+
+static ref FALLBACK_ENCODE_TIME_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_fallback_encode_time_us",
+        "Time spent in fallback encode path in microseconds"
+    )
+    .buckets(vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0])
+).unwrap();
+
+static ref GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION: IntGaugeVec = IntGaugeVec::new(
+        Opts::new(
+            "grpc_concurrent_subscribe_per_tcp_connection",
+            "Current concurrent subscriptions per remote TCP peer socket address"
+        ),
+        &["remote_peer_sk_addr"]
+    ).unwrap();
+
     static ref TOTAL_TRAFFIC_SENT: IntCounter = IntCounter::new(
         "total_traffic_sent_bytes",
         "Total traffic sent to subscriber by type (account_update, block_meta, etc)"
     ).unwrap();
 
     static ref TRAFFIC_SENT_PER_REMOTE_IP: IntCounterVec = IntCounterVec::new(
-        Opts::new(
-            "traffic_sent_per_remote_ip_bytes",
-            "Total traffic sent to subscriber by remote IP"
-        ),
+        Opts::new("traffic_sent_per_remote_ip_bytes", "Total traffic sent to subscriber by remote IP"),
         &["remote_ip"]
     ).unwrap();
 
-
     static ref GRPC_METHOD_CALL_COUNT: IntCounterVec = IntCounterVec::new(
-        Opts::new(
-            "yellowstone_grpc_method_call_count",
-            "Total number of calls to GetVersion gRPC method"
-        ),
+        Opts::new("yellowstone_grpc_method_call_count", "Total number of calls to GetVersion gRPC method"),
         &["method"]
     ).unwrap();
 
     static ref GRPC_SERVICE_OUTBOUND_BYTES: IntGaugeVec = IntGaugeVec::new(
-        Opts::new(
-            "yellowstone_grpc_service_outbound_bytes",
-            "Current emitted bytes by tonic service response bodies per active subscriber stream"
-        ),
+        Opts::new("yellowstone_grpc_service_outbound_bytes", "Current emitted bytes by tonic service response bodies per active subscriber stream"),
         &["subscriber_id"]
     ).unwrap();
-
-}
-
-pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
-    GRPC_METHOD_CALL_COUNT
-        .with_label_values(&[method.as_ref()])
-        .inc();
-}
-
-pub fn add_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S, bytes: u64) {
-    GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
-        .add(bytes as i64);
-}
-
-pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S) {
-    GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
-        .set(0);
-}
-
-pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .inc_by(bytes);
-}
-
-pub fn reset_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .reset();
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .remove_label_values(&[remote_ip.as_ref()])
-        .expect("remove_label_values")
-}
-
-pub fn add_total_traffic_sent(bytes: u64) {
-    TOTAL_TRAFFIC_SENT.inc_by(bytes);
 }
 
 #[derive(Debug)]
@@ -336,8 +365,20 @@ impl PrometheusService {
             register!(GRPC_MESSAGE_SENT);
             register!(GRPC_BYTES_SENT);
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
+            register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
+            register!(GRPC_SUBCRIBER_RX_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
+            register!(GEYSER_BATCH_SIZE);
             register!(GRPC_CLIENT_DISCONNECTS);
+            register!(PRE_ENCODED_CACHE_HIT);
+            register!(PRE_ENCODED_CACHE_MISS);
+            register!(PRE_ENCODED_CACHE_SKIP);
+            register!(PRE_ENCODE_POPULATED_ON_ARRIVAL);
+            register!(PRE_ENCODE_EMPTY_ON_ARRIVAL);
+            register!(PARALLEL_ENCODER_LATENCY_US);
+            register!(PARALLEL_ENCODER_QUEUE_DEPTH);
+            register!(FAST_PATH_TIME_US);
+            register!(FALLBACK_ENCODE_TIME_US);
             register!(GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION);
             register!(TOTAL_TRAFFIC_SENT);
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
@@ -537,6 +578,18 @@ pub fn observe_geyser_account_update_received(data_bytesize: usize) {
     GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
 }
 
+pub fn set_subscriber_send_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
+}
+
+pub fn set_subscriber_recv_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load: i64) {
+    GRPC_SUBCRIBER_RX_LOAD
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(load);
+}
+
 pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
     GRPC_SUBSCRIBER_QUEUE_SIZE
         .with_label_values(&[subscriber_id.as_ref()])
@@ -547,6 +600,87 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
     GRPC_CLIENT_DISCONNECTS
         .with_label_values(&[subscriber_id.as_ref(), reason])
         .inc();
+}
+
+pub fn pre_encoded_cache_hit(msg_type: &str) {
+    PRE_ENCODED_CACHE_HIT.with_label_values(&[msg_type]).inc();
+}
+
+pub fn pre_encoded_cache_miss(msg_type: &str) {
+    PRE_ENCODED_CACHE_MISS.with_label_values(&[msg_type]).inc();
+}
+
+pub fn pre_encoded_cache_skip(msg_type: &str) {
+    PRE_ENCODED_CACHE_SKIP.with_label_values(&[msg_type]).inc();
+}
+
+pub fn pre_encode_populated_on_arrival(msg_type: &str) {
+    PRE_ENCODE_POPULATED_ON_ARRIVAL
+        .with_label_values(&[msg_type])
+        .inc();
+}
+
+pub fn pre_encode_empty_on_arrival(msg_type: &str) {
+    PRE_ENCODE_EMPTY_ON_ARRIVAL
+        .with_label_values(&[msg_type])
+        .inc();
+}
+
+pub fn observe_parallel_encoder_latency_us(latency: f64) {
+    PARALLEL_ENCODER_LATENCY_US.observe(latency);
+}
+
+pub fn encoder_queue_depth_inc() {
+    PARALLEL_ENCODER_QUEUE_DEPTH.inc();
+}
+
+pub fn encoder_queue_depth_dec() {
+    PARALLEL_ENCODER_QUEUE_DEPTH.dec();
+}
+
+pub fn observe_fast_path_time_us(latency: f64) {
+    FAST_PATH_TIME_US.observe(latency);
+}
+
+pub fn observe_fallback_encode_time_us(latency: f64) {
+    FALLBACK_ENCODE_TIME_US.observe(latency);
+}
+
+pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
+    GRPC_METHOD_CALL_COUNT
+        .with_label_values(&[method.as_ref()])
+        .inc();
+}
+
+pub fn add_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S, bytes: u64) {
+    GRPC_SERVICE_OUTBOUND_BYTES
+        .with_label_values(&[subscriber_id.as_ref()])
+        .add(bytes as i64);
+}
+
+pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S) {
+    GRPC_SERVICE_OUTBOUND_BYTES
+        .with_label_values(&[subscriber_id.as_ref()])
+        .set(0);
+}
+
+pub fn add_total_traffic_sent(bytes: u64) {
+    TOTAL_TRAFFIC_SENT.inc_by(bytes);
+}
+
+pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
+    TRAFFIC_SENT_PER_REMOTE_IP
+        .with_label_values(&[remote_ip.as_ref()])
+        .inc_by(bytes);
+}
+
+pub fn reset_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S) {
+    TRAFFIC_SENT_PER_REMOTE_IP
+        .with_label_values(&[remote_ip.as_ref()])
+        .reset();
+    TRAFFIC_SENT_PER_REMOTE_IP
+        .remove_label_values(&[remote_ip.as_ref()])
+        .expect("remove_label_values");
 }
 
 pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
@@ -575,14 +709,16 @@ pub fn reset_metrics() {
     SLOT_STATUS.reset();
     SLOT_STATUS_PLUGIN.reset();
     INVALID_FULL_BLOCKS.reset();
+    GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD.reset();
     GRPC_SUBSCRIBER_QUEUE_SIZE.reset();
-    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
+    GRPC_SUBCRIBER_RX_LOAD.reset();
 
     // Reset counter vectors (clears all label combinations)
     MISSED_STATUS_MESSAGE.reset();
     GRPC_MESSAGE_SENT.reset();
     GRPC_BYTES_SENT.reset();
     GRPC_CLIENT_DISCONNECTS.reset();
+    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
     TOTAL_TRAFFIC_SENT.reset();
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
