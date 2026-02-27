@@ -18,6 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - yellowstone-grpc-proto-12.1.0
 
 ### Fixes
+- geyser: replace Arc::get_mut with OnceLock for pre-encoding to support shared ownership, added metrics for pre-encode hit/miss ([#683](https://github.com/rpcpool/yellowstone-grpc/pull/683))
 
 - geyser: replace `OnDrop` with `ClientSession` RAII guard in `client_loop`, fixing missed cleanup on early-exit paths ([#687](https://github.com/rpcpool/yellowstone-grpc/pull/687)), ([#690](https://github.com/rpcpool/yellowstone-grpc/pull/690))
 - geyser: fix ping and traffic metric ([#698](https://github.com/rpcpool/yellowstone-grpc/pull/698))
