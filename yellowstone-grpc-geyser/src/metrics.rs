@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigPrometheus,
-        plugin::{filter::Filter, message::SlotStatus},
+        plugin::{entry::METRICS_ENABLED, filter::Filter, message::SlotStatus},
         version::VERSION as VERSION_INFO,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
@@ -154,40 +154,52 @@ lazy_static::lazy_static! {
 }
 
 pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
-    GRPC_METHOD_CALL_COUNT
-        .with_label_values(&[method.as_ref()])
-        .inc();
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_METHOD_CALL_COUNT
+            .with_label_values(&[method.as_ref()])
+            .inc();
+    }
 }
 
 pub fn add_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S, bytes: u64) {
-    GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
-        .add(bytes as i64);
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_SERVICE_OUTBOUND_BYTES
+            .with_label_values(&[subscriber_id.as_ref()])
+            .add(bytes as i64);
+    }
 }
 
 pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S) {
-    GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
-        .set(0);
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_SERVICE_OUTBOUND_BYTES
+            .with_label_values(&[subscriber_id.as_ref()])
+            .set(0);
+    }
 }
 
 pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .inc_by(bytes);
+    if *METRICS_ENABLED.get().unwrap() {
+        TRAFFIC_SENT_PER_REMOTE_IP
+            .with_label_values(&[remote_ip.as_ref()])
+            .inc_by(bytes);
+    }
 }
 
 pub fn reset_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .reset();
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .remove_label_values(&[remote_ip.as_ref()])
-        .expect("remove_label_values")
+    if *METRICS_ENABLED.get().unwrap() {
+        TRAFFIC_SENT_PER_REMOTE_IP
+            .with_label_values(&[remote_ip.as_ref()])
+            .reset();
+        TRAFFIC_SENT_PER_REMOTE_IP
+            .remove_label_values(&[remote_ip.as_ref()])
+            .expect("remove_label_values")
+    }
 }
 
 pub fn add_total_traffic_sent(bytes: u64) {
-    TOTAL_TRAFFIC_SENT.inc_by(bytes);
+    if *METRICS_ENABLED.get().unwrap() {
+        TOTAL_TRAFFIC_SENT.inc_by(bytes);
+    }
 }
 
 #[derive(Debug)]
@@ -465,103 +477,135 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
 }
 
 pub fn incr_grpc_bytes_sent<S: AsRef<str>>(remote_id: S, byte_sent: u32) {
-    GRPC_BYTES_SENT
-        .with_label_values(&[remote_id.as_ref()])
-        .inc_by(byte_sent as u64);
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_BYTES_SENT
+            .with_label_values(&[remote_id.as_ref()])
+            .inc_by(byte_sent as u64);
+    }
 }
 
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
-    GRPC_MESSAGE_SENT
-        .with_label_values(&[remote_id.as_ref()])
-        .inc();
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_MESSAGE_SENT
+            .with_label_values(&[remote_id.as_ref()])
+            .inc();
+    }
 }
 
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
-    SLOT_STATUS
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    if *METRICS_ENABLED.get().unwrap() {
+        SLOT_STATUS
+            .with_label_values(&[status.as_str()])
+            .set(slot as i64);
+    }
 }
 
 pub fn update_slot_plugin_status(status: SlotStatus, slot: u64) {
-    SLOT_STATUS_PLUGIN
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    if *METRICS_ENABLED.get().unwrap() {
+        SLOT_STATUS_PLUGIN
+            .with_label_values(&[status.as_str()])
+            .set(slot as i64);
+    }
 }
 
 pub fn update_invalid_blocks(reason: impl AsRef<str>) {
-    INVALID_FULL_BLOCKS
-        .with_label_values(&[reason.as_ref()])
-        .inc();
-    INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+    if *METRICS_ENABLED.get().unwrap() {
+        INVALID_FULL_BLOCKS
+            .with_label_values(&[reason.as_ref()])
+            .inc();
+        INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+    }
 }
 
 pub fn message_queue_size_inc() {
-    MESSAGE_QUEUE_SIZE.inc()
+    if *METRICS_ENABLED.get().unwrap() {
+        MESSAGE_QUEUE_SIZE.inc()
+    }
 }
 
 pub fn message_queue_size_dec() {
-    MESSAGE_QUEUE_SIZE.dec()
+    if *METRICS_ENABLED.get().unwrap() {
+        MESSAGE_QUEUE_SIZE.dec()
+    }
 }
 
 pub fn connections_total_inc() {
-    CONNECTIONS_TOTAL.inc()
+    if *METRICS_ENABLED.get().unwrap() {
+        CONNECTIONS_TOTAL.inc()
+    }
 }
 
 pub fn connections_total_dec() {
-    CONNECTIONS_TOTAL.dec()
+    if *METRICS_ENABLED.get().unwrap() {
+        CONNECTIONS_TOTAL.dec()
+    }
 }
 
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
-    for (multiplier, filter) in [(-1, old), (1, new)] {
-        if let Some(filter) = filter {
-            SUBSCRIPTIONS_TOTAL
-                .with_label_values(&[endpoint, "grpc_total"])
-                .add(multiplier);
-
-            for (name, value) in filter.get_metrics() {
+    if *METRICS_ENABLED.get().unwrap() {
+        for (multiplier, filter) in [(-1, old), (1, new)] {
+            if let Some(filter) = filter {
                 SUBSCRIPTIONS_TOTAL
-                    .with_label_values(&[endpoint, name])
-                    .add((value as i64) * multiplier);
+                    .with_label_values(&[endpoint, "grpc_total"])
+                    .add(multiplier);
+
+                for (name, value) in filter.get_metrics() {
+                    SUBSCRIPTIONS_TOTAL
+                        .with_label_values(&[endpoint, name])
+                        .add((value as i64) * multiplier);
+                }
             }
         }
     }
 }
 
 pub fn missed_status_message_inc(status: SlotStatus) {
-    MISSED_STATUS_MESSAGE
-        .with_label_values(&[status.as_str()])
-        .inc()
+    if *METRICS_ENABLED.get().unwrap() {
+        MISSED_STATUS_MESSAGE
+            .with_label_values(&[status.as_str()])
+            .inc()
+    }
 }
 
 pub fn observe_geyser_account_update_received(data_bytesize: usize) {
-    GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
+    if *METRICS_ENABLED.get().unwrap() {
+        GEYSER_ACCOUNT_UPDATE_RECEIVED.observe(data_bytesize as f64 / 1024.0);
+    }
 }
 
 pub fn set_subscriber_queue_size<S: AsRef<str>>(subscriber_id: S, size: u64) {
-    GRPC_SUBSCRIBER_QUEUE_SIZE
-        .with_label_values(&[subscriber_id.as_ref()])
-        .set(size as i64);
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_SUBSCRIBER_QUEUE_SIZE
+            .with_label_values(&[subscriber_id.as_ref()])
+            .set(size as i64);
+    }
 }
 
 pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
-    GRPC_CLIENT_DISCONNECTS
-        .with_label_values(&[subscriber_id.as_ref(), reason])
-        .inc();
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_CLIENT_DISCONNECTS
+            .with_label_values(&[subscriber_id.as_ref(), reason])
+            .inc();
+    }
 }
 
 pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
     remote_peer_sk_addr: S,
     size: u64,
 ) {
-    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
-        .with_label_values(&[remote_peer_sk_addr.as_ref()])
-        .set(size as i64);
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
+            .with_label_values(&[remote_peer_sk_addr.as_ref()])
+            .set(size as i64);
+    }
 }
 
 pub fn remove_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(remote_peer_sk_addr: S) {
-    GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
-        .remove_label_values(&[remote_peer_sk_addr.as_ref()])
-        .expect("remove_label_values");
+    if *METRICS_ENABLED.get().unwrap() {
+        GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
+            .remove_label_values(&[remote_peer_sk_addr.as_ref()])
+            .expect("remove_label_values");
+    }
 }
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
