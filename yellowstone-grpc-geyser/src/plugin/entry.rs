@@ -17,7 +17,7 @@ use {
         concat, env,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
+            Arc, Mutex, OnceLock,
         },
         time::Duration,
     },
@@ -27,6 +27,8 @@ use {
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
+
+pub(crate) const METRICS_ENABLED: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct PluginInner {
@@ -75,13 +77,19 @@ impl GeyserPlugin for Plugin {
     fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
         let config = Config::load_from_file(config_file)?;
 
+        // set metrics enabled on first load
+        // this persists across reloads
+        let _ = METRICS_ENABLED.set(config.prometheus.is_some());
+
         // Setup logger
         solana_logger::setup_with_default(&config.log.level);
 
         log::info!("loading plugin: {}", self.name());
 
         // Reset metrics to prevent accumulation across plugin reload cycles
-        metrics::reset_metrics();
+        if *METRICS_ENABLED.get().unwrap() {
+            metrics::reset_metrics();
+        }
 
         // Create inner
         let mut builder = Builder::new_multi_thread();
@@ -108,15 +116,17 @@ impl GeyserPlugin for Plugin {
 
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
-            // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
-            PrometheusService::spawn(
-                config.prometheus,
-                config.debug_clients_http.then_some(debug_client_rx),
-                prometheus_cancellation_token,
-                prometheus_task_tracker,
-            )
-            .await
-            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+            if *METRICS_ENABLED.get().unwrap() {
+                // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
+                PrometheusService::spawn(
+                    config.prometheus,
+                    config.debug_clients_http.then_some(debug_client_rx),
+                    prometheus_cancellation_token,
+                    prometheus_task_tracker,
+                )
+                .await
+                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+            }
 
             let (snapshot_channel, grpc_channel) = GrpcService::create(
                 config.grpc,
