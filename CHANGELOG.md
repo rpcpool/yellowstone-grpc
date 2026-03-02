@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- geyser: configurable per-subscriber subscription limit with enforce/observe mode ([#680](https://github.com/rpcpool/yellowstone-grpc/pull/680))
+
 ## 2026-02-24
 
 - yellowstone-grpc-client-12.1.0
