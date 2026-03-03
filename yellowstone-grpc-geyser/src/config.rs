@@ -174,6 +174,19 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub unary_concurrency_limit: usize,
+    /// Maximum concurrent subscriptions allowed per subscriber ID.
+    /// Subscribers are identified by the `x-subscription-id` header,
+    /// falling back to the remote IP address.
+    #[serde(
+        default = "ConfigGrpc::subscription_limit_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub subscription_limit: usize,
+    /// When false (default), exceeding the subscription limit only logs
+    /// and emits metrics without rejecting the connection. Set to true
+    /// to start rejecting with RESOURCE_EXHAUSTED.
+    #[serde(default)]
+    pub subscription_limit_enforce: bool,
     /// Enable/disable unary methods
     #[serde(default)]
     pub unary_disabled: bool,
@@ -238,6 +251,10 @@ impl ConfigGrpc {
 
     const fn unary_concurrency_limit_default() -> usize {
         Semaphore::MAX_PERMITS
+    }
+
+    const fn subscription_limit_default() -> usize {
+        1000
     }
 
     const fn default_filter_name_size_limit() -> usize {

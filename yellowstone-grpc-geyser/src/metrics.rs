@@ -143,6 +143,14 @@ lazy_static::lazy_static! {
         &["method"]
     ).unwrap();
 
+    static ref GRPC_SUBSCRIPTION_LIMIT_EXCEEDED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_subscription_limit_exceeded_total",
+            "Number of subscribe attempts that exceeded the per-subscriber limit"
+        ),
+        &["subscriber_id"]
+    ).unwrap();
+
     static ref GRPC_SERVICE_OUTBOUND_BYTES: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "yellowstone_grpc_service_outbound_bytes",
@@ -342,6 +350,7 @@ impl PrometheusService {
             register!(TOTAL_TRAFFIC_SENT);
             register!(TRAFFIC_SENT_PER_REMOTE_IP);
             register!(GRPC_METHOD_CALL_COUNT);
+            register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
 
             VERSION
@@ -511,6 +520,12 @@ pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
 }
 
+pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
+    GRPC_SUBSCRIPTION_LIMIT_EXCEEDED
+        .with_label_values(&[subscriber_id.as_ref()])
+        .inc();
+}
+
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
@@ -586,6 +601,7 @@ pub fn reset_metrics() {
     TOTAL_TRAFFIC_SENT.reset();
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
+    GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.reset();
     GRPC_METHOD_CALL_COUNT.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset

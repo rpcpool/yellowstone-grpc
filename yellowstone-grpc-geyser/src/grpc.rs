@@ -3,7 +3,8 @@ use {
         config::ConfigGrpc,
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size, DebugClientMessage,
+            self, incr_grpc_method_call_count, set_subscriber_queue_size,
+            subscription_limit_exceeded_inc, DebugClientMessage,
         },
         plugin::{
             filter::{
@@ -352,6 +353,8 @@ enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
+type SubscriptionTracker = Arc<StdMutex<HashMap<String, usize>>>;
+
 static CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR: LazyLock<
     StdMutex<HashMap<SocketAddr, usize>>,
 > = LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -373,6 +376,7 @@ struct ClientSession {
     cancellation_token: CancellationToken,
     disconnect_reason: &'static str,
     maybe_remote_peer_sk_addr: Option<SocketAddr>,
+    subscription_tracker: SubscriptionTracker,
 }
 
 impl ClientSession {
@@ -383,6 +387,7 @@ impl ClientSession {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
+        subscription_tracker: SubscriptionTracker,
     ) -> Self {
         let filter = Filter::default();
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
@@ -415,6 +420,7 @@ impl ClientSession {
             cancellation_token,
             disconnect_reason: "unknown",
             maybe_remote_peer_sk_addr,
+            subscription_tracker,
         }
     }
 
@@ -432,6 +438,18 @@ impl ClientSession {
 
 impl Drop for ClientSession {
     fn drop(&mut self) {
+        {
+            let mut tracker = self
+                .subscription_tracker
+                .lock()
+                .expect("subscription_tracker mutex poisoned");
+            if let Some(count) = tracker.get_mut(&self.subscriber_id) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    tracker.remove(&self.subscriber_id);
+                }
+            }
+        }
         if let Some(remote_peer_sk_addr) = self.maybe_remote_peer_sk_addr {
             let mut subscriptions_per_remote_addr =
                 CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR
@@ -475,6 +493,9 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
+    subscription_limit: usize,
+    subscription_limit_enforce: bool,
+    subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<BlockMetaStorage>,
     subscribe_id: AtomicUsize,
     snapshot_rx: Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>,
@@ -584,6 +605,9 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
+            subscription_limit: config.subscription_limit,
+            subscription_limit_enforce: config.subscription_limit_enforce,
+            subscription_tracker: Arc::new(StdMutex::new(HashMap::new())),
             blocks_meta,
             subscribe_id: AtomicUsize::new(0),
             snapshot_rx: Mutex::new(snapshot_rx),
@@ -1008,6 +1032,7 @@ impl GrpcService {
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        subscription_tracker: SubscriptionTracker,
     ) {
         let mut session = ClientSession::new(
             id,
@@ -1016,6 +1041,7 @@ impl GrpcService {
             maybe_remote_peer_sk_addr,
             debug_client_tx,
             cancellation_token,
+            subscription_tracker,
         );
         let cancellation_token = session.cancellation_token.clone();
 
@@ -1300,6 +1326,43 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         incr_grpc_method_call_count("subscribe");
+
+        let subscriber_id = request
+            .metadata()
+            .get("x-subscription-id")
+            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+            .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()));
+
+        // Per-subscriber subscription limit: check and increment under a
+        // single lock hold so no two calls can race past the limit.
+        // Cleanup (decrement) is handled by `ClientSession::drop()`.
+        // When subscriber_id is None (no x-subscription-id header and no
+        // remote address) we skip the limit check entirely rather than
+        // grouping all unidentified clients into a shared bucket.
+        if let Some(id) = subscriber_id.as_deref() {
+            if self.subscription_limit > 0 {
+                let mut tracker = self
+                    .subscription_tracker
+                    .lock()
+                    .expect("subscription_tracker mutex poisoned");
+                let count = tracker.entry(id.to_owned()).or_insert(0);
+
+                if *count >= self.subscription_limit {
+                    subscription_limit_exceeded_inc(id);
+                    if self.subscription_limit_enforce {
+                        return Err(Status::resource_exhausted(
+                            "max subscription limit exceeded",
+                        ));
+                    }
+                    info!(
+                        "subscriber {id:?} over limit ({count}/{}), not enforcing",
+                        self.subscription_limit
+                    );
+                }
+                *count += 1;
+            }
+        }
+
         let maybe_remote_peer_sk_addr = request
             .extensions()
             .get::<TcpConnectInfo>()
@@ -1369,12 +1432,6 @@ impl Geyser for GrpcService {
             .get("x-endpoint")
             .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
             .unwrap_or_else(|| "".to_owned());
-
-        let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
         let filter_names = Arc::clone(&self.filter_names);
@@ -1448,6 +1505,7 @@ impl Geyser for GrpcService {
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
             self.task_tracker.clone(),
+            Arc::clone(&self.subscription_tracker),
         ));
 
         Ok(Response::new(stream_rx))
@@ -1627,6 +1685,7 @@ mod tests {
     async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
+        let st: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
         let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
@@ -1654,6 +1713,7 @@ mod tests {
             None,
             ct.clone(),
             tt.clone(),
+            Arc::clone(&st),
         ));
 
         // yield so incoming_handler sends the filter and client_loop
@@ -1683,5 +1743,71 @@ mod tests {
             .expect("client_loop panicked");
 
         assert!(ct.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_subscription_tracker_decrements_on_session_drop() {
+        let tracker: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
+
+        // simulate what subscribe() does: increment under lock
+        {
+            let mut map = tracker.lock().unwrap();
+            *map.entry("sub-1".to_owned()).or_insert(0) += 1;
+            *map.entry("sub-1".to_owned()).or_insert(0) += 1;
+        }
+        assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 2);
+
+        // create a session (mirrors what client_loop does)
+        {
+            let _session = ClientSession::new(
+                0,
+                Some("sub-1".into()),
+                "".into(),
+                None,
+                None,
+                CancellationToken::new(),
+                Arc::clone(&tracker),
+            );
+            // session alive: count unchanged
+            assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 2);
+        }
+        // session dropped: count decremented
+        assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 1);
+
+        // second drop removes the entry entirely
+        {
+            let _session = ClientSession::new(
+                1,
+                Some("sub-1".into()),
+                "".into(),
+                None,
+                None,
+                CancellationToken::new(),
+                Arc::clone(&tracker),
+            );
+        }
+        assert!(tracker.lock().unwrap().get("sub-1").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_subscription_tracker_skips_unidentified_subscribers() {
+        let tracker: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
+
+        // subscriber_id=None resolves to "UNKNOWN" inside ClientSession,
+        // but subscribe() skips the limit check entirely for None.
+        // The tracker should remain empty since no increment happened.
+        {
+            let _session = ClientSession::new(
+                0,
+                None,
+                "".into(),
+                None,
+                None,
+                CancellationToken::new(),
+                Arc::clone(&tracker),
+            );
+        }
+        // drop fires but "UNKNOWN" was never in the tracker, so nothing changes
+        assert!(tracker.lock().unwrap().is_empty());
     }
 }
