@@ -1,18 +1,24 @@
 use {
-    crate::{metrics, plugin::{
-        filter::{FilterAccountsDataSlice, name::FilterName},
-        message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo,
+    crate::{
+        metrics,
+        plugin::{
+            filter::{name::FilterName, FilterAccountsDataSlice},
+            message::{
+                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
+                MessageSlot, MessageTransaction, MessageTransactionInfo,
+            },
         },
-    }},
+    },
     bytes::{
-        Bytes, buf::{Buf, BufMut}
+        buf::{Buf, BufMut},
+        Bytes,
     },
     prost::{
-        DecodeError, encoding::{
-            DecodeContext, WireType, encode_key, encode_varint, encoded_len_varint, key_len, message
-        }
+        encoding::{
+            encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
+            WireType,
+        },
+        DecodeError,
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
@@ -25,7 +31,11 @@ use {
     },
     yellowstone_grpc_proto::{
         geyser::{
-            SlotStatus as SlotStatusProto, SubscribeUpdate, SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo, SubscribeUpdateTransactionStatus, subscribe_update::UpdateOneof
+            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            SubscribeUpdateTransactionStatus,
         },
         solana::storage::confirmed_block,
     },
@@ -482,16 +492,28 @@ impl FilteredUpdateAccount {
         data_slice: &FilterAccountsDataSlice,
         buf: &mut impl BufMut,
     ) {
+        // metric-fx: always record whether OnceLock was populated on arrival
+        if account.get_pre_encoded().is_some() {
+            metrics::pre_encode_populated_on_arrival("account");
+        } else {
+            metrics::pre_encode_empty_on_arrival("account");
+        }
+        //
+        
         // use pre-encoded if: no slicing and pre-encoded exists
         if data_slice.as_ref().is_empty() {
             if let Some(pre_encoded) = account.get_pre_encoded() {
+                let start = std::time::Instant::now();
                 metrics::pre_encoded_cache_hit("account");
                 encode_key(tag, WireType::LengthDelimited, buf);
                 encode_varint(pre_encoded.len() as u64, buf);
                 buf.put_slice(pre_encoded);
+                metrics::observe_fast_path_time_us(start.elapsed().as_micros() as f64);
                 return;
             }
-            metrics::pre_encoded_cache_miss("account");
+            metrics::pre_encoded_cache_miss("account"); // OnceLock empty
+        } else {
+            metrics::pre_encoded_cache_skip("account"); // skipped due to data slice
         }
 
         // fallback: slice-aware encoding
@@ -676,10 +698,12 @@ impl FilteredUpdateTransaction {
     fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
         // try to use pre-encoded bytes (fast path)
         if let Some(pre_encoded) = tx.get_pre_encoded() {
+            let start = std::time::Instant::now();
             metrics::pre_encoded_cache_hit("txn");
             encode_key(tag, WireType::LengthDelimited, buf);
             encode_varint(pre_encoded.len() as u64, buf);
             buf.put_slice(pre_encoded);
+            metrics::observe_fast_path_time_us(start.elapsed().as_micros() as f64);
             return;
         }
 

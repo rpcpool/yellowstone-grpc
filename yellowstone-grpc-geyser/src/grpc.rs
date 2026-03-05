@@ -816,8 +816,9 @@ impl GrpcService {
                             // processed
                             processed_messages.push(message.clone());
                             GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
+                            let encoded = parallel_encoder.encode(processed_messages).await;
                             let _ =
-                                broadcast_tx.send((CommitmentLevel::Processed, processed_messages.into()));
+                                broadcast_tx.send((CommitmentLevel::Processed, encoded.into()));
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                             processed_sleep
                                 .as_mut()
@@ -856,8 +857,9 @@ impl GrpcService {
                                 || !finalized_messages.is_empty()
                             {
                                 GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
+                                let encoded = parallel_encoder.encode(processed_messages).await;
                                 let _ = broadcast_tx
-                                    .send((CommitmentLevel::Processed, processed_messages.into()));
+                                    .send((CommitmentLevel::Processed, encoded.into()));
                                 processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                                 processed_sleep
                                     .as_mut()

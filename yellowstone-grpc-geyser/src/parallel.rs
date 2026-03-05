@@ -1,7 +1,10 @@
 use {
-    crate::plugin::{
-        filter::encoder::{AccountEncoder, TransactionEncoder},
-        message::Message,
+    crate::{
+        metrics,
+        plugin::{
+            filter::encoder::{AccountEncoder, TransactionEncoder},
+            message::Message,
+        },
     },
     rayon::{ThreadPool, ThreadPoolBuilder},
     tokio::sync::{mpsc, oneshot},
@@ -72,26 +75,32 @@ impl ParallelEncoder {
     }
 
     pub async fn encode(&self, batch: Vec<(u64, Message)>) -> Vec<(u64, Message)> {
-        if batch.len() < 4 {
-            return Self::encode_sync(batch);
-        }
+        let start = std::time::Instant::now();
 
-        let (tx, rx) = oneshot::channel();
+        let result = if batch.len() < 4 {
+            Self::encode_sync(batch)
+        } else {
+            let (tx, rx) = oneshot::channel();
 
-        // move batch, don't clone
-        if self
-            .tx
-            .send(EncodeRequest {
-                batch,
-                response: tx,
-            })
-            .is_err()
-        {
-            // channel closed - this shouldn't happen in normal operation
-            panic!("encoder channel closed");
-        }
+            metrics::encoder_queue_depth_inc(); // batch entering queue
+            if self
+                .tx
+                .send(EncodeRequest {
+                    batch,
+                    response: tx,
+                })
+                .is_err()
+            {
+                panic!("encoder channel closed");
+            }
 
-        rx.await.expect("encoder response failed")
+            let result = rx.await.expect("encoder response failed");
+            metrics::encoder_queue_depth_dec();
+            result
+        };
+
+        metrics::observe_parallel_encoder_latency_us(start.elapsed().as_micros() as f64);
+        result
     }
 
     fn encode_sync(mut batch: Vec<(u64, Message)>) -> Vec<(u64, Message)> {

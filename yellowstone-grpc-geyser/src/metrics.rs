@@ -144,6 +144,50 @@ lazy_static::lazy_static! {
         Opts::new("yellowstone_grpc_pre_encoded_cache_miss", "Pre-encoded cache misses by message type"),
         &["type"]
     ).unwrap();
+
+    static ref PRE_ENCODED_CACHE_SKIP: IntCounterVec = IntCounterVec::new(
+        Opts::new("yellowstone_grpc_pre_encoded_cache_skip", "Pre-encoded cache skips due to unempty data slices"),
+        &["type"]
+    ).unwrap();
+
+    static ref PRE_ENCODE_POPULATED_ON_ARRIVAL: IntCounterVec = IntCounterVec::new(
+    Opts::new("yellowstone_grpc_pre_encode_populated_on_arrival", "OnceLock already populated when subscriber encodes"),
+    &["type"]
+).unwrap();
+
+static ref PRE_ENCODE_EMPTY_ON_ARRIVAL: IntCounterVec = IntCounterVec::new(
+    Opts::new("yellowstone_grpc_pre_encode_empty_on_arrival", "OnceLock empty when subscriber encodes"),
+    &["type"]
+).unwrap();
+
+static ref PARALLEL_ENCODER_LATENCY_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_parallel_encoder_latency_us",
+        "Time spent in parallel encoder encode() in microseconds"
+    )
+    .buckets(vec![10.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0])
+).unwrap();
+
+static ref PARALLEL_ENCODER_QUEUE_DEPTH: IntGauge = IntGauge::new(
+    "yellowstone_grpc_parallel_encoder_queue_depth",
+    "Number of batches waiting to be encoded"
+).unwrap();
+
+static ref FAST_PATH_TIME_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_fast_path_time_us",
+        "Time spent in pre-encoded cache hit path in microseconds"
+    )
+    .buckets(vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0])
+).unwrap();
+
+static ref FALLBACK_ENCODE_TIME_US: Histogram = Histogram::with_opts(
+    HistogramOpts::new(
+        "yellowstone_grpc_fallback_encode_time_us",
+        "Time spent in fallback encode path in microseconds"
+    )
+    .buckets(vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0])
+).unwrap();
 }
 
 #[derive(Debug)]
@@ -299,6 +343,13 @@ impl PrometheusService {
             register!(GRPC_CLIENT_DISCONNECTS);
             register!(PRE_ENCODED_CACHE_HIT);
             register!(PRE_ENCODED_CACHE_MISS);
+            register!(PRE_ENCODED_CACHE_SKIP);
+            register!(PRE_ENCODE_POPULATED_ON_ARRIVAL);
+            register!(PRE_ENCODE_EMPTY_ON_ARRIVAL);
+            register!(PARALLEL_ENCODER_LATENCY_US);
+            register!(PARALLEL_ENCODER_QUEUE_DEPTH);
+            register!(FAST_PATH_TIME_US);
+            register!(FALLBACK_ENCODE_TIME_US);
 
             VERSION
                 .with_label_values(&[
@@ -523,6 +574,42 @@ pub fn pre_encoded_cache_hit(msg_type: &str) {
 
 pub fn pre_encoded_cache_miss(msg_type: &str) {
     PRE_ENCODED_CACHE_MISS.with_label_values(&[msg_type]).inc();
+}
+
+pub fn pre_encoded_cache_skip(msg_type: &str) {
+    PRE_ENCODED_CACHE_SKIP.with_label_values(&[msg_type]).inc();
+}
+
+pub fn pre_encode_populated_on_arrival(msg_type: &str) {
+    PRE_ENCODE_POPULATED_ON_ARRIVAL
+        .with_label_values(&[msg_type])
+        .inc();
+}
+
+pub fn pre_encode_empty_on_arrival(msg_type: &str) {
+    PRE_ENCODE_EMPTY_ON_ARRIVAL
+        .with_label_values(&[msg_type])
+        .inc();
+}
+
+pub fn observe_parallel_encoder_latency_us(latency: f64) {
+    PARALLEL_ENCODER_LATENCY_US.observe(latency);
+}
+
+pub fn encoder_queue_depth_inc() {
+    PARALLEL_ENCODER_QUEUE_DEPTH.inc();
+}
+
+pub fn encoder_queue_depth_dec() {
+    PARALLEL_ENCODER_QUEUE_DEPTH.dec();
+}
+
+pub fn observe_fast_path_time_us(latency: f64) {
+    FAST_PATH_TIME_US.observe(latency);
+}
+
+pub fn observe_fallback_encode_time_us(latency: f64) {
+    FALLBACK_ENCODE_TIME_US.observe(latency);
 }
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
