@@ -70,7 +70,7 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "~3.1.0"
+agave-geyser-plugin-interface = "=3.1.8"
 solana-account-decoder = "~3.1.0"
 solana-logger = "3.0.0"
 solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
@@ -94,7 +94,7 @@ spl-token-2022-interface = "2.0.0"
 
 # Yellowstone
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.1.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.1.0-debug1+solana.3.1.8" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.1.0", default-features = false }
 
 [workspace.lints.clippy]
@@ -105,3 +105,4 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+debug = 2
