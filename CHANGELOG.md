@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 - geyser: add Unix domain socket support for multiple gRPC listener ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
+- client: add `connect_uds` method for Unix domain socket connections ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
+- client-simple: add `--uds` flag for Unix domain socket connections ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
 
 - geyser: configurable per-subscriber subscription limit with enforce/observe mode ([#680](https://github.com/rpcpool/yellowstone-grpc/pull/680))
 

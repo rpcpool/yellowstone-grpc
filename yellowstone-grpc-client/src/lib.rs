@@ -6,12 +6,16 @@ use {
         sink::{Sink, SinkExt},
         stream::Stream,
     },
-    std::time::Duration,
+    std::{path::PathBuf, time::Duration},
+    tokio::net::UnixStream,
     tonic::{
         codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
         service::interceptor::InterceptedService,
-        transport::channel::{Channel, Endpoint},
+        transport::{
+            channel::{Channel, Endpoint},
+            Uri,
+        },
         Request, Response, Status,
     },
     tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
@@ -330,6 +334,32 @@ impl GeyserGrpcBuilder {
         self,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let channel = self.endpoint.connect_lazy();
+        self.build(channel)
+    }
+
+    /// Connect to a gRPC server over a Unix Domain Socket.
+    ///
+    /// The `path` is the filesystem path to the socket (e.g. "/tmp/yellowstone.sock").
+    /// tonic requires a dummy HTTP URI for the channel, but the actual transport
+    /// goes through the UDS connector.
+    pub async fn connect_uds(
+        self,
+        path: impl Into<PathBuf>,
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+        let path = path.into();
+
+        // tonic needs an Endpoint to hang config off of, but the URI is ignored
+        // by the connector — all traffic goes through the UnixStream.
+        let channel = Endpoint::from_static("http://[::]:0")
+            .connect_with_connector(tower::service_fn(move |_: Uri| {
+                let path = path.clone();
+                async move {
+                    let stream = UnixStream::connect(path).await?;
+                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                }
+            }))
+            .await?;
+
         self.build(channel)
     }
 

@@ -21,7 +21,9 @@ use {
     },
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
-    yellowstone_grpc_client::{GeyserGrpcClient, GeyserGrpcClientError, Interceptor},
+    yellowstone_grpc_client::{
+        GeyserGrpcBuilder, GeyserGrpcClient, GeyserGrpcClientError, Interceptor,
+    },
     yellowstone_grpc_geyser::plugin::{convert_from, filter::message::FilteredUpdate},
     yellowstone_grpc_proto::{
         geyser::SlotStatus,
@@ -89,6 +91,10 @@ struct Args {
     #[clap(long)]
     connect_timeout_ms: Option<u64>,
 
+    /// Connect via Unix Domain Socket at this path instead of TCP
+    #[clap(long)]
+    uds: Option<PathBuf>,
+
     /// Sets the tower service default internal buffer size, default is 1024
     #[clap(long)]
     buffer_size: Option<usize>,
@@ -150,7 +156,7 @@ impl Args {
         Some(self.commitment.unwrap_or_default().into())
     }
 
-    async fn connect(&self) -> anyhow::Result<GeyserGrpcClient<impl Interceptor + Clone>> {
+    async fn build(&self) -> anyhow::Result<GeyserGrpcBuilder> {
         let mut tls_config = ClientTlsConfig::new().with_native_roots();
         if let Some(path) = &self.ca_certificate {
             let bytes = fs::read(path).await?;
@@ -206,7 +212,7 @@ impl Args {
             builder = builder.timeout(Duration::from_millis(duration));
         }
 
-        builder.connect().await.map_err(Into::into)
+        Ok(builder)
     }
 }
 
@@ -652,6 +658,71 @@ impl Action {
     }
 }
 
+async fn run_action(
+    mut client: GeyserGrpcClient<impl Interceptor>,
+    action: &Action,
+    commitment: Option<CommitmentLevel>,
+) -> anyhow::Result<()> {
+    match action {
+        Action::HealthCheck => client
+            .health_check()
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::HealthWatch => geyser_health_watch(client).await,
+        Action::Subscribe(_) => {
+            let (request, resub, stats, verify_encoding) = action
+                .get_subscribe_request(commitment)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("expect subscribe action"))?;
+
+            geyser_subscribe(client, request, resub, stats, verify_encoding).await
+        }
+        Action::SubscribeDeshred(_) => {
+            let (request, stats) = action
+                .get_subscribe_deshred_request()
+                .ok_or_else(|| anyhow::anyhow!("expect subscribe deshred action"))?;
+
+            geyser_subscribe_deshred(client, request, stats).await
+        }
+        Action::SubscribeReplayInfo => client
+            .subscribe_replay_info()
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::Ping { count } => client
+            .ping(*count)
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::GetLatestBlockhash => client
+            .get_latest_blockhash(commitment)
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::GetBlockHeight => client
+            .get_block_height(commitment)
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::GetSlot => client
+            .get_slot(commitment)
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::IsBlockhashValid { blockhash } => client
+            .is_blockhash_valid(blockhash.clone(), commitment)
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+        Action::GetVersion => client
+            .get_version()
+            .await
+            .map_err(anyhow::Error::new)
+            .map(|response| info!("response: {response:?}")),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env::set_var(
@@ -680,74 +751,29 @@ async fn main() -> anyhow::Result<()> {
             drop(zero_attempts);
 
             let commitment = args.get_commitment();
-            let mut client = args.connect().await.map_err(backoff::Error::transient)?;
-            info!("Connected");
+            let builder = args.build().await.map_err(backoff::Error::transient)?;
 
-            match &args.action {
-                Action::HealthCheck => client
-                    .health_check()
+            if let Some(uds_path) = &args.uds {
+                let client = builder
+                    .connect_uds(uds_path)
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::HealthWatch => geyser_health_watch(client).await,
-                Action::Subscribe(_) => {
-                    let (request, resub, stats, verify_encoding) = args
-                        .action
-                        .get_subscribe_request(commitment)
-                        .await
-                        .map_err(backoff::Error::Permanent)?
-                        .ok_or(backoff::Error::Permanent(anyhow::anyhow!(
-                            "expect subscribe action"
-                        )))?;
-
-                    geyser_subscribe(client, request, resub, stats, verify_encoding).await
-                }
-                Action::SubscribeDeshred(_) => {
-                    let (request, stats) = args.action.get_subscribe_deshred_request().ok_or(
-                        backoff::Error::Permanent(anyhow::anyhow!(
-                            "expect subscribe deshred action"
-                        )),
-                    )?;
-
-                    geyser_subscribe_deshred(client, request, stats).await
-                }
-                Action::SubscribeReplayInfo => client
-                    .subscribe_replay_info()
+                    .map_err(backoff::Error::transient)?;
+                info!("Connected");
+                run_action(client, &args.action, commitment)
+                    .await
+                    .map_err(backoff::Error::transient)?;
+            } else {
+                let client = builder
+                    .connect()
                     .await
                     .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::Ping { count } => client
-                    .ping(*count)
+                    .map_err(backoff::Error::transient)?;
+                info!("Connected");
+                run_action(client, &args.action, commitment)
                     .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::GetLatestBlockhash => client
-                    .get_latest_blockhash(commitment)
-                    .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::GetBlockHeight => client
-                    .get_block_height(commitment)
-                    .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::GetSlot => client
-                    .get_slot(commitment)
-                    .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::IsBlockhashValid { blockhash } => client
-                    .is_blockhash_valid(blockhash.clone(), commitment)
-                    .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
-                Action::GetVersion => client
-                    .get_version()
-                    .await
-                    .map_err(anyhow::Error::new)
-                    .map(|response| info!("response: {response:?}")),
+                    .map_err(backoff::Error::transient)?;
             }
-            .map_err(backoff::Error::transient)?;
 
             Ok::<(), backoff::Error<anyhow::Error>>(())
         }
