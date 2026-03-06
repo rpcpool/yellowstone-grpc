@@ -18,9 +18,13 @@ account-data-as-bytes = [
 [dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
+hyper-util = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
