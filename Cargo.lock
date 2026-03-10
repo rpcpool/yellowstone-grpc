@@ -68,8 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -81,8 +81,8 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "log",
  "solana-clock",
@@ -96,8 +96,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 3.0.0",
@@ -2936,8 +2936,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "Inflector",
  "base64",
@@ -2977,8 +2977,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "base64",
  "bs58",
@@ -3661,8 +3661,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e12814d555b01fcd8d9ef74e3219da2384ab1682bfb66d5c1a8db7757df4263"
 dependencies = [
  "bincode",
  "bs58",
@@ -3685,8 +3686,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 
 [[package]]
 name = "solana-system-interface"
@@ -3769,8 +3770,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "bincode",
  "serde",
@@ -3797,8 +3798,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3839,8 +3840,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "3.1.8"
-source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
+version = "3.1.10"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#8d701da3a7f8295b4b1ad4f768b4d0be54ad2fe8"
 dependencies = [
  "base64",
  "bincode",
@@ -5302,7 +5303,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "12.1.0+triton-ext"
+version = "12.1.0+triton-ext.solana.3.1.10"
 dependencies = [
  "bytes",
  "futures",
@@ -5317,7 +5318,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "12.1.0+triton-ext"
+version = "12.1.0+triton-ext.solana.3.1.10"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5345,7 +5346,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "12.1.0+triton-ext"
+version = "12.1.0+triton-ext.solana.3.1.10"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5411,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.1.0+triton-ext"
+version = "12.1.0+triton-ext.solana.3.1.10"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5573,3 +5574,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "solana-storage-proto"
+version = "3.1.8"
+source = "git+https://github.com/rpcpool/solana-public?branch=v3.1-triton-public#6549613c2481d0478856dd0d69ecb32210ce8207"
