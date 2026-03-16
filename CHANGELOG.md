@@ -11,10 +11,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## 2026-03-16
 
 - yellowstone-grpc-client-12.2.0
-- yellowstone-grpc-client-simple-12.1.0
+- yellowstone-grpc-client-simple-12.2.0
 - yellowstone-grpc-geyser-12.2.0
 - yellowstone-grpc-proto-12.1.0
-
 
 ### Features
 - geyser: add Unix domain socket support for multiple gRPC listener ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
