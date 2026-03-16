@@ -1314,7 +1314,7 @@ pub mod tests {
                                 for data in &data_samples {
                                     for txn_signature in [None, Some(Signature::from([0u8; 64]))] {
                                         // Create account WITH pre-encoding
-                                        let mut account_with = MessageAccountInfo {
+                                        let account_with = MessageAccountInfo {
                                             pubkey: *pubkey,
                                             lamports,
                                             owner: *owner,
@@ -1325,7 +1325,7 @@ pub mod tests {
                                             txn_signature,
                                             pre_encoded: OnceLock::new(),
                                         };
-                                        AccountEncoder::pre_encode(&mut account_with);
+                                        AccountEncoder::pre_encode(&account_with);
 
                                         // Create account WITHOUT pre-encoding (fallback path)
                                         let account_without = MessageAccountInfo {
@@ -1424,7 +1424,7 @@ pub mod tests {
         // Get real transactions from fixtures (these have pre_encoded: None)
         for tx_arc in load_predefined_transactions() {
             // Clone the transaction info
-            let mut tx_with_cache = MessageTransactionInfo {
+            let tx_with_cache = MessageTransactionInfo {
                 signature: tx_arc.signature,
                 is_vote: tx_arc.is_vote,
                 transaction: tx_arc.transaction.clone(),
@@ -1446,7 +1446,7 @@ pub mod tests {
             };
 
             // Pre-encode one of them
-            TransactionEncoder::pre_encode(&mut tx_with_cache);
+            TransactionEncoder::pre_encode(&tx_with_cache);
 
             assert!(
                 tx_with_cache.pre_encoded.get().is_some(),

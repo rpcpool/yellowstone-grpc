@@ -173,6 +173,15 @@ lazy_static::lazy_static! {
         Opts::new("yellowstone_grpc_service_outbound_bytes", "Current emitted bytes by tonic service response bodies per active subscriber stream"),
         &["subscriber_id"]
     ).unwrap();
+
+
+    static ref GEYSER_EVENT_DROPPED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "geyser_event_dropped_total",
+            "Total number of events dropped in the plugin due to drop_list"
+        ),
+        &["event"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -333,6 +342,7 @@ impl PrometheusService {
             register!(GRPC_METHOD_CALL_COUNT);
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
+            register!(GEYSER_EVENT_DROPPED);
 
             VERSION
                 .with_label_values(&[
@@ -452,6 +462,12 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
+    GEYSER_EVENT_DROPPED
+        .with_label_values(&[event.as_ref()])
+        .inc();
 }
 
 pub fn incr_grpc_bytes_sent<S: AsRef<str>>(remote_id: S, byte_sent: u32) {
@@ -640,6 +656,8 @@ pub fn reset_metrics() {
     // Pre-encoding
     PRE_ENCODED_CACHE_HIT.reset();
     PRE_ENCODED_CACHE_MISS.reset();
+
+    GEYSER_EVENT_DROPPED.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup

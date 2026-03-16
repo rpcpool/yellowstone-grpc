@@ -2,11 +2,14 @@ use {
     crate::{
         config::Config,
         grpc::GrpcService,
-        metrics::{self, PrometheusService},
+        metrics::{self, incr_geyser_event_dropped, PrometheusService},
         parallel::ParallelEncoder,
-        plugin::message::{
-            Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
-            MessageTransaction,
+        plugin::{
+            filter::limits::FilterLimits,
+            message::{
+                Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransaction,
+            },
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -14,6 +17,7 @@ use {
         ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
         SlotStatus,
     },
+    solana_pubkey::Pubkey,
     std::{
         concat, env,
         sync::{
@@ -34,6 +38,7 @@ pub struct PluginInner {
     runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
+    filter_limits: FilterLimits,
     grpc_channel: mpsc::UnboundedSender<Message>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
@@ -76,6 +81,7 @@ impl GeyserPlugin for Plugin {
 
     fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
         let config = Config::load_from_file(config_file)?;
+        let filter_limits = config.grpc.filter_limits.clone();
 
         // Setup logger
         solana_logger::setup_with_default(&config.log.level);
@@ -151,6 +157,7 @@ impl GeyserPlugin for Plugin {
             runtime,
             snapshot_channel: Mutex::new(snapshot_channel),
             snapshot_channel_closed: AtomicBool::new(false),
+            filter_limits,
             grpc_channel,
             plugin_cancellation_token,
             plugin_task_tracker,
@@ -198,6 +205,14 @@ impl GeyserPlugin for Plugin {
                 }
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
             };
+
+            if let Ok(owner) = Pubkey::try_from(account.owner) {
+                // Drop accounts from owners in the drop list, even during startup.
+                if inner.filter_limits.accounts.owner_reject.contains(&owner) {
+                    incr_geyser_event_dropped("account");
+                    return Ok(());
+                }
+            }
 
             if is_startup {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {

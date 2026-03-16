@@ -1378,6 +1378,7 @@ impl GrpcService {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn serve_listener<H>(
         listener: Listener,
         tls_identity: Option<Identity>,

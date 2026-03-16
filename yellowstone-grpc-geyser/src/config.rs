@@ -306,7 +306,7 @@ pub struct ConfigGrpc {
     pub subscription_limit: usize,
     /// When false (default), exceeding the subscription limit only logs
     /// and emits metrics without rejecting the connection. Set to true
-    /// to start rejecting with RESOURCE_EXHAUSTED.
+    /// to start rejecting with RESOURCE_EX2AUSTED.
     #[serde(default)]
     pub subscription_limit_enforce: bool,
     /// Enable/disable unary methods
