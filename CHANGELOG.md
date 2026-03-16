@@ -8,14 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
-## [Unreleased]
+## 2026-03-16
+
+- yellowstone-grpc-client-12.2.0
+- yellowstone-grpc-client-simple-12.1.0
+- yellowstone-grpc-geyser-12.2.0
+- yellowstone-grpc-proto-12.1.0
+
 
 ### Features
 - geyser: add Unix domain socket support for multiple gRPC listener ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
 - client: add `connect_uds` method for Unix domain socket connections ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
 - client-simple: add `--uds` flag for Unix domain socket connections ([#671](https://github.com/rpcpool/yellowstone-grpc/pull/671))
-
 - geyser: configurable per-subscriber subscription limit with enforce/observe mode ([#680](https://github.com/rpcpool/yellowstone-grpc/pull/680))
+- support `drop_list` in geyser's JSON configuration file.
 
 ## 2026-02-24
 
