@@ -1,4 +1,4 @@
-import Client from "../src"
+import Client, { ClientDuplexStream } from "../src"
 import {
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
@@ -163,6 +163,87 @@ function isChannelClosedError(error: any): boolean {
   return message.toLowerCase().includes("channel closed");
 }
 
+function makeMinimalSubscribeRequest(): SubscribeRequest {
+  return {
+    accounts: {},
+    slots: {},
+    transactions: {},
+    transactionsStatus: {},
+    accountsDataSlice: [],
+    blocks: {},
+    blocksMeta: {},
+    entry: {},
+    commitment: 2,
+  };
+}
+
+function closeStreamAndCaptureTerminalEvent(
+  stream: any,
+  timeoutMs = 2500,
+): Promise<"close" | "end" | "error" | "timeout"> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const settleOnce = (event: "close" | "end" | "error" | "timeout") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(event);
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      stream.off("close", onClose);
+      stream.off("end", onEnd);
+      stream.off("error", onError);
+    };
+
+    const onClose = () => settleOnce("close");
+    const onEnd = () => settleOnce("end");
+    const onError = () => settleOnce("error");
+
+    const timeoutId = setTimeout(() => settleOnce("timeout"), timeoutMs);
+
+    stream.once("close", onClose);
+    stream.once("end", onEnd);
+    stream.once("error", onError);
+
+    try {
+      stream.end();
+    } catch {}
+
+    try {
+      stream.destroy();
+    } catch {}
+  });
+}
+
+function writeAndCaptureError(stream: any, request: SubscribeRequest): Promise<Error | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settleOnce = (error: Error | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve(error);
+    };
+
+    const timeoutId = setTimeout(() => {
+      settleOnce(new Error("write callback timed out"));
+    }, 2500);
+
+    try {
+      stream.write(request, (err: Error | null | undefined) => settleOnce(err ?? null));
+    } catch (err) {
+      settleOnce(err as Error);
+    }
+  });
+}
+
 function getAllGeyserMessageFns(): Array<[string, any]> {
   return Object.entries(geyser)
     .filter(([, value]) => {
@@ -178,6 +259,51 @@ function getAllGeyserMessageFns(): Array<[string, any]> {
     })
     .sort(([left], [right]) => left.localeCompare(right));
 }
+
+describe("ClientDuplexStream shutdown behavior", () => {
+  test("shutdown: destroy emits terminal event and calls native close", async () => {
+    const nativeClose = jest.fn();
+    const nativeWrite = jest.fn();
+    const nativeRead = jest.fn(() => new Promise(() => {}));
+    const stream = new ClientDuplexStream(
+      {
+        close: nativeClose,
+        write: nativeWrite,
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+
+    const terminalEvent = await closeStreamAndCaptureTerminalEvent(stream, 500);
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("shutdown: write after destroy returns an error", async () => {
+    const nativeWrite = jest.fn();
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        write: nativeWrite,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+
+    stream.destroy();
+    const writeError = await writeAndCaptureError(stream, makeMinimalSubscribeRequest());
+
+    expect(writeError).not.toBeNull();
+    const message = String(writeError?.message ?? "").toLowerCase();
+    expect(
+      message.includes("closed") ||
+      message.includes("destroyed") ||
+      message.includes("write after end")
+    ).toBe(true);
+    expect(nativeWrite).not.toHaveBeenCalled();
+  });
+});
 
 describe("subscribe response schema tests", () => {
   const TEST_TIMEOUT = 100000;

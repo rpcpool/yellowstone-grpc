@@ -23,7 +23,7 @@ use std::sync::{
 };
 use tokio::sync::{
   mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-  oneshot, Mutex,
+  Mutex,
 };
 use yellowstone_grpc_proto::prelude::*;
 
@@ -32,6 +32,8 @@ use crate::{
   js_types::{JsSubscribeRequest, JsSubscribeUpdate},
 };
 
+#[cfg(test)]
+mod duplex_stream_tests;
 pub mod js_types;
 #[cfg(test)]
 mod js_types_tests;
@@ -58,9 +60,14 @@ struct DuplexStream {
   /// Read side consumed by `read()`. Each message is delivered exactly once.
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
   /// Write side used by `write()`. Requests are forwarded to gRPC task.
+  ///
+  /// The mutex protects a close-state transition, not sender sharing:
+  /// - `close()` sets the state to `None` (revokes future writes).
+  /// - `write()` reads/clones under the same lock.
+  ///
+  /// `UnboundedSender` being cheap-`Clone` is true, but clone alone does not
+  /// provide an atomic "disable writes now" transition.
   writable: Arc<StdMutex<Option<UnboundedSender<SubscribeRequest>>>>,
-  /// One-shot shutdown signal for the worker spawned by `subscribe()`.
-  shutdown_tx: Arc<StdMutex<Option<oneshot::Sender<()>>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
 }
@@ -74,9 +81,7 @@ impl DuplexStream {
     // TODO : Fine tune unbounded channels.
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let writable = Arc::new(StdMutex::new(Some(writable_tx)));
-    let shutdown_tx = Arc::new(StdMutex::new(Some(shutdown_tx)));
     let is_closing = Arc::new(AtomicBool::new(false));
     let is_closing_worker = is_closing.clone();
 
@@ -99,17 +104,12 @@ impl DuplexStream {
 
       loop {
         tokio::select! {
-          // Explicit shutdown from JS destroy/close path.
-          _ = &mut shutdown_rx => {
-            break;
-          },
-
           // 1. SubscribeRequest is received from self.write().
           // 2. SubscribeRequest is propagated to Geyser client's sender.
           req_option = writable_rx.recv() => {
             if let Some(request) = req_option {
               if let Err(e) = stream_tx.send(request).await {
-                if is_closing_worker.load(Ordering::Relaxed) {
+                if is_closing_worker.load(Ordering::Acquire) {
                   break;
                 }
                 return Err(napi::Error::from_reason(e.to_string()))
@@ -132,7 +132,7 @@ impl DuplexStream {
                 }
               }
               Some(Err(e)) => {
-                if is_closing_worker.load(Ordering::Relaxed) {
+                if is_closing_worker.load(Ordering::Acquire) {
                   break;
                 }
                 return Err(napi::Error::from_reason(e.to_string()))
@@ -149,7 +149,6 @@ impl DuplexStream {
     Ok(Self {
       readable: Arc::new(Mutex::new(readable_rx)),
       writable,
-      shutdown_tx,
       is_closing,
     })
   }
@@ -183,21 +182,14 @@ impl DuplexStream {
   /// worker to forward to the gRPC request sink.
   #[napi]
   pub fn close(&self) -> Result<()> {
-    self.is_closing.store(true, Ordering::Relaxed);
-
-    let mut shutdown_guard = self
-      .shutdown_tx
-      .lock()
-      .map_err(|_| napi::Error::from_reason("Failed to acquire shutdown lock"))?;
-    if let Some(shutdown_tx) = shutdown_guard.take() {
-      let _ = shutdown_tx.send(());
-    }
-    drop(shutdown_guard);
+    self.is_closing.store(true, Ordering::Release);
 
     let mut writable_guard = self
       .writable
       .lock()
       .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    // Dropping the last sender closes the channel and causes
+    // `writable_rx.recv()` to return `None` in the worker.
     *writable_guard = None;
 
     Ok(())
@@ -205,7 +197,7 @@ impl DuplexStream {
 
   #[napi]
   pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
-    if self.is_closing.load(Ordering::Relaxed) {
+    if self.is_closing.load(Ordering::Acquire) {
       return Err(napi::Error::from_reason(
         "Cannot write to a closing subscription stream",
       ));
