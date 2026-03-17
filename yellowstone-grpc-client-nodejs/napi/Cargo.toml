@@ -48,6 +48,11 @@ walkdir = "2.5.0"
 napi-derive = "3.3.0"
 yellowstone-grpc-proto = "11.0.0"
 
+[dev-dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
 
 [profile.release]
 lto = true

@@ -51,6 +51,69 @@ use std::{
 };
 use syn::{punctuated::Punctuated, Item, Path, Type};
 
+struct BuildDirEntryInspection {
+  path: PathBuf,
+  dir_name: String,
+  is_dir_result: std::io::Result<bool>,
+}
+
+fn collect_candidate_out_dirs_from_entry_inspections(
+  build_dir: &std::path::Path,
+  required_files: &[&str],
+  entry_inspection_results: Vec<std::io::Result<BuildDirEntryInspection>>,
+) -> Vec<(PathBuf, Option<std::time::SystemTime>)> {
+  let mut candidate_out_dirs: Vec<(PathBuf, Option<std::time::SystemTime>)> = Vec::new();
+
+  for entry_inspection_result in entry_inspection_results {
+    let entry_inspection = match entry_inspection_result {
+      Ok(value) => value,
+      Err(error) => {
+        println!(
+          "cargo:warning=Typegen skipped entry in {}: {}",
+          build_dir.display(),
+          error
+        );
+        continue;
+      }
+    };
+
+    let is_dir = match entry_inspection.is_dir_result {
+      Ok(value) => value,
+      Err(error) => {
+        println!(
+          "cargo:warning=Typegen skipped path {}: {}",
+          entry_inspection.path.display(),
+          error
+        );
+        continue;
+      }
+    };
+    if !is_dir {
+      continue;
+    }
+
+    if !entry_inspection
+      .dir_name
+      .starts_with("yellowstone-grpc-proto-")
+    {
+      continue;
+    }
+
+    let out_dir_candidate = entry_inspection.path.join("out");
+    if required_files
+      .iter()
+      .all(|file_name| out_dir_candidate.join(file_name).is_file())
+    {
+      let modified_at = fs::metadata(&out_dir_candidate)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+      candidate_out_dirs.push((out_dir_candidate, modified_at));
+    }
+  }
+
+  candidate_out_dirs
+}
+
 /// Finds the freshest `yellowstone-grpc-proto` Cargo build output directory.
 ///
 /// Cargo builds dependencies in hashed directories under `target/*/build`.
@@ -74,7 +137,6 @@ fn resolve_proto_out_dir() -> Option<PathBuf> {
     .expect("Failed to derive target/*/build directory from OUT_DIR");
 
   let required_files = ["geyser.rs", "solana.storage.confirmed_block.rs"];
-  let mut candidate_out_dirs: Vec<(PathBuf, Option<std::time::SystemTime>)> = Vec::new();
 
   let build_dir_entries = match fs::read_dir(&build_dir) {
     Ok(entries) => entries,
@@ -88,51 +150,20 @@ fn resolve_proto_out_dir() -> Option<PathBuf> {
     }
   };
 
-  for entry in build_dir_entries {
-    let entry = match entry {
-      Ok(value) => value,
-      Err(error) => {
-        println!(
-          "cargo:warning=Typegen skipped entry in {}: {}",
-          build_dir.display(),
-          error
-        );
-        continue;
-      }
-    };
-
-    let file_type = match entry.file_type() {
-      Ok(value) => value,
-      Err(error) => {
-        println!(
-          "cargo:warning=Typegen skipped path {}: {}",
-          entry.path().display(),
-          error
-        );
-        continue;
-      }
-    };
-    if !file_type.is_dir() {
-      continue;
-    }
-
-    let dir_name = entry.file_name();
-    let dir_name = dir_name.to_string_lossy();
-    if !dir_name.starts_with("yellowstone-grpc-proto-") {
-      continue;
-    }
-
-    let out_dir_candidate = entry.path().join("out");
-    if required_files
-      .iter()
-      .all(|file_name| out_dir_candidate.join(file_name).is_file())
-    {
-      let modified_at = fs::metadata(&out_dir_candidate)
-        .and_then(|metadata| metadata.modified())
-        .ok();
-      candidate_out_dirs.push((out_dir_candidate, modified_at));
-    }
-  }
+  let entry_inspection_results = build_dir_entries.map(|entry_result| {
+    entry_result.map(|entry| BuildDirEntryInspection {
+      path: entry.path(),
+      dir_name: entry.file_name().to_string_lossy().into_owned(),
+      is_dir_result: entry.file_type().map(|file_type| file_type.is_dir()),
+    })
+  });
+  let entry_inspection_results: Vec<std::io::Result<BuildDirEntryInspection>> =
+    entry_inspection_results.collect();
+  let mut candidate_out_dirs = collect_candidate_out_dirs_from_entry_inspections(
+    &build_dir,
+    &required_files,
+    entry_inspection_results,
+  );
 
   candidate_out_dirs.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
 
@@ -1339,4 +1370,1395 @@ fn map_js_value_to_protobuf_conversion_result_expression(
   }
 
   quote!(Ok::<_, napi::Error>(#js_value_expression))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use quote::ToTokens;
+  use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+    process,
+    sync::{
+      atomic::{AtomicU64, Ordering},
+      Mutex, OnceLock,
+    },
+    time::Duration,
+  };
+  use syn::parse_quote;
+
+  static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+  static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+  struct TempDirGuard {
+    path: PathBuf,
+  }
+
+  impl TempDirGuard {
+    fn new(label: &str) -> Self {
+      let unique_id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+      let path = std::env::temp_dir().join(format!(
+        "typegen-tests-{label}-{}-{unique_id}",
+        process::id()
+      ));
+      let _ = fs::remove_dir_all(&path);
+      fs::create_dir_all(&path).unwrap();
+      Self { path }
+    }
+
+    fn path(&self) -> &Path {
+      &self.path
+    }
+  }
+
+  impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+      let _ = fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct EnvVarGuard {
+    key: &'static str,
+    old_value: Option<OsString>,
+  }
+
+  impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+      let old_value = std::env::var_os(key);
+      std::env::set_var(key, value);
+      Self { key, old_value }
+    }
+
+    fn remove(key: &'static str) -> Self {
+      let old_value = std::env::var_os(key);
+      std::env::remove_var(key);
+      Self { key, old_value }
+    }
+  }
+
+  impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+      if let Some(old_value) = self.old_value.take() {
+        std::env::set_var(self.key, old_value);
+      } else {
+        std::env::remove_var(self.key);
+      }
+    }
+  }
+
+  struct CwdGuard {
+    old_cwd: PathBuf,
+  }
+
+  impl CwdGuard {
+    fn set(path: &Path) -> Self {
+      let old_cwd = std::env::current_dir().unwrap();
+      std::env::set_current_dir(path).unwrap();
+      Self { old_cwd }
+    }
+  }
+
+  impl Drop for CwdGuard {
+    fn drop(&mut self) {
+      std::env::set_current_dir(&self.old_cwd).unwrap();
+    }
+  }
+
+  fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap()
+  }
+
+  fn parse_type(type_source: &str) -> Type {
+    syn::parse_str(type_source).unwrap()
+  }
+
+  fn parse_items(source: &str) -> Vec<Item> {
+    syn::parse_file(source).unwrap().items
+  }
+
+  fn empty_type_path() -> Type {
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        segments: Punctuated::new(),
+      },
+    })
+  }
+
+  fn vec_with_lifetime_generic_type() -> Type {
+    let mut args = Punctuated::<syn::GenericArgument, syn::Token![,]>::new();
+    args.push(syn::GenericArgument::Lifetime(parse_quote!('a)));
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        segments: {
+          let mut segments = Punctuated::new();
+          segments.push(syn::PathSegment {
+            ident: format_ident!("Vec"),
+            arguments: syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+              colon2_token: None,
+              lt_token: Default::default(),
+              args,
+              gt_token: Default::default(),
+            }),
+          });
+          segments
+        },
+      },
+    })
+  }
+
+  fn option_with_lifetime_generic_type() -> Type {
+    let mut args = Punctuated::<syn::GenericArgument, syn::Token![,]>::new();
+    args.push(syn::GenericArgument::Lifetime(parse_quote!('a)));
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        segments: {
+          let mut segments = Punctuated::new();
+          segments.push(syn::PathSegment {
+            ident: format_ident!("Option"),
+            arguments: syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+              colon2_token: None,
+              lt_token: Default::default(),
+              args,
+              gt_token: Default::default(),
+            }),
+          });
+          segments
+        },
+      },
+    })
+  }
+
+  fn hash_map_with_lifetime_key_type() -> Type {
+    let mut args = Punctuated::<syn::GenericArgument, syn::Token![,]>::new();
+    args.push(syn::GenericArgument::Lifetime(parse_quote!('a)));
+    args.push(syn::GenericArgument::Type(parse_type("u64")));
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        segments: {
+          let mut segments = Punctuated::new();
+          segments.push(syn::PathSegment {
+            ident: format_ident!("HashMap"),
+            arguments: syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+              colon2_token: None,
+              lt_token: Default::default(),
+              args,
+              gt_token: Default::default(),
+            }),
+          });
+          segments
+        },
+      },
+    })
+  }
+
+  fn hash_map_with_only_lifetime_key_type() -> Type {
+    let mut args = Punctuated::<syn::GenericArgument, syn::Token![,]>::new();
+    args.push(syn::GenericArgument::Lifetime(parse_quote!('a)));
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        segments: {
+          let mut segments = Punctuated::new();
+          segments.push(syn::PathSegment {
+            ident: format_ident!("HashMap"),
+            arguments: syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+              colon2_token: None,
+              lt_token: Default::default(),
+              args,
+              gt_token: Default::default(),
+            }),
+          });
+          segments
+        },
+      },
+    })
+  }
+
+  fn squash_whitespace(value: impl AsRef<str>) -> String {
+    value
+      .as_ref()
+      .chars()
+      .filter(|ch| !ch.is_whitespace())
+      .collect()
+  }
+
+  fn assert_contains_squashed(haystack: impl AsRef<str>, needle: impl AsRef<str>) {
+    let haystack = squash_whitespace(haystack);
+    let needle = squash_whitespace(needle);
+    assert!(haystack.contains(&needle));
+  }
+
+  fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+  }
+
+  fn setup_build_layout(root: &Path) -> (PathBuf, PathBuf) {
+    let build_dir = root.join("target").join("debug").join("build");
+    let current_crate_out = build_dir.join("yellowstone-grpc-napi-test").join("out");
+    fs::create_dir_all(&current_crate_out).unwrap();
+    (build_dir, current_crate_out)
+  }
+
+  fn create_proto_candidate(
+    build_dir: &Path,
+    name_suffix: &str,
+    geyser_source: &str,
+    confirmed_block_source: &str,
+  ) -> PathBuf {
+    let out_dir = build_dir
+      .join(format!("yellowstone-grpc-proto-{name_suffix}"))
+      .join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    write_file(&out_dir.join("geyser.rs"), geyser_source);
+    write_file(
+      &out_dir.join("solana.storage.confirmed_block.rs"),
+      confirmed_block_source,
+    );
+    out_dir
+  }
+
+  fn sample_geyser_source() -> &'static str {
+    r#"
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeRequest {
+  #[prost(uint64, tag = "1")]
+  pub slot: u64,
+  #[prost(bytes = "vec", tag = "2")]
+  pub data: ::prost::alloc::vec::Vec<u8>,
+  #[prost(message, optional, tag = "3")]
+  pub maybe_time: ::core::option::Option<::prost_types::Timestamp>,
+  #[prost(oneof = "subscribe_request::Mode", tags = "4, 5")]
+  pub mode: ::core::option::Option<subscribe_request::Mode>,
+}
+
+pub mod subscribe_request {
+  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  pub enum Mode {
+    #[prost(string, tag = "4")]
+    Name(::prost::alloc::string::String),
+    #[prost(uint64, tag = "5")]
+    Height(u64),
+  }
+}
+"#
+  }
+
+  fn sample_confirmed_block_source() -> &'static str {
+    r#"
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfirmedBlock {
+  #[prost(uint64, tag = "1")]
+  pub parent_slot: u64,
+}
+"#
+  }
+
+  #[test]
+  fn convert_identifier_helpers_work() {
+    assert_eq!(convert_module_or_type_identifier_to_pascal_case(""), "");
+    assert_eq!(
+      convert_module_or_type_identifier_to_pascal_case("subscribe_update"),
+      "SubscribeUpdate"
+    );
+    assert_eq!(
+      convert_module_or_type_identifier_to_pascal_case("confirmedBlock"),
+      "ConfirmedBlock"
+    );
+    assert_eq!(
+      convert_pascal_case_identifier_to_snake_case("UpdateOneof"),
+      "update_oneof"
+    );
+
+    let type_name = build_js_type_name_from_path_segments(&[
+      "subscribe_update".to_string(),
+      "UpdateOneof".to_string(),
+    ]);
+    assert_eq!(type_name, "JsSubscribeUpdateUpdateOneof");
+  }
+
+  #[test]
+  fn path_normalization_and_timestamp_detection_work() {
+    let normalized_crate_path: syn::TypePath = syn::parse_str("crate::a::b::Type").unwrap();
+    assert_eq!(
+      type_path_to_normalized_string(&normalized_crate_path),
+      "a::b::Type"
+    );
+    let normalized_super_path: syn::TypePath = syn::parse_str("super::x::Type").unwrap();
+    assert_eq!(
+      type_path_to_normalized_string(&normalized_super_path),
+      "x::Type"
+    );
+
+    let timestamp_type: syn::TypePath = syn::parse_str("::prost_types::Timestamp").unwrap();
+    assert!(is_prost_types_timestamp_type_path(&timestamp_type));
+    let short_path: syn::TypePath = syn::parse_str("Timestamp").unwrap();
+    assert!(!is_prost_types_timestamp_type_path(&short_path));
+  }
+
+  #[test]
+  fn derive_detection_helpers_cover_valid_and_invalid_derive_syntax() {
+    let message_struct: syn::ItemStruct = syn::parse_str(
+      r#"
+#[derive(Clone, ::prost::Message, Debug)]
+pub struct Foo {}
+"#,
+    )
+    .unwrap();
+    assert!(has_derive_trait(&message_struct.attrs, "Message"));
+    assert!(is_prost_message_struct(&message_struct.attrs));
+    assert!(!is_prost_oneof_enum(&message_struct.attrs));
+
+    let oneof_enum: syn::ItemEnum = syn::parse_str(
+      r#"
+#[derive(Clone, ::prost::Oneof)]
+pub enum Foo {
+  #[prost(string, tag = "1")]
+  Name(String),
+}
+"#,
+    )
+    .unwrap();
+    assert!(has_derive_trait(&oneof_enum.attrs, "Oneof"));
+    assert!(is_prost_oneof_enum(&oneof_enum.attrs));
+
+    let invalid_derive_struct: syn::ItemStruct = syn::parse_str(
+      r#"
+#[derive = "Message"]
+pub struct Broken {}
+"#,
+    )
+    .unwrap();
+    assert!(!has_derive_trait(&invalid_derive_struct.attrs, "Message"));
+
+    let non_derive_attribute: syn::Attribute = parse_quote!(#[prost(string, tag = "1")]);
+    assert!(!has_derive_trait(&[non_derive_attribute], "Message"));
+  }
+
+  #[test]
+  fn collect_target_message_struct_names_from_items_traverses_nested_modules() {
+    let items = parse_items(
+      r#"
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopLevel {}
+
+pub mod nested {
+  #[derive(Clone, PartialEq, ::prost::Message)]
+  pub struct Nested {}
+
+  pub enum NotAProstMessage {
+    A
+  }
+}
+"#,
+    );
+
+    let mut target_names = HashSet::new();
+    collect_target_message_struct_names_from_items(&items, &mut target_names);
+
+    assert!(target_names.contains("TopLevel"));
+    assert!(target_names.contains("Nested"));
+    assert!(!target_names.contains("NotAProstMessage"));
+  }
+
+  #[test]
+  fn collect_target_message_struct_names_handles_io_and_parse_failures() {
+    let _lock = lock_tests();
+    let temp_dir = TempDirGuard::new("collect-targets");
+
+    let valid_file = temp_dir.path().join("valid.rs");
+    write_file(
+      &valid_file,
+      r#"
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidMessage {}
+"#,
+    );
+    let invalid_file = temp_dir.path().join("invalid.rs");
+    write_file(&invalid_file, "this is not rust syntax {{{");
+    let missing_file = temp_dir.path().join("missing.rs");
+
+    let names = collect_target_message_struct_names(&[valid_file, invalid_file, missing_file]);
+    assert_eq!(names.len(), 1);
+    assert!(names.contains("ValidMessage"));
+  }
+
+  #[test]
+  fn collect_oneof_enum_infos_from_items_collects_variants_and_deduplicates() {
+    let items = parse_items(
+      r#"
+pub mod outer_mod {
+  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  pub enum Choice {
+    #[prost(string, tag = "1")]
+    Name(String),
+    UnitVariant,
+    Named { x: i32 },
+  }
+}
+"#,
+    );
+
+    let mut oneof_map = HashMap::new();
+    collect_oneof_enum_infos_from_items(&items, &[], &mut oneof_map);
+    collect_oneof_enum_infos_from_items(&items, &[], &mut oneof_map);
+
+    assert_eq!(oneof_map.len(), 1);
+    let info = oneof_map.get("outer_mod::Choice").unwrap();
+    assert_eq!(info.js_type_ident.to_string(), "JsOuterModChoice");
+    assert_eq!(info.variant_infos.len(), 1);
+    assert_eq!(info.variant_infos[0].variant_ident.to_string(), "Name");
+    assert_eq!(
+      info.variant_infos[0].variant_field_ident.to_string(),
+      "name"
+    );
+  }
+
+  #[test]
+  fn collect_candidate_out_dirs_from_entry_inspections_handles_entry_errors() {
+    let _lock = lock_tests();
+    let temp_dir = TempDirGuard::new("collect-candidates");
+    let build_dir = temp_dir.path().join("target").join("debug").join("build");
+    fs::create_dir_all(&build_dir).unwrap();
+
+    let valid_candidate_path = build_dir.join("yellowstone-grpc-proto-valid");
+    let valid_candidate_out = valid_candidate_path.join("out");
+    fs::create_dir_all(&valid_candidate_out).unwrap();
+    write_file(&valid_candidate_out.join("geyser.rs"), "");
+    write_file(
+      &valid_candidate_out.join("solana.storage.confirmed_block.rs"),
+      "",
+    );
+
+    let inspections = vec![
+      Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "synthetic entry error",
+      )),
+      Ok(BuildDirEntryInspection {
+        path: build_dir.join("yellowstone-grpc-proto-bad-filetype"),
+        dir_name: "yellowstone-grpc-proto-bad-filetype".to_string(),
+        is_dir_result: Err(std::io::Error::new(
+          std::io::ErrorKind::Other,
+          "synthetic file_type error",
+        )),
+      }),
+      Ok(BuildDirEntryInspection {
+        path: build_dir.join("not-yellowstone"),
+        dir_name: "not-yellowstone".to_string(),
+        is_dir_result: Ok(true),
+      }),
+      Ok(BuildDirEntryInspection {
+        path: build_dir.join("yellowstone-grpc-proto-file"),
+        dir_name: "yellowstone-grpc-proto-file".to_string(),
+        is_dir_result: Ok(false),
+      }),
+      Ok(BuildDirEntryInspection {
+        path: valid_candidate_path,
+        dir_name: "yellowstone-grpc-proto-valid".to_string(),
+        is_dir_result: Ok(true),
+      }),
+    ];
+
+    let required_files = ["geyser.rs", "solana.storage.confirmed_block.rs"];
+    let candidates =
+      collect_candidate_out_dirs_from_entry_inspections(&build_dir, &required_files, inspections);
+    assert_eq!(candidates.len(), 1);
+    assert!(candidates[0]
+      .0
+      .ends_with("yellowstone-grpc-proto-valid/out"));
+  }
+
+  #[test]
+  fn type_contains_vec_u8_recursively_handles_all_wrappers() {
+    assert!(!type_contains_vec_u8_recursively(&empty_type_path()));
+    assert!(type_contains_vec_u8_recursively(&parse_type("Vec<u8>")));
+    assert!(type_contains_vec_u8_recursively(&parse_type(
+      "Option<Vec<u8>>"
+    )));
+    assert!(type_contains_vec_u8_recursively(&parse_type("&Vec<u8>")));
+    assert!(type_contains_vec_u8_recursively(&parse_type(
+      "(Vec<u8>, u8)"
+    )));
+    assert!(type_contains_vec_u8_recursively(&parse_type(
+      "[Vec<u8>; 2]"
+    )));
+    assert!(type_contains_vec_u8_recursively(&parse_type(
+      "::prost_types::Timestamp"
+    )));
+    assert!(type_contains_vec_u8_recursively(&Type::Group(
+      syn::TypeGroup {
+        group_token: Default::default(),
+        elem: Box::new(parse_type("Vec<u8>")),
+      }
+    )));
+    assert!(type_contains_vec_u8_recursively(&parse_type("(Vec<u8>)")));
+    assert!(!type_contains_vec_u8_recursively(
+      &vec_with_lifetime_generic_type()
+    ));
+    assert!(!type_contains_vec_u8_recursively(&parse_type(
+      "Vec<String>"
+    )));
+    assert!(!type_contains_vec_u8_recursively(&parse_type("_")));
+  }
+
+  #[test]
+  fn type_references_env_required_target_recursively_handles_nested_types() {
+    let mut env_required_structs = HashSet::new();
+    env_required_structs.insert("NeedsEnv".to_string());
+    let mut env_required_oneofs = HashSet::new();
+    env_required_oneofs.insert("outer::Choice".to_string());
+
+    assert!(!type_references_env_required_target_recursively(
+      &empty_type_path(),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(type_references_env_required_target_recursively(
+      &parse_type("NeedsEnv"),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(type_references_env_required_target_recursively(
+      &parse_type("crate::outer::Choice"),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(type_references_env_required_target_recursively(
+      &parse_type("Option<Vec<NeedsEnv>>"),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(type_references_env_required_target_recursively(
+      &Type::Group(syn::TypeGroup {
+        group_token: Default::default(),
+        elem: Box::new(parse_type("NeedsEnv")),
+      }),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("Vec<u64>"),
+      &env_required_structs,
+      &env_required_oneofs
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("&u64"),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("(u64, i32)"),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("[u8; 4]"),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("(u64)"),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &Type::Group(syn::TypeGroup {
+        group_token: Default::default(),
+        elem: Box::new(parse_type("u64")),
+      }),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+    assert!(!type_references_env_required_target_recursively(
+      &parse_type("_"),
+      &HashSet::new(),
+      &HashSet::new()
+    ));
+  }
+
+  #[test]
+  fn map_type_to_js_rules_cover_primitives_and_fallbacks() {
+    let target_type_names = HashSet::new();
+    let env_required_struct_names = HashSet::new();
+    let oneof_map = HashMap::new();
+    let env_required_oneofs = HashSet::new();
+
+    let (timestamp_js_type, timestamp_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &parse_type("::prost_types::Timestamp"),
+        quote!(value.ts),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(timestamp_js_type.to_string(), "Date < 'env >");
+    assert_contains_squashed(
+      timestamp_conversion.to_string(),
+      "env . create_date ( timestamp_millis_for_date_conversion )",
+    );
+
+    let (u64_js_type, u64_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("u64"),
+      quote!(value.slot),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_eq!(squash_whitespace(u64_js_type.to_string()), "String");
+    assert_contains_squashed(u64_conversion.to_string(), "to_string");
+
+    let (i64_js_type, i64_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("i64"),
+      quote!(value.offset),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_eq!(squash_whitespace(i64_js_type.to_string()), "String");
+    assert_contains_squashed(i64_conversion.to_string(), "to_string");
+
+    let (bytes_js_type, bytes_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("Vec<u8>"),
+      quote!(value.bytes),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_contains_squashed(bytes_js_type.to_string(), "BufferSlice < 'env >");
+    assert_contains_squashed(bytes_conversion.to_string(), "BufferSlice :: copy_from");
+
+    let (fallback_js_type, fallback_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &parse_type("(u8, u8)"),
+        quote!(value.anything),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(fallback_js_type.to_string(), "(u8,u8)");
+    assert_contains_squashed(fallback_conversion.to_string(), "Ok::<_,napi::Error>");
+
+    let (vec_lifetime_js_type, vec_lifetime_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &vec_with_lifetime_generic_type(),
+        quote!(value.vec),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(vec_lifetime_js_type.to_string(), "Vec<'a>");
+    assert_contains_squashed(
+      vec_lifetime_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.vec)",
+    );
+
+    let (option_lifetime_js_type, option_lifetime_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &option_with_lifetime_generic_type(),
+        quote!(value.option),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(option_lifetime_js_type.to_string(), "Option<'a>");
+    assert_contains_squashed(
+      option_lifetime_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.option)",
+    );
+  }
+
+  #[test]
+  fn map_type_to_js_rules_cover_option_vec_hashmap_targets_and_oneof() {
+    let mut target_type_names = HashSet::new();
+    target_type_names.insert("TargetType".to_string());
+    let mut env_required_struct_names = HashSet::new();
+    env_required_struct_names.insert("TargetType".to_string());
+
+    let oneof_info = OneofEnumInfo {
+      rust_full_path_string: "outer::Choice".to_string(),
+      js_type_ident: format_ident!("JsOuterChoice"),
+      variant_infos: vec![],
+    };
+    let mut oneof_map = HashMap::new();
+    oneof_map.insert("outer::Choice".to_string(), oneof_info);
+
+    let mut env_required_oneofs = HashSet::new();
+    env_required_oneofs.insert("outer::Choice".to_string());
+
+    let (option_js_type, option_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("Option<u64>"),
+      quote!(value.option_field),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_contains_squashed(option_js_type.to_string(), "Option < String >");
+    assert_contains_squashed(option_conversion.to_string(), ".map");
+
+    let (vec_js_type, vec_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("Vec<u64>"),
+      quote!(value.vec_field),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_contains_squashed(vec_js_type.to_string(), "Vec < String >");
+    assert_contains_squashed(vec_conversion.to_string(), ".collect::<napi::Result");
+
+    let (hash_map_js_type, hash_map_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &parse_type("HashMap<String, u64>"),
+        quote!(value.map_field),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(hash_map_js_type.to_string(), "HashMap < String , String >");
+    assert_contains_squashed(hash_map_conversion.to_string(), "converted_hash_map_value");
+
+    let (target_js_type, target_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("TargetType"),
+      quote!(value.target),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_contains_squashed(target_js_type.to_string(), "JsTargetType < 'env >");
+    assert_contains_squashed(
+      target_conversion.to_string(),
+      "JsTargetType::from_protobuf_to_js_type",
+    );
+
+    let (oneof_js_type, oneof_conversion) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("crate::outer::Choice"),
+      quote!(value.choice),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &env_required_oneofs,
+    );
+    assert_contains_squashed(oneof_js_type.to_string(), "JsOuterChoice < 'env >");
+    assert_contains_squashed(
+      oneof_conversion.to_string(),
+      "JsOuterChoice::from_protobuf_to_js_type",
+    );
+
+    let mut non_env_oneofs = HashSet::new();
+    let (non_env_oneof_js_type, _) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("outer::Choice"),
+      quote!(value.choice),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &non_env_oneofs,
+    );
+    assert_eq!(
+      squash_whitespace(non_env_oneof_js_type.to_string()),
+      "JsOuterChoice"
+    );
+
+    env_required_struct_names.clear();
+    let (non_env_target_js_type, _) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("TargetType"),
+      quote!(value.target),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &non_env_oneofs,
+    );
+    assert_eq!(
+      squash_whitespace(non_env_target_js_type.to_string()),
+      "JsTargetType"
+    );
+
+    non_env_oneofs.insert("outer::Choice".to_string());
+    let (option_without_generic_type, _) = map_type_to_js_type_and_conversion_result_expression(
+      &parse_type("Option"),
+      quote!(value.bad),
+      &target_type_names,
+      &env_required_struct_names,
+      &oneof_map,
+      &non_env_oneofs,
+    );
+    assert_eq!(
+      squash_whitespace(option_without_generic_type.to_string()),
+      "Option"
+    );
+  }
+
+  #[test]
+  fn map_type_to_js_hashmap_missing_generics_passthroughs() {
+    let target_type_names = HashSet::new();
+    let env_required_struct_names = HashSet::new();
+    let oneof_map = HashMap::new();
+    let env_required_oneofs = HashSet::new();
+
+    let (hash_map_no_generics_type, hash_map_no_generics_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &parse_type("HashMap"),
+        quote!(value.map),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_eq!(
+      squash_whitespace(hash_map_no_generics_type.to_string()),
+      "HashMap"
+    );
+    assert_contains_squashed(
+      hash_map_no_generics_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let (hash_map_one_generic_type, hash_map_one_generic_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &parse_type("HashMap<u64>"),
+        quote!(value.map),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_eq!(
+      squash_whitespace(hash_map_one_generic_type.to_string()),
+      "HashMap<u64>"
+    );
+    assert_contains_squashed(
+      hash_map_one_generic_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let (hash_map_lifetime_key_type, hash_map_lifetime_key_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &hash_map_with_lifetime_key_type(),
+        quote!(value.map),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(hash_map_lifetime_key_type.to_string(), "HashMap<'a,u64>");
+    assert_contains_squashed(
+      hash_map_lifetime_key_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let (hash_map_only_lifetime_key_type, hash_map_only_lifetime_key_conversion) =
+      map_type_to_js_type_and_conversion_result_expression(
+        &hash_map_with_only_lifetime_key_type(),
+        quote!(value.map),
+        &target_type_names,
+        &env_required_struct_names,
+        &oneof_map,
+        &env_required_oneofs,
+      );
+    assert_contains_squashed(hash_map_only_lifetime_key_type.to_string(), "HashMap<'a>");
+    assert_contains_squashed(
+      hash_map_only_lifetime_key_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+  }
+
+  #[test]
+  fn map_js_to_protobuf_rules_cover_primitives_and_fallbacks() {
+    let target_type_names = HashSet::new();
+    let oneof_map = HashMap::new();
+
+    let timestamp_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("::prost_types::Timestamp"),
+      quote!(value.date),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      timestamp_conversion.to_string(),
+      "Ok::<_,napi::Error>(::prost_types::Timestamp",
+    );
+
+    let u64_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("u64"),
+      quote!(value.slot),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(u64_conversion.to_string(), "parse::<u64>()");
+
+    let i64_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("i64"),
+      quote!(value.offset),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(i64_conversion.to_string(), "parse::<i64>()");
+
+    let bytes_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("Vec<u8>"),
+      quote!(value.bytes),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(bytes_conversion.to_string(), "as_ref().to_vec()");
+
+    let fallback_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("(u8, u8)"),
+      quote!(value.anything),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      fallback_conversion.to_string(),
+      "Ok::<_,napi::Error>(value.anything)",
+    );
+  }
+
+  #[test]
+  fn map_js_to_protobuf_rules_cover_containers_targets_and_oneof() {
+    let mut target_type_names = HashSet::new();
+    target_type_names.insert("TargetType".to_string());
+
+    let mut oneof_map = HashMap::new();
+    oneof_map.insert(
+      "outer::Choice".to_string(),
+      OneofEnumInfo {
+        rust_full_path_string: "outer::Choice".to_string(),
+        js_type_ident: format_ident!("JsOuterChoice"),
+        variant_infos: vec![],
+      },
+    );
+
+    let option_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("Option<u64>"),
+      quote!(value.option_field),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(option_conversion.to_string(), ".map");
+
+    let vec_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("Vec<u64>"),
+      quote!(value.vec_field),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(vec_conversion.to_string(), ".collect::<napi::Result");
+
+    let hash_map_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("HashMap<String, u64>"),
+      quote!(value.map_field),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(hash_map_conversion.to_string(), "converted_hash_map_key");
+    assert_contains_squashed(hash_map_conversion.to_string(), "converted_hash_map_value");
+
+    let target_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("TargetType"),
+      quote!(value.target),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(target_conversion.to_string(), ".from_js_to_protobuf_type()");
+
+    let oneof_conversion = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("crate::outer::Choice"),
+      quote!(value.choice),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(oneof_conversion.to_string(), ".from_js_to_protobuf_type()");
+
+    let option_without_generic = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("Option"),
+      quote!(value.option),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      option_without_generic.to_string(),
+      "Ok::<_,napi::Error>(value.option)",
+    );
+
+    let hash_map_without_generics = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("HashMap"),
+      quote!(value.map),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      hash_map_without_generics.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let hash_map_single_generic = map_js_value_to_protobuf_conversion_result_expression(
+      &parse_type("HashMap<String>"),
+      quote!(value.map),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      hash_map_single_generic.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let vec_with_lifetime = map_js_value_to_protobuf_conversion_result_expression(
+      &vec_with_lifetime_generic_type(),
+      quote!(value.vec),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      vec_with_lifetime.to_string(),
+      "Ok::<_,napi::Error>(value.vec)",
+    );
+
+    let hash_map_lifetime_key = map_js_value_to_protobuf_conversion_result_expression(
+      &hash_map_with_lifetime_key_type(),
+      quote!(value.map),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      hash_map_lifetime_key.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+
+    let option_with_lifetime = map_js_value_to_protobuf_conversion_result_expression(
+      &option_with_lifetime_generic_type(),
+      quote!(value.option),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      option_with_lifetime.to_string(),
+      "Ok::<_,napi::Error>(value.option)",
+    );
+
+    let hash_map_only_lifetime_key = map_js_value_to_protobuf_conversion_result_expression(
+      &hash_map_with_only_lifetime_key_type(),
+      quote!(value.map),
+      &target_type_names,
+      &oneof_map,
+    );
+    assert_contains_squashed(
+      hash_map_only_lifetime_key.to_string(),
+      "Ok::<_,napi::Error>(value.map)",
+    );
+  }
+
+  #[test]
+  fn resolve_proto_out_dir_panics_when_out_dir_is_missing() {
+    let _lock = lock_tests();
+    let _out_dir_guard = EnvVarGuard::remove("OUT_DIR");
+    let panic_result = std::panic::catch_unwind(resolve_proto_out_dir);
+    assert!(panic_result.is_err());
+  }
+
+  #[test]
+  fn resolve_proto_out_dir_returns_none_when_build_dir_is_missing() {
+    let _lock = lock_tests();
+    let temp_dir = TempDirGuard::new("resolve-missing-build");
+    let out_dir = temp_dir.path().join("a").join("b").join("out");
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &out_dir);
+    assert!(resolve_proto_out_dir().is_none());
+  }
+
+  #[test]
+  fn resolve_proto_out_dir_returns_none_when_no_matching_candidates_exist() {
+    let _lock = lock_tests();
+    let temp_dir = TempDirGuard::new("resolve-no-candidates");
+    let (build_dir, current_out_dir) = setup_build_layout(temp_dir.path());
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+
+    fs::create_dir_all(build_dir.join("some-other-crate").join("out")).unwrap();
+    assert!(resolve_proto_out_dir().is_none());
+  }
+
+  #[test]
+  fn resolve_proto_out_dir_selects_latest_matching_candidate() {
+    let _lock = lock_tests();
+    let temp_dir = TempDirGuard::new("resolve-latest");
+    let (build_dir, current_out_dir) = setup_build_layout(temp_dir.path());
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+
+    let first_candidate = create_proto_candidate(
+      &build_dir,
+      "old",
+      sample_geyser_source(),
+      sample_confirmed_block_source(),
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    let second_candidate = create_proto_candidate(
+      &build_dir,
+      "new",
+      sample_geyser_source(),
+      sample_confirmed_block_source(),
+    );
+
+    let resolved = resolve_proto_out_dir().expect("expected a resolved proto out dir");
+    assert_eq!(resolved, second_candidate);
+    assert_ne!(resolved, first_candidate);
+  }
+
+  #[test]
+  fn generate_types_returns_early_when_no_message_structs_are_discovered() {
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-no-targets");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+
+    let (build_dir, current_out_dir) = setup_build_layout(workspace.path());
+    create_proto_candidate(
+      &build_dir,
+      "empty",
+      "pub struct NotAProstMessage { pub id: u64 }",
+      "pub struct AlsoNotAProstMessage { pub id: u64 }",
+    );
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    assert!(!workspace.path().join("src/js_types.rs").exists());
+  }
+
+  #[test]
+  fn generate_types_returns_early_when_proto_out_dir_cannot_be_resolved() {
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-no-out-dir");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+    let out_dir = workspace.path().join("missing").join("crate").join("out");
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &out_dir);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    assert!(!workspace.path().join("src/js_types.rs").exists());
+  }
+
+  #[test]
+  fn generate_types_covers_env_propagation_and_env_oneof_generation() {
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-env-propagation");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+
+    let (build_dir, current_out_dir) = setup_build_layout(workspace.path());
+    create_proto_candidate(
+      &build_dir,
+      "env",
+      r#"
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LeafBytes {
+  #[prost(bytes = "vec", tag = "1")]
+  pub data: ::prost::alloc::vec::Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WrapperStruct {
+  #[prost(message, optional, tag = "1")]
+  pub leaf: ::core::option::Option<LeafBytes>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UsesOneofs {
+  #[prost(oneof = "env_direct::Choice", optional, tag = "1")]
+  pub direct: ::core::option::Option<env_direct::Choice>,
+  #[prost(oneof = "env_transitive::Choice", optional, tag = "2")]
+  pub transitive: ::core::option::Option<env_transitive::Choice>,
+}
+
+pub struct PlainIgnored {
+  pub value: u64,
+}
+
+pub enum NotOneofEnum {
+  A,
+}
+
+pub mod env_direct {
+  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  pub enum Choice {
+    #[prost(bytes = "vec", tag = "1")]
+    Bytes(::prost::alloc::vec::Vec<u8>),
+  }
+}
+
+pub mod env_transitive {
+  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  pub enum Choice {
+    #[prost(message, tag = "1")]
+    Wrapped(super::WrapperStruct),
+  }
+}
+"#,
+      sample_confirmed_block_source(),
+    );
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    let generated = fs::read_to_string(workspace.path().join("src/js_types.rs")).unwrap();
+    assert!(generated.contains("pub struct JsEnvDirectChoice<'env>"));
+    assert!(generated.contains("pub struct JsEnvTransitiveChoice<'env>"));
+    assert!(generated.contains("pub struct JsWrapperStruct<'env>"));
+  }
+
+  #[test]
+  fn generate_types_writes_header_and_generated_types() {
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-success");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+
+    let (build_dir, current_out_dir) = setup_build_layout(workspace.path());
+    create_proto_candidate(
+      &build_dir,
+      "success",
+      sample_geyser_source(),
+      sample_confirmed_block_source(),
+    );
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    let generated = fs::read_to_string(workspace.path().join("src/js_types.rs")).unwrap();
+    assert!(generated.contains("auto-generated from the proto types by typegen.rs"));
+    assert!(generated.contains("#![allow(dead_code)]"));
+    assert!(generated.contains("#![allow(unused_imports)]"));
+    assert!(generated.contains("#![allow(unused_variables)]"));
+    assert!(generated.contains("pub struct JsSubscribeRequest"));
+    assert!(generated.contains("pub struct JsSubscribeRequestMode"));
+    assert!(generated.contains("from_js_to_protobuf_type"));
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn generate_types_handles_non_zero_rustfmt_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-rustfmt-fail");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+
+    let (build_dir, current_out_dir) = setup_build_layout(workspace.path());
+    create_proto_candidate(
+      &build_dir,
+      "rustfmt-fail",
+      sample_geyser_source(),
+      sample_confirmed_block_source(),
+    );
+
+    let fake_bin_dir = workspace.path().join("fake-bin");
+    fs::create_dir_all(&fake_bin_dir).unwrap();
+    let fake_rustfmt = fake_bin_dir.join("rustfmt");
+    write_file(&fake_rustfmt, "#!/bin/sh\nexit 1\n");
+    let mut permissions = fs::metadata(&fake_rustfmt).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_rustfmt, permissions).unwrap();
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", fake_bin_dir.display(), old_path.to_string_lossy());
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+    let _path_guard = EnvVarGuard::set("PATH", &new_path);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    assert!(workspace.path().join("src/js_types.rs").exists());
+  }
+
+  #[test]
+  fn generate_types_handles_missing_rustfmt_binary() {
+    let _lock = lock_tests();
+    let workspace = TempDirGuard::new("generate-rustfmt-missing");
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+
+    let (build_dir, current_out_dir) = setup_build_layout(workspace.path());
+    create_proto_candidate(
+      &build_dir,
+      "rustfmt-missing",
+      sample_geyser_source(),
+      sample_confirmed_block_source(),
+    );
+
+    let empty_bin_dir = workspace.path().join("empty-bin");
+    fs::create_dir_all(&empty_bin_dir).unwrap();
+
+    let _out_dir_guard = EnvVarGuard::set("OUT_DIR", &current_out_dir);
+    let _path_guard = EnvVarGuard::set("PATH", &empty_bin_dir);
+    let _cwd_guard = CwdGuard::set(workspace.path());
+    generate_types();
+
+    assert!(workspace.path().join("src/js_types.rs").exists());
+  }
+
+  #[test]
+  fn manual_oneof_info_struct_fields_are_accessible_in_tests() {
+    let info = OneofEnumInfo {
+      rust_full_path_string: "foo::Bar".to_string(),
+      js_type_ident: format_ident!("JsFooBar"),
+      variant_infos: vec![OneofEnumVariantInfo {
+        variant_ident: parse_quote!(A),
+        variant_field_ident: parse_quote!(a),
+        variant_type: parse_type("u64"),
+      }],
+    };
+
+    assert_eq!(info.rust_full_path_string, "foo::Bar");
+    assert_eq!(info.js_type_ident.to_string(), "JsFooBar");
+    assert_eq!(info.variant_infos.len(), 1);
+    assert_eq!(info.variant_infos[0].variant_ident.to_string(), "A");
+    assert_eq!(info.variant_infos[0].variant_field_ident.to_string(), "a");
+    assert_contains_squashed(
+      info.variant_infos[0]
+        .variant_type
+        .to_token_stream()
+        .to_string(),
+      "u64",
+    );
+  }
+
+  #[test]
+  fn env_var_guard_drop_restores_or_removes_values() {
+    let _lock = lock_tests();
+    let unique_key = "TYPEGEN_TEST_ENV_KEY_SHOULD_NOT_EXIST";
+    std::env::remove_var(unique_key);
+    {
+      let _guard = EnvVarGuard::set(unique_key, "temporary");
+      assert_eq!(std::env::var(unique_key).unwrap(), "temporary");
+    }
+    assert!(std::env::var_os(unique_key).is_none());
+  }
+
+  #[test]
+  fn assert_contains_squashed_panics_when_needle_is_missing() {
+    let panic_result = std::panic::catch_unwind(|| {
+      assert_contains_squashed("abc", "xyz");
+    });
+    assert!(panic_result.is_err());
+  }
 }
