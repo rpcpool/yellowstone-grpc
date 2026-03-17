@@ -30,7 +30,7 @@
 //! - `HashMap<K, V>` -> `HashMap<K, JsV>`
 //!   (keys are kept as-is; values convert recursively).
 //! - protobuf `oneof` enum -> generated `Js...` object with one optional field per variant.
-//! - protobuf target struct in `TARGET_TYPES` -> generated `Js{StructName}`.
+//! - protobuf message structs (auto-discovered) -> generated `Js{StructName}`.
 //! - Any other type -> unchanged passthrough.
 //!
 //! JS wrapper -> Protobuf Rust:
@@ -167,67 +167,6 @@ pub fn generate_types() {
     "#![allow(unused_variables)]\n\n",
   );
 
-  const TARGET_TYPES: &[&str] = &[
-    "ConfirmedBlock",
-    "ConfirmedTransaction",
-    "Transaction",
-    "Message",
-    "MessageHeader",
-    "MessageAddressTableLookup",
-    "TransactionStatusMeta",
-    "TransactionError",
-    "InnerInstructions",
-    "InnerInstruction",
-    "CompiledInstruction",
-    "TokenBalance",
-    "UiTokenAmount",
-    "ReturnData",
-    "RewardType",
-    "Reward",
-    "Rewards",
-    "UnixTimestamp",
-    "BlockHeight",
-    "NumPartitions",
-    "SubscribeRequest",
-    "SubscribeRequestFilterAccounts",
-    "SubscribeRequestFilterAccountsFilter",
-    "SubscribeRequestFilterAccountsFilterMemcmp",
-    "SubscribeRequestFilterAccountsFilterLamports",
-    "SubscribeRequestFilterSlots",
-    "SubscribeRequestFilterTransactions",
-    "SubscribeRequestFilterBlocks",
-    "SubscribeRequestFilterBlocksMeta",
-    "SubscribeRequestFilterEntry",
-    "SubscribeRequestAccountsDataSlice",
-    "SubscribeRequestPing",
-    "SubscribeUpdate",
-    "SubscribeUpdateAccount",
-    "SubscribeUpdateAccountInfo",
-    "SubscribeUpdateSlot",
-    "SubscribeUpdateTransaction",
-    "SubscribeUpdateTransactionInfo",
-    "SubscribeUpdateTransactionStatus",
-    "SubscribeUpdateBlock",
-    "SubscribeUpdateBlockMeta",
-    "SubscribeUpdateEntry",
-    "SubscribeUpdatePing",
-    "SubscribeUpdatePong",
-    "SubscribeReplayInfoRequest",
-    "SubscribeReplayInfoResponse",
-    "PingRequest",
-    "PongResponse",
-    "GetLatestBlockhashRequest",
-    "GetLatestBlockhashResponse",
-    "GetBlockHeightRequest",
-    "GetBlockHeightResponse",
-    "GetSlotRequest",
-    "GetSlotResponse",
-    "GetVersionRequest",
-    "GetVersionResponse",
-    "IsBlockhashValidRequest",
-    "IsBlockhashValidResponse",
-  ];
-
   let input_root = match resolve_proto_out_dir() {
     Some(path) => path,
     None => return,
@@ -240,6 +179,11 @@ pub fn generate_types() {
     input_root.join("geyser.rs"),
     input_root.join("solana.storage.confirmed_block.rs"),
   ];
+  let target_type_names = collect_target_message_struct_names(&files);
+  if target_type_names.is_empty() {
+    println!("cargo:warning=Typegen skipped: no prost message structs discovered");
+    return;
+  }
 
   // --------------------------------------------------
   // PASS 1 — detect lifetime requirements.
@@ -266,7 +210,7 @@ pub fn generate_types() {
     for item in ast.items {
       if let Item::Struct(s) = item {
         let name = s.ident.to_string();
-        if !TARGET_TYPES.contains(&name.as_str()) {
+        if !target_type_names.contains(&name) {
           continue;
         }
 
@@ -390,7 +334,7 @@ pub fn generate_types() {
         map_type_to_js_type_and_conversion_result_expression(
           &variant_info.variant_type,
           quote!(#variant_value_ident),
-          TARGET_TYPES,
+          &target_type_names,
           &env_required_struct_names,
           &oneof_enum_info_by_rust_path,
           &env_required_oneof_rust_paths,
@@ -399,7 +343,7 @@ pub fn generate_types() {
         map_js_value_to_protobuf_conversion_result_expression(
           &variant_info.variant_type,
           quote!(#variant_value_ident),
-          TARGET_TYPES,
+          &target_type_names,
           &oneof_enum_info_by_rust_path,
         );
 
@@ -514,7 +458,7 @@ pub fn generate_types() {
     for item in ast.items {
       let Item::Struct(s) = item else { continue };
       let name = s.ident.to_string();
-      if !TARGET_TYPES.contains(&name.as_str()) {
+      if !target_type_names.contains(&name) {
         continue;
       }
 
@@ -534,7 +478,7 @@ pub fn generate_types() {
           map_type_to_js_type_and_conversion_result_expression(
             &field.ty,
             field_value_expression,
-            TARGET_TYPES,
+            &target_type_names,
             &env_required_struct_names,
             &oneof_enum_info_by_rust_path,
             &env_required_oneof_rust_paths,
@@ -548,7 +492,7 @@ pub fn generate_types() {
           map_js_value_to_protobuf_conversion_result_expression(
             &field.ty,
             field_js_value_expression,
-            TARGET_TYPES,
+            &target_type_names,
             &oneof_enum_info_by_rust_path,
           );
         protobuf_field_conversion_tokens.push(quote!(
@@ -658,6 +602,66 @@ struct OneofEnumVariantInfo {
 // Helpers
 // --------------------------------------------------
 
+/// Discovers protobuf message struct names from generated Rust files.
+///
+/// We intentionally discover from generated Rust (`prost::Message` derive)
+/// instead of raw proto regexes so the generator follows the exact input that
+/// this crate compiles against.
+fn collect_target_message_struct_names(files: &[PathBuf]) -> HashSet<String> {
+  let mut target_type_names = HashSet::new();
+
+  for file in files {
+    let source = match fs::read_to_string(file) {
+      Ok(value) => value,
+      Err(error) => {
+        println!(
+          "cargo:warning=Typegen skipped file {} while collecting target types: {}",
+          file.display(),
+          error
+        );
+        continue;
+      }
+    };
+
+    let ast = match syn::parse_file(&source) {
+      Ok(value) => value,
+      Err(error) => {
+        println!(
+          "cargo:warning=Typegen skipped file {} due parse error while collecting target types: {}",
+          file.display(),
+          error
+        );
+        continue;
+      }
+    };
+
+    collect_target_message_struct_names_from_items(&ast.items, &mut target_type_names);
+  }
+
+  target_type_names
+}
+
+fn collect_target_message_struct_names_from_items(
+  items: &[Item],
+  target_type_names: &mut HashSet<String>,
+) {
+  for item in items {
+    match item {
+      Item::Struct(struct_item) => {
+        if is_prost_message_struct(&struct_item.attrs) {
+          target_type_names.insert(struct_item.ident.to_string());
+        }
+      }
+      Item::Mod(module_item) => {
+        if let Some((_, module_items)) = &module_item.content {
+          collect_target_message_struct_names_from_items(module_items, target_type_names);
+        }
+      }
+      _ => {}
+    }
+  }
+}
+
 fn collect_oneof_enum_infos_from_items(
   items: &[Item],
   module_path_segments: &[String],
@@ -729,8 +733,7 @@ fn collect_oneof_enum_infos_from_items(
   }
 }
 
-/// Returns true when an enum has `#[derive(..., Oneof, ...)]`.
-fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
+fn has_derive_trait(attributes: &[syn::Attribute], trait_name: &str) -> bool {
   for attribute in attributes {
     if attribute.path().is_ident("derive") {
       let derive_paths =
@@ -738,7 +741,7 @@ fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
       if let Ok(derive_paths) = derive_paths {
         for derive_path in derive_paths {
           if let Some(segment) = derive_path.segments.last() {
-            if segment.ident == "Oneof" {
+            if segment.ident == trait_name {
               return true;
             }
           }
@@ -747,6 +750,16 @@ fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
     }
   }
   false
+}
+
+/// Returns true when an enum has `#[derive(..., Oneof, ...)]`.
+fn is_prost_oneof_enum(attributes: &[syn::Attribute]) -> bool {
+  has_derive_trait(attributes, "Oneof")
+}
+
+/// Returns true when a struct has `#[derive(..., Message, ...)]`.
+fn is_prost_message_struct(attributes: &[syn::Attribute]) -> bool {
+  has_derive_trait(attributes, "Message")
 }
 
 /// Builds a JS type name from a Rust module/type path.
@@ -972,12 +985,12 @@ fn type_references_env_required_target_recursively(
 /// 5. `Option<T>` recursion
 /// 6. `Vec<T>` recursion
 /// 7. `HashMap<K, V>` recursion on value type
-/// 8. `TARGET_TYPES` struct -> generated `Js{Type}`
+/// 8. discovered prost message struct -> generated `Js{Type}`
 /// 9. fallback passthrough (`T` -> `T`)
 fn map_type_to_js_type_and_conversion_result_expression(
   input_type: &Type,
   input_value_expression: proc_macro2::TokenStream,
-  target_type_names: &[&str],
+  target_type_names: &HashSet<String>,
   env_required_struct_names: &HashSet<String>,
   oneof_enum_info_by_rust_path: &HashMap<String, OneofEnumInfo>,
   env_required_oneof_rust_paths: &HashSet<String>,
@@ -1134,7 +1147,7 @@ fn map_type_to_js_type_and_conversion_result_expression(
       }
     }
 
-    if target_type_names.contains(&type_name.as_str()) {
+    if target_type_names.contains(&type_name) {
       let js_type_ident = format_ident!("Js{}", last_segment.ident);
       if env_required_struct_names.contains(&type_name) {
         return (
@@ -1169,12 +1182,12 @@ fn map_type_to_js_type_and_conversion_result_expression(
 /// 6. `Option<T>` recursion
 /// 7. `Vec<T>` recursion
 /// 8. `HashMap<K, V>` recursion on key and value
-/// 9. `TARGET_TYPES` struct <- generated `Js{Type}` wrapper
+/// 9. discovered prost message struct <- generated `Js{Type}` wrapper
 /// 10. fallback passthrough (`T` -> `T`)
 fn map_js_value_to_protobuf_conversion_result_expression(
   protobuf_type: &Type,
   js_value_expression: proc_macro2::TokenStream,
-  target_type_names: &[&str],
+  target_type_names: &HashSet<String>,
   oneof_enum_info_by_rust_path: &HashMap<String, OneofEnumInfo>,
 ) -> proc_macro2::TokenStream {
   if let Type::Path(type_path) = protobuf_type {
@@ -1320,7 +1333,7 @@ fn map_js_value_to_protobuf_conversion_result_expression(
       }
     }
 
-    if target_type_names.contains(&type_name.as_str()) {
+    if target_type_names.contains(&type_name) {
       return quote!(#js_value_expression.from_js_to_protobuf_type());
     }
   }
