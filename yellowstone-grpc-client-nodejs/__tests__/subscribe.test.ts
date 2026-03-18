@@ -220,6 +220,45 @@ function closeStreamAndCaptureTerminalEvent(
   });
 }
 
+function waitForTerminalEvent(
+  stream: any,
+  timeoutMs = 2500,
+): Promise<"close" | "end" | "error" | "timeout"> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const settleOnce = (event: "close" | "end" | "error" | "timeout") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(event);
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      stream.off("close", onClose);
+      stream.off("end", onEnd);
+      stream.off("error", onError);
+    };
+
+    const onClose = () => settleOnce("close");
+    const onEnd = () => settleOnce("end");
+    const onError = () => settleOnce("error");
+
+    const timeoutId = setTimeout(() => settleOnce("timeout"), timeoutMs);
+
+    stream.once("close", onClose);
+    stream.once("end", onEnd);
+    stream.once("error", onError);
+  });
+}
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function writeAndCaptureError(stream: any, request: SubscribeRequest): Promise<Error | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -229,12 +268,15 @@ function writeAndCaptureError(stream: any, request: SubscribeRequest): Promise<E
       }
       settled = true;
       clearTimeout(timeoutId);
+      stream.off("error", onErrorEvent);
       resolve(error);
     };
+    const onErrorEvent = (err: Error) => settleOnce(err);
 
     const timeoutId = setTimeout(() => {
       settleOnce(new Error("write callback timed out"));
     }, 2500);
+    stream.once("error", onErrorEvent);
 
     try {
       stream.write(request, (err: Error | null | undefined) => settleOnce(err ?? null));
@@ -302,6 +344,238 @@ describe("ClientDuplexStream shutdown behavior", () => {
       message.includes("write after end")
     ).toBe(true);
     expect(nativeWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe("Client connection guard behavior", () => {
+  test("all public client methods fail before connect", async () => {
+    const client = new Client("http://localhost:1", undefined, {});
+
+    const guardedCalls: Array<() => Promise<unknown>> = [
+      () => client.getLatestBlockhash(2),
+      () => client.ping(1),
+      () => client.getBlockHeight(2),
+      () => client.getSlot(2),
+      () => client.isBlockhashValid("abc", 2),
+      () => client.getVersion(),
+      () => client.subscribeReplayInfo(),
+      () => client.subscribe(),
+    ];
+
+    for (const invoke of guardedCalls) {
+      await expect(invoke()).rejects.toThrow("Client not connected. Call connect() first");
+    }
+  });
+
+  test("connect failure keeps client disconnected", async () => {
+    const client = new Client("this-is-not-a-valid-endpoint", "token", {});
+
+    await expect(client.connect()).rejects.toThrow();
+    await expect(client.getVersion()).rejects.toThrow("Client not connected. Call connect() first");
+  });
+});
+
+describe("ClientDuplexStream read and lifecycle behavior", () => {
+  function makeNativeUpdate(): any {
+    return {
+      filters: ["client"],
+      createdAt: new Date(),
+      updateOneof: {
+        ping: {},
+      },
+    };
+  }
+
+  test("read: prevents overlapping native read calls while one read is in flight", async () => {
+    let resolveRead: ((value: any) => void) | null = null;
+    const nativeRead = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        write: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+    const pushSpy = jest.spyOn(stream as any, "push").mockReturnValue(false);
+
+    (stream as any)._read(0);
+    (stream as any)._read(0);
+    expect(nativeRead).toHaveBeenCalledTimes(1);
+
+    resolveRead?.(makeNativeUpdate());
+    await flushMicrotasks();
+
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+    await closeStreamAndWait(stream);
+  });
+
+  test("read: honors backpressure and only pulls again after next _read()", async () => {
+    const nativeRead = jest.fn().mockResolvedValue(makeNativeUpdate());
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        write: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+    const pushSpy = jest.spyOn(stream as any, "push").mockReturnValue(false);
+
+    (stream as any)._read(0);
+    await flushMicrotasks();
+    expect(nativeRead).toHaveBeenCalledTimes(1);
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+
+    (stream as any)._read(0);
+    await flushMicrotasks();
+    expect(nativeRead).toHaveBeenCalledTimes(2);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("read: NO_UPDATE_AVAILABLE is treated as graceful end (no error event)", async () => {
+    const nativeClose = jest.fn();
+    const nativeRead = jest
+      .fn()
+      .mockRejectedValue({ code: "NO_UPDATE_AVAILABLE", message: "no update available" });
+    const stream = new ClientDuplexStream(
+      {
+        close: nativeClose,
+        write: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+
+    const terminalEventPromise = waitForTerminalEvent(stream, 1000);
+    (stream as any)._read(0);
+    const terminalEvent = await terminalEventPromise;
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(terminalEvent).not.toBe("error");
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("read: undefined update from native read is treated as graceful end", async () => {
+    const nativeClose = jest.fn();
+    const nativeRead = jest.fn().mockResolvedValue(undefined);
+    const stream = new ClientDuplexStream(
+      {
+        close: nativeClose,
+        write: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+
+    const terminalEventPromise = waitForTerminalEvent(stream, 1000);
+    (stream as any)._read(0);
+    const terminalEvent = await terminalEventPromise;
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(terminalEvent).not.toBe("error");
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("read: native read error emits a single terminal error", async () => {
+    const nativeClose = jest.fn();
+    const nativeRead = jest.fn().mockRejectedValue(new Error("simulated read failure"));
+    const stream = new ClientDuplexStream(
+      {
+        close: nativeClose,
+        write: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+    const observedErrors: Error[] = [];
+    stream.on("error", (err) => observedErrors.push(err as Error));
+
+    const closePromise = new Promise<void>((resolve) => stream.once("close", () => resolve()));
+    (stream as any)._read(0);
+    await closePromise;
+
+    expect(observedErrors.length).toBe(1);
+    expect(String(observedErrors[0].message)).toContain("simulated read failure");
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("destroy: native close throw is swallowed and stream still terminates", async () => {
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(() => {
+          throw new Error("native close failed");
+        }),
+        write: jest.fn(),
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+
+    expect(() => stream.destroy()).not.toThrow();
+    const terminalEvent = await waitForTerminalEvent(stream, 1000);
+    expect(terminalEvent).not.toBe("timeout");
+  });
+
+  test("write: native write throw is propagated through write callback", async () => {
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        write: jest.fn(() => {
+          throw new Error("native write failed");
+        }),
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    // Node Duplex may emit an `error` event in addition to write callback error.
+    stream.on("error", () => {});
+
+    const writeError = await writeAndCaptureError(stream, makeMinimalSubscribeRequest());
+    expect(writeError).not.toBeNull();
+    expect(String(writeError?.message ?? "")).toContain("native write failed");
+
+    await closeStreamAndWait(stream);
+  });
+});
+
+describe("Client subscription independence behavior", () => {
+  test("closing one subscription stream does not affect another stream", async () => {
+    const nativeStreamA = {
+      close: jest.fn(),
+      write: jest.fn(),
+      read: jest.fn(() => new Promise(() => {})),
+    };
+    const nativeStreamB = {
+      close: jest.fn(),
+      write: jest.fn(),
+      read: jest.fn(() => new Promise(() => {})),
+    };
+
+    const client = new Client("http://localhost:1", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: jest.fn().mockReturnValueOnce(nativeStreamA).mockReturnValueOnce(nativeStreamB),
+    };
+
+    const streamA = await client.subscribe();
+    const streamB = await client.subscribe();
+
+    await closeStreamAndWait(streamA);
+
+    const streamBWriteError = await writeAndCaptureError(streamB, makeMinimalSubscribeRequest());
+    expect(streamBWriteError).toBeNull();
+    expect(nativeStreamB.write).toHaveBeenCalledTimes(1);
+
+    await closeStreamAndWait(streamB);
+
+    expect(nativeStreamA.close).toHaveBeenCalledTimes(1);
+    expect(nativeStreamB.close).toHaveBeenCalledTimes(1);
   });
 });
 

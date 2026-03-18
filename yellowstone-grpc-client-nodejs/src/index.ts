@@ -289,6 +289,13 @@ export class ClientDuplexStream extends Duplex {
           return;
         }
 
+        // Native side can signal EOF by returning no update.
+        if (update == null) {
+          this.push(null);
+          this.destroy();
+          return;
+        }
+
         const grpcUpdate = fromJsSubscribeUpdate(update);
 
         // Respect backpressure: only pull again if consumer accepted push.
