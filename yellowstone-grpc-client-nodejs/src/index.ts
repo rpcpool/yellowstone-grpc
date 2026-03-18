@@ -309,8 +309,24 @@ export class ClientDuplexStream extends Duplex {
         }
         this._terminalErrorSeen = true;
 
+        // Detect normal end-of-stream / "no update available" sentinel from native side.
+        const e = err as any;
+        const isNormalEof =
+          err == null ||
+          (e && typeof e.code === "string" && e.code === "NO_UPDATE_AVAILABLE") ||
+          (e &&
+            typeof e.message === "string" &&
+            e.message.toLowerCase().includes("no update available"));
+
         this.push(null); // Signal end of stream
-        this.destroy(err as Error); // Handle resource cleanup once
+
+        if (isNormalEof) {
+          // Graceful shutdown: end without emitting an error event.
+          this.destroy();
+        } else {
+          // Real error: propagate as a stream error.
+          this.destroy(err as Error);
+        }
       });
   }
 

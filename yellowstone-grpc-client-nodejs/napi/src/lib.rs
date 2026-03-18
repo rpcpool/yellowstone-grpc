@@ -158,20 +158,28 @@ impl DuplexStream {
   /// Retrieve one `SubscribeUpdate` from the worker and convert it to
   /// the generated N-API JS representation (`JsSubscribeUpdate`).
   #[napi]
-  pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, JsSubscribeUpdate<'env>>> {
+  pub fn read<'env>(
+    &self,
+    env: &'env Env,
+  ) -> Result<PromiseRaw<'env, Option<JsSubscribeUpdate<'env>>>> {
     let readable = self.readable.clone();
 
     env.spawn_future_with_callback(
       async move {
         match readable.lock().await.recv().await {
-          Some(update) => Ok(update),
+          Some(update) => Ok(Some(update)),
           // Channel close indicates worker termination; JS wrapper treats this
           // as stream end and destroys the Node duplex stream.
-          None => Err(napi::Error::from_reason("No update available")),
+          None => Ok(None),
         }
       },
-      move |environment, subscribe_update| {
-        JsSubscribeUpdate::from_protobuf_to_js_type(environment, subscribe_update)
+      move |environment, subscribe_update_opt| match subscribe_update_opt {
+        Some(subscribe_update) => JsSubscribeUpdate::from_protobuf_to_js_type(
+          environment,
+          subscribe_update,
+        )
+        .map(Some),
+        None => Ok(None),
       },
     )
   }
