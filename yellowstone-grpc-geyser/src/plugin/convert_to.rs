@@ -7,7 +7,7 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
-    solana_transaction_context::TransactionReturnData,
+    solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
     solana_transaction_status::{
         InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
@@ -218,6 +218,10 @@ pub fn create_reward(reward: &Reward) -> proto::Reward {
         post_balance: reward.post_balance,
         reward_type: create_reward_type(reward.reward_type) as i32,
         commission: reward.commission.map(|c| c.to_string()).unwrap_or_default(),
+        commission_bps: reward
+            .commission_bps
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
     }
 }
 

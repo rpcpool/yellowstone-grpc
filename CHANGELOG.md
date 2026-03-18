@@ -8,14 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
-## 2026-03-31
+## 2026-04-07
 
 - yellowstone-grpc-client-13.0.0
-- yellowstone-grpc-client-nodejs-5.0.7
-- yellowstone-grpc-client-simple-12.2.0
-- yellowstone-grpc-geyser-12.2.0
-- yellowstone-grpc-proto-12.1.0
+- yellowstone-grpc-client-simple-13.0.0
+- yellowstone-grpc-geyser-13.0.0
+- yellowstone-grpc-proto-13.0.0
 
+### Features
+- proto: add `commission_bps` field to `Reward` message (SIMD-0291)
+- geyser: upgrade agave monorepo dependencies to 4.0.0-beta.2
+- geyser: upgrade Solana SDK dependencies to match agave 4.0.0-beta.2
 
 ### Breaking
 
@@ -42,7 +45,6 @@ Referenced PR(s) :[721](https://github.com/rpcpool/yellowstone-grpc/pull/721)
 
 ### Features
 - client: deshred subscriptions support in the TypeScript SDK ([#718](https://github.com/rpcpool/yellowstone-grpc/pull/718))
-
 ## 2026-03-16
 
 - yellowstone-grpc-client-12.2.0
