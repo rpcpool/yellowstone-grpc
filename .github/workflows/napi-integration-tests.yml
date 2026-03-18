@@ -82,8 +82,7 @@ jobs:
       
       - name: cargo clean
         working-directory: yellowstone-grpc-client-nodejs/napi
-        run:
-          cargo clean
+        run: cargo clean
 
   # Linux x64 MUSL - Alpine container
   test-linux-x64-musl:
@@ -169,8 +168,7 @@ jobs:
 
       - name: cargo clean
         working-directory: yellowstone-grpc-client-nodejs/napi
-        run:
-          cargo clean
+        run: cargo clean
 
   # macOS x64 (Intel)
   test-macos-x64:
@@ -233,8 +231,7 @@ jobs:
 
       - name: cargo clean
         working-directory: yellowstone-grpc-client-nodejs/napi
-        run:
-          cargo clean
+        run: cargo clean
 
   # macOS ARM64 (Apple Silicon)
   test-macos-arm64:
@@ -297,8 +294,7 @@ jobs:
 
       - name: cargo clean
         working-directory: yellowstone-grpc-client-nodejs/napi
-        run:
-          cargo clean
+        run: cargo clean
 
   # Release gate - all tests must pass
   integration-tests-complete:
