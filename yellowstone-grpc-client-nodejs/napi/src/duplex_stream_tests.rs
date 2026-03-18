@@ -167,10 +167,10 @@ async fn concurrent_close_write_race_is_stable_and_stream_ends_closed() {
     let stream_for_close = stream.clone();
     let stream_for_write = stream.clone();
 
-    let (close_result, write_result) = tokio::join!(
-      async move { stream_for_close.close() },
-      async move { stream_for_write.write(empty_subscribe_request()) }
-    );
+    let (close_result, write_result) =
+      tokio::join!(async move { stream_for_close.close() }, async move {
+        stream_for_write.write(empty_subscribe_request())
+      });
 
     close_result.expect("close should never fail");
     if let Err(error) = write_result {
