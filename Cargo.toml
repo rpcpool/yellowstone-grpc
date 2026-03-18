@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 12.1.0
-    "yellowstone-grpc-client", # 12.1.0
-    "yellowstone-grpc-geyser", # 12.1.0
-    "yellowstone-grpc-proto", # 12.1.0
+    "examples/rust", # 12.3.0
+    "yellowstone-grpc-client", # 12.3.0
+    "yellowstone-grpc-geyser", # 12.3.0
+    "yellowstone-grpc-proto", # 12.3.0
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
@@ -72,32 +72,32 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "~3.1.0"
-solana-account-decoder = "~3.1.0"
+agave-geyser-plugin-interface = "~4.0.0-beta.2"
+solana-account-decoder = "~4.0.0-beta.2"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "~3.1.0"
-solana-transaction-status = "~3.1.0"
+solana-storage-proto = { version = "~4.0.0-beta.2", features = ["agave-unstable-api"] }
+solana-transaction-context = "~4.0.0-beta.2"
+solana-transaction-status = "~4.0.0-beta.2"
 
 # Solana SDK
-solana-account = "3.0.0"
-solana-clock = "3.0.0"
-solana-hash = "4.0.0"
-solana-keypair = "3.0.1"
-solana-message = "3.0.1"
-solana-pubkey = "4.0.0"
-solana-signature = "3.1.0"
+solana-account = "3.4.0"
+solana-clock = "3.0.1"
+solana-hash = "4.2.0"
+solana-keypair = "3.1.0"
+solana-message = "3.1.0"
+solana-pubkey = "4.1.0"
+solana-signature = "3.3.0"
 solana-signer = "3.0.0"
-solana-transaction = "3.0.1"
+solana-transaction = "3.1.0"
 solana-transaction-error = "3.0.0"
 
 # Solana Misc
-spl-token-2022-interface = "2.0.0"
+spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.2.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.2.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.1.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "12.3.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.3.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.3.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

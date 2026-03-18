@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## 2026-03-18
+
+- yellowstone-grpc-client-12.3.0
+- yellowstone-grpc-client-simple-12.3.0
+- yellowstone-grpc-geyser-12.3.0
+- yellowstone-grpc-proto-12.3.0
+
+### Features
+- proto: add `commission_bps` field to `Reward` message (SIMD-0291)
+- geyser: upgrade agave monorepo dependencies to 4.0.0-beta.2
+- geyser: upgrade Solana SDK dependencies to match agave 4.0.0-beta.2
+
+### Breaking
+
 ## 2026-03-16
 
 - yellowstone-grpc-client-12.2.0
