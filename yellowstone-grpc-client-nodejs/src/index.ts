@@ -58,6 +58,10 @@ export default class Client {
     this._channelOptions = channel_options;
   }
 
+  isConnected(): boolean {
+    return this._grpcClient !== null;
+  }
+
   async connect(): Promise<void> {
     // Use the factory method to create the client
     this._grpcClient = await napi.GrpcClient.new(
@@ -154,6 +158,10 @@ export default class Client {
   }
 
   async subscribe(): Promise<ClientDuplexStream> {
+    if (!this._grpcClient) {
+      await this.connect();
+    }
+
     // Inner stream.Duplex config passed to both stream.Readable and Writable.
     // See: https://nodejs.org/en/blog/feature/streams2#new-streamduplexoptions
     const options = {
@@ -165,7 +173,7 @@ export default class Client {
       // highWaterMark: 16
     };
 
-    const stream = this._grpcClient.subscribe();
+    const stream = this._grpcClient!.subscribe();
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {
