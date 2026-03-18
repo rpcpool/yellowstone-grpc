@@ -174,11 +174,9 @@ impl DuplexStream {
         }
       },
       move |environment, subscribe_update_opt| match subscribe_update_opt {
-        Some(subscribe_update) => JsSubscribeUpdate::from_protobuf_to_js_type(
-          environment,
-          subscribe_update,
-        )
-        .map(Some),
+        Some(subscribe_update) => {
+          JsSubscribeUpdate::from_protobuf_to_js_type(environment, subscribe_update).map(Some)
+        }
         None => Ok(None),
       },
     )

@@ -17,7 +17,7 @@ export declare class DuplexStream {
    * Retrieve one `SubscribeUpdate` from the worker and convert it to
    * the generated N-API JS representation (`JsSubscribeUpdate`).
    */
-  read(): Promise<JsSubscribeUpdate>
+  read(): Promise<JsSubscribeUpdate | undefined | null>
   /**
    * Write JS Accesspoint.
    *
