@@ -1,10 +1,11 @@
-pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
+mod stream;
+
 use {
     bytes::Bytes,
     futures::{
         channel::mpsc,
         sink::{Sink, SinkExt},
-        stream::Stream,
+        stream::{Stream, StreamExt},
     },
     std::{path::PathBuf, time::Duration},
     tokio::net::UnixStream,
@@ -27,6 +28,10 @@ use {
         SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
         SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
+};
+pub use {
+    stream::{subscribe_with_reconnect, Backoff, ReconnectCallback},
+    tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
 
 #[derive(Debug, Clone)]
@@ -63,6 +68,7 @@ pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 pub struct GeyserGrpcClient<F> {
     pub health: HealthClient<InterceptedService<Channel, F>>,
     pub geyser: GeyserClient<InterceptedService<Channel, F>>,
+    builder: Option<GeyserGrpcBuilder>,
 }
 
 impl GeyserGrpcClient<()> {
@@ -81,8 +87,13 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     pub const fn new(
         health: HealthClient<InterceptedService<Channel, F>>,
         geyser: GeyserClient<InterceptedService<Channel, F>>,
+        builder: Option<GeyserGrpcBuilder>,
     ) -> Self {
-        Self { health, geyser }
+        Self {
+            health,
+            geyser,
+            builder,
+        }
     }
 
     // Health
@@ -136,10 +147,17 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>> {
-        self.subscribe_with_request(Some(request))
-            .await
-            .map(|(_sink, stream)| stream)
+    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>>
+    where
+        F: 'static,
+    {
+        if let Some(builder) = &self.builder {
+            Ok(subscribe_with_reconnect(builder.clone(), request).boxed())
+        } else {
+            self.subscribe_with_request(Some(request))
+                .await
+                .map(|(_sink, stream)| stream.boxed())
+        }
     }
 
     // Subscribe Deshred
@@ -260,7 +278,7 @@ pub enum GeyserGrpcBuilderError {
 
 pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
     pub x_token: Option<AsciiMetadataValue>,
@@ -269,6 +287,8 @@ pub struct GeyserGrpcBuilder {
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
     pub max_encoding_message_size: Option<usize>,
+    pub reconnect: Option<Backoff>,
+    pub on_reconnect: Option<ReconnectCallback>,
 }
 
 impl GeyserGrpcBuilder {
@@ -282,6 +302,8 @@ impl GeyserGrpcBuilder {
             accept_compressed: None,
             max_decoding_message_size: None,
             max_encoding_message_size: None,
+            reconnect: None,
+            on_reconnect: None,
         }
     }
 
@@ -295,11 +317,11 @@ impl GeyserGrpcBuilder {
 
     // Create client
     fn build(
-        self,
+        &self,
         channel: Channel,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let interceptor = InterceptorXToken {
-            x_token: self.x_token,
+            x_token: self.x_token.clone(), // open to suggestion
             x_request_snapshot: self.x_request_snapshot,
         };
 
@@ -317,21 +339,28 @@ impl GeyserGrpcBuilder {
             geyser = geyser.max_encoding_message_size(limit);
         }
 
+        let builder = if self.reconnect.is_some() {
+            Some(self.clone())
+        } else {
+            None
+        };
+
         Ok(GeyserGrpcClient::new(
             HealthClient::with_interceptor(channel, interceptor),
             geyser,
+            builder,
         ))
     }
 
     pub async fn connect(
-        self,
+        &self,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
     pub fn connect_lazy(
-        self,
+        &self,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
@@ -492,6 +521,23 @@ impl GeyserGrpcBuilder {
     pub fn max_encoding_message_size(self, limit: usize) -> Self {
         Self {
             max_encoding_message_size: Some(limit),
+            ..self
+        }
+    }
+
+    pub fn enable_autoreconnect(self, backoff: Backoff) -> Self {
+        Self {
+            reconnect: Some(backoff),
+            ..self
+        }
+    }
+
+    pub fn on_reconnect<F>(self, callback: F) -> Self
+    where
+        F: Fn(u32, &Status) + Send + Sync + 'static,
+    {
+        Self {
+            on_reconnect: Some(ReconnectCallback::new(callback)),
             ..self
         }
     }
