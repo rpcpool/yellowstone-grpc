@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use yellowstone_grpc_napi::js_types::*;
 use yellowstone_grpc_proto::geyser::{
   subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
-  subscribe_request_filter_accounts_filter_memcmp, subscribe_update,
-  subscribe_update_deshred,
+  subscribe_request_filter_accounts_filter_memcmp, subscribe_update, subscribe_update_deshred,
 };
 use yellowstone_grpc_proto::prelude::*;
 use yellowstone_grpc_proto::solana::storage::confirmed_block::*;

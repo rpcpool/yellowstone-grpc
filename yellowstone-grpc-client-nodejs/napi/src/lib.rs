@@ -32,8 +32,7 @@ use yellowstone_grpc_proto::prelude::*;
 use crate::{
   client::GrpcClient,
   js_types::{
-    JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeUpdate,
-    JsSubscribeUpdateDeshred,
+    JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeUpdate, JsSubscribeUpdateDeshred,
   },
   subscribe_request_validation::validate_subscribe_request,
 };
@@ -452,8 +451,8 @@ impl DuplexStreamDeshred {
 
   #[napi]
   pub fn write_raw(&self, request_bytes: Buffer) -> Result<()> {
-    let protobuf_subscribe_request =
-      SubscribeDeshredRequest::decode(request_bytes.as_ref()).map_err(|error| {
+    let protobuf_subscribe_request = SubscribeDeshredRequest::decode(request_bytes.as_ref())
+      .map_err(|error| {
         napi::Error::new(
           napi::Status::InvalidArg,
           format!("invalid SubscribeDeshredRequest payload: {error}"),

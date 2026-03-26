@@ -54,26 +54,24 @@ pub fn encode_tx(
   let transaction_proto = tx
     .transaction
     .ok_or_else(|| napi::Error::from_reason("failed to get transaction payload"))?;
-  let transaction = <StorageTransaction as Prost11Message>::decode(
-    transaction_proto.encode_to_vec().as_slice(),
-  )
-  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction payload: {e}")))?;
+  let transaction =
+    <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
+      .map_err(|e| {
+        napi::Error::from_reason(format!("failed to decode transaction payload: {e}"))
+      })?;
   let transaction = catch_unwind(AssertUnwindSafe(|| transaction.into()))
     .map_err(|_| napi::Error::from_reason("failed to decode transaction payload"))?;
   let meta_proto = tx
     .meta
     .ok_or_else(|| napi::Error::from_reason("failed to get transaction meta"))?;
-  let meta = <StorageTransactionStatusMeta as Prost11Message>::decode(
-    meta_proto.encode_to_vec().as_slice(),
-  )
-  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?
-  .try_into()
-  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?;
+  let meta =
+    <StorageTransactionStatusMeta as Prost11Message>::decode(meta_proto.encode_to_vec().as_slice())
+      .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?
+      .try_into()
+      .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?;
 
-  let tx_with_meta = TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta {
-    transaction,
-    meta,
-  });
+  let tx_with_meta =
+    TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta { transaction, meta });
 
   if let TransactionWithStatusMeta::Complete(tx) = tx_with_meta {
     serde_json::to_string(
@@ -113,25 +111,20 @@ struct EncodedDeshredTransaction {
 }
 
 #[napi]
-pub fn encode_deshred_tx(
-  data: &[u8],
-  encoding: WasmUiTransactionEncoding,
-) -> napi::Result<String> {
+pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> napi::Result<String> {
   let tx = SubscribeUpdateDeshredTransactionInfo::decode(data)
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
   let transaction_proto = tx
     .transaction
     .ok_or_else(|| napi::Error::from_reason("failed to get deshred transaction payload"))?;
-  let transaction = <StorageTransaction as Prost11Message>::decode(
-    transaction_proto.encode_to_vec().as_slice(),
-  )
-  .map_err(|e| {
-    napi::Error::from_reason(format!("failed to decode deshred transaction payload: {e}"))
-  })?;
-  let transaction: VersionedTransaction =
-    catch_unwind(AssertUnwindSafe(|| transaction.into()))
-      .map_err(|_| napi::Error::from_reason("failed to decode deshred transaction payload"))?;
+  let transaction =
+    <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
+      .map_err(|e| {
+        napi::Error::from_reason(format!("failed to decode deshred transaction payload: {e}"))
+      })?;
+  let transaction: VersionedTransaction = catch_unwind(AssertUnwindSafe(|| transaction.into()))
+    .map_err(|_| napi::Error::from_reason("failed to decode deshred transaction payload"))?;
 
   let encoded = EncodedDeshredTransaction {
     signature: bs58::encode(tx.signature).into_string(),
@@ -156,8 +149,7 @@ pub fn encode_deshred_tx(
 mod tests {
   use super::{encode_deshred_tx, WasmUiTransactionEncoding};
   use yellowstone_grpc_proto::{
-    prelude::SubscribeUpdateDeshredTransactionInfo,
-    prost::Message as Prost14Message,
+    prelude::SubscribeUpdateDeshredTransactionInfo, prost::Message as Prost14Message,
   };
 
   #[test]
