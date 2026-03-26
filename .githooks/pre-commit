@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Exit on command errors, undefined vars, and failed pipelines.
+set -euo pipefail
+
+# Resolve and switch to repository root so relative paths are stable.
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Ensure commit signing is enabled before allowing commit to continue.
+if [[ "$(git config --bool --get commit.gpgsign || true)" != "true" ]]; then
+  echo "[pre-commit] ERROR: commit signing is not enabled."
+  echo "[pre-commit] Set it with: git config commit.gpgsign true"
+  exit 1
+fi
+
+# Run root workspace formatting check (warning only, does not block commit).
+if ! cargo fmt --all -- --check; then
+  echo "[pre-commit] WARNING: formatting check failed (cargo fmt --all -- --check)."
+  echo "[pre-commit] Run: cargo fmt --all"
+fi
+
+# If staged changes include files under napi, run formatting check there too.
+if git diff --cached --name-only -- 'yellowstone-grpc-client-nodejs/napi/**' | grep -q .; then
+  # Run the check in the napi crate directory (warning only).
+  if ! (
+    cd yellowstone-grpc-client-nodejs/napi
+    cargo fmt --all -- --check
+  ); then
+    echo "[pre-commit] WARNING: formatting check failed in yellowstone-grpc-client-nodejs/napi."
+    echo "[pre-commit] Run: (cd yellowstone-grpc-client-nodejs/napi && cargo fmt --all)"
+  fi
+fi
