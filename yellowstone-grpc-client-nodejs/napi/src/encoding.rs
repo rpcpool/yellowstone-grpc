@@ -151,3 +151,45 @@ pub fn encode_deshred_tx(
 
   serde_json::to_string(&encoded).map_err(Into::into)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::{encode_deshred_tx, WasmUiTransactionEncoding};
+  use yellowstone_grpc_proto::{
+    prelude::SubscribeUpdateDeshredTransactionInfo,
+    prost::Message as Prost14Message,
+  };
+
+  #[test]
+  fn encode_deshred_tx_rejects_invalid_bytes_payload() {
+    let error = encode_deshred_tx(&[0xFF, 0x00, 0xAA], WasmUiTransactionEncoding::Json)
+      .expect_err("invalid protobuf bytes should be rejected");
+
+    assert!(
+      error.to_string().to_lowercase().contains("decode"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[test]
+  fn encode_deshred_tx_rejects_missing_transaction_payload() {
+    let data = SubscribeUpdateDeshredTransactionInfo {
+      signature: vec![1, 2, 3],
+      is_vote: false,
+      transaction: None,
+      loaded_writable_addresses: Vec::new(),
+      loaded_readonly_addresses: Vec::new(),
+    }
+    .encode_to_vec();
+
+    let error = encode_deshred_tx(&data, WasmUiTransactionEncoding::Json)
+      .expect_err("missing transaction payload should be rejected");
+
+    assert!(
+      error
+        .to_string()
+        .contains("failed to get deshred transaction payload"),
+      "unexpected error message: {error}"
+    );
+  }
+}

@@ -451,6 +451,81 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
 }
 
 #[test]
+fn js_subscribe_deshred_request_conversion_preserves_vote_false_and_ping() {
+  let mut deshred_transactions = HashMap::new();
+  deshred_transactions.insert(
+    "client".to_string(),
+    JsSubscribeRequestFilterDeshredTransactions {
+      vote: Some(false),
+      account_include: vec!["acc1".to_string()],
+      account_exclude: vec!["acc2".to_string()],
+      account_required: vec!["acc3".to_string()],
+    },
+  );
+
+  let js_subscribe_deshred_request_value = JsSubscribeDeshredRequest {
+    deshred_transactions,
+    ping: Some(JsSubscribeRequestPing { id: 17 }),
+  };
+
+  let protobuf_subscribe_deshred_request_value = js_subscribe_deshred_request_value
+    .from_js_to_protobuf_type()
+    .unwrap();
+
+  let client_filter = protobuf_subscribe_deshred_request_value
+    .deshred_transactions
+    .get("client")
+    .expect("client filter should exist");
+
+  assert_eq!(client_filter.vote, Some(false));
+  assert_eq!(client_filter.account_include, vec!["acc1".to_string()]);
+  assert_eq!(client_filter.account_exclude, vec!["acc2".to_string()]);
+  assert_eq!(client_filter.account_required, vec!["acc3".to_string()]);
+  assert_eq!(
+    protobuf_subscribe_deshred_request_value.ping.unwrap().id,
+    17
+  );
+}
+
+#[test]
+fn js_subscribe_update_deshred_update_oneof_accepts_deshred_transaction_variant() {
+  let js_update_oneof_value: JsSubscribeUpdateDeshredUpdateOneof<'static> =
+    JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction: Some(JsSubscribeUpdateDeshredTransaction {
+        transaction: None,
+        slot: "9".to_string(),
+      }),
+      ping: None,
+      pong: None,
+    };
+
+  let protobuf_update_oneof_value = js_update_oneof_value.from_js_to_protobuf_type().unwrap();
+  assert!(matches!(
+    protobuf_update_oneof_value,
+    subscribe_update_deshred::UpdateOneof::DeshredTransaction(value) if value.slot == 9
+  ));
+}
+
+#[test]
+fn js_subscribe_update_deshred_update_oneof_rejects_multiple_variants() {
+  let js_update_oneof_value: JsSubscribeUpdateDeshredUpdateOneof<'static> =
+    JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction: Some(JsSubscribeUpdateDeshredTransaction {
+        transaction: None,
+        slot: "9".to_string(),
+      }),
+      ping: Some(JsSubscribeUpdatePing {}),
+      pong: None,
+    };
+
+  let conversion_error = js_update_oneof_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
+  let conversion_error_message = conversion_error.to_string();
+  assert!(conversion_error_message.contains("Multiple variants set"));
+}
+
+#[test]
 fn js_subscribe_update_slot_parses_numeric_fields() {
   let js_subscribe_update_slot_value = JsSubscribeUpdateSlot {
     slot: "12".to_string(),

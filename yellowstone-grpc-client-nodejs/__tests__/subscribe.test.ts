@@ -1,4 +1,8 @@
-import Client, { ClientDeshredDuplexStream, ClientDuplexStream } from "../src";
+import Client, {
+  ClientDeshredDuplexStream,
+  ClientDuplexStream,
+  txDeshredEncode,
+} from "../src";
 import {
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
@@ -1006,6 +1010,120 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       await closeStreamAndWait(stream);
     },
   );
+
+  test("deshred read: maps updateOneof.deshredTransaction to top-level SDK field", async () => {
+    const deshredPayload = {
+      slot: "8",
+      transaction: {
+        signature: Buffer.from([7, 7, 7]),
+        isVote: false,
+        transaction: undefined,
+        loadedWritableAddresses: [],
+        loadedReadonlyAddresses: [],
+      },
+    };
+
+    const nativeRead = jest.fn().mockResolvedValue({
+      filters: ["client"],
+      createdAt: new Date(),
+      updateOneof: {
+        deshredTransaction: deshredPayload,
+      },
+    });
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+
+    const dataPromise = waitForDataEvent(stream, 1000);
+    (stream as any)._read(0);
+    const mappedUpdate = await dataPromise;
+
+    expect((mappedUpdate as any).updateOneof).toBeUndefined();
+    expect(mappedUpdate.deshredTransaction).toEqual(deshredPayload);
+    expect(mappedUpdate.filters).toEqual(["client"]);
+    expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
+      "[object Date]",
+    );
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred read: maps ping and pong variants to top-level SDK fields", async () => {
+    for (const variantPayload of [{ ping: {} }, { pong: { id: 3 } }]) {
+      const nativeRead = jest.fn().mockResolvedValue({
+        filters: ["client"],
+        createdAt: new Date(),
+        updateOneof: variantPayload,
+      });
+      const stream = new ClientDeshredDuplexStream(
+        {
+          close: jest.fn(),
+          writeRaw: jest.fn(),
+          read: nativeRead,
+        },
+        { objectMode: true },
+      );
+
+      const dataPromise = waitForDataEvent(stream, 1000);
+      (stream as any)._read(0);
+      const mappedUpdate = await dataPromise;
+
+      expect((mappedUpdate as any).updateOneof).toBeUndefined();
+      if ("ping" in variantPayload) {
+        expect(mappedUpdate.ping).toEqual({});
+        expect(mappedUpdate.pong).toBeUndefined();
+      } else {
+        expect(mappedUpdate.pong).toEqual({ id: 3 });
+        expect(mappedUpdate.ping).toBeUndefined();
+      }
+
+      await closeStreamAndWait(stream);
+    }
+  });
+
+  test("deshred write: rejects invalid vote value", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const request = {
+      deshredTransactions: {
+        client: {
+          vote: "not-bool",
+          accountInclude: [],
+          accountExclude: [],
+          accountRequired: [],
+        },
+      },
+    };
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).not.toBeNull();
+    expect(String(writeError?.message ?? "")).toContain(
+      "Invalid deshredTransactions.client.vote",
+    );
+    expect(nativeWriteRaw).toHaveBeenCalledTimes(0);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("txDeshredEncode export exposes encoding and raw encoder", () => {
+    expect(txDeshredEncode).toBeDefined();
+    expect(txDeshredEncode.encoding.JsonParsed).toBeDefined();
+    expect(typeof txDeshredEncode.encode_raw).toBe("function");
+  });
 
   test("read: ignores late read completion after destroy", async () => {
     let resolveRead: ((value: any) => void) | null = null;

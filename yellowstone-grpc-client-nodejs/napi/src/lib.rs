@@ -428,7 +428,10 @@ impl DuplexStreamDeshred {
 #[cfg(test)]
 mod tests {
   use crate::{
-    js_types::{JsSubscribeDeshredRequest, JsSubscribeRequest},
+    js_types::{
+      JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeRequestFilterDeshredTransactions,
+      JsSubscribeRequestPing,
+    },
     DuplexStream, DuplexStreamDeshred,
   };
   use napi::bindgen_prelude::Buffer;
@@ -910,6 +913,69 @@ mod tests {
       .expect("receiver should get one request");
 
     assert_eq!(received, request);
+  }
+
+  #[tokio::test]
+  async fn deshred_write_delivers_js_request_to_receiver() {
+    let (stream, mut writable_rx) = make_test_deshred_stream();
+
+    let mut deshred_transactions = HashMap::new();
+    deshred_transactions.insert(
+      "client".to_string(),
+      JsSubscribeRequestFilterDeshredTransactions {
+        vote: Some(false),
+        account_include: vec!["acc1".to_string()],
+        account_exclude: vec!["acc2".to_string()],
+        account_required: vec!["acc3".to_string()],
+      },
+    );
+
+    let request = JsSubscribeDeshredRequest {
+      deshred_transactions,
+      ping: Some(JsSubscribeRequestPing { id: 99 }),
+    };
+
+    stream
+      .write(request)
+      .expect("write should succeed for valid JS deshred request");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out")
+      .expect("receiver should get one request");
+
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .and_then(|filter| filter.vote),
+      Some(false)
+    );
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .unwrap()
+        .account_include,
+      vec!["acc1".to_string()]
+    );
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .unwrap()
+        .account_exclude,
+      vec!["acc2".to_string()]
+    );
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .unwrap()
+        .account_required,
+      vec!["acc3".to_string()]
+    );
+    assert_eq!(received.ping.unwrap().id, 99);
   }
 
   #[tokio::test]
