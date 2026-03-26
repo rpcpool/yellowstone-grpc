@@ -1086,6 +1086,59 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     }
   });
 
+  test("deshred read: NO_UPDATE_AVAILABLE is treated as graceful end (no error event)", async () => {
+    const nativeClose = jest.fn();
+    const nativeRead = jest.fn().mockRejectedValue({
+      code: "NO_UPDATE_AVAILABLE",
+      message: "no update available",
+    });
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: nativeClose,
+        writeRaw: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+
+    const terminalEventPromise = waitForTerminalEvent(stream, 1000);
+    (stream as any)._read(0);
+    const terminalEvent = await terminalEventPromise;
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(terminalEvent).not.toBe("error");
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("deshred read: native read error emits a single terminal error", async () => {
+    const nativeClose = jest.fn();
+    const nativeRead = jest
+      .fn()
+      .mockRejectedValue(new Error("deshred simulated read failure"));
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: nativeClose,
+        writeRaw: jest.fn(),
+        read: nativeRead,
+      },
+      { objectMode: true },
+    );
+    const observedErrors: Error[] = [];
+    stream.on("error", (err) => observedErrors.push(err as Error));
+
+    const closePromise = new Promise<void>((resolve) =>
+      stream.once("close", () => resolve()),
+    );
+    (stream as any)._read(0);
+    await closePromise;
+
+    expect(observedErrors.length).toBe(1);
+    expect(String(observedErrors[0].message)).toContain(
+      "deshred simulated read failure",
+    );
+    expect(nativeClose).toHaveBeenCalledTimes(1);
+  });
+
   test("deshred write: rejects invalid vote value", async () => {
     const nativeWriteRaw = jest.fn();
     const stream = new ClientDeshredDuplexStream(
@@ -2107,6 +2160,142 @@ describe("subscribe response schema tests", () => {
         subscribe_update_response,
       );
       expect(decodedEnvelope.transaction).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+});
+
+describe("subscribeDeshred response schema tests", () => {
+  const TEST_TIMEOUT = 100000;
+
+  // .env
+  const { TEST_ENDPOINT: endpoint, TEST_TOKEN: xToken } = process.env;
+
+  const channelOptions = {};
+  const client = new Client(endpoint, xToken, channelOptions);
+
+  beforeAll(async () => {
+    await client.connect();
+  });
+
+  function baseSubscribeDeshredRequest(): SubscribeDeshredRequest {
+    return {
+      deshredTransactions: {},
+    };
+  }
+
+  async function assertDeshredRequestsAcceptedOnSingleStream(
+    requests: Array<{ label: string; request: SubscribeDeshredRequest }>,
+    settleMs = 250,
+  ): Promise<void> {
+    const stream = await client.subscribeDeshred();
+    const streamErrors: Error[] = [];
+    stream.on("error", (error: Error) => {
+      streamErrors.push(error);
+    });
+
+    try {
+      for (const { label, request } of requests) {
+        const writeError = await writeAndCaptureError(stream, request);
+        if (writeError) {
+          throw new Error(
+            `[${label}] write failed: ${String(writeError.message ?? writeError)}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, settleMs));
+        const unexpectedError = streamErrors.find(
+          (error) =>
+            !String(error?.message ?? "")
+              .toLowerCase()
+              .includes("no update available"),
+        );
+        if (unexpectedError) {
+          throw new Error(
+            `[${label}] stream emitted error: ${unexpectedError.message}`,
+          );
+        }
+      }
+    } finally {
+      await closeStreamAndWait(stream);
+    }
+  }
+
+  test("deshred filter combinations are accepted", async () => {
+    const triStateBool: Array<boolean | undefined> = [undefined, true, false];
+    const requests: Array<{ label: string; request: SubscribeDeshredRequest }> =
+      [];
+
+    for (const vote of triStateBool) {
+      const request = baseSubscribeDeshredRequest();
+      const label = `vote_${String(vote)}`;
+      request.deshredTransactions = {
+        [label]: {
+          vote,
+          accountInclude: [],
+          accountExclude: [],
+          accountRequired: [],
+        },
+      };
+      requests.push({ label, request });
+    }
+
+    await assertDeshredRequestsAcceptedOnSingleStream(requests);
+  }, 180000);
+
+  test(
+    "deshred ping/pong",
+    async () => {
+      const subscribe_deshred_stream = await client.subscribeDeshred();
+      const request: SubscribeDeshredRequest = {
+        deshredTransactions: {},
+        ping: {
+          id: 42,
+        },
+      };
+
+      const waitForPingOrPong = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_deshred_stream,
+        (data) => Boolean(data?.pong || data?.ping),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_deshred_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      const subscribe_update_response = await waitForPingOrPong;
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+
+      const pong = subscribe_update_response.pong;
+      const ping = subscribe_update_response.ping;
+
+      if (pong) {
+        expect(typeof pong).toBe("object");
+        expect(typeof pong.id).toBe("number");
+        expect(pong.id).toBe(42);
+
+        const decodedPong = expectEncodeDecodeRoundTrip(
+          SubscribeUpdatePong,
+          pong,
+        );
+        expect(decodedPong.id).toBe(42);
+      } else {
+        expect(typeof ping).toBe("object");
+        const decodedPing = expectEncodeDecodeRoundTrip(
+          SubscribeUpdatePing,
+          ping,
+          true,
+        );
+        expect(decodedPing).toBeDefined();
+      }
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        geyser.SubscribeUpdateDeshred,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.ping || decodedEnvelope.pong).toBeDefined();
     },
     TEST_TIMEOUT,
   );

@@ -70,6 +70,10 @@ struct DuplexStream {
   /// `UnboundedSender` being cheap-`Clone` is true, but clone alone does not
   /// provide an atomic "disable writes now" transition.
   writable: Arc<StdMutex<Option<UnboundedSender<SubscribeRequest>>>>,
+  /// Terminal worker error captured from gRPC send/recv failures.
+  ///
+  /// `read()` surfaces this to JS once the update channel is closed.
+  terminal_error: Arc<StdMutex<Option<String>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
 }
@@ -84,15 +88,27 @@ impl DuplexStream {
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
     let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+    let terminal_error = Arc::new(StdMutex::new(None));
+    let terminal_error_worker = terminal_error.clone();
     let is_closing = Arc::new(AtomicBool::new(false));
     let is_closing_worker = is_closing.clone();
 
     // Spawn one worker per `subscribe()` call. The worker owns both sides of
     // the gRPC bidirectional stream and forwards data between JS and gRPC.
     env.spawn_future(async move {
-      let holder = client_holder
-      .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+      let holder = match client_holder
+        .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
+      {
+        Some(holder) => holder,
+        None => {
+          if let Ok(mut error_guard) = terminal_error_worker.lock() {
+            if error_guard.is_none() {
+              *error_guard = Some("subscribe stream setup failed: Invalid client type".to_string());
+            }
+          }
+          return Ok(());
+        }
+      };
 
       // Acquire lock, call subscribe, and immediately release the lock
       // The returned streams are independent and don't need the client lock
@@ -100,7 +116,14 @@ impl DuplexStream {
         let mut client = holder.client.lock().await;
         match client.subscribe().await {
           Ok(stream) => stream,
-          Err(e) => return Err(napi::Error::from_reason(e.to_string()))
+          Err(error) => {
+            if let Ok(mut error_guard) = terminal_error_worker.lock() {
+              if error_guard.is_none() {
+                *error_guard = Some(format!("subscribe stream open failed: {error}"));
+              }
+            }
+            return Ok(());
+          }
         }
       }; // Lock is dropped here when client goes out of scope
 
@@ -114,7 +137,12 @@ impl DuplexStream {
                 if is_closing_worker.load(Ordering::Acquire) {
                   break;
                 }
-                return Err(napi::Error::from_reason(e.to_string()))
+                if let Ok(mut error_guard) = terminal_error_worker.lock() {
+                  if error_guard.is_none() {
+                    *error_guard = Some(format!("subscribe stream send failed: {e}"));
+                  }
+                }
+                break;
               }
             } else {
               // JS writable side dropped: no more requests can be sent.
@@ -137,7 +165,12 @@ impl DuplexStream {
                 if is_closing_worker.load(Ordering::Acquire) {
                   break;
                 }
-                return Err(napi::Error::from_reason(e.to_string()))
+                if let Ok(mut error_guard) = terminal_error_worker.lock() {
+                  if error_guard.is_none() {
+                    *error_guard = Some(format!("subscribe stream receive failed: {e}"));
+                  }
+                }
+                break;
               }
               None => break,
             }
@@ -151,6 +184,7 @@ impl DuplexStream {
     Ok(Self {
       readable: Arc::new(Mutex::new(readable_rx)),
       writable,
+      terminal_error,
       is_closing,
     })
   }
@@ -165,16 +199,10 @@ impl DuplexStream {
     env: &'env Env,
   ) -> Result<PromiseRaw<'env, Option<JsSubscribeUpdate<'env>>>> {
     let readable = self.readable.clone();
+    let terminal_error = self.terminal_error.clone();
 
     env.spawn_future_with_callback(
-      async move {
-        match readable.lock().await.recv().await {
-          Some(update) => Ok(Some(update)),
-          // Channel close indicates worker termination; JS wrapper treats this
-          // as stream end and destroys the Node duplex stream.
-          None => Ok(None),
-        }
-      },
+      async move { Self::recv_update_or_error(readable, terminal_error).await },
       move |environment, subscribe_update_opt| match subscribe_update_opt {
         Some(subscribe_update) => {
           JsSubscribeUpdate::from_protobuf_to_js_type(environment, subscribe_update).map(Some)
@@ -248,6 +276,29 @@ impl DuplexStream {
     }
     Ok(())
   }
+
+  async fn recv_update_or_error(
+    readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
+    terminal_error: Arc<StdMutex<Option<String>>>,
+  ) -> Result<Option<SubscribeUpdate>> {
+    match readable.lock().await.recv().await {
+      Some(update) => Ok(Some(update)),
+      // Channel close indicates worker termination. If worker captured a native
+      // terminal error, surface it to JS instead of silently ending the stream.
+      None => {
+        let error_message = terminal_error
+          .lock()
+          .map_err(|_| napi::Error::from_reason("Failed to acquire terminal error lock"))?
+          .clone();
+
+        if let Some(message) = error_message {
+          Err(napi::Error::from_reason(message))
+        } else {
+          Ok(None)
+        }
+      }
+    }
+  }
 }
 
 /// DuplexStreamDeshred Engine.
@@ -259,6 +310,10 @@ struct DuplexStreamDeshred {
   readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdateDeshred>>>,
   /// Write side used by `write()`. Requests are forwarded to gRPC task.
   writable: Arc<StdMutex<Option<UnboundedSender<SubscribeDeshredRequest>>>>,
+  /// Terminal worker error captured from gRPC send/recv failures.
+  ///
+  /// `read()` surfaces this to JS once the update channel is closed.
+  terminal_error: Arc<StdMutex<Option<String>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
 }
@@ -293,6 +348,8 @@ impl DuplexStreamDeshred {
         let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
         let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeDeshredRequest>();
         let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+        let terminal_error = Arc::new(StdMutex::new(None));
+        let terminal_error_worker = Arc::clone(&terminal_error);
         let is_closing = Arc::new(AtomicBool::new(false));
         let is_closing_worker = Arc::clone(&is_closing);
 
@@ -301,9 +358,15 @@ impl DuplexStreamDeshred {
             tokio::select! {
               req_option = writable_rx.recv() => {
                 if let Some(request) = req_option {
-                  if let Err(_e) = stream_tx.send(request).await {
+                  if let Err(error) = stream_tx.send(request).await {
                     if is_closing_worker.load(Ordering::Acquire) {
                       break;
+                    }
+                    if let Ok(mut error_guard) = terminal_error_worker.lock() {
+                      if error_guard.is_none() {
+                        *error_guard =
+                          Some(format!("deshred stream send failed: {error}"));
+                      }
                     }
                     break;
                   }
@@ -318,9 +381,14 @@ impl DuplexStreamDeshred {
                       break;
                     }
                   }
-                  Some(Err(_e)) => {
+                  Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
                       break;
+                    }
+                    if let Ok(mut error_guard) = terminal_error_worker.lock() {
+                      if error_guard.is_none() {
+                        *error_guard = Some(format!("deshred stream receive failed: {error}"));
+                      }
                     }
                     break;
                   }
@@ -334,6 +402,7 @@ impl DuplexStreamDeshred {
         Ok(Self {
           readable: Arc::new(Mutex::new(readable_rx)),
           writable,
+          terminal_error,
           is_closing,
         })
       },
@@ -348,14 +417,10 @@ impl DuplexStreamDeshred {
     env: &'env Env,
   ) -> Result<PromiseRaw<'env, Option<JsSubscribeUpdateDeshred<'env>>>> {
     let readable = self.readable.clone();
+    let terminal_error = self.terminal_error.clone();
 
     env.spawn_future_with_callback(
-      async move {
-        match readable.lock().await.recv().await {
-          Some(update) => Ok(Some(update)),
-          None => Ok(None),
-        }
-      },
+      async move { Self::recv_update_or_error(readable, terminal_error).await },
       move |environment, subscribe_update_opt| match subscribe_update_opt {
         Some(subscribe_update) => {
           JsSubscribeUpdateDeshred::from_protobuf_to_js_type(environment, subscribe_update)
@@ -422,6 +487,27 @@ impl DuplexStreamDeshred {
       return Err(napi::Error::from_reason(e.to_string()));
     }
     Ok(())
+  }
+
+  async fn recv_update_or_error(
+    readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdateDeshred>>>,
+    terminal_error: Arc<StdMutex<Option<String>>>,
+  ) -> Result<Option<SubscribeUpdateDeshred>> {
+    match readable.lock().await.recv().await {
+      Some(update) => Ok(Some(update)),
+      None => {
+        let error_message = terminal_error
+          .lock()
+          .map_err(|_| napi::Error::from_reason("Failed to acquire terminal error lock"))?
+          .clone();
+
+        if let Some(message) = error_message {
+          Err(napi::Error::from_reason(message))
+        } else {
+          Ok(None)
+        }
+      }
+    }
   }
 }
 
@@ -566,6 +652,7 @@ mod tests {
       DuplexStream {
         readable: Arc::new(Mutex::new(readable_rx)),
         writable: Arc::new(StdMutex::new(Some(writable_tx))),
+        terminal_error: Arc::new(StdMutex::new(None)),
         is_closing: Arc::new(AtomicBool::new(false)),
       },
       writable_rx,
@@ -583,6 +670,7 @@ mod tests {
       DuplexStreamDeshred {
         readable: Arc::new(Mutex::new(readable_rx)),
         writable: Arc::new(StdMutex::new(Some(writable_tx))),
+        terminal_error: Arc::new(StdMutex::new(None)),
         is_closing: Arc::new(AtomicBool::new(false)),
       },
       writable_rx,
@@ -885,6 +973,41 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn subscribe_read_returns_none_when_channel_closed_without_terminal_error() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(None));
+
+    let result = DuplexStream::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect("closed channel without error should map to None");
+
+    assert!(result.is_none());
+  }
+
+  #[tokio::test]
+  async fn subscribe_read_returns_terminal_error_when_channel_closed_after_worker_failure() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(Some(
+      "subscribe stream receive failed: channel closed".to_string(),
+    )));
+
+    let error = DuplexStream::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect_err("terminal error should be propagated to caller");
+
+    assert!(
+      error
+        .to_string()
+        .contains("subscribe stream receive failed: channel closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
   async fn deshred_write_raw_delivers_decoded_request_to_receiver() {
     let (stream, mut writable_rx) = make_test_deshred_stream();
 
@@ -1005,6 +1128,41 @@ mod tests {
 
     assert!(
       message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_read_returns_none_when_channel_closed_without_terminal_error() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(None));
+
+    let result = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect("closed channel without error should map to None");
+
+    assert!(result.is_none());
+  }
+
+  #[tokio::test]
+  async fn deshred_read_returns_terminal_error_when_channel_closed_after_worker_failure() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(Some(
+      "deshred stream receive failed: channel closed".to_string(),
+    )));
+
+    let error = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect_err("terminal error should be propagated to caller");
+
+    assert!(
+      error
+        .to_string()
+        .contains("deshred stream receive failed: channel closed"),
       "unexpected error message: {error}"
     );
   }

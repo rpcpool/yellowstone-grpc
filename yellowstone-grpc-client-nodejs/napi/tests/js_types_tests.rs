@@ -451,6 +451,49 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
 }
 
 #[test]
+fn js_subscribe_request_conversion_preserves_transactions_vote_false() {
+  let mut transactions = HashMap::new();
+  transactions.insert(
+    "client".to_string(),
+    JsSubscribeRequestFilterTransactions {
+      vote: Some(false),
+      failed: None,
+      signature: None,
+      account_include: vec!["acc1".to_string()],
+      account_exclude: vec!["acc2".to_string()],
+      account_required: vec!["acc3".to_string()],
+    },
+  );
+
+  let js_subscribe_request_value: JsSubscribeRequest<'static> = JsSubscribeRequest {
+    accounts: HashMap::new(),
+    slots: HashMap::new(),
+    transactions,
+    transactions_status: HashMap::new(),
+    blocks: HashMap::new(),
+    blocks_meta: HashMap::new(),
+    entry: HashMap::new(),
+    commitment: Some(1),
+    accounts_data_slice: Vec::new(),
+    ping: None,
+    from_slot: None,
+  };
+
+  let protobuf_subscribe_request_value = js_subscribe_request_value
+    .from_js_to_protobuf_type()
+    .unwrap();
+
+  let tx_filter = protobuf_subscribe_request_value
+    .transactions
+    .get("client")
+    .expect("client tx filter should exist");
+  assert_eq!(tx_filter.vote, Some(false));
+  assert_eq!(tx_filter.account_include, vec!["acc1".to_string()]);
+  assert_eq!(tx_filter.account_exclude, vec!["acc2".to_string()]);
+  assert_eq!(tx_filter.account_required, vec!["acc3".to_string()]);
+}
+
+#[test]
 fn js_subscribe_deshred_request_conversion_preserves_vote_false_and_ping() {
   let mut deshred_transactions = HashMap::new();
   deshred_transactions.insert(
