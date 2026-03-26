@@ -71,7 +71,6 @@ npm start -- -e="https://api.rpcpool.com" \
 npm start -- -e="http://sg131.rpcpool.wg:10000" \
   subscribeDeshred \
   --deshred-parsed \
-  --deshred-encoding jsonParsed \
   --deshred-vote=false \
   --deshred-account-include "<Pubkey>"
 ```

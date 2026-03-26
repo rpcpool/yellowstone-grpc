@@ -10,7 +10,6 @@ import Client, {
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
-import { WasmUiTransactionEncoding } from "@triton-one/yellowstone-grpc/dist/types/napi";
 
 async function main() {
   const args = parseCommandLineArgs();
@@ -315,7 +314,7 @@ async function subscribeDeshredCommand(client: Client, args) {
       try {
         const tx = txDeshredEncode.encode(
           txMessage,
-          WasmUiTransactionEncoding.JsonParsed,
+          txDeshredEncode.encoding.JsonParsed,
         );
         console.log(
           `DESHRED filters: ${data.filters}, slot#${data.deshredTransaction.slot}, tx: ${JSON.stringify(tx)}`
@@ -575,20 +574,12 @@ function parseCommandLineArgs() {
       return yargs.options({
         "deshred-parsed": {
           default: false,
-          describe: "parse deshred transactions using txEncode",
+          describe: "parse deshred transactions using txDeshredEncode",
           type: "boolean",
-        },
-        "deshred-encoding": {
-          default: "jsonParsed",
-          describe:
-            "encoding for parsed deshred transactions: binary/base64/base58/json/jsonParsed",
-          choices: ["binary", "base64", "base58", "json", "jsonParsed"],
-          type: "string",
         },
         "deshred-vote": {
           description: "filter vote transactions",
           type: "boolean",
-          default: false,
         },
         "deshred-account-include": {
           default: [],
