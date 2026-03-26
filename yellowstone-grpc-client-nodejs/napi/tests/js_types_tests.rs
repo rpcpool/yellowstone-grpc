@@ -4,6 +4,7 @@ use yellowstone_grpc_napi::js_types::*;
 use yellowstone_grpc_proto::geyser::{
   subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
   subscribe_request_filter_accounts_filter_memcmp, subscribe_update,
+  subscribe_update_deshred,
 };
 use yellowstone_grpc_proto::prelude::*;
 use yellowstone_grpc_proto::solana::storage::confirmed_block::*;
@@ -42,6 +43,10 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     JsSubscribeUpdateUpdateOneof,
     subscribe_update::UpdateOneof
   );
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredUpdateOneof,
+    subscribe_update_deshred::UpdateOneof
+  );
   assert_conversion_signatures_for_env_type!(JsConfirmedBlock, ConfirmedBlock);
   assert_conversion_signatures_for_env_type!(JsConfirmedTransaction, ConfirmedTransaction);
   assert_conversion_signatures_for_env_type!(JsTransaction, Transaction);
@@ -70,6 +75,7 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     SubscribeRequestFilterAccountsFilterMemcmp
   );
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdate, SubscribeUpdate);
+  assert_conversion_signatures_for_env_type!(JsSubscribeUpdateDeshred, SubscribeUpdateDeshred);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateAccount, SubscribeUpdateAccount);
   assert_conversion_signatures_for_env_type!(
     JsSubscribeUpdateAccountInfo,
@@ -89,6 +95,14 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   );
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateBlock, SubscribeUpdateBlock);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateEntry, SubscribeUpdateEntry);
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredTransaction,
+    SubscribeUpdateDeshredTransaction
+  );
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredTransactionInfo,
+    SubscribeUpdateDeshredTransactionInfo
+  );
 
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterAccountsFilterLamportsCmp,
@@ -117,6 +131,14 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterBlocks,
     SubscribeRequestFilterBlocks
+  );
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeDeshredRequest,
+    SubscribeDeshredRequest
+  );
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeRequestFilterDeshredTransactions,
+    SubscribeRequestFilterDeshredTransactions
   );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterBlocksMeta,

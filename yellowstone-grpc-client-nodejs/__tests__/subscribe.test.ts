@@ -1,4 +1,4 @@
-import Client, { ClientDuplexStream } from "../src"
+import Client, { ClientDuplexStream } from "../src";
 import {
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
@@ -123,7 +123,9 @@ function waitForSubscribeUpdateMatchingPredicate(
     const onEndOrClose = () => {
       settleOnce(() => {
         cleanup();
-        const error = new Error("Stream ended before receiving expected subscribe update");
+        const error = new Error(
+          "Stream ended before receiving expected subscribe update",
+        );
         void closeStreamAndWait(stream).finally(() => reject(error));
       });
     };
@@ -131,7 +133,9 @@ function waitForSubscribeUpdateMatchingPredicate(
     const timeoutId = setTimeout(() => {
       settleOnce(() => {
         cleanup();
-        const error = new Error(`Timed out waiting for expected subscribe update after ${timeoutMs}ms`);
+        const error = new Error(
+          `Timed out waiting for expected subscribe update after ${timeoutMs}ms`,
+        );
         void closeStreamAndWait(stream).finally(() => reject(error));
       });
     }, timeoutMs);
@@ -143,7 +147,11 @@ function waitForSubscribeUpdateMatchingPredicate(
   });
 }
 
-function expectEncodeDecodeRoundTrip(messageFns: any, payload: any, allowEmpty = false): any {
+function expectEncodeDecodeRoundTrip(
+  messageFns: any,
+  payload: any,
+  allowEmpty = false,
+): any {
   const encoded = messageFns.encode(payload).finish();
   const decoded = messageFns.decode(encoded);
 
@@ -186,7 +194,9 @@ function makeComprehensiveSubscribeRequest(): SubscribeRequest {
         nonemptyTxnSignature: true,
         filters: [
           { memcmp: { offset: "1", bytes: Uint8Array.from([1, 2, 3]) } },
-          { memcmp: { offset: "2", base58: "11111111111111111111111111111111" } },
+          {
+            memcmp: { offset: "2", base58: "11111111111111111111111111111111" },
+          },
           { memcmp: { offset: "3", base64: "AQID" } },
           { datasize: "165" },
           { tokenAccountState: true },
@@ -345,7 +355,12 @@ function waitForDataEvent(stream: any, timeoutMs = 1000): Promise<any> {
     const onData = (data: any) => settleOnce(() => resolve(data));
     const onError = (error: Error) => settleOnce(() => reject(error));
     const timeoutId = setTimeout(
-      () => settleOnce(() => reject(new Error(`Timed out waiting for stream data after ${timeoutMs}ms`))),
+      () =>
+        settleOnce(() =>
+          reject(
+            new Error(`Timed out waiting for stream data after ${timeoutMs}ms`),
+          ),
+        ),
       timeoutMs,
     );
     stream.once("data", onData);
@@ -353,7 +368,10 @@ function waitForDataEvent(stream: any, timeoutMs = 1000): Promise<any> {
   });
 }
 
-function writeAndCaptureError(stream: any, request: SubscribeRequest): Promise<Error | null> {
+function writeAndCaptureError(
+  stream: any,
+  request: SubscribeRequest,
+): Promise<Error | null> {
   return new Promise((resolve) => {
     let settled = false;
     const settleOnce = (error: Error | null) => {
@@ -373,7 +391,9 @@ function writeAndCaptureError(stream: any, request: SubscribeRequest): Promise<E
     stream.once("error", onErrorEvent);
 
     try {
-      stream.write(request, (err: Error | null | undefined) => settleOnce(err ?? null));
+      stream.write(request, (err: Error | null | undefined) =>
+        settleOnce(err ?? null),
+      );
     } catch (err) {
       settleOnce(err as Error);
     }
@@ -428,14 +448,17 @@ describe("ClientDuplexStream shutdown behavior", () => {
     );
 
     stream.destroy();
-    const writeError = await writeAndCaptureError(stream, makeMinimalSubscribeRequest());
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeRequest(),
+    );
 
     expect(writeError).not.toBeNull();
     const message = String(writeError?.message ?? "").toLowerCase();
     expect(
       message.includes("closed") ||
-      message.includes("destroyed") ||
-      message.includes("write after end")
+        message.includes("destroyed") ||
+        message.includes("write after end"),
     ).toBe(true);
     expect(nativeWrite).not.toHaveBeenCalled();
   });
@@ -443,7 +466,7 @@ describe("ClientDuplexStream shutdown behavior", () => {
 
 describe("Client connection guard behavior", () => {
   test("all public client methods fail before connect", async () => {
-    const client = new Client("http://localhost:1", undefined, {});
+    const client = new Client("http://localhost:10000", undefined, {});
 
     const guardedCalls: Array<() => Promise<unknown>> = [
       () => client.getLatestBlockhash(2),
@@ -454,10 +477,13 @@ describe("Client connection guard behavior", () => {
       () => client.getVersion(),
       () => client.subscribeReplayInfo(),
       () => client.subscribe(),
+      () => client.subscribeDeshred(),
     ];
 
     for (const invoke of guardedCalls) {
-      await expect(invoke()).rejects.toThrow("Client not connected. Call connect() first");
+      await expect(invoke()).rejects.toThrow(
+        "Client not connected. Call connect() first",
+      );
     }
   });
 
@@ -465,7 +491,24 @@ describe("Client connection guard behavior", () => {
     const client = new Client("this-is-not-a-valid-endpoint", "token", {});
 
     await expect(client.connect()).rejects.toThrow();
-    await expect(client.getVersion()).rejects.toThrow("Client not connected. Call connect() first");
+    await expect(client.getVersion()).rejects.toThrow(
+      "Client not connected. Call connect() first",
+    );
+  });
+
+  test("subscribeDeshred bubbles native stream-open errors", async () => {
+    const client = new Client("http://localhost:10000", undefined, {});
+    const unimplementedError = new Error(
+      "status: Unimplemented, message: SubscribeDeshred is not available on this server",
+    );
+
+    (client as any)._grpcClient = {
+      subscribeDeshred: jest.fn().mockRejectedValue(unimplementedError),
+    };
+
+    await expect(client.subscribeDeshred()).rejects.toThrow(
+      "SubscribeDeshred is not available on this server",
+    );
   });
 });
 
@@ -537,7 +580,10 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const nativeClose = jest.fn();
     const nativeRead = jest
       .fn()
-      .mockRejectedValue({ code: "NO_UPDATE_AVAILABLE", message: "no update available" });
+      .mockRejectedValue({
+        code: "NO_UPDATE_AVAILABLE",
+        message: "no update available",
+      });
     const stream = new ClientDuplexStream(
       {
         close: nativeClose,
@@ -579,7 +625,9 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
 
   test("read: native read error emits a single terminal error", async () => {
     const nativeClose = jest.fn();
-    const nativeRead = jest.fn().mockRejectedValue(new Error("simulated read failure"));
+    const nativeRead = jest
+      .fn()
+      .mockRejectedValue(new Error("simulated read failure"));
     const stream = new ClientDuplexStream(
       {
         close: nativeClose,
@@ -591,12 +639,16 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const observedErrors: Error[] = [];
     stream.on("error", (err) => observedErrors.push(err as Error));
 
-    const closePromise = new Promise<void>((resolve) => stream.once("close", () => resolve()));
+    const closePromise = new Promise<void>((resolve) =>
+      stream.once("close", () => resolve()),
+    );
     (stream as any)._read(0);
     await closePromise;
 
     expect(observedErrors.length).toBe(1);
-    expect(String(observedErrors[0].message)).toContain("simulated read failure");
+    expect(String(observedErrors[0].message)).toContain(
+      "simulated read failure",
+    );
     expect(nativeClose).toHaveBeenCalledTimes(1);
   });
 
@@ -631,7 +683,10 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     // Node Duplex may emit an `error` event in addition to write callback error.
     stream.on("error", () => {});
 
-    const writeError = await writeAndCaptureError(stream, makeMinimalSubscribeRequest());
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeRequest(),
+    );
     expect(writeError).not.toBeNull();
     expect(String(writeError?.message ?? "")).toContain("native write failed");
 
@@ -658,12 +713,19 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
     const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
 
-    expect(decoded.accounts.allFields.account).toEqual(["accountA", "accountB"]);
+    expect(decoded.accounts.allFields.account).toEqual([
+      "accountA",
+      "accountB",
+    ]);
     expect(decoded.accounts.allFields.owner).toEqual(["ownerA"]);
     expect(decoded.accounts.allFields.nonemptyTxnSignature).toBe(true);
     expect(decoded.accounts.allFields.filters).toHaveLength(9);
-    expect(decoded.accounts.allFields.filters[0].memcmp?.bytes).toEqual(Uint8Array.from([1, 2, 3]));
-    expect(decoded.accounts.allFields.filters[1].memcmp?.base58).toBe("11111111111111111111111111111111");
+    expect(decoded.accounts.allFields.filters[0].memcmp?.bytes).toEqual(
+      Uint8Array.from([1, 2, 3]),
+    );
+    expect(decoded.accounts.allFields.filters[1].memcmp?.base58).toBe(
+      "11111111111111111111111111111111",
+    );
     expect(decoded.accounts.allFields.filters[2].memcmp?.base64).toBe("AQID");
     expect(decoded.accounts.allFields.filters[3].datasize).toBe("165");
     expect(decoded.accounts.allFields.filters[4].tokenAccountState).toBe(true);
@@ -678,18 +740,32 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     expect(decoded.transactions.txClient.vote).toBe(true);
     expect(decoded.transactions.txClient.failed).toBe(false);
     expect(decoded.transactions.txClient.signature).toBe("txSig1");
-    expect(decoded.transactions.txClient.accountInclude).toEqual(["accInclude"]);
-    expect(decoded.transactions.txClient.accountExclude).toEqual(["accExclude"]);
-    expect(decoded.transactions.txClient.accountRequired).toEqual(["accRequired"]);
+    expect(decoded.transactions.txClient.accountInclude).toEqual([
+      "accInclude",
+    ]);
+    expect(decoded.transactions.txClient.accountExclude).toEqual([
+      "accExclude",
+    ]);
+    expect(decoded.transactions.txClient.accountRequired).toEqual([
+      "accRequired",
+    ]);
 
     expect(decoded.transactionsStatus.txStatusClient.vote).toBe(false);
     expect(decoded.transactionsStatus.txStatusClient.failed).toBe(true);
     expect(decoded.transactionsStatus.txStatusClient.signature).toBe("txSig2");
-    expect(decoded.transactionsStatus.txStatusClient.accountInclude).toEqual(["statusInclude"]);
-    expect(decoded.transactionsStatus.txStatusClient.accountExclude).toEqual(["statusExclude"]);
-    expect(decoded.transactionsStatus.txStatusClient.accountRequired).toEqual(["statusRequired"]);
+    expect(decoded.transactionsStatus.txStatusClient.accountInclude).toEqual([
+      "statusInclude",
+    ]);
+    expect(decoded.transactionsStatus.txStatusClient.accountExclude).toEqual([
+      "statusExclude",
+    ]);
+    expect(decoded.transactionsStatus.txStatusClient.accountRequired).toEqual([
+      "statusRequired",
+    ]);
 
-    expect(decoded.blocks.blocksClient.accountInclude).toEqual(["blockAccount"]);
+    expect(decoded.blocks.blocksClient.accountInclude).toEqual([
+      "blockAccount",
+    ]);
     expect(decoded.blocks.blocksClient.includeTransactions).toBe(true);
     expect(decoded.blocks.blocksClient.includeAccounts).toBe(false);
     expect(decoded.blocks.blocksClient.includeEntries).toBe(true);
@@ -718,9 +794,14 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     );
     stream.on("error", () => {});
 
-    const writeError = await writeAndCaptureError(stream, makeMinimalSubscribeRequest());
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeRequest(),
+    );
     expect(writeError).not.toBeNull();
-    expect(String(writeError?.message ?? "")).toContain("Native stream does not support writeRaw");
+    expect(String(writeError?.message ?? "")).toContain(
+      "Native stream does not support writeRaw",
+    );
 
     await closeStreamAndWait(stream);
   });
@@ -738,12 +819,16 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     stream.on("error", () => {});
 
     const request = makeComprehensiveSubscribeRequest();
-    const requestBeforeWrite = geyser.SubscribeRequest.decode(geyser.SubscribeRequest.encode(request).finish());
+    const requestBeforeWrite = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
 
     const writeError = await writeAndCaptureError(stream, request);
     expect(writeError).toBeNull();
 
-    const requestAfterWrite = geyser.SubscribeRequest.decode(geyser.SubscribeRequest.encode(request).finish());
+    const requestAfterWrite = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
     expect(requestAfterWrite).toEqual(requestBeforeWrite);
     expect(nativeWriteRaw).toHaveBeenCalledTimes(1);
 
@@ -751,43 +836,86 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
   });
 
   test.each([
-    ["account", { slot: "1", isStartup: false, account: { pubkey: Buffer.from([]) } }],
+    [
+      "account",
+      { slot: "1", isStartup: false, account: { pubkey: Buffer.from([]) } },
+    ],
     ["slot", { slot: "2", status: 1 }],
-    ["transaction", { slot: "3", transaction: { signature: Buffer.from([]), isVote: false, index: "0" } }],
-    ["transactionStatus", { slot: "4", signature: Buffer.from([]), isVote: false, index: "0" }],
-    ["block", { slot: "5", blockhash: "hash", parentSlot: "4", parentBlockhash: "parent" }],
+    [
+      "transaction",
+      {
+        slot: "3",
+        transaction: { signature: Buffer.from([]), isVote: false, index: "0" },
+      },
+    ],
+    [
+      "transactionStatus",
+      { slot: "4", signature: Buffer.from([]), isVote: false, index: "0" },
+    ],
+    [
+      "block",
+      {
+        slot: "5",
+        blockhash: "hash",
+        parentSlot: "4",
+        parentBlockhash: "parent",
+      },
+    ],
     ["ping", {}],
     ["pong", { id: 7 }],
-    ["blockMeta", { slot: "6", blockhash: "meta", parentSlot: "5", parentBlockhash: "parent-meta" }],
-    ["entry", { slot: "7", index: "0", numHashes: "0", hash: Buffer.from([]), executedTransactionCount: "0", startingTransactionIndex: "0" }],
-  ])("read: maps updateOneof.%s to top-level SDK field", async (variant, payload) => {
-    const nativeRead = jest.fn().mockResolvedValue({
-      filters: ["client"],
-      createdAt: new Date(),
-      updateOneof: {
-        [variant]: payload,
-      },
-    });
-    const stream = new ClientDuplexStream(
+    [
+      "blockMeta",
       {
-        close: jest.fn(),
-        writeRaw: jest.fn(),
-        read: nativeRead,
+        slot: "6",
+        blockhash: "meta",
+        parentSlot: "5",
+        parentBlockhash: "parent-meta",
       },
-      { objectMode: true },
-    );
+    ],
+    [
+      "entry",
+      {
+        slot: "7",
+        index: "0",
+        numHashes: "0",
+        hash: Buffer.from([]),
+        executedTransactionCount: "0",
+        startingTransactionIndex: "0",
+      },
+    ],
+  ])(
+    "read: maps updateOneof.%s to top-level SDK field",
+    async (variant, payload) => {
+      const nativeRead = jest.fn().mockResolvedValue({
+        filters: ["client"],
+        createdAt: new Date(),
+        updateOneof: {
+          [variant]: payload,
+        },
+      });
+      const stream = new ClientDuplexStream(
+        {
+          close: jest.fn(),
+          writeRaw: jest.fn(),
+          read: nativeRead,
+        },
+        { objectMode: true },
+      );
 
-    const dataPromise = waitForDataEvent(stream, 1000);
-    (stream as any)._read(0);
-    const mappedUpdate = await dataPromise;
+      const dataPromise = waitForDataEvent(stream, 1000);
+      (stream as any)._read(0);
+      const mappedUpdate = await dataPromise;
 
-    expect((mappedUpdate as any).updateOneof).toBeUndefined();
-    expect((mappedUpdate as any)[variant]).toEqual(payload);
-    expect(mappedUpdate.filters).toEqual(["client"]);
-    expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe("[object Date]");
+      expect((mappedUpdate as any).updateOneof).toBeUndefined();
+      expect((mappedUpdate as any)[variant]).toEqual(payload);
+      expect(mappedUpdate.filters).toEqual(["client"]);
+      expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
+        "[object Date]",
+      );
 
-    await closeStreamAndWait(stream);
-  });
+      await closeStreamAndWait(stream);
+    },
+  );
 
   test("read: ignores late read completion after destroy", async () => {
     let resolveRead: ((value: any) => void) | null = null;
@@ -835,9 +963,12 @@ describe("Client subscription independence behavior", () => {
       read: jest.fn(() => new Promise(() => {})),
     };
 
-    const client = new Client("http://localhost:1", undefined, {});
+    const client = new Client("http://localhost:10000", undefined, {});
     (client as any)._grpcClient = {
-      subscribe: jest.fn().mockReturnValueOnce(nativeStreamA).mockReturnValueOnce(nativeStreamB),
+      subscribe: jest
+        .fn()
+        .mockReturnValueOnce(nativeStreamA)
+        .mockReturnValueOnce(nativeStreamB),
     };
 
     const streamA = await client.subscribe();
@@ -845,7 +976,10 @@ describe("Client subscription independence behavior", () => {
 
     await closeStreamAndWait(streamA);
 
-    const streamBWriteError = await writeAndCaptureError(streamB, makeMinimalSubscribeRequest());
+    const streamBWriteError = await writeAndCaptureError(
+      streamB,
+      makeMinimalSubscribeRequest(),
+    );
     expect(streamBWriteError).toBeNull();
     expect(nativeStreamB.writeRaw).toHaveBeenCalledTimes(1);
 
@@ -860,10 +994,7 @@ describe("subscribe response schema tests", () => {
   const TEST_TIMEOUT = 100000;
 
   // .env
-  const {
-    TEST_ENDPOINT: endpoint,
-    TEST_TOKEN: xToken
-  } = process.env;
+  const { TEST_ENDPOINT: endpoint, TEST_TOKEN: xToken } = process.env;
 
   // Use options sensible defaults.
   const channelOptions = {};
@@ -901,14 +1032,21 @@ describe("subscribe response schema tests", () => {
       for (const { label, request } of requests) {
         const writeError = await writeAndCaptureError(stream, request);
         if (writeError) {
-          throw new Error(`[${label}] write failed: ${String(writeError.message ?? writeError)}`);
+          throw new Error(
+            `[${label}] write failed: ${String(writeError.message ?? writeError)}`,
+          );
         }
         await new Promise((resolve) => setTimeout(resolve, settleMs));
         const unexpectedError = streamErrors.find(
-          (error) => !String(error?.message ?? "").toLowerCase().includes("no update available"),
+          (error) =>
+            !String(error?.message ?? "")
+              .toLowerCase()
+              .includes("no update available"),
         );
         if (unexpectedError) {
-          throw new Error(`[${label}] stream emitted error: ${unexpectedError.message}`);
+          throw new Error(
+            `[${label}] stream emitted error: ${unexpectedError.message}`,
+          );
         }
       }
     } finally {
@@ -921,9 +1059,20 @@ describe("subscribe response schema tests", () => {
       label: string;
       filter: SubscribeRequest["accounts"][string]["filters"][number];
     }> = [
-      { label: "memcmp_bytes", filter: { memcmp: { offset: "0", bytes: Uint8Array.from([1, 2, 3]) } } },
-      { label: "memcmp_base58", filter: { memcmp: { offset: "1", base58: "11111111111111111111111111111111" } } },
-      { label: "memcmp_base64", filter: { memcmp: { offset: "2", base64: "AQID" } } },
+      {
+        label: "memcmp_bytes",
+        filter: { memcmp: { offset: "0", bytes: Uint8Array.from([1, 2, 3]) } },
+      },
+      {
+        label: "memcmp_base58",
+        filter: {
+          memcmp: { offset: "1", base58: "11111111111111111111111111111111" },
+        },
+      },
+      {
+        label: "memcmp_base64",
+        filter: { memcmp: { offset: "2", base64: "AQID" } },
+      },
       { label: "datasize", filter: { datasize: "165" } },
       { label: "token_account_state", filter: { tokenAccountState: true } },
       { label: "lamports_eq", filter: { lamports: { eq: "1" } } },
@@ -996,7 +1145,8 @@ describe("subscribe response schema tests", () => {
   test("transactions filter combinations are accepted", async () => {
     const triStateBool: Array<boolean | undefined> = [undefined, true, false];
     const signaturePresence = [false, true];
-    const validSignature = "4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5";
+    const validSignature =
+      "4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5";
     const requests: Array<{ label: string; request: SubscribeRequest }> = [];
 
     for (const vote of triStateBool) {
@@ -1025,7 +1175,8 @@ describe("subscribe response schema tests", () => {
   test("transactionsStatus filter combinations are accepted", async () => {
     const triStateBool: Array<boolean | undefined> = [undefined, true, false];
     const signaturePresence = [false, true];
-    const validSignature = "4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5";
+    const validSignature =
+      "4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5";
     const requests: Array<{ label: string; request: SubscribeRequest }> = [];
 
     for (const vote of triStateBool) {
@@ -1051,608 +1202,713 @@ describe("subscribe response schema tests", () => {
     await assertRequestsAcceptedOnSingleStream(requests);
   }, 180000);
 
-  test("account", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      accounts: {
-        client: {
-          account: [],
-          filters: [],
-          owner: [],
+  test(
+    "account",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        accounts: {
+          client: {
+            account: [],
+            filters: [],
+            owner: [],
+          },
+        },
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForAccount = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.account),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
         }
-      },
-      slots: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForAccount = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.account),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForAccount;
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    // We're doing it this way so we can bypass the Jest Globals vs Node Globals
-    // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
-    //
-    // See issue here: https://github.com/jestjs/jest/issues/2549
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.account).toBe("object");
-    expect(typeof subscribe_update_response.account.slot).toBe("string");
-    expect(typeof subscribe_update_response.account.isStartup).toBe("boolean");
-    expect(typeof subscribe_update_response.account.account).toBe("object");
-
-    const account = subscribe_update_response.account.account;
-    expect(account.pubkey).toBeInstanceOf(Buffer);
-    expect(account.owner).toBeInstanceOf(Buffer);
-    expect(account.data).toBeInstanceOf(Buffer);
-    expect(typeof account.lamports).toBe("string");
-    expect(typeof account.rentEpoch).toBe("string");
-    expect(typeof account.writeVersion).toBe("string");
-    expect(typeof account.executable).toBe("boolean");
-
-    const decodedAccount = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateAccount,
-      subscribe_update_response.account,
-    );
-    expect(decodedAccount.account).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.account).toBeDefined();
-
-  }, TEST_TIMEOUT);
-
-  test("slot", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      slots: {
-        client: {}
-      },
-      accounts: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForSlot = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.slot),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForSlot;
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    // We're doing it this way so we can bypass the Jest Globals vs Node Globals
-    // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
-    //
-    // See issue here: https://github.com/jestjs/jest/issues/2549
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.slot).toBe("object");
-    expect(typeof subscribe_update_response.slot.slot).toBe("string");
-    expect(typeof subscribe_update_response.slot.status).toBe("number");
-
-    const decodedSlot = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateSlot,
-      subscribe_update_response.slot,
-    );
-    expect(decodedSlot.slot).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.slot).toBeDefined();
-
-  }, TEST_TIMEOUT);
-
-  test("transaction", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      transactions: {
-        client: {
-          accountExclude: [],
-          accountInclude: [],
-          accountRequired: []
-        },
-      },
-      accounts: {},
-      slots: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForTransaction = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.transaction?.transaction),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForTransaction;
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    // We're doing it this way so we can bypass the Jest Globals vs Node Globals
-    // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
-    //
-    // See issue here: https://github.com/jestjs/jest/issues/2549
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.transaction).toBe("object");
-    expect(typeof subscribe_update_response.transaction.slot).toBe("string");
-
-    const tx = subscribe_update_response.transaction.transaction;
-    expect(tx.signature).toBeInstanceOf(Buffer);
-    expect(typeof tx.transaction).toBe("object");
-    expect(typeof tx.meta).toBe("object");
-    expect(typeof tx.index).toBe("string");
-    expect(typeof tx.isVote).toBe("boolean");
-
-    const txMeta = subscribe_update_response.transaction.transaction.meta;
-    expect(Object.prototype.toString.call(txMeta.preBalances)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.postBalances)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.innerInstructions)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.logMessages)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.preTokenBalances)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.postTokenBalances)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.rewards)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.loadedWritableAddresses)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(txMeta.loadedReadonlyAddresses)).toBe("[object Array]");
-    expect(typeof txMeta.innerInstructionsNone).toBe("boolean");
-    expect(typeof txMeta.logMessagesNone).toBe("boolean");
-    expect(typeof txMeta.returnDataNone).toBe("boolean");
-    expect(typeof txMeta.computeUnitsConsumed).toBe("string");
-    expect(typeof txMeta.fee).toBe("string");
-    expect(typeof txMeta.costUnits).toBe("string");
-
-    const innerTx = subscribe_update_response.transaction.transaction.transaction;
-    expect(Object.prototype.toString.call(innerTx.signatures)).toBe("[object Array]");
-    expect(typeof innerTx.message).toBe("object");
-    expect(Object.prototype.toString.call(innerTx.message.accountKeys)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(innerTx.message.instructions)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(innerTx.message.addressTableLookups)).toBe("[object Array]");
-    expect(innerTx.message.recentBlockhash).toBeInstanceOf(Buffer);
-    expect(typeof innerTx.message.header).toBe("object");
-    expect(typeof innerTx.message.header.numRequiredSignatures).toBe("number");
-    expect(typeof innerTx.message.header.numReadonlySignedAccounts).toBe("number");
-    expect(typeof innerTx.message.header.numReadonlyUnsignedAccounts).toBe("number");
-    expect(typeof innerTx.message.versioned).toBe("boolean");
-
-    const decodedTransaction = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateTransaction,
-      subscribe_update_response.transaction,
-    );
-    expect(decodedTransaction.transaction).toBeDefined();
-
-    const decodedTransactionInfo = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateTransactionInfo,
-      subscribe_update_response.transaction.transaction,
-    );
-    expect(decodedTransactionInfo.signature).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.transaction).toBeDefined();
-
-  }, TEST_TIMEOUT)
-
-  test("transactionStatus", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      transactionsStatus: {
-        client: {
-          accountExclude: [],
-          accountInclude: [],
-          accountRequired: []
-        },
-      },
-      accounts: {},
-      slots: {},
-      transactions: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForTransactionStatus = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.transactionStatus),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForTransactionStatus;
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.transactionStatus).toBe("object");
-    expect(typeof subscribe_update_response.transactionStatus.slot).toBe("string");
-    expect(subscribe_update_response.transactionStatus.signature).toBeInstanceOf(Buffer);
-    expect(typeof subscribe_update_response.transactionStatus.isVote).toBe("boolean");
-    expect(typeof subscribe_update_response.transactionStatus.index).toBe("string");
-
-    const decodedTransactionStatus = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateTransactionStatus,
-      subscribe_update_response.transactionStatus,
-    );
-    expect(decodedTransactionStatus.signature).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.transactionStatus).toBeDefined();
-  }, TEST_TIMEOUT);
-
-  test("block", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      blocks: {
-        client: {
-          accountInclude: [],
-          includeTransactions: true,
-          includeAccounts: false,
-          includeEntries: false,
-        },
-      },
-      accounts: {},
-      slots: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocksMeta: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForBlock = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.block),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForBlock;
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.block).toBe("object");
-
-    const block = subscribe_update_response.block;
-    expect(typeof block.slot).toBe("string");
-    expect(typeof block.blockhash).toBe("string");
-    expect(typeof block.parentSlot).toBe("string");
-    expect(typeof block.parentBlockhash).toBe("string");
-    expect(typeof block.executedTransactionCount).toBe("string");
-    expect(typeof block.updatedAccountCount).toBe("string");
-    expect(typeof block.entriesCount).toBe("string");
-    expect(Object.prototype.toString.call(block.transactions)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(block.accounts)).toBe("[object Array]");
-    expect(Object.prototype.toString.call(block.entries)).toBe("[object Array]");
-
-    const decodedBlock = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateBlock,
-      subscribe_update_response.block,
-    );
-    expect(decodedBlock.blockhash).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.block).toBeDefined();
-  }, TEST_TIMEOUT);
-
-  test("blockMeta", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      blocksMeta: {
-        client: {}
-      },
-      accounts: {},
-      slots: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      entry: {},
-      commitment: 2
-    };
-
-    const waitForBlockMeta = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.blockMeta),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    try {
-      subscribe_update_response = await waitForBlockMeta;
-    } catch (error) {
-      if (isChannelClosedError(error)) {
-        expect(isChannelClosedError(error)).toBe(true);
-        return;
-      }
-      throw error;
-    }
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.blockMeta).toBe("object");
-
-    const blockMeta = subscribe_update_response.blockMeta;
-    expect(typeof blockMeta.slot).toBe("string");
-    expect(typeof blockMeta.blockhash).toBe("string");
-    expect(typeof blockMeta.parentSlot).toBe("string");
-    expect(typeof blockMeta.parentBlockhash).toBe("string");
-    expect(typeof blockMeta.executedTransactionCount).toBe("string");
-    expect(typeof blockMeta.entriesCount).toBe("string");
-
-    const decodedBlockMeta = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateBlockMeta,
-      subscribe_update_response.blockMeta,
-    );
-    expect(decodedBlockMeta.blockhash).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.blockMeta).toBeDefined();
-  }, TEST_TIMEOUT);
-
-  test("entry", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      entry: {
-        client: {}
-      },
-      accounts: {},
-      slots: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      commitment: 2
-    };
-
-    const waitForEntry = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.entry),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    try {
-      subscribe_update_response = await waitForEntry;
-    } catch (error) {
-      if (isChannelClosedError(error)) {
-        expect(isChannelClosedError(error)).toBe(true);
-        return;
-      }
-      throw error;
-    }
-
-    expect(subscribe_update_response.filters).toEqual(["client"]);
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    expect(typeof subscribe_update_response.entry).toBe("object");
-
-    const entry = subscribe_update_response.entry;
-    expect(typeof entry.slot).toBe("string");
-    expect(typeof entry.index).toBe("string");
-    expect(typeof entry.numHashes).toBe("string");
-    expect(entry.hash).toBeInstanceOf(Buffer);
-    expect(typeof entry.executedTransactionCount).toBe("string");
-    expect(typeof entry.startingTransactionIndex).toBe("string");
-
-    const decodedEntry = expectEncodeDecodeRoundTrip(
-      SubscribeUpdateEntry,
-      subscribe_update_response.entry,
-    );
-    expect(decodedEntry.hash).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.entry).toBeDefined();
-  }, TEST_TIMEOUT);
-
-  test("ping/pong", async () => {
-    let subscribe_update_response: any;
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      accounts: {},
-      slots: {},
-      transactions: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2,
-      ping: {
-        id: 42,
-      },
-    };
-
-    const waitForPingOrPong = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.pong || data?.ping),
-      TEST_TIMEOUT,
-    );
-
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
-      }
-    });
-
-    subscribe_update_response = await waitForPingOrPong;
-
-    expect(Object.prototype.toString.call(subscribe_update_response.createdAt)).toBe("[object Date]");
-
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    const pong = subscribe_update_response.pong;
-    const ping = subscribe_update_response.ping;
-
-    if (pong) {
-      expect(typeof pong).toBe("object");
-      expect(typeof pong.id).toBe("number");
-      expect(pong.id).toBe(42);
-
-      const decodedPong = expectEncodeDecodeRoundTrip(SubscribeUpdatePong, pong);
-      expect(decodedPong.id).toBe(42);
+      });
+
+      subscribe_update_response = await waitForAccount;
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      // We're doing it this way so we can bypass the Jest Globals vs Node Globals
+      // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
+      //
+      // See issue here: https://github.com/jestjs/jest/issues/2549
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.account).toBe("object");
+      expect(typeof subscribe_update_response.account.slot).toBe("string");
+      expect(typeof subscribe_update_response.account.isStartup).toBe(
+        "boolean",
+      );
+      expect(typeof subscribe_update_response.account.account).toBe("object");
+
+      const account = subscribe_update_response.account.account;
+      expect(account.pubkey).toBeInstanceOf(Buffer);
+      expect(account.owner).toBeInstanceOf(Buffer);
+      expect(account.data).toBeInstanceOf(Buffer);
+      expect(typeof account.lamports).toBe("string");
+      expect(typeof account.rentEpoch).toBe("string");
+      expect(typeof account.writeVersion).toBe("string");
+      expect(typeof account.executable).toBe("boolean");
+
+      const decodedAccount = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateAccount,
+        subscribe_update_response.account,
+      );
+      expect(decodedAccount.account).toBeDefined();
 
       const decodedEnvelope = expectEncodeDecodeRoundTrip(
         SubscribeUpdate,
         subscribe_update_response,
       );
-      expect(decodedEnvelope.pong).toBeDefined();
-      return;
-    }
+      expect(decodedEnvelope.account).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
 
-    expect(typeof ping).toBe("object");
-
-    const decodedPing = expectEncodeDecodeRoundTrip(SubscribeUpdatePing, ping, true);
-    expect(decodedPing).toBeDefined();
-
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.ping).toBeDefined();
-  }, TEST_TIMEOUT);
-
-  test("SubscribeUpdateTransactionInfo encode", async () => {
-    const subscribe_duplex_stream = await client.subscribe();
-    const request: SubscribeRequest = {
-      transactions: {
-        client: {
-          accountExclude: [],
-          accountInclude: [],
-          accountRequired: [],
+  test(
+    "slot",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        slots: {
+          client: {},
         },
-      },
-      accounts: {},
-      slots: {},
-      transactionsStatus: {},
-      accountsDataSlice: [],
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      commitment: 2,
-    };
+        accounts: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
 
-    const waitForTransactionInfo = waitForSubscribeUpdateMatchingPredicate(
-      subscribe_duplex_stream,
-      (data) => Boolean(data?.transaction?.transaction),
-      TEST_TIMEOUT,
-    );
+      const waitForSlot = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.slot),
+        TEST_TIMEOUT,
+      );
 
-    subscribe_duplex_stream.write(request, (err) => {
-      if (err) {
-        console.error(`error writing to stream: ${err}`)
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      subscribe_update_response = await waitForSlot;
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      // We're doing it this way so we can bypass the Jest Globals vs Node Globals
+      // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
+      //
+      // See issue here: https://github.com/jestjs/jest/issues/2549
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.slot).toBe("object");
+      expect(typeof subscribe_update_response.slot.slot).toBe("string");
+      expect(typeof subscribe_update_response.slot.status).toBe("number");
+
+      const decodedSlot = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateSlot,
+        subscribe_update_response.slot,
+      );
+      expect(decodedSlot.slot).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.slot).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "transaction",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        transactions: {
+          client: {
+            accountExclude: [],
+            accountInclude: [],
+            accountRequired: [],
+          },
+        },
+        accounts: {},
+        slots: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForTransaction = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.transaction?.transaction),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      subscribe_update_response = await waitForTransaction;
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      // We're doing it this way so we can bypass the Jest Globals vs Node Globals
+      // type conflicts that makes expect(Date).toBeInstanceOf(Date) to fail.
+      //
+      // See issue here: https://github.com/jestjs/jest/issues/2549
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.transaction).toBe("object");
+      expect(typeof subscribe_update_response.transaction.slot).toBe("string");
+
+      const tx = subscribe_update_response.transaction.transaction;
+      expect(tx.signature).toBeInstanceOf(Buffer);
+      expect(typeof tx.transaction).toBe("object");
+      expect(typeof tx.meta).toBe("object");
+      expect(typeof tx.index).toBe("string");
+      expect(typeof tx.isVote).toBe("boolean");
+
+      const txMeta = subscribe_update_response.transaction.transaction.meta;
+      expect(Object.prototype.toString.call(txMeta.preBalances)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.postBalances)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.innerInstructions)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.logMessages)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.preTokenBalances)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.postTokenBalances)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(txMeta.rewards)).toBe(
+        "[object Array]",
+      );
+      expect(
+        Object.prototype.toString.call(txMeta.loadedWritableAddresses),
+      ).toBe("[object Array]");
+      expect(
+        Object.prototype.toString.call(txMeta.loadedReadonlyAddresses),
+      ).toBe("[object Array]");
+      expect(typeof txMeta.innerInstructionsNone).toBe("boolean");
+      expect(typeof txMeta.logMessagesNone).toBe("boolean");
+      expect(typeof txMeta.returnDataNone).toBe("boolean");
+      expect(typeof txMeta.computeUnitsConsumed).toBe("string");
+      expect(typeof txMeta.fee).toBe("string");
+      expect(typeof txMeta.costUnits).toBe("string");
+
+      const innerTx =
+        subscribe_update_response.transaction.transaction.transaction;
+      expect(Object.prototype.toString.call(innerTx.signatures)).toBe(
+        "[object Array]",
+      );
+      expect(typeof innerTx.message).toBe("object");
+      expect(Object.prototype.toString.call(innerTx.message.accountKeys)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(innerTx.message.instructions)).toBe(
+        "[object Array]",
+      );
+      expect(
+        Object.prototype.toString.call(innerTx.message.addressTableLookups),
+      ).toBe("[object Array]");
+      expect(innerTx.message.recentBlockhash).toBeInstanceOf(Buffer);
+      expect(typeof innerTx.message.header).toBe("object");
+      expect(typeof innerTx.message.header.numRequiredSignatures).toBe(
+        "number",
+      );
+      expect(typeof innerTx.message.header.numReadonlySignedAccounts).toBe(
+        "number",
+      );
+      expect(typeof innerTx.message.header.numReadonlyUnsignedAccounts).toBe(
+        "number",
+      );
+      expect(typeof innerTx.message.versioned).toBe("boolean");
+
+      const decodedTransaction = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateTransaction,
+        subscribe_update_response.transaction,
+      );
+      expect(decodedTransaction.transaction).toBeDefined();
+
+      const decodedTransactionInfo = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateTransactionInfo,
+        subscribe_update_response.transaction.transaction,
+      );
+      expect(decodedTransactionInfo.signature).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.transaction).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "transactionStatus",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        transactionsStatus: {
+          client: {
+            accountExclude: [],
+            accountInclude: [],
+            accountRequired: [],
+          },
+        },
+        accounts: {},
+        slots: {},
+        transactions: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForTransactionStatus = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.transactionStatus),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      subscribe_update_response = await waitForTransactionStatus;
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.transactionStatus).toBe("object");
+      expect(typeof subscribe_update_response.transactionStatus.slot).toBe(
+        "string",
+      );
+      expect(
+        subscribe_update_response.transactionStatus.signature,
+      ).toBeInstanceOf(Buffer);
+      expect(typeof subscribe_update_response.transactionStatus.isVote).toBe(
+        "boolean",
+      );
+      expect(typeof subscribe_update_response.transactionStatus.index).toBe(
+        "string",
+      );
+
+      const decodedTransactionStatus = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateTransactionStatus,
+        subscribe_update_response.transactionStatus,
+      );
+      expect(decodedTransactionStatus.signature).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.transactionStatus).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "block",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        blocks: {
+          client: {
+            accountInclude: [],
+            includeTransactions: true,
+            includeAccounts: false,
+            includeEntries: false,
+          },
+        },
+        accounts: {},
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForBlock = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.block),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      subscribe_update_response = await waitForBlock;
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.block).toBe("object");
+
+      const block = subscribe_update_response.block;
+      expect(typeof block.slot).toBe("string");
+      expect(typeof block.blockhash).toBe("string");
+      expect(typeof block.parentSlot).toBe("string");
+      expect(typeof block.parentBlockhash).toBe("string");
+      expect(typeof block.executedTransactionCount).toBe("string");
+      expect(typeof block.updatedAccountCount).toBe("string");
+      expect(typeof block.entriesCount).toBe("string");
+      expect(Object.prototype.toString.call(block.transactions)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(block.accounts)).toBe(
+        "[object Array]",
+      );
+      expect(Object.prototype.toString.call(block.entries)).toBe(
+        "[object Array]",
+      );
+
+      const decodedBlock = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateBlock,
+        subscribe_update_response.block,
+      );
+      expect(decodedBlock.blockhash).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.block).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "blockMeta",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        blocksMeta: {
+          client: {},
+        },
+        accounts: {},
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForBlockMeta = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.blockMeta),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      try {
+        subscribe_update_response = await waitForBlockMeta;
+      } catch (error) {
+        if (isChannelClosedError(error)) {
+          expect(isChannelClosedError(error)).toBe(true);
+          return;
+        }
+        throw error;
       }
-    });
 
-    const subscribe_update_response = await waitForTransactionInfo;
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.blockMeta).toBe("object");
 
-    expect((subscribe_update_response as any).updateOneof).toBeUndefined();
-    const tx_info = subscribe_update_response.transaction.transaction;
-    const decoded = expectEncodeDecodeRoundTrip(SubscribeUpdateTransactionInfo, tx_info);
-    expect(decoded.signature).toBeDefined();
+      const blockMeta = subscribe_update_response.blockMeta;
+      expect(typeof blockMeta.slot).toBe("string");
+      expect(typeof blockMeta.blockhash).toBe("string");
+      expect(typeof blockMeta.parentSlot).toBe("string");
+      expect(typeof blockMeta.parentBlockhash).toBe("string");
+      expect(typeof blockMeta.executedTransactionCount).toBe("string");
+      expect(typeof blockMeta.entriesCount).toBe("string");
 
-    const decodedEnvelope = expectEncodeDecodeRoundTrip(
-      SubscribeUpdate,
-      subscribe_update_response,
-    );
-    expect(decodedEnvelope.transaction).toBeDefined();
-  }, TEST_TIMEOUT)
+      const decodedBlockMeta = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateBlockMeta,
+        subscribe_update_response.blockMeta,
+      );
+      expect(decodedBlockMeta.blockhash).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.blockMeta).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "entry",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        entry: {
+          client: {},
+        },
+        accounts: {},
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        commitment: 2,
+      };
+
+      const waitForEntry = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.entry),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      try {
+        subscribe_update_response = await waitForEntry;
+      } catch (error) {
+        if (isChannelClosedError(error)) {
+          expect(isChannelClosedError(error)).toBe(true);
+          return;
+        }
+        throw error;
+      }
+
+      expect(subscribe_update_response.filters).toEqual(["client"]);
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      expect(typeof subscribe_update_response.entry).toBe("object");
+
+      const entry = subscribe_update_response.entry;
+      expect(typeof entry.slot).toBe("string");
+      expect(typeof entry.index).toBe("string");
+      expect(typeof entry.numHashes).toBe("string");
+      expect(entry.hash).toBeInstanceOf(Buffer);
+      expect(typeof entry.executedTransactionCount).toBe("string");
+      expect(typeof entry.startingTransactionIndex).toBe("string");
+
+      const decodedEntry = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateEntry,
+        subscribe_update_response.entry,
+      );
+      expect(decodedEntry.hash).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.entry).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "ping/pong",
+    async () => {
+      let subscribe_update_response: any;
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        accounts: {},
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+        ping: {
+          id: 42,
+        },
+      };
+
+      const waitForPingOrPong = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.pong || data?.ping),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      subscribe_update_response = await waitForPingOrPong;
+
+      expect(
+        Object.prototype.toString.call(subscribe_update_response.createdAt),
+      ).toBe("[object Date]");
+
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      const pong = subscribe_update_response.pong;
+      const ping = subscribe_update_response.ping;
+
+      if (pong) {
+        expect(typeof pong).toBe("object");
+        expect(typeof pong.id).toBe("number");
+        expect(pong.id).toBe(42);
+
+        const decodedPong = expectEncodeDecodeRoundTrip(
+          SubscribeUpdatePong,
+          pong,
+        );
+        expect(decodedPong.id).toBe(42);
+
+        const decodedEnvelope = expectEncodeDecodeRoundTrip(
+          SubscribeUpdate,
+          subscribe_update_response,
+        );
+        expect(decodedEnvelope.pong).toBeDefined();
+        return;
+      }
+
+      expect(typeof ping).toBe("object");
+
+      const decodedPing = expectEncodeDecodeRoundTrip(
+        SubscribeUpdatePing,
+        ping,
+        true,
+      );
+      expect(decodedPing).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.ping).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
+
+  test(
+    "SubscribeUpdateTransactionInfo encode",
+    async () => {
+      const subscribe_duplex_stream = await client.subscribe();
+      const request: SubscribeRequest = {
+        transactions: {
+          client: {
+            accountExclude: [],
+            accountInclude: [],
+            accountRequired: [],
+          },
+        },
+        accounts: {},
+        slots: {},
+        transactionsStatus: {},
+        accountsDataSlice: [],
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        commitment: 2,
+      };
+
+      const waitForTransactionInfo = waitForSubscribeUpdateMatchingPredicate(
+        subscribe_duplex_stream,
+        (data) => Boolean(data?.transaction?.transaction),
+        TEST_TIMEOUT,
+      );
+
+      subscribe_duplex_stream.write(request, (err) => {
+        if (err) {
+          console.error(`error writing to stream: ${err}`);
+        }
+      });
+
+      const subscribe_update_response = await waitForTransactionInfo;
+
+      expect((subscribe_update_response as any).updateOneof).toBeUndefined();
+      const tx_info = subscribe_update_response.transaction.transaction;
+      const decoded = expectEncodeDecodeRoundTrip(
+        SubscribeUpdateTransactionInfo,
+        tx_info,
+      );
+      expect(decoded.signature).toBeDefined();
+
+      const decodedEnvelope = expectEncodeDecodeRoundTrip(
+        SubscribeUpdate,
+        subscribe_update_response,
+      );
+      expect(decodedEnvelope.transaction).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 describe("unary response schema tests", () => {
   const TEST_TIMEOUT = 100000;
 
   // .env
-  const {
-    TEST_ENDPOINT: endpoint,
-    TEST_TOKEN: xToken
-  } = process.env;
+  const { TEST_ENDPOINT: endpoint, TEST_TOKEN: xToken } = process.env;
 
   // Use options sensible defaults.
   const channelOptions = {};
@@ -1662,87 +1918,134 @@ describe("unary response schema tests", () => {
     await client.connect();
   });
 
-  test("getLatestBlockhash", async () => {
-    const response = await client.getLatestBlockhash(2);
+  test(
+    "getLatestBlockhash",
+    async () => {
+      const response = await client.getLatestBlockhash(2);
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.slot).toBe("string");
-    expect(typeof response.blockhash).toBe("string");
-    expect(typeof response.lastValidBlockHeight).toBe("string");
-    expect(response.blockhash.length).toBeGreaterThan(0);
+      expect(typeof response).toBe("object");
+      expect(typeof response.slot).toBe("string");
+      expect(typeof response.blockhash).toBe("string");
+      expect(typeof response.lastValidBlockHeight).toBe("string");
+      expect(response.blockhash.length).toBeGreaterThan(0);
 
-    const decoded = expectEncodeDecodeRoundTrip(GetLatestBlockhashResponse, response);
-    expect(decoded.blockhash).toBe(response.blockhash);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(
+        GetLatestBlockhashResponse,
+        response,
+      );
+      expect(decoded.blockhash).toBe(response.blockhash);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("ping", async () => {
-    const pingCount = 7;
-    const response = await client.ping(pingCount);
+  test(
+    "ping",
+    async () => {
+      const pingCount = 7;
+      const response = await client.ping(pingCount);
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.count).toBe("number");
-    expect(response.count).toBe(pingCount);
+      expect(typeof response).toBe("object");
+      expect(typeof response.count).toBe("number");
+      expect(response.count).toBe(pingCount);
 
-    const decoded = expectEncodeDecodeRoundTrip(PongResponse, response);
-    expect(decoded.count).toBe(pingCount);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(PongResponse, response);
+      expect(decoded.count).toBe(pingCount);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("getBlockHeight", async () => {
-    const response = await client.getBlockHeight(2);
+  test(
+    "getBlockHeight",
+    async () => {
+      const response = await client.getBlockHeight(2);
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.blockHeight).toBe("string");
-    expect(response.blockHeight.length).toBeGreaterThan(0);
+      expect(typeof response).toBe("object");
+      expect(typeof response.blockHeight).toBe("string");
+      expect(response.blockHeight.length).toBeGreaterThan(0);
 
-    const decoded = expectEncodeDecodeRoundTrip(GetBlockHeightResponse, response);
-    expect(decoded.blockHeight).toBe(response.blockHeight);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(
+        GetBlockHeightResponse,
+        response,
+      );
+      expect(decoded.blockHeight).toBe(response.blockHeight);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("getSlot", async () => {
-    const response = await client.getSlot(2);
+  test(
+    "getSlot",
+    async () => {
+      const response = await client.getSlot(2);
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.slot).toBe("string");
-    expect(response.slot.length).toBeGreaterThan(0);
+      expect(typeof response).toBe("object");
+      expect(typeof response.slot).toBe("string");
+      expect(response.slot.length).toBeGreaterThan(0);
 
-    const decoded = expectEncodeDecodeRoundTrip(GetSlotResponse, response);
-    expect(decoded.slot).toBe(response.slot);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(GetSlotResponse, response);
+      expect(decoded.slot).toBe(response.slot);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("isBlockhashValid", async () => {
-    const latestBlockhash = await client.getLatestBlockhash(2);
-    const response = await client.isBlockhashValid(latestBlockhash.blockhash, 2);
+  test(
+    "isBlockhashValid",
+    async () => {
+      const latestBlockhash = await client.getLatestBlockhash(2);
+      const response = await client.isBlockhashValid(
+        latestBlockhash.blockhash,
+        2,
+      );
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.slot).toBe("string");
-    expect(typeof response.valid).toBe("boolean");
+      expect(typeof response).toBe("object");
+      expect(typeof response.slot).toBe("string");
+      expect(typeof response.valid).toBe("boolean");
 
-    const decoded = expectEncodeDecodeRoundTrip(IsBlockhashValidResponse, response);
-    expect(decoded.valid).toBe(response.valid);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(
+        IsBlockhashValidResponse,
+        response,
+      );
+      expect(decoded.valid).toBe(response.valid);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("getVersion", async () => {
-    const response = await client.getVersion();
+  test(
+    "getVersion",
+    async () => {
+      const response = await client.getVersion();
 
-    expect(typeof response).toBe("object");
-    expect(typeof response.version).toBe("string");
-    expect(response.version.length).toBeGreaterThan(0);
+      expect(typeof response).toBe("object");
+      expect(typeof response.version).toBe("string");
+      expect(response.version.length).toBeGreaterThan(0);
 
-    const decoded = expectEncodeDecodeRoundTrip(GetVersionResponse, response);
-    expect(decoded.version).toBe(response.version);
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(GetVersionResponse, response);
+      expect(decoded.version).toBe(response.version);
+    },
+    TEST_TIMEOUT,
+  );
 
-  test("subscribeReplayInfo", async () => {
-    const response = await client.subscribeReplayInfo();
+  test(
+    "subscribeReplayInfo",
+    async () => {
+      const response = await client.subscribeReplayInfo();
 
-    expect(typeof response).toBe("object");
-    if (response.firstAvailable !== undefined && response.firstAvailable !== null) {
-      expect(typeof response.firstAvailable).toBe("string");
-    }
+      expect(typeof response).toBe("object");
+      if (
+        response.firstAvailable !== undefined &&
+        response.firstAvailable !== null
+      ) {
+        expect(typeof response.firstAvailable).toBe("string");
+      }
 
-    const decoded = expectEncodeDecodeRoundTrip(SubscribeReplayInfoResponse, response, true);
-    expect(decoded).toBeDefined();
-  }, TEST_TIMEOUT);
+      const decoded = expectEncodeDecodeRoundTrip(
+        SubscribeReplayInfoResponse,
+        response,
+        true,
+      );
+      expect(decoded).toBeDefined();
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 describe("grpc message encode/decode tests", () => {

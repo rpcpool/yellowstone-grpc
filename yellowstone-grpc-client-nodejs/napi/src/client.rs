@@ -373,4 +373,18 @@ impl GrpcClient {
   pub fn subscribe(&self, env: &napi::Env) -> napi::Result<crate::DuplexStream> {
     crate::DuplexStream::subscribe(env, self)
   }
+
+  /// Creates a deshred subscription stream bound to this client connection.
+  ///
+  /// Unlike `subscribe()`, this method opens the underlying gRPC stream before
+  /// resolving, so server-side `UNIMPLEMENTED` errors bubble to TypeScript
+  /// callers through the returned Promise.
+  #[allow(private_interfaces)]
+  #[napi]
+  pub fn subscribe_deshred<'env>(
+    &self,
+    env: &'env napi::Env,
+  ) -> napi::Result<PromiseRaw<'env, crate::DuplexStreamDeshred>> {
+    crate::DuplexStreamDeshred::subscribe(env, self)
+  }
 }

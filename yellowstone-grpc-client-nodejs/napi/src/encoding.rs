@@ -1,11 +1,15 @@
 use {
   napi_derive::napi,
-  solana_transaction_status::{TransactionWithStatusMeta, UiTransactionEncoding},
-  yellowstone_grpc_proto::{
-    convert_from,
-    prelude::{SubscribeUpdateTransactionInfo, TransactionError as TransactionErrorProto},
-    prost::Message,
+  prost011::Message as Prost11Message,
+  solana_storage_proto::convert::generated::{
+    Transaction as StorageTransaction, TransactionStatusMeta as StorageTransactionStatusMeta,
   },
+  solana_transaction_error::TransactionError as TransactionErrorSolana,
+  solana_transaction_status::{
+    TransactionWithStatusMeta, UiTransactionEncoding, VersionedTransactionWithStatusMeta,
+  },
+  std::panic::{catch_unwind, AssertUnwindSafe},
+  yellowstone_grpc_proto::{prelude::SubscribeUpdateTransactionInfo, prost::Message as Prost14Message},
 };
 
 #[napi]
@@ -41,9 +45,31 @@ pub fn encode_tx(
   let tx = SubscribeUpdateTransactionInfo::decode(data)
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-  if let TransactionWithStatusMeta::Complete(tx) =
-    convert_from::create_tx_with_meta(tx).map_err(|e| napi::Error::from_reason(e.to_string()))?
-  {
+  let transaction_proto = tx
+    .transaction
+    .ok_or_else(|| napi::Error::from_reason("failed to get transaction payload"))?;
+  let transaction = <StorageTransaction as Prost11Message>::decode(
+    transaction_proto.encode_to_vec().as_slice(),
+  )
+  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction payload: {e}")))?;
+  let transaction = catch_unwind(AssertUnwindSafe(|| transaction.into()))
+    .map_err(|_| napi::Error::from_reason("failed to decode transaction payload"))?;
+  let meta_proto = tx
+    .meta
+    .ok_or_else(|| napi::Error::from_reason("failed to get transaction meta"))?;
+  let meta = <StorageTransactionStatusMeta as Prost11Message>::decode(
+    meta_proto.encode_to_vec().as_slice(),
+  )
+  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?
+  .try_into()
+  .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?;
+
+  let tx_with_meta = TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta {
+    transaction,
+    meta,
+  });
+
+  if let TransactionWithStatusMeta::Complete(tx) = tx_with_meta {
     serde_json::to_string(
       &tx
         .encode(
@@ -61,9 +87,11 @@ pub fn encode_tx(
 
 #[napi]
 pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
-  match convert_from::create_tx_error(Some(&TransactionErrorProto { err })) {
-    Ok(Some(err)) => serde_json::to_string(&err).map_err(Into::into),
-    Ok(None) => Err(napi::Error::from_reason("unexpected")),
-    Err(error) => Err(napi::Error::from_reason(error)),
-  }
+  let tx_error = catch_unwind(AssertUnwindSafe(|| {
+    wincode::deserialize::<TransactionErrorSolana>(&err)
+  }))
+  .map_err(|_| napi::Error::from_reason("failed to decode TransactionError"))?
+  .map_err(|e| napi::Error::from_reason(format!("failed to decode TransactionError: {e}")))?;
+
+  serde_json::to_string(&tx_error).map_err(Into::into)
 }

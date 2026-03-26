@@ -8,6 +8,7 @@ import {
   GetVersionResponse as GetVersionResponseMessage,
   IsBlockhashValidResponse as IsBlockhashValidResponseMessage,
   PongResponse as PongResponseMessage,
+  SubscribeDeshredRequest as SubscribeDeshredRequestMessage,
   SubscribeRequest as SubscribeRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
   SubscribeUpdateTransactionInfo,
@@ -20,18 +21,23 @@ import type {
   GetVersionResponse,
   IsBlockhashValidResponse,
   PongResponse,
+  SubscribeDeshredRequest,
   SubscribeReplayInfoResponse,
   SubscribeRequest,
+  SubscribeUpdateDeshred,
   SubscribeUpdate,
 } from "./grpc/geyser";
 
 // Reexport automatically generated types
 export {
   CommitmentLevel,
+  SubscribeDeshredRequest,
+  SubscribeDeshredRequest_DeshredTransactionsEntry,
   SubscribeRequest,
   SubscribeRequest_AccountsEntry,
   SubscribeRequest_BlocksEntry,
   SubscribeRequest_BlocksMetaEntry,
+  SubscribeRequestFilterDeshredTransactions,
   SubscribeRequest_SlotsEntry,
   SubscribeRequest_TransactionsEntry,
   SubscribeRequestAccountsDataSlice,
@@ -49,6 +55,9 @@ export {
   SubscribeUpdateAccountInfo,
   SubscribeUpdateBlock,
   SubscribeUpdateBlockMeta,
+  SubscribeUpdateDeshred,
+  SubscribeUpdateDeshredTransaction,
+  SubscribeUpdateDeshredTransactionInfo,
   SubscribeUpdatePing,
   SubscribeUpdateSlot,
   SubscribeUpdateTransaction,
@@ -92,6 +101,24 @@ function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate 
     blockMeta: oneof.blockMeta as any,
     entry: oneof.entry as any,
   } as SubscribeUpdate;
+}
+
+/**
+ * Convert N-API `JsSubscribeUpdateDeshred` shape (with `updateOneof`) into the
+ * generated protobuf-friendly SDK shape (`SubscribeUpdateDeshred`).
+ */
+function fromJsSubscribeUpdateDeshred(
+  update: napi.JsSubscribeUpdateDeshred,
+): SubscribeUpdateDeshred {
+  const oneof = update.updateOneof ?? {};
+
+  return {
+    filters: update.filters ?? [],
+    createdAt: update.createdAt,
+    deshredTransaction: oneof.deshredTransaction as any,
+    ping: oneof.ping as any,
+    pong: oneof.pong as any,
+  } as SubscribeUpdateDeshred;
 }
 
 export default class Client {
@@ -248,6 +275,28 @@ export default class Client {
       }
     });
   }
+
+  async subscribeDeshred(): Promise<ClientDeshredDuplexStream> {
+    const grpcClient = this._connectedGrpcClient();
+
+    // Same stream options used by regular subscribe() wrapper.
+    const options = {
+      objectMode: true,
+      decodeStrings: false,
+    };
+
+    // Native layer opens the gRPC stream before resolving this Promise, so
+    // unsupported RPCs (UNIMPLEMENTED) throw here and bubble to caller.
+    const stream = await grpcClient.subscribeDeshred();
+
+    return new Promise<ClientDeshredDuplexStream>((resolve, reject) => {
+      try {
+        resolve(new ClientDeshredDuplexStream(stream, options));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
 }
 
 export class ClientDuplexStream extends Duplex {
@@ -371,6 +420,136 @@ export class ClientDuplexStream extends Duplex {
 
     try {
       const encodedRequest = SubscribeRequestMessage.encode(chunk).finish();
+      const nativeStream = this._napiDuplexStream as unknown as {
+        writeRaw?: (requestBytes: Uint8Array) => void;
+      };
+
+      if (typeof nativeStream.writeRaw !== "function") {
+        throw new Error(
+          "Native stream does not support writeRaw; reinstall the SDK so JS and native bindings match",
+        );
+      }
+
+      nativeStream.writeRaw(encodedRequest);
+      callback();
+    } catch (err) {
+      callback(err as Error);
+    }
+  }
+}
+
+export class ClientDeshredDuplexStream extends Duplex {
+  private _napiDuplexStream: unknown;
+  private _readInFlight: boolean;
+  private _isClosed: boolean;
+  private _isDestroying: boolean;
+  private _terminalErrorSeen: boolean;
+
+  constructor(stream: unknown, options: object | undefined) {
+    super({ ...options });
+    this._napiDuplexStream = stream;
+    this._readInFlight = false;
+    this._isClosed = false;
+    this._isDestroying = false;
+    this._terminalErrorSeen = false;
+
+    this.once("close", () => {
+      this._isClosed = true;
+    });
+  }
+
+  _pullNextUpdate() {
+    if (this._isClosed || this._isDestroying || this._readInFlight) {
+      return;
+    }
+
+    this._readInFlight = true;
+
+    (this._napiDuplexStream as {
+      read: () => Promise<napi.JsSubscribeUpdateDeshred | undefined | null>;
+    })
+      .read()
+      .then((update) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        if (update == null) {
+          this.push(null);
+          this.destroy();
+          return;
+        }
+
+        const grpcUpdate = fromJsSubscribeUpdateDeshred(update);
+
+        const canContinue = this.push(grpcUpdate);
+        if (canContinue) {
+          this._pullNextUpdate();
+        }
+      })
+      .catch((err) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        if (this._terminalErrorSeen) {
+          return;
+        }
+        this._terminalErrorSeen = true;
+
+        const e = err as any;
+        const isNormalEof =
+          err == null ||
+          (e && typeof e.code === "string" && e.code === "NO_UPDATE_AVAILABLE") ||
+          (e &&
+            typeof e.message === "string" &&
+            e.message.toLowerCase().includes("no update available"));
+
+        this.push(null);
+
+        if (isNormalEof) {
+          this.destroy();
+        } else {
+          this.destroy(err as Error);
+        }
+      });
+  }
+
+  _read(_size: number) {
+    this._pullNextUpdate();
+  }
+
+  _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    this._isDestroying = true;
+    this._isClosed = true;
+    this._terminalErrorSeen = true;
+
+    try {
+      const nativeStream = this._napiDuplexStream as { close?: () => void };
+      if (typeof nativeStream.close === "function") {
+        nativeStream.close();
+      }
+    } catch {}
+
+    callback(error);
+  }
+
+  _write(
+    chunk: SubscribeDeshredRequest,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    if (this._isClosed || this._isDestroying) {
+      callback(new Error("Cannot write to a closed deshred subscription stream"));
+      return;
+    }
+
+    try {
+      const encodedRequest = SubscribeDeshredRequestMessage.encode(chunk).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
         writeRaw?: (requestBytes: Uint8Array) => void;
       };

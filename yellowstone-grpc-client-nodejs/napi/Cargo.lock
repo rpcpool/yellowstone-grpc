@@ -2015,7 +2015,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2659,9 +2659,9 @@ dependencies = [
 
 [[package]]
 name = "solana-instruction-error"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b04259e03c05faf38a8c24217b5cfe4c90572ae6184ab49cddb1584fdd756d3f"
+checksum = "7d3d048edaaeef5a3dc8c01853e585539a74417e4c2d43a9e2c161270045b838"
 dependencies = [
  "num-traits",
  "serde",
@@ -3173,9 +3173,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-error"
-version = "3.0.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4222065402340d7e6aec9dc3e54d22992ddcf923d91edcd815443c2bfca3144a"
+checksum = "8396904805b0b385b9de115a652fe80fd01e5b98ce0513f4fcd8184ada9bb792"
 dependencies = [
  "serde",
  "serde_derive",
@@ -4504,9 +4504,9 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "11.0.0"
+version = "12.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4024d13119c2b12e02829ed8e38dc676200cc0b0f5384bda94af7e47097a2ac"
+checksum = "5a31478dd10ad437b6b39cb463706915ca9668201a6889957f740ed1b3cd8ec8"
 dependencies = [
  "bytes",
  "futures",
@@ -4536,6 +4536,7 @@ dependencies = [
  "napi-sys",
  "parking_lot",
  "proc-macro2",
+ "prost 0.11.9",
  "prost 0.14.3",
  "prost-types 0.14.3",
  "quote",
@@ -4543,6 +4544,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-storage-proto",
+ "solana-transaction-error",
  "solana-transaction-status",
  "syn 2.0.114",
  "tokio",
@@ -4550,34 +4552,22 @@ dependencies = [
  "tonic 0.11.0",
  "uuid",
  "walkdir",
+ "wincode",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "11.0.0"
+version = "12.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc56c7739daf7410bf6ef04ce71ce9b9a22483ef73b78a873815f87e9a8d1d2f"
+checksum = "ab52445da59c3e710dd2128e3e49598cfa45c8ba7f30feb608cafbd404e5e8cf"
 dependencies = [
  "anyhow",
- "bincode",
  "prost 0.14.3",
  "prost-types 0.14.3",
  "protoc-bin-vendored",
- "solana-account",
- "solana-account-decoder",
- "solana-clock",
- "solana-hash 4.1.0",
- "solana-message",
- "solana-pubkey 4.0.0",
- "solana-signature",
- "solana-transaction",
- "solana-transaction-context",
- "solana-transaction-error",
- "solana-transaction-status",
  "tonic 0.14.3",
- "tonic-build 0.14.3",
  "tonic-prost",
  "tonic-prost-build",
 ]

@@ -30,6 +30,19 @@ export declare class DuplexStream {
 }
 
 /**
+ * DuplexStreamDeshred Engine.
+ *
+ * Similar to `DuplexStream`, but targets the deshred pre-execution stream.
+ */
+export declare class DuplexStreamDeshred {
+  /** Retrieve one `SubscribeUpdateDeshred` and convert it to generated N-API JS shape. */
+  read(): Promise<JsSubscribeUpdateDeshred | undefined | null>
+  close(): void
+  write(request: JsSubscribeDeshredRequest): void
+  writeRaw(requestBytes: Buffer): void
+}
+
+/**
  * Main client struct exposed to JavaScript via NAPI.
  *
  * The client maintains a persistent gRPC connection that is created once
@@ -62,6 +75,14 @@ export declare class GrpcClient {
    * which handles Node stream lifecycle and protobuf-shape normalization.
    */
   subscribe(): DuplexStream
+  /**
+   * Creates a deshred subscription stream bound to this client connection.
+   *
+   * Unlike `subscribe()`, this method opens the underlying gRPC stream before
+   * resolving, so server-side `UNIMPLEMENTED` errors bubble to TypeScript
+   * callers through the returned Promise.
+   */
+  subscribeDeshred(): Promise<DuplexStreamDeshred>
 }
 
 export declare function decodeTxError(err: Array<number>): string
@@ -234,6 +255,11 @@ export interface JsRewards {
   numPartitions?: JsNumPartitions
 }
 
+export interface JsSubscribeDeshredRequest {
+  deshredTransactions: Record<string, JsSubscribeRequestFilterDeshredTransactions>
+  ping?: JsSubscribeRequestPing
+}
+
 export interface JsSubscribeReplayInfoRequest {
 
 }
@@ -312,6 +338,13 @@ export interface JsSubscribeRequestFilterBlocksMeta {
 
 }
 
+export interface JsSubscribeRequestFilterDeshredTransactions {
+  vote?: boolean
+  accountInclude: Array<string>
+  accountExclude: Array<string>
+  accountRequired: Array<string>
+}
+
 export interface JsSubscribeRequestFilterEntry {
 
 }
@@ -383,6 +416,31 @@ export interface JsSubscribeUpdateBlockMeta {
   parentBlockhash: string
   executedTransactionCount: string
   entriesCount: string
+}
+
+export interface JsSubscribeUpdateDeshred {
+  filters: Array<string>
+  createdAt?: Date
+  updateOneof?: JsSubscribeUpdateDeshredUpdateOneof
+}
+
+export interface JsSubscribeUpdateDeshredTransaction {
+  transaction?: JsSubscribeUpdateDeshredTransactionInfo
+  slot: string
+}
+
+export interface JsSubscribeUpdateDeshredTransactionInfo {
+  signature: Buffer
+  isVote: boolean
+  transaction?: JsTransaction
+  loadedWritableAddresses: Array<Buffer>
+  loadedReadonlyAddresses: Array<Buffer>
+}
+
+export interface JsSubscribeUpdateDeshredUpdateOneof {
+  deshredTransaction?: JsSubscribeUpdateDeshredTransaction
+  ping?: JsSubscribeUpdatePing
+  pong?: JsSubscribeUpdatePong
 }
 
 export interface JsSubscribeUpdateEntry {

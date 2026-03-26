@@ -31,7 +31,10 @@ use yellowstone_grpc_proto::prelude::*;
 
 use crate::{
   client::GrpcClient,
-  js_types::{JsSubscribeRequest, JsSubscribeUpdate},
+  js_types::{
+    JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeUpdate,
+    JsSubscribeUpdateDeshred,
+  },
   subscribe_request_validation::validate_subscribe_request,
 };
 
@@ -247,9 +250,187 @@ impl DuplexStream {
   }
 }
 
+/// DuplexStreamDeshred Engine.
+///
+/// Similar to `DuplexStream`, but targets the deshred pre-execution stream.
+#[napi]
+struct DuplexStreamDeshred {
+  /// Read side consumed by `read()`. Each message is delivered exactly once.
+  readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdateDeshred>>>,
+  /// Write side used by `write()`. Requests are forwarded to gRPC task.
+  writable: Arc<StdMutex<Option<UnboundedSender<SubscribeDeshredRequest>>>>,
+  /// Set once JS has started destroying this stream.
+  is_closing: Arc<AtomicBool>,
+}
+
+#[napi]
+impl DuplexStreamDeshred {
+  pub fn subscribe<'env>(
+    env: &'env Env,
+    grpc_client: &GrpcClient,
+  ) -> Result<PromiseRaw<'env, Self>> {
+    let client_holder = grpc_client.holder.clone();
+
+    // Open the gRPC stream before returning to JS so connection/protocol errors
+    // (e.g. UNIMPLEMENTED) reject the Promise and bubble to TypeScript callers.
+    env.spawn_future_with_callback(
+      async move {
+        let holder = client_holder
+          .downcast_ref::<crate::client::internal::ClientHolder<
+            yellowstone_grpc_client::InterceptorXToken,
+          >>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+
+        // Acquire lock, open stream, and release lock immediately.
+        let (mut stream_tx, mut stream_rx) = {
+          let mut client = holder.client.lock().await;
+          client
+            .subscribe_deshred()
+            .await
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        };
+
+        let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
+        let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeDeshredRequest>();
+        let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+        let is_closing = Arc::new(AtomicBool::new(false));
+        let is_closing_worker = Arc::clone(&is_closing);
+
+        tokio::spawn(async move {
+          loop {
+            tokio::select! {
+              req_option = writable_rx.recv() => {
+                if let Some(request) = req_option {
+                  if let Err(_e) = stream_tx.send(request).await {
+                    if is_closing_worker.load(Ordering::Acquire) {
+                      break;
+                    }
+                    break;
+                  }
+                } else {
+                  break;
+                }
+              },
+              maybe_update_result = stream_rx.next() => {
+                match maybe_update_result {
+                  Some(Ok(update)) => {
+                    if readable_tx.send(update).is_err() {
+                      break;
+                    }
+                  }
+                  Some(Err(_e)) => {
+                    if is_closing_worker.load(Ordering::Acquire) {
+                      break;
+                    }
+                    break;
+                  }
+                  None => break,
+                }
+              }
+            }
+          }
+        });
+
+        Ok(Self {
+          readable: Arc::new(Mutex::new(readable_rx)),
+          writable,
+          is_closing,
+        })
+      },
+      move |_environment, stream| Ok(stream),
+    )
+  }
+
+  /// Retrieve one `SubscribeUpdateDeshred` and convert it to generated N-API JS shape.
+  #[napi]
+  pub fn read<'env>(
+    &self,
+    env: &'env Env,
+  ) -> Result<PromiseRaw<'env, Option<JsSubscribeUpdateDeshred<'env>>>> {
+    let readable = self.readable.clone();
+
+    env.spawn_future_with_callback(
+      async move {
+        match readable.lock().await.recv().await {
+          Some(update) => Ok(Some(update)),
+          None => Ok(None),
+        }
+      },
+      move |environment, subscribe_update_opt| match subscribe_update_opt {
+        Some(subscribe_update) => {
+          JsSubscribeUpdateDeshred::from_protobuf_to_js_type(environment, subscribe_update)
+            .map(Some)
+        }
+        None => Ok(None),
+      },
+    )
+  }
+
+  #[napi]
+  pub fn close(&self) -> Result<()> {
+    self.is_closing.store(true, Ordering::Release);
+
+    let mut writable_guard = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    *writable_guard = None;
+
+    Ok(())
+  }
+
+  #[napi]
+  pub fn write(&self, request: JsSubscribeDeshredRequest) -> Result<()> {
+    let protobuf_subscribe_request: SubscribeDeshredRequest = request.from_js_to_protobuf_type()?;
+    self.enqueue_subscribe_request(protobuf_subscribe_request)
+  }
+
+  #[napi]
+  pub fn write_raw(&self, request_bytes: Buffer) -> Result<()> {
+    let protobuf_subscribe_request =
+      SubscribeDeshredRequest::decode(request_bytes.as_ref()).map_err(|error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("invalid SubscribeDeshredRequest payload: {error}"),
+        )
+      })?;
+
+    self.enqueue_subscribe_request(protobuf_subscribe_request)
+  }
+
+  fn enqueue_subscribe_request(
+    &self,
+    protobuf_subscribe_request: SubscribeDeshredRequest,
+  ) -> Result<()> {
+    if self.is_closing.load(Ordering::Acquire) {
+      return Err(napi::Error::from_reason(
+        "Cannot write to a closing deshred subscription stream",
+      ));
+    }
+
+    let writable = self
+      .writable
+      .lock()
+      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?
+      .as_ref()
+      .cloned()
+      .ok_or_else(|| {
+        napi::Error::from_reason("Cannot write to a closed deshred subscription stream")
+      })?;
+
+    if let Err(e) = writable.send(protobuf_subscribe_request) {
+      return Err(napi::Error::from_reason(e.to_string()));
+    }
+    Ok(())
+  }
+}
+
 #[cfg(test)]
 mod tests {
-  use crate::{js_types::JsSubscribeRequest, DuplexStream};
+  use crate::{
+    js_types::{JsSubscribeDeshredRequest, JsSubscribeRequest},
+    DuplexStream, DuplexStreamDeshred,
+  };
   use napi::bindgen_prelude::Buffer;
   use prost::Message;
   use std::collections::HashMap;
@@ -265,9 +446,10 @@ mod tests {
     subscribe_request_filter_accounts_filter_memcmp,
   };
   use yellowstone_grpc_proto::prelude::{
-    SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-    SubscribeRequestFilterAccountsFilterLamports, SubscribeRequestFilterAccountsFilterMemcmp,
-    SubscribeUpdate,
+    SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
+    SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+    SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterDeshredTransactions,
+    SubscribeUpdate, SubscribeUpdateDeshred,
   };
 
   fn empty_subscribe_request() -> JsSubscribeRequest<'static> {
@@ -283,6 +465,13 @@ mod tests {
       accounts_data_slice: Vec::new(),
       ping: None,
       from_slot: None,
+    }
+  }
+
+  fn empty_subscribe_deshred_request() -> JsSubscribeDeshredRequest {
+    JsSubscribeDeshredRequest {
+      deshred_transactions: HashMap::new(),
+      ping: None,
     }
   }
 
@@ -372,6 +561,23 @@ mod tests {
 
     (
       DuplexStream {
+        readable: Arc::new(Mutex::new(readable_rx)),
+        writable: Arc::new(StdMutex::new(Some(writable_tx))),
+        is_closing: Arc::new(AtomicBool::new(false)),
+      },
+      writable_rx,
+    )
+  }
+
+  fn make_test_deshred_stream() -> (
+    DuplexStreamDeshred,
+    tokio::sync::mpsc::UnboundedReceiver<SubscribeDeshredRequest>,
+  ) {
+    let (_readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
+    let (writable_tx, writable_rx) = unbounded_channel::<SubscribeDeshredRequest>();
+
+    (
+      DuplexStreamDeshred {
         readable: Arc::new(Mutex::new(readable_rx)),
         writable: Arc::new(StdMutex::new(Some(writable_tx))),
         is_closing: Arc::new(AtomicBool::new(false)),
@@ -669,6 +875,68 @@ mod tests {
       ))
       .expect_err("write_raw after close should fail");
     let message = error.to_string().to_lowercase();
+    assert!(
+      message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_write_raw_delivers_decoded_request_to_receiver() {
+    let (stream, mut writable_rx) = make_test_deshred_stream();
+
+    let mut deshred_transactions = HashMap::new();
+    deshred_transactions.insert(
+      "client".to_string(),
+      SubscribeRequestFilterDeshredTransactions {
+        vote: Some(true),
+        account_include: vec!["acc1".to_string()],
+        account_exclude: vec!["acc2".to_string()],
+        account_required: vec!["acc3".to_string()],
+      },
+    );
+    let request = SubscribeDeshredRequest {
+      deshred_transactions,
+      ping: None,
+    };
+
+    stream
+      .write_raw(Buffer::from(request.encode_to_vec()))
+      .expect("write_raw should succeed for valid deshred payload");
+
+    let received = timeout(Duration::from_millis(200), writable_rx.recv())
+      .await
+      .expect("receiver await should not time out")
+      .expect("receiver should get one request");
+
+    assert_eq!(received, request);
+  }
+
+  #[tokio::test]
+  async fn deshred_write_raw_rejects_invalid_bytes_payload() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+
+    let error = stream
+      .write_raw(Buffer::from(vec![0xAA, 0xBB, 0xCC]))
+      .expect_err("invalid deshred protobuf bytes should be rejected");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("invalid subscribedeshredrequest payload"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_write_after_close_is_rejected() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+    stream.close().expect("close should succeed");
+
+    let error = stream
+      .write(empty_subscribe_deshred_request())
+      .expect_err("write should fail after close");
+    let message = error.to_string().to_lowercase();
+
     assert!(
       message.contains("closing") || message.contains("closed"),
       "unexpected error message: {error}"

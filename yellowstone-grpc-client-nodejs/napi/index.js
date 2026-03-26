@@ -577,6 +577,7 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.DuplexStream = nativeBinding.DuplexStream
+module.exports.DuplexStreamDeshred = nativeBinding.DuplexStreamDeshred
 module.exports.GrpcClient = nativeBinding.GrpcClient
 module.exports.decodeTxError = nativeBinding.decodeTxError
 module.exports.encodeTx = nativeBinding.encodeTx

@@ -690,6 +690,108 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
   }
 }
 #[napi(object)]
+pub struct JsSubscribeUpdateDeshredUpdateOneof<'env> {
+  pub deshred_transaction: ::core::option::Option<JsSubscribeUpdateDeshredTransaction<'env>>,
+  pub ping: ::core::option::Option<JsSubscribeUpdatePing>,
+  pub pong: ::core::option::Option<JsSubscribeUpdatePong>,
+}
+impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: subscribe_update_deshred::UpdateOneof,
+  ) -> napi::Result<Self> {
+    match value {
+      subscribe_update_deshred::UpdateOneof::DeshredTransaction(oneof_variant_value) => Ok(Self {
+        deshred_transaction: Some(
+          JsSubscribeUpdateDeshredTransaction::from_protobuf_to_js_type(env, oneof_variant_value)?,
+        ),
+        ping: None,
+        pong: None,
+      }),
+      subscribe_update_deshred::UpdateOneof::Ping(oneof_variant_value) => Ok(Self {
+        ping: Some(JsSubscribeUpdatePing::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
+        deshred_transaction: None,
+        pong: None,
+      }),
+      subscribe_update_deshred::UpdateOneof::Pong(oneof_variant_value) => Ok(Self {
+        pong: Some(JsSubscribeUpdatePong::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
+        deshred_transaction: None,
+        ping: None,
+      }),
+    }
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<subscribe_update_deshred::UpdateOneof> {
+    let JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction,
+      ping,
+      pong,
+    } = self;
+    let mut selected_oneof_variant: ::core::option::Option<subscribe_update_deshred::UpdateOneof> =
+      None;
+    if let Some(oneof_variant_value) = deshred_transaction {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update_deshred::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::DeshredTransaction(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = ping {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update_deshred::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Ping(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = pong {
+      if selected_oneof_variant.is_some() {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Multiple variants set for {}",
+            "subscribe_update_deshred::UpdateOneof"
+          ),
+        ));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Pong(
+        converted_variant_value,
+      ));
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!(
+          "No variant set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        ),
+      )),
+    }
+  }
+}
+#[napi(object)]
 pub struct JsSubscribeRequest<'env> {
   pub accounts: ::std::collections::HashMap<
     ::prost::alloc::string::String,
@@ -1266,6 +1368,65 @@ impl JsSubscribeRequestFilterEntry {
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
+pub struct JsSubscribeRequestFilterDeshredTransactions {
+  pub vote: ::core::option::Option<bool>,
+  pub account_include: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub account_exclude: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub account_required: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+impl JsSubscribeRequestFilterDeshredTransactions {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterDeshredTransactions,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      vote: value
+        .vote
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      account_include: value
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_exclude: value
+        .account_exclude
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_required: value
+        .account_required
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterDeshredTransactions> {
+    Ok(SubscribeRequestFilterDeshredTransactions {
+      vote: self
+        .vote
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      account_include: self
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_exclude: self
+        .account_exclude
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_required: self
+        .account_required
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+}
+#[napi(object)]
+#[derive(Debug, Clone)]
 pub struct JsSubscribeRequestAccountsDataSlice {
   pub offset: String,
   pub length: String,
@@ -1311,6 +1472,56 @@ impl JsSubscribeRequestPing {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestPing> {
     Ok(SubscribeRequestPing {
       id: Ok::<_, napi::Error>(self.id)?,
+    })
+  }
+}
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct JsSubscribeDeshredRequest {
+  pub deshred_transactions: ::std::collections::HashMap<
+    ::prost::alloc::string::String,
+    JsSubscribeRequestFilterDeshredTransactions,
+  >,
+  pub ping: ::core::option::Option<JsSubscribeRequestPing>,
+}
+impl JsSubscribeDeshredRequest {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeDeshredRequest) -> napi::Result<Self> {
+    Ok(Self {
+      deshred_transactions: value
+        .deshred_transactions
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_value =
+            JsSubscribeRequestFilterDeshredTransactions::from_protobuf_to_js_type(
+              env,
+              hash_map_entry_value,
+            )?;
+          Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      ping: value
+        .ping
+        .map(|option_inner_value| {
+          JsSubscribeRequestPing::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeDeshredRequest> {
+    Ok(SubscribeDeshredRequest {
+      deshred_transactions: self
+        .deshred_transactions
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      ping: self
+        .ping
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
     })
   }
 }
@@ -1951,6 +2162,94 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
   }
 }
 #[napi(object)]
+pub struct JsSubscribeUpdateDeshredTransaction<'env> {
+  pub transaction: ::core::option::Option<JsSubscribeUpdateDeshredTransactionInfo<'env>>,
+  pub slot: String,
+}
+impl<'env> JsSubscribeUpdateDeshredTransaction<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshredTransaction,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      transaction: value
+        .transaction
+        .map(|option_inner_value| {
+          JsSubscribeUpdateDeshredTransactionInfo::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+      slot: Ok::<_, napi::Error>(value.slot.to_string())?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshredTransaction> {
+    Ok(SubscribeUpdateDeshredTransaction {
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        napi::Error::new(
+          napi::Status::InvalidArg,
+          format!("Invalid u64 value: {}", parse_error),
+        )
+      })?,
+    })
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshredTransactionInfo<'env> {
+  pub signature: BufferSlice<'env>,
+  pub is_vote: bool,
+  pub transaction: ::core::option::Option<JsTransaction<'env>>,
+  pub loaded_writable_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
+  pub loaded_readonly_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
+}
+impl<'env> JsSubscribeUpdateDeshredTransactionInfo<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshredTransactionInfo,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      signature: BufferSlice::copy_from(env, &value.signature)?,
+      is_vote: Ok::<_, napi::Error>(value.is_vote)?,
+      transaction: value
+        .transaction
+        .map(|option_inner_value| JsTransaction::from_protobuf_to_js_type(env, option_inner_value))
+        .transpose()?,
+      loaded_writable_addresses: value
+        .loaded_writable_addresses
+        .into_iter()
+        .map(|vec_inner_value| BufferSlice::copy_from(env, &vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_readonly_addresses: value
+        .loaded_readonly_addresses
+        .into_iter()
+        .map(|vec_inner_value| BufferSlice::copy_from(env, &vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshredTransactionInfo> {
+    Ok(SubscribeUpdateDeshredTransactionInfo {
+      signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
+      is_vote: Ok::<_, napi::Error>(self.is_vote)?,
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      loaded_writable_addresses: self
+        .loaded_writable_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_readonly_addresses: self
+        .loaded_readonly_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+}
+#[napi(object)]
 #[derive(Debug, Clone)]
 pub struct JsSubscribeUpdatePing {}
 impl JsSubscribeUpdatePing {
@@ -1975,6 +2274,70 @@ impl JsSubscribeUpdatePong {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdatePong> {
     Ok(SubscribeUpdatePong {
       id: Ok::<_, napi::Error>(self.id)?,
+    })
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshred<'env> {
+  pub filters: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub created_at: ::core::option::Option<Date<'env>>,
+  pub update_oneof: ::core::option::Option<JsSubscribeUpdateDeshredUpdateOneof<'env>>,
+}
+impl<'env> JsSubscribeUpdateDeshred<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshred,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      filters: value
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      created_at: value
+        .created_at
+        .map(|option_inner_value| {
+          let timestamp_value_for_date_conversion = option_inner_value;
+          let timestamp_millis_for_date_conversion = (timestamp_value_for_date_conversion.seconds
+            * 1000) as f64
+            + (timestamp_value_for_date_conversion.nanos as f64 / 1_000_000.0);
+          env.create_date(timestamp_millis_for_date_conversion)
+        })
+        .transpose()?,
+      update_oneof: value
+        .update_oneof
+        .map(|option_inner_value| {
+          JsSubscribeUpdateDeshredUpdateOneof::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshred> {
+    Ok(SubscribeUpdateDeshred {
+      filters: self
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      created_at: self
+        .created_at
+        .map(|option_inner_value| {
+          let timestamp_millis_value_for_conversion = option_inner_value.value_of()?;
+          let timestamp_seconds_for_conversion =
+            (timestamp_millis_value_for_conversion / 1000.0).floor() as i64;
+          let timestamp_nanos_for_conversion = ((timestamp_millis_value_for_conversion
+            - (timestamp_seconds_for_conversion as f64 * 1000.0))
+            * 1_000_000.0) as i32;
+          Ok::<_, napi::Error>(::prost_types::Timestamp {
+            seconds: timestamp_seconds_for_conversion,
+            nanos: timestamp_nanos_for_conversion,
+          })
+        })
+        .transpose()?,
+      update_oneof: self
+        .update_oneof
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
     })
   }
 }

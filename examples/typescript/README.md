@@ -35,6 +35,14 @@ npm start -- --endpoint https://api.rpcpool.com \
   --slots
 ```
 
+### subscribe to slot updates (public endpoint, no token)
+
+```shell
+npm start -- --endpoint http://sg131.rpcpool.wg:10000 \
+  subscribe \
+  --slots
+```
+
 ### subscribe to slot updates, commitment processed
 
 ```shell
@@ -55,6 +63,15 @@ npm start -- -e="https://api.rpcpool.com" \
   --transactions-vote false \
   --transactions-failed false \
   --transactions-account-include "<Pubkey>"
+```
+
+### subscribe to deshred transaction updates
+
+```shell
+npm start -- -e="http://sg131.rpcpool.wg:10000" \
+  subscribeDeshred \
+  --deshred-vote false \
+  --deshred-account-include "<Pubkey>"
 ```
 
 ### unary Ping
