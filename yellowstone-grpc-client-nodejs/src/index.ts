@@ -11,6 +11,7 @@ import {
   SubscribeDeshredRequest as SubscribeDeshredRequestMessage,
   SubscribeRequest as SubscribeRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
+  SubscribeUpdateDeshredTransactionInfo,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 import type {
@@ -67,6 +68,7 @@ export {
 import type {
   TransactionErrorSolana,
   // Import mapper to get return type based on WasmUiTransactionEncoding
+  DeshredTransactionEncodingToReturnType,
   MapTransactionEncodingToReturnType,
 } from "./types";
 
@@ -119,6 +121,52 @@ function fromJsSubscribeUpdateDeshred(
     ping: oneof.ping as any,
     pong: oneof.pong as any,
   } as SubscribeUpdateDeshred;
+}
+
+function parseOptionalBool(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  throw new Error(
+    `Invalid ${fieldName}: expected true/false, got ${JSON.stringify(value)}`,
+  );
+}
+
+function normalizeSubscribeDeshredRequest(
+  request: SubscribeDeshredRequest,
+): SubscribeDeshredRequest {
+  const normalizedEntries = Object.fromEntries(
+    Object.entries(request.deshredTransactions ?? {}).map(([name, filter]) => [
+      name,
+      {
+        ...filter,
+        vote: parseOptionalBool(
+          (filter as { vote?: unknown }).vote,
+          `deshredTransactions.${name}.vote`,
+        ),
+      },
+    ]),
+  );
+
+  return {
+    ...request,
+    deshredTransactions: normalizedEntries,
+  };
 }
 
 export default class Client {
@@ -549,7 +597,10 @@ export class ClientDeshredDuplexStream extends Duplex {
     }
 
     try {
-      const encodedRequest = SubscribeDeshredRequestMessage.encode(chunk).finish();
+      const normalizedChunk = normalizeSubscribeDeshredRequest(chunk);
+      const encodedRequest = SubscribeDeshredRequestMessage.encode(
+        normalizedChunk,
+      ).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
         writeRaw?: (requestBytes: Uint8Array) => void;
       };
@@ -583,6 +634,22 @@ export const txEncode = {
         encoding,
         max_supported_transaction_version,
         show_rewards,
+      ),
+    );
+  },
+};
+
+export const txDeshredEncode = {
+  encoding: (napi as any).WasmUiTransactionEncoding,
+  encode_raw: napi.encodeDeshredTx,
+  encode: <T extends napi.WasmUiTransactionEncoding>(
+    message: SubscribeUpdateDeshredTransactionInfo,
+    encoding: T,
+  ): DeshredTransactionEncodingToReturnType<T> => {
+    return JSON.parse(
+      napi.encodeDeshredTx(
+        SubscribeUpdateDeshredTransactionInfo.encode(message).finish(),
+        encoding,
       ),
     );
   },

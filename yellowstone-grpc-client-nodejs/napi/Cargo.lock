@@ -4577,6 +4577,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-storage-proto",
+ "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status",
  "syn 2.0.117",

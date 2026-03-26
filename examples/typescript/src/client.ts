@@ -6,10 +6,11 @@ import Client, {
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
-  SubscribeUpdateTransactionInfo,
+  txDeshredEncode,
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
+import { WasmUiTransactionEncoding } from "@triton-one/yellowstone-grpc/dist/types/napi";
 
 async function main() {
   const args = parseCommandLineArgs();
@@ -303,9 +304,34 @@ async function subscribeDeshredCommand(client: Client, args) {
   });
 
   stream.on("data", (data) => {
+    const txMessage = data.deshredTransaction?.transaction;
+
+    if (data.deshredTransaction && args.deshredParsed) {
+      if (!txMessage?.transaction) {
+        console.log("data", data);
+        return;
+      }
+
+      try {
+        const tx = txDeshredEncode.encode(
+          txMessage,
+          WasmUiTransactionEncoding.JsonParsed,
+        );
+        console.log(
+          `DESHRED filters: ${data.filters}, slot#${data.deshredTransaction.slot}, tx: ${JSON.stringify(tx)}`
+        );
+      } catch (error) {
+        console.error(
+          `failed to parse deshred tx (slot#${data.deshredTransaction.slot})`,
+          error
+        );
+      }
+      return;
+    }
+
     console.log("data", data);
   });
-
+  
   const request: SubscribeDeshredRequest = {
     deshredTransactions: {
       client: {
@@ -547,9 +573,22 @@ function parseCommandLineArgs() {
     })
     .command("subscribeDeshred", "subscribe to deshred transactions", (yargs) => {
       return yargs.options({
+        "deshred-parsed": {
+          default: false,
+          describe: "parse deshred transactions using txEncode",
+          type: "boolean",
+        },
+        "deshred-encoding": {
+          default: "jsonParsed",
+          describe:
+            "encoding for parsed deshred transactions: binary/base64/base58/json/jsonParsed",
+          choices: ["binary", "base64", "base58", "json", "jsonParsed"],
+          type: "string",
+        },
         "deshred-vote": {
           description: "filter vote transactions",
           type: "boolean",
+          default: false,
         },
         "deshred-account-include": {
           default: [],

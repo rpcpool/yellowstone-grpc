@@ -1,15 +1,21 @@
 use {
   napi_derive::napi,
   prost011::Message as Prost11Message,
+  serde::Serialize,
   solana_storage_proto::convert::generated::{
     Transaction as StorageTransaction, TransactionStatusMeta as StorageTransactionStatusMeta,
   },
+  solana_transaction::versioned::VersionedTransaction,
   solana_transaction_error::TransactionError as TransactionErrorSolana,
   solana_transaction_status::{
-    TransactionWithStatusMeta, UiTransactionEncoding, VersionedTransactionWithStatusMeta,
+    Encodable, EncodedTransaction, TransactionWithStatusMeta, UiTransactionEncoding,
+    VersionedTransactionWithStatusMeta,
   },
   std::panic::{catch_unwind, AssertUnwindSafe},
-  yellowstone_grpc_proto::{prelude::SubscribeUpdateTransactionInfo, prost::Message as Prost14Message},
+  yellowstone_grpc_proto::{
+    prelude::{SubscribeUpdateDeshredTransactionInfo, SubscribeUpdateTransactionInfo},
+    prost::Message as Prost14Message,
+  },
 };
 
 #[napi]
@@ -94,4 +100,54 @@ pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
   .map_err(|e| napi::Error::from_reason(format!("failed to decode TransactionError: {e}")))?;
 
   serde_json::to_string(&tx_error).map_err(Into::into)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncodedDeshredTransaction {
+  signature: String,
+  is_vote: bool,
+  transaction: EncodedTransaction,
+  loaded_writable_addresses: Vec<String>,
+  loaded_readonly_addresses: Vec<String>,
+}
+
+#[napi]
+pub fn encode_deshred_tx(
+  data: &[u8],
+  encoding: WasmUiTransactionEncoding,
+) -> napi::Result<String> {
+  let tx = SubscribeUpdateDeshredTransactionInfo::decode(data)
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+  let transaction_proto = tx
+    .transaction
+    .ok_or_else(|| napi::Error::from_reason("failed to get deshred transaction payload"))?;
+  let transaction = <StorageTransaction as Prost11Message>::decode(
+    transaction_proto.encode_to_vec().as_slice(),
+  )
+  .map_err(|e| {
+    napi::Error::from_reason(format!("failed to decode deshred transaction payload: {e}"))
+  })?;
+  let transaction: VersionedTransaction =
+    catch_unwind(AssertUnwindSafe(|| transaction.into()))
+      .map_err(|_| napi::Error::from_reason("failed to decode deshred transaction payload"))?;
+
+  let encoded = EncodedDeshredTransaction {
+    signature: bs58::encode(tx.signature).into_string(),
+    is_vote: tx.is_vote,
+    transaction: transaction.encode(encoding.into()),
+    loaded_writable_addresses: tx
+      .loaded_writable_addresses
+      .into_iter()
+      .map(|address| bs58::encode(address).into_string())
+      .collect(),
+    loaded_readonly_addresses: tx
+      .loaded_readonly_addresses
+      .into_iter()
+      .map(|address| bs58::encode(address).into_string())
+      .collect(),
+  };
+
+  serde_json::to_string(&encoded).map_err(Into::into)
 }

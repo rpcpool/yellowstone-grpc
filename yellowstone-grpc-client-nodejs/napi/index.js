@@ -580,6 +580,7 @@ module.exports.DuplexStream = nativeBinding.DuplexStream
 module.exports.DuplexStreamDeshred = nativeBinding.DuplexStreamDeshred
 module.exports.GrpcClient = nativeBinding.GrpcClient
 module.exports.decodeTxError = nativeBinding.decodeTxError
+module.exports.encodeDeshredTx = nativeBinding.encodeDeshredTx
 module.exports.encodeTx = nativeBinding.encodeTx
 module.exports.JsCompressionAlgorithm = nativeBinding.JsCompressionAlgorithm
 module.exports.WasmUiTransactionEncoding = nativeBinding.WasmUiTransactionEncoding

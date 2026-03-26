@@ -1,4 +1,4 @@
-import Client, { ClientDuplexStream } from "../src";
+import Client, { ClientDeshredDuplexStream, ClientDuplexStream } from "../src";
 import {
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
@@ -14,6 +14,7 @@ import {
   SubscribeUpdatePing,
   SubscribeUpdatePong,
   SubscribeReplayInfoResponse,
+  SubscribeDeshredRequest,
   SubscribeRequest,
   SubscribeUpdateSlot,
   SubscribeUpdateTransaction,
@@ -257,6 +258,12 @@ function makeComprehensiveSubscribeRequest(): SubscribeRequest {
   };
 }
 
+function makeMinimalSubscribeDeshredRequest(): SubscribeDeshredRequest {
+  return {
+    deshredTransactions: {},
+  };
+}
+
 function closeStreamAndCaptureTerminalEvent(
   stream: any,
   timeoutMs = 2500,
@@ -370,7 +377,7 @@ function waitForDataEvent(stream: any, timeoutMs = 1000): Promise<any> {
 
 function writeAndCaptureError(
   stream: any,
-  request: SubscribeRequest,
+  request: unknown,
 ): Promise<Error | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -779,6 +786,89 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     ]);
     expect(decoded.ping?.id).toBe(42);
     expect(decoded.fromSlot).toBe("777");
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred write: encodes vote=false and forwards protobuf bytes to native writeRaw", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const request: SubscribeDeshredRequest = {
+      deshredTransactions: {
+        client: {
+          vote: false,
+          accountInclude: ["accInclude"],
+          accountExclude: ["accExclude"],
+          accountRequired: ["accRequired"],
+        },
+      },
+      ping: { id: 11 },
+    };
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+    expect(nativeWriteRaw).toHaveBeenCalledTimes(1);
+
+    const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeDeshredRequest.decode(forwardedBytes);
+
+    expect(decoded.deshredTransactions.client.vote).toBe(false);
+    expect(decoded.deshredTransactions.client.accountInclude).toEqual([
+      "accInclude",
+    ]);
+    expect(decoded.deshredTransactions.client.accountExclude).toEqual([
+      "accExclude",
+    ]);
+    expect(decoded.deshredTransactions.client.accountRequired).toEqual([
+      "accRequired",
+    ]);
+    expect(decoded.ping?.id).toBe(11);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred write: normalizes vote='false' string without mutating request object", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const request = makeMinimalSubscribeDeshredRequest() as unknown as {
+      deshredTransactions: Record<string, { vote?: unknown }>;
+    };
+    request.deshredTransactions = {
+      client: {
+        vote: "false",
+        accountInclude: [],
+        accountExclude: [],
+        accountRequired: [],
+      },
+    };
+    const requestBeforeWrite = JSON.parse(JSON.stringify(request));
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+
+    const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeDeshredRequest.decode(forwardedBytes);
+    expect(decoded.deshredTransactions.client.vote).toBe(false);
+
+    expect(request).toEqual(requestBeforeWrite);
 
     await closeStreamAndWait(stream);
   });

@@ -87,6 +87,8 @@ export declare class GrpcClient {
 
 export declare function decodeTxError(err: Array<number>): string
 
+export declare function encodeDeshredTx(data: Uint8Array, encoding: WasmUiTransactionEncoding): string
+
 export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
 
 export interface JsBlockHeight {
