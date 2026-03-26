@@ -18,7 +18,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 solana-transaction-status = "3.1.6"
 base64 = "0.21"
-wincode = "0.2"
+wincode = "0.4.4"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tonic = { version = "0.11", features = ["transport", "tls", "gzip", "zstd"] }
@@ -38,7 +38,7 @@ fastrand = "2.0"
 lazy_static = "1.5.0"
 prost-types = "0.14"
 solana-storage-proto = "3.1.6"
-solana-transaction-error = "3.1.0"
+solana-transaction-error = { version = "3.1.0", features = ["wincode"] }
 home = "0.5.11"
 
 [build-dependencies]
