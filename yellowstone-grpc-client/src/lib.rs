@@ -11,7 +11,6 @@ use {
         stream::Stream,
     },
     std::{
-        ops::Sub,
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
@@ -39,6 +38,7 @@ use {
 };
 
 #[derive(Debug, Clone)]
+/// Interceptor that injects optional auth and snapshot metadata into requests.
 pub struct InterceptorXToken {
     pub x_token: Option<AsciiMetadataValue>,
     pub x_request_snapshot: bool,
@@ -71,6 +71,7 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone)]
+/// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
     pub backoff: Backoff,
     pub x_request_snapshot: bool,
@@ -107,6 +108,7 @@ impl ReconnectConfig {
 }
 
 #[derive(Clone)]
+/// High-level gRPC client exposing unary RPCs and streaming subscribe APIs.
 pub struct GeyserGrpcClient {
     pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
     pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
@@ -127,10 +129,12 @@ impl GeyserGrpcClient {
     }
 }
 
+/// A stream of subscribe updates with automatic reconnect and deduplication.
 pub struct GeyserStream {
     inner: AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>,
 }
 
+/// A stream of deshred updates returned by `subscribe_deshred*` APIs.
 pub struct SubscribeDeshredStream {
     inner: Streaming<SubscribeUpdateDeshred>,
 }
@@ -157,6 +161,11 @@ impl Stream for GeyserStream {
     }
 }
 
+/// User-facing sink for subscribe requests on a bidirectional stream.
+///
+/// The inner sender is swappable so reconnect logic can replace the active
+/// request channel while keeping this sink instance alive.
+#[derive(Clone)]
 pub struct SubscribeRequestSink {
     inner: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     shared: Arc<ArcSwap<SubscribeRequest>>,
@@ -164,6 +173,7 @@ pub struct SubscribeRequestSink {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{inner}")]
+/// Error emitted by `SubscribeRequestSink` operations.
 pub struct SubscribeRequestSinkError {
     inner: mpsc::SendError,
 }
@@ -175,13 +185,10 @@ impl From<mpsc::SendError> for SubscribeRequestSinkError {
 }
 
 impl Sink<SubscribeRequest> for SubscribeRequestSink {
-    // TODO: this is bad API design, because it leaks implementation details of the sink. We should ideally hide the fact that we're using an mpsc channel under the hood, but tonic's streaming API requires us to return a Sink for sending requests,
-    // so we have to wrap it like this to be able to update the shared state on each request.
-    // But for the time being, in order to not break the existing API, we'll just return the same error types.
     type Error = SubscribeRequestSinkError;
 
     fn poll_ready(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let mut inner = self
@@ -194,7 +201,7 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
     }
 
     fn start_send(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         item: SubscribeRequest,
     ) -> Result<(), Self::Error> {
         let mut inner = self
@@ -209,7 +216,7 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
     }
 
     fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let mut inner = self
@@ -220,7 +227,7 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
     }
 
     fn poll_close(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let mut inner = self
@@ -452,6 +459,7 @@ pub enum GeyserGrpcBuilderError {
 pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 
 #[derive(Debug)]
+/// Builder for constructing a configured `GeyserGrpcClient`.
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
     pub x_token: Option<AsciiMetadataValue>,

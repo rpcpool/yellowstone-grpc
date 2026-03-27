@@ -29,16 +29,19 @@ use {
 /// and out-of-order delivery within a slot.
 const CHECKPOINT_SLOT_BUFFER: u64 = 2;
 
+/// Wrapper stream that filters out duplicate subscribe updates.
 pub struct DedupStream<S> {
     state: DedupState,
     inner: S,
 }
 
 impl<S> DedupStream<S> {
+    /// Creates a deduplicating stream wrapper from an inner stream and initial state.
     pub const fn new(inner: S, state: DedupState) -> Self {
         Self { state, inner }
     }
 
+    /// Splits the wrapper into its dedup state and inner stream.
     pub fn into_parts(self) -> (DedupState, S) {
         (self.state, self.inner)
     }
@@ -72,6 +75,7 @@ where
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+/// Unique identity used to detect duplicate messages per slot.
 enum DedupKey {
     Slot(i32),                           // status
     Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
@@ -83,6 +87,7 @@ enum DedupKey {
 }
 
 #[derive(Debug, Clone)]
+/// In-memory deduplication state keyed by slot and update identity.
 pub struct DedupState {
     seen_messages: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
     slot_order: VecDeque<u64>,
@@ -100,6 +105,7 @@ impl Default for DedupState {
 }
 
 impl DedupState {
+    /// Creates dedup state with a custom retained slot window size.
     pub fn with_slot_retention(slot_retention: usize) -> Self {
         Self {
             slot_retention: slot_retention,
@@ -107,6 +113,7 @@ impl DedupState {
         }
     }
 
+    /// Extracts a comparable `(slot, key)` pair from a subscribe update.
     fn extract_key(msg: &SubscribeUpdate) -> Option<(u64, DedupKey)> {
         let oneof = msg.update_oneof.as_ref()?;
         match oneof {
@@ -135,6 +142,7 @@ impl DedupState {
         }
     }
 
+    /// Returns true if this update was previously recorded for its slot.
     pub fn is_duplicate(&self, msg: &SubscribeUpdate) -> bool {
         if let Some((slot, key)) = Self::extract_key(msg) {
             if let Some(keys) = self.seen_messages.get(&slot) {
@@ -144,6 +152,7 @@ impl DedupState {
         false
     }
 
+    /// Records an update key and prunes old slots when retention is exceeded.
     pub fn record(&mut self, msg: &SubscribeUpdate) {
         if let Some((slot, key)) = Self::extract_key(msg) {
             if self.seen_messages.entry(slot).or_default().insert(key) {
@@ -156,6 +165,7 @@ impl DedupState {
         }
     }
 
+    /// Prunes dedup state to the configured slot retention window.
     pub fn prune(&mut self) {
         while self.slot_order.len() > self.slot_retention {
             if let Some(slot) = self.slot_order.pop_front() {
@@ -165,6 +175,7 @@ impl DedupState {
     }
 
     #[allow(dead_code)]
+    /// Clears all dedup state.
     pub fn clear(&mut self) {
         self.seen_messages.clear();
         self.slot_order.clear();
@@ -176,6 +187,7 @@ type ConnectFuture<S> =
     Pin<Box<dyn Future<Output = Result<DedupStream<S>, GeyserGrpcClientError>> + Send + 'static>>;
 
 #[derive(Debug, Clone)]
+/// Exponential backoff policy used for reconnect attempts.
 pub struct Backoff {
     pub initial_interval: Duration,
     pub max_interval: Duration,
@@ -183,16 +195,19 @@ pub struct Backoff {
     pub max_retries: u32,
 }
 
+/// Classifies an operation failure as retryable or terminal.
 pub(crate) enum ErrorCategory<E> {
     Retryable(E),
     Unrecoverable(E),
 }
 
 impl<E> ErrorCategory<E> {
+    /// Returns true when this error category should be retried.
     fn is_retryable(&self) -> bool {
         matches!(self, Self::Retryable(_))
     }
 
+    /// Extracts the underlying error value.
     fn into_inner(self) -> E {
         match self {
             Self::Retryable(e) | Self::Unrecoverable(e) => e,
@@ -201,6 +216,7 @@ impl<E> ErrorCategory<E> {
 }
 
 #[derive(Debug, Clone)]
+/// Mutable runtime state for a single backoff execution.
 struct BackoffInstance {
     current_interval: Duration,
     attempts: u32,
@@ -210,6 +226,7 @@ struct BackoffInstance {
 }
 
 impl BackoffInstance {
+    /// Builds runtime backoff state from the immutable `Backoff` configuration.
     fn new(config: &Backoff) -> Self {
         Self {
             current_interval: config.initial_interval,
@@ -220,10 +237,12 @@ impl BackoffInstance {
         }
     }
 
+    /// Returns true once the configured retry budget has been consumed.
     fn exhausted(&self) -> bool {
         self.attempts >= self.max_retries
     }
 
+    /// Advances retry counters and computes the next interval.
     fn advance(&mut self) {
         self.attempts += 1;
         self.current_interval = self
@@ -234,22 +253,27 @@ impl BackoffInstance {
 }
 
 impl Backoff {
+    /// Default initial retry interval.
     const fn default_initial_interval() -> Duration {
         Duration::from_millis(10)
     }
 
+    /// Default maximum retry interval.
     const fn default_max_interval() -> Duration {
         Duration::from_secs(30)
     }
 
+    /// Default exponential multiplier.
     const fn default_multiplier() -> f64 {
         2.0
     }
 
+    /// Default number of retries.
     const fn default_max_retries() -> u32 {
         3
     }
 
+    /// Creates a new backoff policy.
     pub const fn new(
         initial_interval: Duration,
         max_interval: Duration,
@@ -264,10 +288,15 @@ impl Backoff {
         }
     }
 
+    /// Creates mutable runtime state for one retry execution.
     fn instance(&self) -> BackoffInstance {
         BackoffInstance::new(self)
     }
 
+    /// Retries an async operation according to this policy.
+    ///
+    /// The operation returns `ErrorCategory::Retryable` for transient failures,
+    /// and `ErrorCategory::Unrecoverable` for terminal failures.
     pub(crate) fn retry<F, Fut, T, E>(&self, mut operation: F) -> impl Future<Output = Result<T, E>>
     where
         F: FnMut() -> Fut,
@@ -303,36 +332,29 @@ impl Default for Backoff {
     }
 }
 
-#[derive(Clone)]
-struct ConsumeOnce<T> {
-    inner: Arc<Mutex<Option<T>>>,
-}
-
-impl<T> ConsumeOnce<T> {
-    fn new(value: T) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Some(value))),
-        }
-    }
-
-    fn take(&self) -> Option<T> {
-        self.inner.lock().ok()?.take()
-    }
-}
-
+/// Connector abstraction used by `AutoReconnect` to establish new streams.
 pub trait GrpcConnector: Clone + Send + Sync + 'static {
+    /// Stream type produced by the connector.
     type Stream: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static;
+    /// Error type returned when connecting fails.
     type ConnectError: std::error::Error + Send + Sync + 'static;
+    /// Future type resolving to a connected stream.
     type ConnectFuture: Future<Output = Result<Self::Stream, Self::ConnectError>> + Send + 'static;
+
+    /// Connects a new subscribe stream from the provided request and optional checkpoint slot.
     fn connect(
         &self,
         request: Arc<SubscribeRequest>,
         from_slot: Option<u64>,
     ) -> Self::ConnectFuture;
-    fn backoff(&self) -> Backoff;
+
+    /// Returns true when reconnect attempts should be performed.
+    fn should_reconnect(&self) -> bool;
 }
 
 #[derive(Clone)]
+/// Connector implementation backed by tonic that can re-establish both sides
+/// of the bidirectional subscribe stream.
 pub struct TonicGrpcConnector {
     backoff: Backoff,
     request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
@@ -346,6 +368,7 @@ pub struct TonicGrpcConnector {
 }
 
 impl TonicGrpcConnector {
+    /// Creates a tonic-backed connector and shared request sink handle.
     pub fn new(
         endpoint: Endpoint,
         config: ReconnectConfig,
@@ -372,11 +395,13 @@ impl GrpcConnector for TonicGrpcConnector {
     type ConnectFuture =
         Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>> + Send + 'static>>;
 
+    /// Opens a fresh tonic stream and atomically swaps the active request sender.
     fn connect(
         &self,
         request: Arc<SubscribeRequest>,
         from_slot: Option<u64>,
     ) -> Self::ConnectFuture {
+        let backoff = self.backoff.clone();
         let endpoint = self.endpoint.clone();
         let request_sink = self.request_sink.clone();
         let x_token = self.x_token.clone();
@@ -385,54 +410,77 @@ impl GrpcConnector for TonicGrpcConnector {
         let accept_compressed = self.accept_compressed;
         let max_decoding_message_size = self.max_decoding_message_size;
         let max_encoding_message_size = self.max_encoding_message_size;
-        let mut request = (*request).clone();
-        request.from_slot = from_slot;
+        let base_request = (*request).clone();
 
-        Box::pin(async move {
-            let channel = endpoint
-                .connect()
-                .await
-                .map_err(GeyserGrpcClientError::TransportError)?;
+        let fut = backoff.retry(move || {
+            let endpoint = endpoint.clone();
+            let request_sink = request_sink.clone();
+            let x_token = x_token.clone();
+            let mut request = base_request.clone();
+            async move {
+                request.from_slot = from_slot;
 
-            let interceptor = InterceptorXToken {
-                x_token,
-                x_request_snapshot,
-            };
+                let channel = endpoint
+                    .connect()
+                    .await
+                    .map_err(GeyserGrpcClientError::TransportError)
+                    .map_err(ErrorCategory::Retryable)?;
 
-            let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
-            if let Some(encoding) = send_compressed {
-                geyser = geyser.send_compressed(encoding);
+                let interceptor = InterceptorXToken {
+                    x_token,
+                    x_request_snapshot,
+                };
+
+                let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
+                if let Some(encoding) = send_compressed {
+                    geyser = geyser.send_compressed(encoding);
+                }
+                if let Some(encoding) = accept_compressed {
+                    geyser = geyser.accept_compressed(encoding);
+                }
+                if let Some(limit) = max_decoding_message_size {
+                    geyser = geyser.max_decoding_message_size(limit);
+                }
+                if let Some(limit) = max_encoding_message_size {
+                    geyser = geyser.max_encoding_message_size(limit);
+                }
+
+                let (mut subscribe_tx, subscribe_rx) = mpsc::channel(1000);
+                subscribe_tx
+                    .send(request)
+                    .await
+                    .map_err(GeyserGrpcClientError::SubscribeSendError)
+                    .map_err(ErrorCategory::Unrecoverable)?;
+                let response = geyser
+                    .subscribe(subscribe_rx)
+                    .await
+                    .map_err(GeyserGrpcClientError::from)
+                    .map_err(|e| {
+                        if is_recoverable_client_error(&e) {
+                            ErrorCategory::Retryable(e)
+                        } else {
+                            ErrorCategory::Unrecoverable(e)
+                        }
+                    })?;
+
+                // Reconnect creates a new bidi request channel; swap sender so user-facing
+                // SubscribeRequestSink continues writing into the active stream.
+                *request_sink.lock().expect("request sink mutex poisoned") = subscribe_tx;
+
+                Ok(response.into_inner())
             }
-            if let Some(encoding) = accept_compressed {
-                geyser = geyser.accept_compressed(encoding);
-            }
-            if let Some(limit) = max_decoding_message_size {
-                geyser = geyser.max_decoding_message_size(limit);
-            }
-            if let Some(limit) = max_encoding_message_size {
-                geyser = geyser.max_encoding_message_size(limit);
-            }
+        });
 
-            let (mut subscribe_tx, subscribe_rx) = mpsc::channel(1000);
-            subscribe_tx
-                .send(request)
-                .await
-                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
-            let response = geyser.subscribe(subscribe_rx).await?;
-
-            // Reconnect creates a new bidi request channel; swap sender so user-facing
-            // SubscribeRequestSink continues writing into the active stream.
-            *request_sink.lock().expect("request sink mutex poisoned") = subscribe_tx;
-
-            Ok(response.into_inner())
-        })
+        Box::pin(fut)
     }
 
-    fn backoff(&self) -> Backoff {
-        self.backoff.clone()
+    fn should_reconnect(&self) -> bool {
+        self.backoff.max_retries > 0
     }
 }
 
+/// Stream wrapper that reconnects recoverable failures and resumes from the
+/// last checkpoint while preserving deduplication state.
 pub struct AutoReconnect<GrpcStream, Connector> {
     request: Arc<ArcSwap<SubscribeRequest>>,
     last_checkpoint: Option<u64>,
@@ -447,6 +495,7 @@ where
     S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static,
     Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
 {
+    /// Creates an auto-reconnecting stream from an initial stream and connector.
     pub(crate) fn new(
         stream: DedupStream<S>,
         connector: Connector,
@@ -462,38 +511,20 @@ where
         }
     }
 
+    /// Builds a reconnect future by delegating connection policy to the connector.
     fn make_connection_future(&self, dedup_state: DedupState) -> ConnectFuture<S> {
-        let backoff = self.connector.backoff();
         let connector = self.connector.clone();
-        let request = self.request.clone();
+        let request = self.request.load_full();
         let from_slot = self.last_checkpoint;
-        let dedup_state = ConsumeOnce::new(dedup_state);
-        let fut = backoff.retry(move || {
-            let connector = connector.clone();
-            let request = request.clone();
-            let from_slot = from_slot;
-            let dedup_state = dedup_state.clone();
-            async move {
-                let stream = connector
-                    .connect(request.load_full(), from_slot)
-                    .await
-                    .map_err(|e| {
-                        if is_recoverable_client_error(&e) {
-                            ErrorCategory::Retryable(e)
-                        } else {
-                            ErrorCategory::Unrecoverable(e)
-                        }
-                    })?;
-
-                let dedup_state = dedup_state.take().expect("dedup_state must exists");
-
-                Ok(DedupStream::new(stream, dedup_state))
-            }
-        });
+        let fut = async move {
+            let stream = connector.connect(request, from_slot).await?;
+            Ok(DedupStream::new(stream, dedup_state))
+        };
         Box::pin(fut)
     }
 }
 
+/// Returns true if a client error is considered transient and reconnectable.
 fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     match err {
         GeyserGrpcClientError::TonicStatus(status) => is_recoverable_status_code(&status.code()),
@@ -502,6 +533,7 @@ fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     }
 }
 
+/// Returns true for gRPC status codes that should trigger reconnect.
 const fn is_recoverable_status_code(code: &Code) -> bool {
     matches!(
         code,
@@ -549,7 +581,7 @@ where
                     Poll::Ready(Some(Err(status)))
                         if is_recoverable_status_code(&status.code()) =>
                     {
-                        if me.connector.backoff().max_retries == 0 {
+                        if !me.connector.should_reconnect() {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
@@ -602,6 +634,7 @@ where
     }
 }
 
+/// Extracts the slot number from a subscribe update when available.
 pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
     match msg.update_oneof.as_ref()? {
         UpdateOneof::Account(m) => Some(m.slot),
@@ -697,8 +730,8 @@ mod tests {
             })
         }
 
-        fn backoff(&self) -> Backoff {
-            self.backoff.clone()
+        fn should_reconnect(&self) -> bool {
+            self.backoff.max_retries > 0
         }
     }
 
