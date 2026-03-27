@@ -1,16 +1,26 @@
 use {
-    crate::{GeyserGrpcClient, GeyserGrpcClientError, InterceptorXToken, ReconnectConfig},
-    futures::stream::{BoxStream, Stream, StreamExt},
+    crate::{GeyserGrpcClientError, InterceptorXToken, ReconnectConfig},
+    arc_swap::ArcSwap,
+    futures::{
+        channel::mpsc,
+        sink::SinkExt,
+        stream::{Stream, StreamExt},
+    },
     std::{
-        collections::{HashMap, HashSet, VecDeque}, future::Future, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}, time::Duration
+        collections::{HashMap, HashSet, VecDeque},
+        future::Future,
+        pin::Pin,
+        sync::{Arc, Mutex},
+        task::{Context, Poll},
+        time::Duration,
     },
     tonic::{
-        Code, Status, Streaming, codec::CompressionEncoding, metadata::AsciiMetadataValue, transport::Endpoint
+        codec::CompressionEncoding, metadata::AsciiMetadataValue, transport::Endpoint, Code,
+        Status, Streaming,
     },
-    tonic_health::pb::health_client::HealthClient,
     yellowstone_grpc_proto::{
         geyser::geyser_client::GeyserClient,
-        prelude::{SubscribeRequest, SubscribeUpdate, subscribe_update::UpdateOneof},
+        prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     },
 };
 
@@ -18,7 +28,6 @@ use {
 /// Conservative buffer to account for late-arriving events
 /// and out-of-order delivery within a slot.
 const CHECKPOINT_SLOT_BUFFER: u64 = 2;
-
 
 pub struct DedupStream<S> {
     state: DedupState,
@@ -166,21 +175,62 @@ impl DedupState {
 type ConnectFuture<S> =
     Pin<Box<dyn Future<Output = Result<DedupStream<S>, GeyserGrpcClientError>> + Send + 'static>>;
 
-
-
 #[derive(Debug, Clone)]
 pub struct Backoff {
     pub initial_interval: Duration,
     pub max_interval: Duration,
     pub multiplier: f64,
     pub max_retries: u32,
-    current_interval: Duration,
-    attempts: u32,
 }
 
 pub(crate) enum ErrorCategory<E> {
     Retryable(E),
     Unrecoverable(E),
+}
+
+impl<E> ErrorCategory<E> {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::Retryable(_))
+    }
+
+    fn into_inner(self) -> E {
+        match self {
+            Self::Retryable(e) | Self::Unrecoverable(e) => e,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BackoffInstance {
+    current_interval: Duration,
+    attempts: u32,
+    max_interval: Duration,
+    multiplier: f64,
+    max_retries: u32,
+}
+
+impl BackoffInstance {
+    fn new(config: &Backoff) -> Self {
+        Self {
+            current_interval: config.initial_interval,
+            attempts: 0,
+            max_interval: config.max_interval,
+            multiplier: config.multiplier,
+            max_retries: config.max_retries,
+        }
+    }
+
+    fn exhausted(&self) -> bool {
+        self.attempts >= self.max_retries
+    }
+
+    fn advance(&mut self) {
+        self.attempts += 1;
+        self.current_interval = self
+            .current_interval
+            .mul_f64(self.multiplier)
+            .min(self.max_interval);
+    }
 }
 
 impl Backoff {
@@ -211,64 +261,33 @@ impl Backoff {
             max_interval,
             multiplier,
             max_retries,
-            current_interval: initial_interval,
-            attempts: 0,
         }
     }
 
-    pub const fn reset(&mut self) {
-        self.current_interval = self.initial_interval;
-        self.attempts = 0;
+    fn instance(&self) -> BackoffInstance {
+        BackoffInstance::new(self)
     }
 
-    pub const fn exhausted(&self) -> bool {
-        self.attempts >= self.max_retries
-    }
-
-    fn advance(&mut self) {
-        self.attempts += 1;
-        self.current_interval = self
-            .current_interval
-            .mul_f64(self.multiplier)
-            .min(self.max_interval);
-    }
-
-    pub fn retry<F, Fut, T, E>(&self, mut operation: F) -> impl Future<Output = Result<T, E>>
+    pub(crate) fn retry<F, Fut, T, E>(&self, mut operation: F) -> impl Future<Output = Result<T, E>>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, ErrorCategory<E>>>,
     {
-        let mut this = self.clone();
+        let mut state = self.instance();
         async move {
-            this.reset();
-
             loop {
                 match operation().await {
-                    Ok(value) => {
-                        this.reset();
-                        return Ok(value);
-                    }
+                    Ok(value) => return Ok(value),
                     Err(error) => {
-                        if this.exhausted() {
-                            match error {
-                                ErrorCategory::Retryable(e) | ErrorCategory::Unrecoverable(e) => {
-                                    return Err(e);
-                                }
-                            }
-                        }
-                        match error {
-                            ErrorCategory::Unrecoverable(e) => return Err(e),
-                            ErrorCategory::Retryable(_) => {
-                                // continue to retry
-                            }
+                        if !error.is_retryable() || state.exhausted() {
+                            return Err(error.into_inner());
                         }
 
-                        tokio::time::sleep(this.current_interval).await;
-                        this.advance();
+                        tokio::time::sleep(state.current_interval).await;
+                        state.advance();
                     }
                 }
             }
-
         }
     }
 }
@@ -305,11 +324,18 @@ pub trait GrpcConnector: Clone + Send + Sync + 'static {
     type Stream: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static;
     type ConnectError: std::error::Error + Send + Sync + 'static;
     type ConnectFuture: Future<Output = Result<Self::Stream, Self::ConnectError>> + Send + 'static;
-    fn connect(&self, request: SubscribeRequest, from_slot: Option<u64>) -> Self::ConnectFuture;
+    fn connect(
+        &self,
+        request: Arc<SubscribeRequest>,
+        from_slot: Option<u64>,
+    ) -> Self::ConnectFuture;
+    fn backoff(&self) -> Backoff;
 }
 
 #[derive(Clone)]
 pub struct TonicGrpcConnector {
+    backoff: Backoff,
+    request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     endpoint: Endpoint,
     x_token: Option<AsciiMetadataValue>,
     x_request_snapshot: bool,
@@ -324,8 +350,11 @@ impl TonicGrpcConnector {
         endpoint: Endpoint,
         config: ReconnectConfig,
         x_token: Option<AsciiMetadataValue>,
+        request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     ) -> Self {
         Self {
+            backoff: config.backoff,
+            request_sink,
             endpoint,
             x_token,
             x_request_snapshot: config.x_request_snapshot,
@@ -343,18 +372,27 @@ impl GrpcConnector for TonicGrpcConnector {
     type ConnectFuture =
         Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>> + Send + 'static>>;
 
-    fn connect(&self, mut request: SubscribeRequest, from_slot: Option<u64>) -> Self::ConnectFuture {
+    fn connect(
+        &self,
+        request: Arc<SubscribeRequest>,
+        from_slot: Option<u64>,
+    ) -> Self::ConnectFuture {
         let endpoint = self.endpoint.clone();
+        let request_sink = self.request_sink.clone();
         let x_token = self.x_token.clone();
         let x_request_snapshot = self.x_request_snapshot;
         let send_compressed = self.send_compressed;
         let accept_compressed = self.accept_compressed;
         let max_decoding_message_size = self.max_decoding_message_size;
         let max_encoding_message_size = self.max_encoding_message_size;
+        let mut request = (*request).clone();
         request.from_slot = from_slot;
 
         Box::pin(async move {
-            let channel = endpoint.connect().await.map_err(GeyserGrpcClientError::TransportError)?;
+            let channel = endpoint
+                .connect()
+                .await
+                .map_err(GeyserGrpcClientError::TransportError)?;
 
             let interceptor = InterceptorXToken {
                 x_token,
@@ -375,23 +413,29 @@ impl GrpcConnector for TonicGrpcConnector {
                 geyser = geyser.max_encoding_message_size(limit);
             }
 
+            let (mut subscribe_tx, subscribe_rx) = mpsc::channel(1000);
+            subscribe_tx
+                .send(request)
+                .await
+                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+            let response = geyser.subscribe(subscribe_rx).await?;
 
-            let mut client =
-                GeyserGrpcClient::new(HealthClient::with_interceptor(channel, interceptor), geyser);
+            // Reconnect creates a new bidi request channel; swap sender so user-facing
+            // SubscribeRequestSink continues writing into the active stream.
+            *request_sink.lock().expect("request sink mutex poisoned") = subscribe_tx;
 
-            let (_sink, stream) = client.subscribe_raw(Some(request)).await?;
-            Ok(stream)
+            Ok(response.into_inner())
         })
+    }
+
+    fn backoff(&self) -> Backoff {
+        self.backoff.clone()
     }
 }
 
-
-pub struct AutoReconnect<GrpcStream, Connector> 
-{
-    request: SubscribeRequest,
+pub struct AutoReconnect<GrpcStream, Connector> {
+    request: Arc<ArcSwap<SubscribeRequest>>,
     last_checkpoint: Option<u64>,
-    // client config for rebuilding
-    config: ReconnectConfig,
     stop: bool,
     connector: Connector,
     inner_stream: Option<DedupStream<GrpcStream>>,
@@ -399,20 +443,18 @@ pub struct AutoReconnect<GrpcStream, Connector>
 }
 
 impl<S, Connector> AutoReconnect<S, Connector>
-    where
-        S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static,
-        Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
+where
+    S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static,
+    Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
 {
     pub(crate) fn new(
         stream: DedupStream<S>,
         connector: Connector,
-        request: SubscribeRequest,
-        config: ReconnectConfig,
+        request: Arc<ArcSwap<SubscribeRequest>>,
     ) -> Self {
         Self {
             request,
             last_checkpoint: None,
-            config,
             inner_stream: Some(stream),
             pending_connecting_task: None,
             stop: false,
@@ -420,9 +462,8 @@ impl<S, Connector> AutoReconnect<S, Connector>
         }
     }
 
-
     fn make_connection_future(&self, dedup_state: DedupState) -> ConnectFuture<S> {
-        let backoff = self.config.backoff.clone();
+        let backoff = self.connector.backoff();
         let connector = self.connector.clone();
         let request = self.request.clone();
         let from_slot = self.last_checkpoint;
@@ -433,13 +474,16 @@ impl<S, Connector> AutoReconnect<S, Connector>
             let from_slot = from_slot;
             let dedup_state = dedup_state.clone();
             async move {
-                let stream = connector.connect(request, from_slot).await.map_err(|e| {
-                    if is_recoverable_client_error(&e) {
-                        ErrorCategory::Retryable(e)
-                    } else {
-                        ErrorCategory::Unrecoverable(e)
-                    }
-                })?;
+                let stream = connector
+                    .connect(request.load_full(), from_slot)
+                    .await
+                    .map_err(|e| {
+                        if is_recoverable_client_error(&e) {
+                            ErrorCategory::Retryable(e)
+                        } else {
+                            ErrorCategory::Unrecoverable(e)
+                        }
+                    })?;
 
                 let dedup_state = dedup_state.take().expect("dedup_state must exists");
 
@@ -448,10 +492,7 @@ impl<S, Connector> AutoReconnect<S, Connector>
         });
         Box::pin(fut)
     }
-
 }
-
-
 
 fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     match err {
@@ -460,7 +501,6 @@ fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
         _ => false,
     }
 }
-
 
 const fn is_recoverable_status_code(code: &Code) -> bool {
     matches!(
@@ -476,7 +516,6 @@ const fn is_recoverable_status_code(code: &Code) -> bool {
     )
 }
 
-
 impl<S, Connector> Stream for AutoReconnect<S, Connector>
 where
     S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static,
@@ -490,7 +529,6 @@ where
         }
         let me = self.get_mut();
         while !me.stop {
-
             if let Some(mut stream) = me.inner_stream.take() {
                 match Pin::new(&mut stream).poll_next(cx) {
                     Poll::Ready(Some(Ok(msg))) => {
@@ -501,19 +539,21 @@ where
                                 // arrive in random order — replaying from a couple slots
                                 // back guarantees we don't miss data. dedup handles
                                 // the duplicates this creates.
-                                me.last_checkpoint = Some(slot.saturating_sub(CHECKPOINT_SLOT_BUFFER));
+                                me.last_checkpoint =
+                                    Some(slot.saturating_sub(CHECKPOINT_SLOT_BUFFER));
                             }
                         }
                         me.inner_stream = Some(stream);
                         return Poll::Ready(Some(Ok(msg)));
                     }
-                    Poll::Ready(Some(Err(status))) if is_recoverable_status_code(&status.code()) => {
-                        if me.config.backoff.max_retries == 0 {
+                    Poll::Ready(Some(Err(status)))
+                        if is_recoverable_status_code(&status.code()) =>
+                    {
+                        if me.connector.backoff().max_retries == 0 {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
 
-                        // drop the stream, recover the dedup state and start reconnecting
                         let dedup_state = stream.state;
                         me.pending_connecting_task = Some(me.make_connection_future(dedup_state));
                     }
@@ -552,7 +592,10 @@ where
                     }
                 }
             }
-            assert!(me.inner_stream.is_some() || me.pending_connecting_task.is_some() || me.stop, "must have either an active stream, a pending connecting task, or be stopped");
+            assert!(
+                me.inner_stream.is_some() || me.pending_connecting_task.is_some() || me.stop,
+                "must have either an active stream, a pending connecting task, or be stopped"
+            );
         }
 
         Poll::Ready(None)
@@ -577,7 +620,10 @@ mod tests {
     use {
         super::*,
         futures::stream,
-        std::{collections::VecDeque, sync::{Arc, Mutex}},
+        std::{
+            collections::VecDeque,
+            sync::{Arc, Mutex},
+        },
         tonic::Code,
         yellowstone_grpc_proto::prelude::{
             subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot,
@@ -586,6 +632,7 @@ mod tests {
 
     #[derive(Clone)]
     struct MockGrpcConnector {
+        backoff: Backoff,
         plans: Arc<Mutex<VecDeque<ConnectPlan>>>,
         from_slot_calls: Arc<Mutex<Vec<Option<u64>>>>,
     }
@@ -596,20 +643,24 @@ mod tests {
     }
 
     impl MockGrpcConnector {
-        fn new(plans: Vec<ConnectPlan>) -> Self {
+        fn new(backoff: Backoff, plans: Vec<ConnectPlan>) -> Self {
             Self {
+                backoff,
                 plans: Arc::new(Mutex::new(plans.into())),
                 from_slot_calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
         fn calls(&self) -> Vec<Option<u64>> {
-            self.from_slot_calls.lock().expect("calls mutex poisoned").clone()
+            self.from_slot_calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .clone()
         }
     }
 
     impl GrpcConnector for MockGrpcConnector {
-        type Stream = BoxStream<'static, Result<SubscribeUpdate, Status>>;
+        type Stream = futures::stream::BoxStream<'static, Result<SubscribeUpdate, Status>>;
         type ConnectError = GeyserGrpcClientError;
         type ConnectFuture = Pin<
             Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>> + Send + 'static>,
@@ -617,11 +668,13 @@ mod tests {
 
         fn connect(
             &self,
-            _request: SubscribeRequest,
+            _request: Arc<SubscribeRequest>,
             from_slot: Option<u64>,
         ) -> Self::ConnectFuture {
             let mut plans = self.plans.lock().expect("plans mutex poisoned");
-            let plan = plans.pop_front().expect("unexpected connect call without a test plan");
+            let plan = plans
+                .pop_front()
+                .expect("unexpected connect call without a test plan");
             drop(plans);
 
             self.from_slot_calls
@@ -630,7 +683,10 @@ mod tests {
                 .push(from_slot);
 
             if let Some(expected_from_slot) = plan.expected_from_slot {
-                assert_eq!(from_slot, expected_from_slot, "unexpected reconnect from_slot");
+                assert_eq!(
+                    from_slot, expected_from_slot,
+                    "unexpected reconnect from_slot"
+                );
             }
 
             Box::pin(async move {
@@ -640,22 +696,23 @@ mod tests {
                 }
             })
         }
+
+        fn backoff(&self) -> Backoff {
+            self.backoff.clone()
+        }
     }
 
-    fn reconnect_config_with_retries(max_retries: u32) -> ReconnectConfig {
-        ReconnectConfig {
-            backoff: Backoff::new(
-                Duration::from_millis(0),
-                Duration::from_millis(0),
-                1.0,
-                max_retries,
-            ),
-            x_request_snapshot: false,
-            send_compressed: None,
-            accept_compressed: None,
-            max_decoding_message_size: None,
-            max_encoding_message_size: None,
-        }
+    fn backoff_with_retries(max_retries: u32) -> Backoff {
+        Backoff::new(
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+            1.0,
+            max_retries,
+        )
+    }
+
+    fn request_state(request: SubscribeRequest) -> Arc<ArcSwap<SubscribeRequest>> {
+        Arc::new(ArcSwap::new(Arc::new(request)))
     }
 
     #[test]
@@ -665,47 +722,48 @@ mod tests {
         assert_eq!(backoff.max_interval, Duration::from_secs(30));
         assert_eq!(backoff.multiplier, 2.0);
         assert_eq!(backoff.max_retries, 3);
-        assert!(!backoff.exhausted());
     }
 
     #[test]
-    fn test_backoff_exhaustion() {
-        let mut backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
-        assert!(!backoff.exhausted());
-        backoff.attempts = 3;
-        assert!(backoff.exhausted());
+    fn test_backoff_instance_exhaustion() {
+        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
+        let mut instance = backoff.instance();
+
+        assert!(!instance.exhausted());
+        instance.attempts = 3;
+        assert!(instance.exhausted());
     }
 
     #[test]
-    fn test_backoff_reset() {
-        let mut backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
-        backoff.attempts = 2;
-        backoff.current_interval = Duration::from_secs(1);
-        backoff.reset();
-        assert_eq!(backoff.attempts, 0);
-        assert_eq!(backoff.current_interval, Duration::from_millis(100));
+    fn test_backoff_instance_starts_from_initial() {
+        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
+        let instance = backoff.instance();
+        assert_eq!(instance.attempts, 0);
+        assert_eq!(instance.current_interval, Duration::from_millis(100));
     }
 
     #[test]
     fn test_backoff_advance() {
-        let mut backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 5);
-        assert_eq!(backoff.current_interval, Duration::from_millis(100));
+        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 5);
+        let mut instance = backoff.instance();
+        assert_eq!(instance.current_interval, Duration::from_millis(100));
 
-        backoff.advance();
-        assert_eq!(backoff.attempts, 1);
-        assert_eq!(backoff.current_interval, Duration::from_millis(200));
+        instance.advance();
+        assert_eq!(instance.attempts, 1);
+        assert_eq!(instance.current_interval, Duration::from_millis(200));
 
-        backoff.advance();
-        assert_eq!(backoff.attempts, 2);
-        assert_eq!(backoff.current_interval, Duration::from_millis(400));
+        instance.advance();
+        assert_eq!(instance.attempts, 2);
+        assert_eq!(instance.current_interval, Duration::from_millis(400));
     }
 
     #[test]
     fn test_backoff_advance_caps_at_max() {
-        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(1), 2.0, 10);
-        backoff.advance(); // 1s
-        backoff.advance(); // would be 2s, capped at 1s
-        assert_eq!(backoff.current_interval, Duration::from_secs(1));
+        let backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(1), 2.0, 10);
+        let mut instance = backoff.instance();
+        instance.advance(); // 1s
+        instance.advance(); // would be 2s, capped at 1s
+        assert_eq!(instance.current_interval, Duration::from_secs(1));
     }
 
     #[tokio::test]
@@ -729,8 +787,6 @@ mod tests {
 
         assert_eq!(result, Ok(42));
         assert_eq!(calls, 3);
-        assert_eq!(backoff.attempts, 0);
-        assert_eq!(backoff.current_interval, Duration::from_millis(0));
     }
 
     #[tokio::test]
@@ -747,7 +803,6 @@ mod tests {
 
         assert_eq!(result, Err("still failing"));
         assert_eq!(calls, 3);
-        assert_eq!(backoff.attempts, 0);
     }
 
     #[test]
@@ -889,16 +944,18 @@ mod tests {
     #[tokio::test]
     async fn test_autoreconnect_recovers_from_recoverable_stream_error() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(vec![ConnectPlan {
-            expected_from_slot: Some(None),
-            result: Ok(vec![Ok(make_slot_msg(42, 0))]),
-        }]);
+        let connector = MockGrpcConnector::new(
+            backoff_with_retries(1),
+            vec![ConnectPlan {
+                expected_from_slot: Some(None),
+                result: Ok(vec![Ok(make_slot_msg(42, 0))]),
+            }],
+        );
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
-            SubscribeRequest::default(),
-            reconnect_config_with_retries(1),
+            request_state(SubscribeRequest::default()),
         );
 
         let next = auto.next().await;
@@ -912,34 +969,38 @@ mod tests {
     #[tokio::test]
     async fn test_autoreconnect_no_reconnect_when_max_retries_zero() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(vec![]);
+        let connector = MockGrpcConnector::new(backoff_with_retries(0), vec![]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
-            SubscribeRequest::default(),
-            reconnect_config_with_retries(0),
+            request_state(SubscribeRequest::default()),
         );
 
         let first = auto.next().await.expect("expected one item");
         assert!(first.is_err());
-        assert_eq!(first.expect_err("expected recoverable error").code(), Code::Unavailable);
+        assert_eq!(
+            first.expect_err("expected recoverable error").code(),
+            Code::Unavailable
+        );
         assert_eq!(connector.calls().len(), 0);
     }
 
     #[tokio::test]
     async fn test_autoreconnect_passes_checkpoint_as_from_slot() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(vec![ConnectPlan {
-            expected_from_slot: Some(Some(77)),
-            result: Ok(vec![Ok(make_slot_msg(90, 0))]),
-        }]);
+        let connector = MockGrpcConnector::new(
+            backoff_with_retries(1),
+            vec![ConnectPlan {
+                expected_from_slot: Some(Some(77)),
+                result: Ok(vec![Ok(make_slot_msg(90, 0))]),
+            }],
+        );
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
-            SubscribeRequest::default(),
-            reconnect_config_with_retries(1),
+            request_state(SubscribeRequest::default()),
         );
         auto.last_checkpoint = Some(77);
 

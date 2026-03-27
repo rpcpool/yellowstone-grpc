@@ -16,6 +16,7 @@ account-data-as-bytes = [
 ]
 
 [dependencies]
+arc-swap = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }

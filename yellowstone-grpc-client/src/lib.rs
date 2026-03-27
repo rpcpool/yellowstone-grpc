@@ -1,17 +1,21 @@
 mod stream;
 
-use std::ops::Sub;
-
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
-    crate::stream::Backoff,
+    crate::stream::{AutoReconnect, Backoff, DedupState, DedupStream, TonicGrpcConnector},
+    arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
         channel::mpsc,
         sink::{Sink, SinkExt},
-        stream::{Stream, StreamExt},
+        stream::Stream,
     },
-    std::{path::PathBuf, time::Duration},
+    std::{
+        ops::Sub,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
     tokio::net::UnixStream,
     tonic::{
         codec::{CompressionEncoding, Streaming},
@@ -67,7 +71,7 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone)]
-pub(crate) struct ReconnectConfig {
+pub struct ReconnectConfig {
     pub backoff: Backoff,
     pub x_request_snapshot: bool,
     pub send_compressed: Option<CompressionEncoding>,
@@ -76,8 +80,21 @@ pub(crate) struct ReconnectConfig {
     pub max_encoding_message_size: Option<usize>,
 }
 
+impl Default for ReconnectConfig {
+    fn default() -> Self {
+        Self {
+            backoff: Backoff::default(),
+            x_request_snapshot: false,
+            send_compressed: None,
+            accept_compressed: None,
+            max_decoding_message_size: None,
+            max_encoding_message_size: None,
+        }
+    }
+}
+
 impl ReconnectConfig {
-    pub(crate) fn no_reconnect() -> Self {
+    pub fn no_reconnect() -> Self {
         Self {
             backoff: Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 1.0, 0),
             x_request_snapshot: false,
@@ -93,7 +110,9 @@ impl ReconnectConfig {
 pub struct GeyserGrpcClient {
     pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
     pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
-    reconnect_config: Option<ReconnectConfig>,
+    reconnect_config: ReconnectConfig,
+    reconnect_endpoint: Option<Endpoint>,
+    reconnect_x_token: Option<AsciiMetadataValue>,
 }
 
 impl GeyserGrpcClient {
@@ -109,11 +128,22 @@ impl GeyserGrpcClient {
 }
 
 pub struct GeyserStream {
-    inner: Streaming<SubscribeUpdate>,
+    inner: AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>,
 }
 
 pub struct SubscribeDeshredStream {
     inner: Streaming<SubscribeUpdateDeshred>,
+}
+
+impl Stream for SubscribeDeshredStream {
+    type Item = Result<SubscribeUpdateDeshred, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    }
 }
 
 impl Stream for GeyserStream {
@@ -123,20 +153,95 @@ impl Stream for GeyserStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
+        std::pin::Pin::new(&mut self.inner).poll_next(cx)
     }
 }
 
+pub struct SubscribeRequestSink {
+    inner: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
+    shared: Arc<ArcSwap<SubscribeRequest>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{inner}")]
+pub struct SubscribeRequestSinkError {
+    inner: mpsc::SendError,
+}
+
+impl From<mpsc::SendError> for SubscribeRequestSinkError {
+    fn from(err: mpsc::SendError) -> Self {
+        Self { inner: err }
+    }
+}
+
+impl Sink<SubscribeRequest> for SubscribeRequestSink {
+    // TODO: this is bad API design, because it leaks implementation details of the sink. We should ideally hide the fact that we're using an mpsc channel under the hood, but tonic's streaming API requires us to return a Sink for sending requests,
+    // so we have to wrap it like this to be able to update the shared state on each request.
+    // But for the time being, in order to not break the existing API, we'll just return the same error types.
+    type Error = SubscribeRequestSinkError;
+
+    fn poll_ready(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("subscribe request sink mutex poisoned");
+        std::pin::Pin::new(&mut *inner)
+            .poll_ready(cx)
+            .map_err(Into::into)
+    }
+
+    fn start_send(
+        mut self: std::pin::Pin<&mut Self>,
+        item: SubscribeRequest,
+    ) -> Result<(), Self::Error> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("subscribe request sink mutex poisoned");
+        inner
+            .start_send_unpin(item.clone())
+            .map_err(SubscribeRequestSinkError::from)?;
+        self.shared.store(Arc::new(item));
+        Ok(())
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("subscribe request sink mutex poisoned");
+        inner.poll_flush_unpin(cx).map_err(Into::into)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("subscribe request sink mutex poisoned");
+        inner.poll_close_unpin(cx).map_err(Into::into)
+    }
+}
 
 impl GeyserGrpcClient {
-    pub const fn new(
+    pub fn new(
         health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
         geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
     ) -> Self {
         Self {
             health,
             geyser,
-            reconnect_config: None,
+            reconnect_config: ReconnectConfig::no_reconnect(),
+            reconnect_endpoint: None,
+            reconnect_x_token: None,
         }
     }
 
@@ -162,22 +267,16 @@ impl GeyserGrpcClient {
     // Subscribe
     pub async fn subscribe(
         &mut self,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>>,
-    )> {
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
         self.subscribe_with_request(None).await
     }
 
     pub(crate) async fn subscribe_raw(
         &mut self,
         request: Option<SubscribeRequest>,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        Streaming<SubscribeUpdate>,
-    )> {
-        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
-        if let Some(request) = request {
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, Streaming<SubscribeUpdate>)> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::channel(1000);
+        if let Some(request) = request.clone() {
             subscribe_tx
                 .send(request)
                 .await
@@ -185,24 +284,46 @@ impl GeyserGrpcClient {
         }
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
-        Ok((subscribe_tx, response.into_inner()))
+        let sink = SubscribeRequestSink {
+            inner: Arc::new(Mutex::new(subscribe_tx)),
+            shared: Arc::new(ArcSwap::new(Arc::new(request.unwrap_or_default()))),
+        };
+        Ok((sink, response.into_inner()))
     }
 
     pub async fn subscribe_with_request(
         &mut self,
         request: Option<SubscribeRequest>,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        GeyserStream,
-    )> {
-        self.subscribe_raw(request).await.map(|(sink, stream)| (sink, GeyserStream { inner: stream }))
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
+        let reconnect_config = self.reconnect_config.clone();
+        let endpoint = self
+            .reconnect_endpoint
+            .clone()
+            .unwrap_or_else(|| Endpoint::from_static("http://127.0.0.1:0"));
+        let reconnect_x_token = self.reconnect_x_token.clone();
+
+        self.subscribe_raw(request.clone())
+            .await
+            .map(|(sink, stream)| {
+                let connector = TonicGrpcConnector::new(
+                    endpoint,
+                    reconnect_config.clone(),
+                    reconnect_x_token,
+                    sink.inner.clone(),
+                );
+                let inner = AutoReconnect::new(
+                    DedupStream::new(stream, DedupState::default()),
+                    connector,
+                    sink.shared.clone(),
+                );
+                (sink, GeyserStream { inner })
+            })
     }
 
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
-    ) -> GeyserGrpcClientResult<GeyserStream>
-    {
+    ) -> GeyserGrpcClientResult<GeyserStream> {
         let (_sink, stream) = self.subscribe_with_request(Some(request.clone())).await?;
         Ok(stream)
     }
@@ -233,7 +354,12 @@ impl GeyserGrpcClient {
         }
         let response: Response<Streaming<SubscribeUpdateDeshred>> =
             self.geyser.subscribe_deshred(subscribe_rx).await?;
-        Ok((subscribe_tx, SubscribeDeshredStream { inner: response.into_inner() }))
+        Ok((
+            subscribe_tx,
+            SubscribeDeshredStream {
+                inner: response.into_inner(),
+            },
+        ))
     }
 
     pub async fn subscribe_deshred_once(
@@ -361,21 +487,19 @@ impl GeyserGrpcBuilder {
     }
 
     // Create client
-    fn build(
-        self,
-        channel: Channel,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
+    fn build(self, channel: Channel) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
+        let reconnect_x_token = self.x_token.clone();
         let reconnect_config = if self.auto_reconnect {
-            Some(ReconnectConfig {
+            ReconnectConfig {
                 backoff: Backoff::default(),
                 x_request_snapshot: self.x_request_snapshot,
                 send_compressed: self.send_compressed,
                 accept_compressed: self.accept_compressed,
                 max_decoding_message_size: self.max_decoding_message_size,
                 max_encoding_message_size: self.max_encoding_message_size,
-            })
+            }
         } else {
-            None
+            ReconnectConfig::no_reconnect()
         };
 
         let interceptor = InterceptorXToken {
@@ -401,19 +525,17 @@ impl GeyserGrpcBuilder {
             health: HealthClient::with_interceptor(channel, interceptor),
             geyser,
             reconnect_config,
+            reconnect_endpoint: Some(self.endpoint),
+            reconnect_x_token,
         })
     }
 
-    pub async fn connect(
-        self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
+    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
-    pub fn connect_lazy(
-        self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
+    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
     }
@@ -587,7 +709,12 @@ impl GeyserGrpcBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::GeyserGrpcClient;
+    use {
+        super::{GeyserGrpcClient, SubscribeRequest, SubscribeRequestSink},
+        arc_swap::ArcSwap,
+        futures::{channel::mpsc, FutureExt, SinkExt, StreamExt},
+        std::sync::{Arc, Mutex},
+    };
 
     #[tokio::test]
     async fn test_channel_https_success() {
@@ -655,5 +782,48 @@ mod tests {
             "Err(TonicError(tonic::transport::Error(InvalidUri, InvalidUri(InvalidFormat))))"
                 .to_owned()
         );
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_request_sink_uses_swapped_sender() {
+        let (tx1, mut rx1) = mpsc::channel(8);
+        let (tx2, mut rx2) = mpsc::channel(8);
+
+        let shared = Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default())));
+        let mut sink = SubscribeRequestSink {
+            inner: Arc::new(Mutex::new(tx1)),
+            shared: shared.clone(),
+        };
+
+        let mut req1 = SubscribeRequest::default();
+        req1.from_slot = Some(11);
+        sink.send(req1).await.expect("first send must succeed");
+
+        let first = rx1
+            .next()
+            .await
+            .expect("first receiver should get first request");
+        assert_eq!(first.from_slot, Some(11));
+
+        *sink
+            .inner
+            .lock()
+            .expect("subscribe request sink mutex poisoned") = tx2;
+
+        let mut req2 = SubscribeRequest::default();
+        req2.from_slot = Some(22);
+        sink.send(req2).await.expect("second send must succeed");
+
+        let second = rx2
+            .next()
+            .await
+            .expect("second receiver should get second request");
+        assert_eq!(second.from_slot, Some(22));
+
+        match rx1.next().now_or_never() {
+            None | Some(None) => {}
+            Some(Some(_)) => panic!("old receiver must not get requests after sender swap"),
+        }
+        assert_eq!(shared.load_full().from_slot, Some(22));
     }
 }
