@@ -346,6 +346,46 @@ function waitForTerminalEvent(
   });
 }
 
+function waitForStreamError(stream: any, timeoutMs = 2500): Promise<Error> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const settleOnce = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      stream.off("error", onError);
+      stream.off("close", onCloseBeforeError);
+      stream.off("end", onCloseBeforeError);
+    };
+
+    const onError = (error: Error) => settleOnce(() => resolve(error));
+    const onCloseBeforeError = () =>
+      settleOnce(() =>
+        reject(new Error("Stream ended/closed before emitting error event")),
+      );
+
+    const timeoutId = setTimeout(() => {
+      settleOnce(() =>
+        reject(
+          new Error(`Timed out waiting for stream error after ${timeoutMs}ms`),
+        ),
+      );
+    }, timeoutMs);
+
+    stream.once("error", onError);
+    stream.once("close", onCloseBeforeError);
+    stream.once("end", onCloseBeforeError);
+  });
+}
+
 function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -405,6 +445,37 @@ function writeAndCaptureError(
       stream.write(request, (err: Error | null | undefined) =>
         settleOnce(err ?? null),
       );
+    } catch (err) {
+      settleOnce(err as Error);
+    }
+  });
+}
+
+function writeAndWaitCallback(
+  stream: any,
+  request: unknown,
+  timeoutMs = 5000,
+): Promise<Error | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const settleOnce = (error: Error | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve(error);
+    };
+
+    const timeoutId = setTimeout(() => {
+      settleOnce(new Error(`Timed out waiting for write callback after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    try {
+      stream.write(request, (err: Error | null | undefined) => {
+        settleOnce(err ?? null);
+      });
     } catch (err) {
       settleOnce(err as Error);
     }
@@ -504,6 +575,21 @@ describe("Client connection guard behavior", () => {
     await expect(client.connect()).rejects.toThrow();
     await expect(client.getVersion()).rejects.toThrow(
       "Client not connected. Call connect() first",
+    );
+  });
+
+  test("subscribe bubbles native stream-open errors", async () => {
+    const client = new Client("http://localhost:10000", undefined, {});
+    const unavailableError = new Error(
+      "status: Unavailable, message: subscribe stream open failed",
+    );
+
+    (client as any)._grpcClient = {
+      subscribe: jest.fn().mockRejectedValue(unavailableError),
+    };
+
+    await expect(client.subscribe()).rejects.toThrow(
+      "subscribe stream open failed",
     );
   });
 
@@ -1463,6 +1549,34 @@ describe("subscribe response schema tests", () => {
     await assertRequestsAcceptedOnSingleStream(requests);
   }, 180000);
 
+  test("runtime server errors are propagated via stream error event", async () => {
+    const stream = await client.subscribe();
+    try {
+      // Ensure `_read()` is driven so native terminal errors can surface to JS.
+      stream.on("data", () => {});
+      const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
+      const request = baseSubscribeRequest();
+      request.transactions = {
+        invalid_pubkey_filter: {
+          signature: "abc",
+          accountInclude: ["not_base58_!!!"],
+          accountExclude: [],
+          accountRequired: [],
+        },
+      };
+
+      const writeError = await writeAndWaitCallback(stream, request);
+      expect(writeError).toBeNull();
+
+      const observedError = await runtimeError;
+      const message = String(observedError?.message ?? "").toLowerCase();
+      expect(message.length).toBeGreaterThan(0);
+      expect(message.includes("no update available")).toBe(false);
+    } finally {
+      await closeStreamAndWait(stream);
+    }
+  }, TEST_TIMEOUT);
+
   test(
     "account",
     async () => {
@@ -2241,6 +2355,34 @@ describe("subscribeDeshred response schema tests", () => {
 
     await assertDeshredRequestsAcceptedOnSingleStream(requests);
   }, 180000);
+
+  test("deshred runtime server errors are propagated via stream error event", async () => {
+    const stream = await client.subscribeDeshred();
+    try {
+      // Ensure `_read()` is driven so native terminal errors can surface to JS.
+      stream.on("data", () => {});
+      const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
+      const request: SubscribeDeshredRequest = {
+        deshredTransactions: {
+          invalid_pubkey_filter: {
+            accountInclude: ["not_base58_!!!"],
+            accountExclude: [],
+            accountRequired: [],
+          },
+        },
+      };
+
+      const writeError = await writeAndWaitCallback(stream, request);
+      expect(writeError).toBeNull();
+
+      const observedError = await runtimeError;
+      const message = String(observedError?.message ?? "").toLowerCase();
+      expect(message.length).toBeGreaterThan(0);
+      expect(message.includes("no update available")).toBe(false);
+    } finally {
+      await closeStreamAndWait(stream);
+    }
+  }, TEST_TIMEOUT);
 
   test(
     "deshred ping/pong",

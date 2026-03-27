@@ -48,6 +48,28 @@ fn init_crypto_provider() {
   });
 }
 
+fn capture_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>, message: String) {
+  // First terminal failure wins: preserve the earliest causal error and avoid
+  // replacing it with follow-up shutdown noise from the same worker.
+  let mut error_guard = match terminal_error.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => poisoned.into_inner(),
+  };
+  if error_guard.is_none() {
+    *error_guard = Some(message);
+  }
+}
+
+fn get_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>) -> Option<String> {
+  // Recover poisoned state and still return any stored terminal error so JS
+  // observes the native failure instead of a silent EOF.
+  let error_guard = match terminal_error.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => poisoned.into_inner(),
+  };
+  error_guard.clone()
+}
+
 /// DuplexStream Engine
 ///
 /// The inner engine for a custom implementation of stream.Duplex
@@ -80,112 +102,109 @@ struct DuplexStream {
 #[napi]
 impl DuplexStream {
   // #[napi]
-  pub fn subscribe(env: &Env, grpc_client: &GrpcClient) -> Result<Self> {
+  pub fn subscribe<'env>(
+    env: &'env Env,
+    grpc_client: &GrpcClient,
+  ) -> Result<PromiseRaw<'env, Self>> {
     let client_holder = grpc_client.holder.clone();
 
-    // TODO : Fine tune unbounded channels.
-    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
-    let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
-    let writable = Arc::new(StdMutex::new(Some(writable_tx)));
-    let terminal_error = Arc::new(StdMutex::new(None));
-    let terminal_error_worker = terminal_error.clone();
-    let is_closing = Arc::new(AtomicBool::new(false));
-    let is_closing_worker = is_closing.clone();
+    // Open the gRPC stream before returning to JS so connection/protocol errors
+    // reject the Promise and bubble to TypeScript callers.
+    env.spawn_future_with_callback(
+      async move {
+        let holder = client_holder
+          .downcast_ref::<crate::client::internal::ClientHolder<
+            yellowstone_grpc_client::InterceptorXToken,
+          >>()
+          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
 
-    // Spawn one worker per `subscribe()` call. The worker owns both sides of
-    // the gRPC bidirectional stream and forwards data between JS and gRPC.
-    env.spawn_future(async move {
-      let holder = match client_holder
-        .downcast_ref::<crate::client::internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-      {
-        Some(holder) => holder,
-        None => {
-          if let Ok(mut error_guard) = terminal_error_worker.lock() {
-            if error_guard.is_none() {
-              *error_guard = Some("subscribe stream setup failed: Invalid client type".to_string());
-            }
-          }
-          return Ok(());
-        }
-      };
+        // Acquire lock, call subscribe, and immediately release the lock.
+        let (mut stream_tx, mut stream_rx) = {
+          let mut client = holder.client.lock().await;
+          client
+            .subscribe()
+            .await
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?
+        };
 
-      // Acquire lock, call subscribe, and immediately release the lock
-      // The returned streams are independent and don't need the client lock
-      let (mut stream_tx, mut stream_rx) = {
-        let mut client = holder.client.lock().await;
-        match client.subscribe().await {
-          Ok(stream) => stream,
-          Err(error) => {
-            if let Ok(mut error_guard) = terminal_error_worker.lock() {
-              if error_guard.is_none() {
-                *error_guard = Some(format!("subscribe stream open failed: {error}"));
-              }
-            }
-            return Ok(());
-          }
-        }
-      }; // Lock is dropped here when client goes out of scope
+        // TODO : Fine tune unbounded channels.
+        let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
+        let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
+        let writable = Arc::new(StdMutex::new(Some(writable_tx)));
+        let terminal_error = Arc::new(StdMutex::new(None));
+        let terminal_error_worker = terminal_error.clone();
+        let is_closing = Arc::new(AtomicBool::new(false));
+        let is_closing_worker = is_closing.clone();
 
-      loop {
-        tokio::select! {
-          // 1. SubscribeRequest is received from self.write().
-          // 2. SubscribeRequest is propagated to Geyser client's sender.
-          req_option = writable_rx.recv() => {
-            if let Some(request) = req_option {
-              if let Err(e) = stream_tx.send(request).await {
-                if is_closing_worker.load(Ordering::Acquire) {
-                  break;
-                }
-                if let Ok(mut error_guard) = terminal_error_worker.lock() {
-                  if error_guard.is_none() {
-                    *error_guard = Some(format!("subscribe stream send failed: {e}"));
+        // Worker lifecycle:
+        // - Runs until JS closes the writable side, gRPC side ends, or a
+        //   non-graceful gRPC send/recv failure occurs.
+        // - For non-graceful failures, captures terminal error and exits.
+        // - Dropping `readable_tx` on exit closes JS read channel.
+        tokio::spawn(async move {
+          loop {
+            tokio::select! {
+              // 1. SubscribeRequest is received from self.write().
+              // 2. SubscribeRequest is propagated to Geyser client's sender.
+              req_option = writable_rx.recv() => {
+                if let Some(request) = req_option {
+                  if let Err(error) = stream_tx.send(request).await {
+                    if is_closing_worker.load(Ordering::Acquire) {
+                      // JS initiated close; treat send failure during teardown
+                      // as expected shutdown, not a user-facing stream error.
+                      break;
+                    }
+                    capture_terminal_error(
+                      &terminal_error_worker,
+                      format!("subscribe stream send failed: {error}"),
+                    );
+                    break;
                   }
+                } else {
+                  // JS writable side dropped: no more requests can be sent.
+                  // Exit worker so the upstream gRPC stream is torn down as well.
+                  break;
                 }
-                break;
-              }
-            } else {
-              // JS writable side dropped: no more requests can be sent.
-              // Exit worker so the upstream gRPC stream is torn down as well.
-              break;
-            }
-          },
+              },
 
-          // 1. SubscribeUpdate is received from Geyser client's receiver.
-          // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
-          maybe_update_result = stream_rx.next() => {
-            match maybe_update_result {
-              Some(Ok(update)) => {
-                // JS reader side disappeared; no point continuing the worker.
-                if readable_tx.send(update).is_err() {
-                  break;
-                }
-              }
-              Some(Err(e)) => {
-                if is_closing_worker.load(Ordering::Acquire) {
-                  break;
-                }
-                if let Ok(mut error_guard) = terminal_error_worker.lock() {
-                  if error_guard.is_none() {
-                    *error_guard = Some(format!("subscribe stream receive failed: {e}"));
+              // 1. SubscribeUpdate is received from Geyser client's receiver.
+              // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
+              maybe_update_result = stream_rx.next() => {
+                match maybe_update_result {
+                  Some(Ok(update)) => {
+                    // JS reader side disappeared; no point continuing the worker.
+                    if readable_tx.send(update).is_err() {
+                      break;
+                    }
                   }
+                  Some(Err(error)) => {
+                    if is_closing_worker.load(Ordering::Acquire) {
+                      // JS initiated close; treat recv failure during teardown
+                      // as expected shutdown, not a user-facing stream error.
+                      break;
+                    }
+                    capture_terminal_error(
+                      &terminal_error_worker,
+                      format!("subscribe stream receive failed: {error}"),
+                    );
+                    break;
+                  }
+                  None => break,
                 }
-                break;
               }
-              None => break,
             }
           }
-        }
-      }
+        });
 
-      Ok(())
-    })?;
-
-    Ok(Self {
-      readable: Arc::new(Mutex::new(readable_rx)),
-      writable,
-      terminal_error,
-      is_closing,
-    })
+        Ok(Self {
+          readable: Arc::new(Mutex::new(readable_rx)),
+          writable,
+          terminal_error,
+          is_closing,
+        })
+      },
+      move |_environment, stream| Ok(stream),
+    )
   }
 
   /// Read JS Accesspoint.
@@ -285,10 +304,9 @@ impl DuplexStream {
       // Channel close indicates worker termination. If worker captured a native
       // terminal error, surface it to JS instead of silently ending the stream.
       None => {
-        let error_message = terminal_error
-          .lock()
-          .map_err(|_| napi::Error::from_reason("Failed to acquire terminal error lock"))?
-          .clone();
+        // EOF without terminal error => graceful end-of-stream.
+        // EOF with terminal error => reject read promise so TS emits `error`.
+        let error_message = get_terminal_error(&terminal_error);
 
         if let Some(message) = error_message {
           Err(napi::Error::from_reason(message))
@@ -352,6 +370,9 @@ impl DuplexStreamDeshred {
         let is_closing = Arc::new(AtomicBool::new(false));
         let is_closing_worker = Arc::clone(&is_closing);
 
+        // Same lifecycle contract as `DuplexStream`:
+        // propagate first non-graceful gRPC error through `terminal_error`,
+        // then close channel so JS `read()` can map it to a rejected promise.
         tokio::spawn(async move {
           loop {
             tokio::select! {
@@ -359,14 +380,13 @@ impl DuplexStreamDeshred {
                 if let Some(request) = req_option {
                   if let Err(error) = stream_tx.send(request).await {
                     if is_closing_worker.load(Ordering::Acquire) {
+                      // Closing path: avoid surfacing expected teardown errors.
                       break;
                     }
-                    if let Ok(mut error_guard) = terminal_error_worker.lock() {
-                      if error_guard.is_none() {
-                        *error_guard =
-                          Some(format!("deshred stream send failed: {error}"));
-                      }
-                    }
+                    capture_terminal_error(
+                      &terminal_error_worker,
+                      format!("deshred stream send failed: {error}"),
+                    );
                     break;
                   }
                 } else {
@@ -382,13 +402,13 @@ impl DuplexStreamDeshred {
                   }
                   Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
+                      // Closing path: avoid surfacing expected teardown errors.
                       break;
                     }
-                    if let Ok(mut error_guard) = terminal_error_worker.lock() {
-                      if error_guard.is_none() {
-                        *error_guard = Some(format!("deshred stream receive failed: {error}"));
-                      }
-                    }
+                    capture_terminal_error(
+                      &terminal_error_worker,
+                      format!("deshred stream receive failed: {error}"),
+                    );
                     break;
                   }
                   None => break,
@@ -495,10 +515,9 @@ impl DuplexStreamDeshred {
     match readable.lock().await.recv().await {
       Some(update) => Ok(Some(update)),
       None => {
-        let error_message = terminal_error
-          .lock()
-          .map_err(|_| napi::Error::from_reason("Failed to acquire terminal error lock"))?
-          .clone();
+        // Match regular subscribe semantics: graceful EOF when no terminal
+        // error, otherwise reject and bubble root cause to TypeScript caller.
+        let error_message = get_terminal_error(&terminal_error);
 
         if let Some(message) = error_message {
           Err(napi::Error::from_reason(message))
@@ -1007,6 +1026,35 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn subscribe_read_returns_terminal_error_when_terminal_error_lock_is_poisoned() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(None));
+    {
+      let terminal_error_poison = terminal_error.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let mut guard = terminal_error_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        *guard = Some("subscribe stream receive failed: poisoned lock".to_string());
+        panic!("intentional poison");
+      });
+    }
+
+    let error = DuplexStream::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect_err("terminal error should still propagate from poisoned lock");
+
+    assert!(
+      error
+        .to_string()
+        .contains("subscribe stream receive failed: poisoned lock"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
   async fn deshred_write_raw_delivers_decoded_request_to_receiver() {
     let (stream, mut writable_rx) = make_test_deshred_stream();
 
@@ -1162,6 +1210,35 @@ mod tests {
       error
         .to_string()
         .contains("deshred stream receive failed: channel closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_read_returns_terminal_error_when_terminal_error_lock_is_poisoned() {
+    let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
+    drop(readable_tx);
+    let readable = Arc::new(Mutex::new(readable_rx));
+    let terminal_error = Arc::new(StdMutex::new(None));
+    {
+      let terminal_error_poison = terminal_error.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let mut guard = terminal_error_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        *guard = Some("deshred stream receive failed: poisoned lock".to_string());
+        panic!("intentional poison");
+      });
+    }
+
+    let error = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
+      .await
+      .expect_err("terminal error should still propagate from poisoned lock");
+
+    assert!(
+      error
+        .to_string()
+        .contains("deshred stream receive failed: poisoned lock"),
       "unexpected error message: {error}"
     );
   }

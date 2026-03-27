@@ -313,7 +313,7 @@ export default class Client {
 
     // Native stream produces N-API generated JS objects; wrapper below adapts
     // to public protobuf-generated SDK shapes and Node stream semantics.
-    const stream = grpcClient.subscribe();
+    const stream = await grpcClient.subscribe();
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {

@@ -74,7 +74,7 @@ export declare class GrpcClient {
    * The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
    * which handles Node stream lifecycle and protobuf-shape normalization.
    */
-  subscribe(): DuplexStream
+  subscribe(): Promise<DuplexStream>
   /**
    * Creates a deshred subscription stream bound to this client connection.
    *

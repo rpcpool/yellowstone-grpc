@@ -370,7 +370,10 @@ impl GrpcClient {
   // subscribe should only be available via the `GrpcClient`
   #[allow(private_interfaces)]
   #[napi]
-  pub fn subscribe(&self, env: &napi::Env) -> napi::Result<crate::DuplexStream> {
+  pub fn subscribe<'env>(
+    &self,
+    env: &'env napi::Env,
+  ) -> napi::Result<PromiseRaw<'env, crate::DuplexStream>> {
     crate::DuplexStream::subscribe(env, self)
   }
 
