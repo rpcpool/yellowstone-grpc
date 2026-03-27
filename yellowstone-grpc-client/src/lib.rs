@@ -1,8 +1,10 @@
 mod stream;
 
+use std::ops::Sub;
+
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
-    crate::stream::{AutoReconnect, Backoff, DedupConfig},
+    crate::stream::Backoff,
     bytes::Bytes,
     futures::{
         channel::mpsc,
@@ -58,15 +60,15 @@ pub enum GeyserGrpcClientError {
     TonicStatus(#[from] Status),
     #[error("Failed to send subscribe request: {0}")]
     SubscribeSendError(#[from] mpsc::SendError),
+    #[error("gRPC transport error: {0}")]
+    TransportError(#[from] tonic::transport::Error),
 }
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone)]
 pub(crate) struct ReconnectConfig {
-    pub endpoint: Endpoint,
     pub backoff: Backoff,
-    pub x_token: Option<AsciiMetadataValue>,
     pub x_request_snapshot: bool,
     pub send_compressed: Option<CompressionEncoding>,
     pub accept_compressed: Option<CompressionEncoding>,
@@ -74,14 +76,27 @@ pub(crate) struct ReconnectConfig {
     pub max_encoding_message_size: Option<usize>,
 }
 
+impl ReconnectConfig {
+    pub(crate) fn no_reconnect() -> Self {
+        Self {
+            backoff: Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 1.0, 0),
+            x_request_snapshot: false,
+            send_compressed: None,
+            accept_compressed: None,
+            max_decoding_message_size: None,
+            max_encoding_message_size: None,
+        }
+    }
+}
+
 #[derive(Clone)]
-pub struct GeyserGrpcClient<F> {
-    pub health: HealthClient<InterceptedService<Channel, F>>,
-    pub geyser: GeyserClient<InterceptedService<Channel, F>>,
+pub struct GeyserGrpcClient {
+    pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
+    pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
     reconnect_config: Option<ReconnectConfig>,
 }
 
-impl GeyserGrpcClient<()> {
+impl GeyserGrpcClient {
     pub fn build_from_shared(
         endpoint: impl Into<Bytes>,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcBuilder> {
@@ -93,10 +108,30 @@ impl GeyserGrpcClient<()> {
     }
 }
 
-impl<F: Interceptor> GeyserGrpcClient<F> {
+pub struct GeyserStream {
+    inner: Streaming<SubscribeUpdate>,
+}
+
+pub struct SubscribeDeshredStream {
+    inner: Streaming<SubscribeUpdateDeshred>,
+}
+
+impl Stream for GeyserStream {
+    type Item = Result<SubscribeUpdate, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
+
+impl GeyserGrpcClient {
     pub const fn new(
-        health: HealthClient<InterceptedService<Channel, F>>,
-        geyser: GeyserClient<InterceptedService<Channel, F>>,
+        health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
+        geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
     ) -> Self {
         Self {
             health,
@@ -134,12 +169,12 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         self.subscribe_with_request(None).await
     }
 
-    pub async fn subscribe_with_request(
+    pub(crate) async fn subscribe_raw(
         &mut self,
         request: Option<SubscribeRequest>,
     ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
+        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
+        Streaming<SubscribeUpdate>,
     )> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
@@ -153,20 +188,23 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok((subscribe_tx, response.into_inner()))
     }
 
+    pub async fn subscribe_with_request(
+        &mut self,
+        request: Option<SubscribeRequest>,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
+        GeyserStream,
+    )> {
+        self.subscribe_raw(request).await.map(|(sink, stream)| (sink, GeyserStream { inner: stream }))
+    }
+
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdate, Status>>>
-    where
-        F: 'static,
+    ) -> GeyserGrpcClientResult<GeyserStream>
     {
         let (_sink, stream) = self.subscribe_with_request(Some(request.clone())).await?;
-
-        if let Some(config) = self.reconnect_config.take() {
-            Ok(AutoReconnect::new(stream.boxed(), request, DedupConfig::default(), config).boxed())
-        } else {
-            Ok(stream.boxed())
-        }
+        Ok(stream)
     }
 
     // Subscribe Deshred
@@ -174,7 +212,7 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         &mut self,
     ) -> GeyserGrpcClientResult<(
         impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>,
+        SubscribeDeshredStream,
     )> {
         self.subscribe_deshred_with_request(None).await
     }
@@ -183,8 +221,8 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         &mut self,
         request: Option<SubscribeDeshredRequest>,
     ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError> + use<F>,
-        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>> + use<F>,
+        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>,
+        SubscribeDeshredStream,
     )> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
@@ -195,13 +233,13 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         }
         let response: Response<Streaming<SubscribeUpdateDeshred>> =
             self.geyser.subscribe_deshred(subscribe_rx).await?;
-        Ok((subscribe_tx, response.into_inner()))
+        Ok((subscribe_tx, SubscribeDeshredStream { inner: response.into_inner() }))
     }
 
     pub async fn subscribe_deshred_once(
         &mut self,
         request: SubscribeDeshredRequest,
-    ) -> GeyserGrpcClientResult<impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>> {
+    ) -> GeyserGrpcClientResult<SubscribeDeshredStream> {
         self.subscribe_deshred_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
@@ -326,12 +364,10 @@ impl GeyserGrpcBuilder {
     fn build(
         self,
         channel: Channel,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let reconnect_config = if self.auto_reconnect {
             Some(ReconnectConfig {
-                endpoint: self.endpoint.clone(),
                 backoff: Backoff::default(),
-                x_token: self.x_token.clone(),
                 x_request_snapshot: self.x_request_snapshot,
                 send_compressed: self.send_compressed,
                 accept_compressed: self.accept_compressed,
@@ -370,14 +406,14 @@ impl GeyserGrpcBuilder {
 
     pub async fn connect(
         self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
     pub fn connect_lazy(
         self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
     }
@@ -390,7 +426,7 @@ impl GeyserGrpcBuilder {
     pub async fn connect_uds(
         self,
         path: impl Into<PathBuf>,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let path = path.into();
 
         // tonic needs an Endpoint to hang config off of, but the URI is ignored
