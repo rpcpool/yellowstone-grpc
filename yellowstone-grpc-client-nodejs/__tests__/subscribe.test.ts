@@ -1258,6 +1258,82 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     await closeStreamAndWait(stream);
   });
 
+  test("deshred write: native write throw is propagated through write callback", async () => {
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: jest.fn(() => {
+          throw new Error("deshred native write failed");
+        }),
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeDeshredRequest(),
+    );
+    expect(writeError).not.toBeNull();
+    expect(String(writeError?.message ?? "")).toContain(
+      "deshred native write failed",
+    );
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred write: returns compatibility error when native stream lacks writeRaw", async () => {
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        write: jest.fn(),
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeDeshredRequest(),
+    );
+    expect(writeError).not.toBeNull();
+    expect(String(writeError?.message ?? "")).toContain(
+      "Native stream does not support writeRaw",
+    );
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred write: write after destroy is rejected and native writeRaw is not called", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    stream.destroy();
+    const writeError = await writeAndCaptureError(
+      stream,
+      makeMinimalSubscribeDeshredRequest(),
+    );
+
+    expect(writeError).not.toBeNull();
+    const message = String(writeError?.message ?? "").toLowerCase();
+    expect(
+      message.includes("closed") ||
+        message.includes("destroyed") ||
+        message.includes("write after end"),
+    ).toBe(true);
+    expect(nativeWriteRaw).not.toHaveBeenCalled();
+  });
+
   test("txDeshredEncode export exposes encoding and raw encoder", () => {
     expect(txDeshredEncode).toBeDefined();
     expect(txDeshredEncode.encoding.JsonParsed).toBeDefined();

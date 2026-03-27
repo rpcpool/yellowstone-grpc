@@ -795,6 +795,54 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn close_returns_lock_error_when_writable_lock_is_poisoned() {
+    let (stream, _writable_rx) = make_test_stream();
+    {
+      let writable_poison = stream.writable.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let _guard = writable_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        panic!("intentional poison");
+      });
+    }
+
+    let error = stream
+      .close()
+      .expect_err("close should fail when writable lock is poisoned");
+    assert!(
+      error
+        .to_string()
+        .contains("Failed to acquire writable lock"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn write_returns_lock_error_when_writable_lock_is_poisoned() {
+    let (stream, _writable_rx) = make_test_stream();
+    {
+      let writable_poison = stream.writable.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let _guard = writable_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        panic!("intentional poison");
+      });
+    }
+
+    let error = stream
+      .write(empty_subscribe_request())
+      .expect_err("write should fail when writable lock is poisoned");
+    assert!(
+      error
+        .to_string()
+        .contains("Failed to acquire writable lock"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
   async fn close_is_idempotent() {
     let (stream, _writable_rx) = make_test_stream();
 
@@ -1175,6 +1223,145 @@ mod tests {
 
     assert!(
       message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_write_after_receiver_drop_returns_channel_closed_error() {
+    let (stream, writable_rx) = make_test_deshred_stream();
+    drop(writable_rx);
+
+    let error = stream
+      .write(empty_subscribe_deshred_request())
+      .expect_err("write should fail when deshred receiver is dropped");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("channel closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_write_raw_after_close_is_rejected() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+    stream.close().expect("close should succeed");
+
+    let error = stream
+      .write_raw(Buffer::from(
+        SubscribeDeshredRequest {
+          deshred_transactions: HashMap::new(),
+          ping: None,
+        }
+        .encode_to_vec(),
+      ))
+      .expect_err("write_raw after close should fail");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_close_is_idempotent() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+
+    stream.close().expect("first close should succeed");
+    stream.close().expect("second close should succeed");
+
+    let error = stream
+      .write(empty_subscribe_deshred_request())
+      .expect_err("writes should stay rejected after repeated close");
+    let message = error.to_string().to_lowercase();
+
+    assert!(
+      message.contains("closing") || message.contains("closed"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_concurrent_close_write_race_is_stable_and_stream_ends_closed() {
+    for _ in 0..32 {
+      let (stream, _writable_rx) = make_test_deshred_stream();
+      let stream = Arc::new(stream);
+      let stream_for_close = stream.clone();
+      let stream_for_write = stream.clone();
+
+      let (close_result, write_result) =
+        tokio::join!(async move { stream_for_close.close() }, async move {
+          stream_for_write.write(empty_subscribe_deshred_request())
+        });
+
+      close_result.expect("close should never fail");
+      if let Err(error) = write_result {
+        let message = error.to_string().to_lowercase();
+        assert!(
+          message.contains("closing")
+            || message.contains("closed")
+            || message.contains("channel closed"),
+          "unexpected race error message: {error}"
+        );
+      }
+
+      let post_close_error = stream
+        .write(empty_subscribe_deshred_request())
+        .expect_err("writes after close/write race should be rejected");
+      let post_close_message = post_close_error.to_string().to_lowercase();
+      assert!(
+        post_close_message.contains("closing") || post_close_message.contains("closed"),
+        "unexpected post-race error message: {post_close_error}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn deshred_close_returns_lock_error_when_writable_lock_is_poisoned() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+    {
+      let writable_poison = stream.writable.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let _guard = writable_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        panic!("intentional poison");
+      });
+    }
+
+    let error = stream
+      .close()
+      .expect_err("close should fail when writable lock is poisoned");
+    assert!(
+      error
+        .to_string()
+        .contains("Failed to acquire writable lock"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn deshred_write_returns_lock_error_when_writable_lock_is_poisoned() {
+    let (stream, _writable_rx) = make_test_deshred_stream();
+    {
+      let writable_poison = stream.writable.clone();
+      let _ = std::panic::catch_unwind(move || {
+        let _guard = writable_poison
+          .lock()
+          .expect("lock should be available before intentional poison");
+        panic!("intentional poison");
+      });
+    }
+
+    let error = stream
+      .write(empty_subscribe_deshred_request())
+      .expect_err("write should fail when writable lock is poisoned");
+    assert!(
+      error
+        .to_string()
+        .contains("Failed to acquire writable lock"),
       "unexpected error message: {error}"
     );
   }
