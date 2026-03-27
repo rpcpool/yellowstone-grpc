@@ -2,8 +2,8 @@ use {
     clap::Parser,
     futures::stream::StreamExt,
     log::info,
-    std::{collections::HashMap, time::Duration},
-    yellowstone_grpc_client::{Backoff, GeyserGrpcClient},
+    std::collections::HashMap,
+    yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
@@ -20,18 +20,6 @@ struct Args {
     #[clap(long)]
     x_token: Option<String>,
 
-    #[clap(long, default_value_t = 500)]
-    backoff_initial_ms: u64,
-
-    #[clap(long, default_value_t = 30000)]
-    backoff_max_ms: u64,
-
-    #[clap(long, default_value_t = 2.0)]
-    backoff_multiplier: f64,
-
-    #[clap(long, default_value_t = 10)]
-    backoff_max_retries: u32,
-
     #[clap(long)]
     slots: bool,
 
@@ -47,19 +35,9 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    let backoff = Backoff::new(
-        Duration::from_millis(args.backoff_initial_ms),
-        Duration::from_millis(args.backoff_max_ms),
-        args.backoff_multiplier,
-        args.backoff_max_retries,
-    );
-
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
-        .enable_autoreconnect(backoff)
-        .on_reconnect(|attempt, status| {
-            log::warn!("reconnect attempt={attempt} status={status}");
-        })
+        .auto_reconnect(true)
         .connect()
         .await?;
 

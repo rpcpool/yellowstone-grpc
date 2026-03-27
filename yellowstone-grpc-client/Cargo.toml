@@ -20,6 +20,7 @@ bytes = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
+pin-project = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }

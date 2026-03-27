@@ -1,52 +1,131 @@
 use {
-    crate::{GeyserGrpcBuilder, GeyserGrpcClientError},
-    futures::stream::{try_unfold, BoxStream, Stream, StreamExt},
+    crate::{GeyserGrpcClient, GeyserGrpcClientError, InterceptorXToken, ReconnectConfig},
+    futures::stream::{BoxStream, Stream, StreamExt},
+    pin_project::pin_project,
     std::{
-        collections::{BTreeMap, HashSet},
-        sync::Arc,
+        collections::{HashMap, HashSet, VecDeque},
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll},
         time::Duration,
     },
-    tonic::{Code, Status},
-    yellowstone_grpc_proto::prelude::{
-        subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate,
+    tonic::{
+        codec::CompressionEncoding, metadata::AsciiMetadataValue, transport::Endpoint, Code, Status,
+    },
+    tonic_health::pb::health_client::HealthClient,
+    yellowstone_grpc_proto::{
+        geyser::geyser_client::GeyserClient,
+        prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     },
 };
 
-#[derive(Debug, Default)]
-struct DedupTracker {
-    /// Per-slot set of seen message keys
-    seen: BTreeMap<u64, HashSet<DedupKey>>,
+/// Number of slots behind the last block_meta to checkpoint.
+/// Conservative buffer to account for late-arriving events
+/// and out-of-order delivery within a slot.
+const CHECKPOINT_SLOT_BUFFER: u64 = 2;
+
+#[derive(Debug, Clone)]
+pub struct DedupConfig {
+    pub max_slot: usize,
+}
+
+impl Default for DedupConfig {
+    fn default() -> Self {
+        Self { max_slot: 100 }
+    }
+}
+
+#[pin_project]
+pub struct DedupStream<S> {
+    state: DedupState,
+    #[pin]
+    inner: S,
+}
+
+impl<S> DedupStream<S> {
+    pub const fn new(inner: S, state: DedupState) -> Self {
+        Self { state, inner }
+    }
+
+    pub fn into_parts(self) -> (DedupState, S) {
+        (self.state, self.inner)
+    }
+}
+
+impl<S> Stream for DedupStream<S>
+where
+    S: Stream<Item = Result<SubscribeUpdate, Status>>,
+{
+    type Item = Result<SubscribeUpdate, Status>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        loop {
+            match this.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(msg))) => {
+                    if this.state.is_duplicate(&msg) {
+                        continue;
+                    }
+
+                    this.state.record(&msg);
+                    return Poll::Ready(Some(Ok(msg)));
+                }
+                other => return other,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum DedupKey {
-    Slot(i32),                  // status
-    Account(Vec<u8>, u64),      // pubkey, write_version
-    Transaction(Vec<u8>),       // signature
-    TransactionStatus(Vec<u8>), // signature
-    Entry(u64),                 // index
+    Slot(i32),                           // status
+    Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
+    Transaction(u64),                    // index
+    TransactionStatus(u64),              // index
+    Entry(u64),                          // index
     BlockMeta,
     Block,
 }
 
-impl DedupTracker {
+#[derive(Debug, Clone, Default)]
+pub struct DedupState {
+    seen_messages: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
+    slot_order: VecDeque<u64>,
+    config: DedupConfig,
+}
+
+impl DedupState {
+    pub fn new(config: DedupConfig) -> Self {
+        Self {
+            seen_messages: HashMap::new(),
+            slot_order: VecDeque::new(),
+            config,
+        }
+    }
+
     fn extract_key(msg: &SubscribeUpdate) -> Option<(u64, DedupKey)> {
         let oneof = msg.update_oneof.as_ref()?;
         match oneof {
             UpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
             UpdateOneof::Account(m) => {
                 let info = m.account.as_ref()?;
-                Some((
-                    m.slot,
-                    DedupKey::Account(info.pubkey.clone(), info.write_version),
-                ))
+                let pubkey = <[u8; 32]>::try_from(info.pubkey.as_slice()).ok()?;
+
+                let sig = info
+                    .txn_signature
+                    .as_ref()
+                    .and_then(|s| <[u8; 64]>::try_from(s.as_slice()).ok());
+                Some((m.slot, DedupKey::Account(pubkey, sig)))
             }
             UpdateOneof::Transaction(m) => {
                 let info = m.transaction.as_ref()?;
-                Some((m.slot, DedupKey::Transaction(info.signature.clone())))
+                Some((m.slot, DedupKey::Transaction(info.index)))
             }
             UpdateOneof::TransactionStatus(m) => {
-                Some((m.slot, DedupKey::TransactionStatus(m.signature.clone())))
+                Some((m.slot, DedupKey::TransactionStatus(m.index)))
             }
             UpdateOneof::Entry(m) => Some((m.slot, DedupKey::Entry(m.index))),
             UpdateOneof::BlockMeta(m) => Some((m.slot, DedupKey::BlockMeta)),
@@ -55,56 +134,59 @@ impl DedupTracker {
         }
     }
 
-    /// Returns true if this message was already seen
-    fn is_duplicate(&self, msg: &SubscribeUpdate) -> bool {
+    pub fn is_duplicate(&self, msg: &SubscribeUpdate) -> bool {
         if let Some((slot, key)) = Self::extract_key(msg) {
-            if let Some(keys) = self.seen.get(&slot) {
+            if let Some(keys) = self.seen_messages.get(&slot) {
                 return keys.contains(&key);
             }
         }
         false
     }
 
-    /// Record a message as seen
-    fn record(&mut self, msg: &SubscribeUpdate) {
+    pub fn record(&mut self, msg: &SubscribeUpdate) {
         if let Some((slot, key)) = Self::extract_key(msg) {
-            self.seen.entry(slot).or_default().insert(key);
+            if self.seen_messages.entry(slot).or_default().insert(key) {
+                // new slot we haven't tracked yet
+                if !self.slot_order.contains(&slot) {
+                    self.slot_order.push_back(slot);
+                    self.prune();
+                }
+            }
         }
     }
 
-    /// Clear all tracked state (called on reconnect to stop dedup
-    /// once we've passed the replay window)
-    fn clear(&mut self) {
-        self.seen.clear();
+    pub fn prune(&mut self) {
+        while self.slot_order.len() > self.config.max_slot {
+            if let Some(slot) = self.slot_order.pop_front() {
+                self.seen_messages.remove(&slot);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn clear(&mut self) {
+        self.seen_messages.clear();
+        self.slot_order.clear();
     }
 }
 
-#[allow(clippy::type_complexity)]
-pub struct ReconnectCallback(Arc<dyn Fn(u32, &Status) + Send + Sync>); // open to suggestions against Arc @lvboudre and @leafaar
+/// A boxed future that resolves to a new raw stream or an error.
+type ConnectFuture =
+    Pin<Box<dyn Future<Output = Result<GeyserStream, GeyserGrpcClientError>> + Send>>;
 
-impl Clone for ReconnectCallback {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
-    }
-}
+/// A boxed sleep timer for backoff between reconnect attempts.
+type SleepFuture = Pin<Box<tokio::time::Sleep>>;
 
-impl ReconnectCallback {
-    pub fn new<F>(f: F) -> Self
-    where
-        F: Fn(u32, &Status) + Send + Sync + 'static,
-    {
-        Self(Arc::new(f))
-    }
+type GeyserStream = BoxStream<'static, Result<SubscribeUpdate, Status>>;
 
-    pub fn call(&self, attempt: u32, status: &Status) {
-        (self.0)(attempt, status);
-    }
-}
-
-impl std::fmt::Debug for ReconnectCallback {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ReconnectCallback(..)")
-    }
+pub enum ConnectionState {
+    Streaming(DedupStream<GeyserStream>),
+    /// Connection died — waiting for backoff timer before retrying.
+    /// Carries DedupState so it survives to the next connection.
+    Waiting(DedupState, SleepFuture),
+    /// Backoff done — async connect/subscribe in progress.
+    /// Carries DedupState to pass into the new DedupStream on success.
+    Connecting(DedupState, ConnectFuture),
 }
 
 #[derive(Debug, Clone)]
@@ -159,9 +241,8 @@ impl Backoff {
         self.attempts >= self.max_retries
     }
 
-    pub async fn sleep(&mut self) {
+    pub fn advance(&mut self) {
         self.attempts += 1;
-        tokio::time::sleep(self.current_interval).await;
         self.current_interval = self
             .current_interval
             .mul_f64(self.multiplier)
@@ -180,6 +261,92 @@ impl Default for Backoff {
     }
 }
 
+pub struct AutoReconnect {
+    state: ConnectionState,
+    backoff: Backoff,
+    endpoint: Endpoint,
+    request: SubscribeRequest,
+    last_checkpoint: Option<u64>,
+    // client config for rebuilding
+    x_token: Option<AsciiMetadataValue>,
+    x_request_snapshot: bool,
+    send_compressed: Option<CompressionEncoding>,
+    accept_compressed: Option<CompressionEncoding>,
+    max_decoding_message_size: Option<usize>,
+    max_encoding_message_size: Option<usize>,
+}
+
+impl AutoReconnect {
+    pub fn new(
+        stream: GeyserStream,
+        request: SubscribeRequest,
+        dedup_config: DedupConfig,
+        config: ReconnectConfig,
+    ) -> Self {
+        Self {
+            state: ConnectionState::Streaming(DedupStream::new(
+                stream,
+                DedupState::new(dedup_config),
+            )),
+            backoff: config.backoff,
+            endpoint: config.endpoint,
+            request,
+            last_checkpoint: None,
+            x_token: config.x_token,
+            x_request_snapshot: config.x_request_snapshot,
+            send_compressed: config.send_compressed,
+            accept_compressed: config.accept_compressed,
+            max_decoding_message_size: config.max_decoding_message_size,
+            max_encoding_message_size: config.max_encoding_message_size,
+        }
+    }
+
+    pub fn make_connection_future(&self) -> ConnectFuture {
+        let endpoint = self.endpoint.clone(); // clone before the async block
+        let x_token = self.x_token.clone();
+        let x_request_snapshot = self.x_request_snapshot;
+        let send_compressed = self.send_compressed;
+        let accept_compressed = self.accept_compressed;
+        let max_decoding_message_size = self.max_decoding_message_size;
+        let max_encoding_message_size = self.max_encoding_message_size;
+        let mut request = self.request.clone();
+        request.from_slot = self.last_checkpoint;
+
+        Box::pin(async move {
+            let channel = endpoint
+                .connect()
+                .await
+                .map_err(|e| GeyserGrpcClientError::TonicStatus(Status::internal(e.to_string())))?;
+
+            let interceptor = InterceptorXToken {
+                x_token,
+                x_request_snapshot,
+            };
+
+            let mut geyser = GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
+            if let Some(encoding) = send_compressed {
+                geyser = geyser.send_compressed(encoding);
+            }
+            if let Some(encoding) = accept_compressed {
+                geyser = geyser.accept_compressed(encoding);
+            }
+            if let Some(limit) = max_decoding_message_size {
+                geyser = geyser.max_decoding_message_size(limit);
+            }
+            if let Some(limit) = max_encoding_message_size {
+                geyser = geyser.max_encoding_message_size(limit);
+            }
+
+            let mut client =
+                GeyserGrpcClient::new(HealthClient::with_interceptor(channel, interceptor), geyser);
+
+            let (_sink, stream) = client.subscribe_with_request(Some(request)).await?;
+
+            Ok(stream.boxed())
+        })
+    }
+}
+
 const fn should_reconnect(code: Code) -> bool {
     matches!(
         code,
@@ -194,135 +361,111 @@ const fn should_reconnect(code: Code) -> bool {
     )
 }
 
-struct ReconnectState {
-    builder: GeyserGrpcBuilder,
-    request: SubscribeRequest,
-    backoff: Backoff,
-    on_reconnect: Option<ReconnectCallback>,
-    inner: Option<BoxStream<'static, Result<SubscribeUpdate, Status>>>,
-    last_seen_slot: Option<u64>,
-    dedup: DedupTracker,
-    needs_dedup: bool,
-}
+impl Stream for AutoReconnect {
+    type Item = Result<SubscribeUpdate, Status>;
 
-pub fn subscribe_with_reconnect(
-    mut builder: GeyserGrpcBuilder,
-    request: SubscribeRequest,
-) -> impl Stream<Item = Result<SubscribeUpdate, Status>> {
-    let backoff = builder.reconnect.take().unwrap_or_default();
-    let on_reconnect = builder.on_reconnect.take();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let me = self.get_mut();
 
-    try_unfold(
-        ReconnectState {
-            builder,
-            request,
-            backoff,
-            on_reconnect,
-            inner: None,
-            last_seen_slot: None,
-            dedup: DedupTracker::default(),
-            needs_dedup: false,
-        },
-        |mut state| async move {
-            loop {
-                // If we have a live stream, poll it
-                if let Some(stream) = state.inner.as_mut() {
-                    match stream.next().await {
-                        Some(Ok(msg)) => {
-                            state.backoff.reset();
+        let state = std::mem::replace(
+            &mut me.state,
+            ConnectionState::Waiting(
+                DedupState::default(),
+                Box::pin(tokio::time::sleep(Duration::from_secs(0))),
+            ),
+        );
 
-                            // Skip duplicates after reconnect replay
-                            if state.needs_dedup {
-                                if state.dedup.is_duplicate(&msg) {
-                                    if let Some(slot) = extract_slot(&msg) {
-                                        state.last_seen_slot = Some(slot);
-                                    }
-                                    continue;
-                                }
-                                // First non-duplicate means we've passed the replay window
-                                state.needs_dedup = false;
-                                state.dedup.clear();
-                            }
-
-                            if let Some(slot) = extract_slot(&msg) {
-                                state.last_seen_slot = Some(slot);
-                            }
-
-                            state.dedup.record(&msg);
-                            return Ok(Some((msg, state)));
-                        }
-                        Some(Err(status)) => {
-                            if !should_reconnect(status.code()) {
-                                // Fatal error — surface to consumer
-                                return Err(status);
-                            }
-                            log::warn!("stream error, reconnecting: {status}");
-                            if let Some(cb) = &state.on_reconnect {
-                                cb.call(state.backoff.attempts, &status);
-                            }
-                        }
-                        None => {
-                            log::info!("stream ended, reconnecting");
+        match state {
+            ConnectionState::Streaming(mut stream) => match Pin::new(&mut stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(msg))) => {
+                    me.backoff.reset();
+                    if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
+                        if let Some(slot) = extract_slot(&msg) {
+                            // checkpoint a few slots behind the last fully built slot.
+                            // block_meta can arrive late and events within a slot
+                            // arrive in random order — replaying from a couple slots
+                            // back guarantees we don't miss data. dedup handles
+                            // the duplicates this creates.
+                            me.last_checkpoint = Some(slot.saturating_sub(CHECKPOINT_SLOT_BUFFER));
                         }
                     }
-                    // Stream broke — null it, backoff, retry
-                    state.inner = None;
-                    if state.backoff.exhausted() {
-                        return Err(Status::internal("max reconnect retries exhausted"));
+                    me.state = ConnectionState::Streaming(stream);
+                    Poll::Ready(Some(Ok(msg)))
+                }
+                Poll::Ready(Some(Err(status))) if should_reconnect(status.code()) => {
+                    log::warn!("stream error, reconnecting: {status}");
+                    let (dedup_state, _) = stream.into_parts();
+                    me.backoff.advance();
+                    me.state = ConnectionState::Waiting(
+                        dedup_state,
+                        Box::pin(tokio::time::sleep(me.backoff.current_interval)),
+                    );
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Some(Err(status))) => Poll::Ready(Some(Err(status))),
+                Poll::Ready(None) => {
+                    log::info!("stream ended, reconnecting");
+                    let (dedup_state, _) = stream.into_parts();
+                    me.backoff.advance();
+                    me.state = ConnectionState::Waiting(
+                        dedup_state,
+                        Box::pin(tokio::time::sleep(me.backoff.current_interval)),
+                    );
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Pending => {
+                    me.state = ConnectionState::Streaming(stream);
+                    Poll::Pending
+                }
+            },
+            ConnectionState::Waiting(dedup_state, mut sleep) => {
+                match Pin::new(&mut sleep).poll(cx) {
+                    Poll::Ready(()) => {
+                        let fut = me.make_connection_future();
+                        me.state = ConnectionState::Connecting(dedup_state, fut);
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
                     }
-                    state.backoff.sleep().await;
-                } else {
-                    // No stream — try to connect
-                    match state.builder.connect().await {
-                        Ok(mut client) => {
-                            let mut request = state.request.clone();
-                            request.from_slot = state.last_seen_slot;
-                            match client
-                                .subscribe_with_request(Some(state.request.clone()))
-                                .await
-                            {
-                                Ok((_sink, stream)) => {
-                                    state.inner = Some(stream.boxed());
-                                    state.backoff.reset();
-                                    if state.last_seen_slot.is_some() {
-                                        state.needs_dedup = true;
-                                    }
-                                }
-                                Err(error) => {
-                                    let status = match error {
-                                        GeyserGrpcClientError::TonicStatus(s) => s,
-                                        other => Status::internal(other.to_string()),
-                                    };
-                                    log::error!("subscribe failed: {status}");
-                                    if let Some(cb) = &state.on_reconnect {
-                                        cb.call(state.backoff.attempts, &status);
-                                    }
-                                    if state.backoff.exhausted() {
-                                        return Err(status);
-                                    }
-                                    state.backoff.sleep().await;
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let status = Status::internal(error.to_string());
-                            log::error!("connect failed: {status}");
-                            if let Some(cb) = &state.on_reconnect {
-                                cb.call(state.backoff.attempts, &status);
-                            }
-                            if state.backoff.exhausted() {
-                                return Err(status);
-                            }
-                            state.backoff.sleep().await;
-                        }
+                    Poll::Pending => {
+                        me.state = ConnectionState::Waiting(dedup_state, sleep);
+                        Poll::Pending
                     }
                 }
             }
-        },
-    )
+            ConnectionState::Connecting(dedup_state, mut fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(stream)) => {
+                    me.backoff.reset();
+                    me.state = ConnectionState::Streaming(DedupStream::new(stream, dedup_state));
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Err(error)) => {
+                    log::error!("connect failed: {error}");
+                    if me.backoff.exhausted() {
+                        return Poll::Ready(Some(Err(Status::internal(
+                            "max reconnect retries exhausted",
+                        ))));
+                    }
+                    me.backoff.advance();
+                    me.state = ConnectionState::Waiting(
+                        dedup_state,
+                        Box::pin(tokio::time::sleep(me.backoff.current_interval)),
+                    );
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Pending => {
+                    me.state = ConnectionState::Connecting(dedup_state, fut);
+                    Poll::Pending
+                }
+            },
+        }
+    }
 }
 
-fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
+pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
     match msg.update_oneof.as_ref()? {
         UpdateOneof::Account(m) => Some(m.slot),
         UpdateOneof::Slot(m) => Some(m.slot),
@@ -374,8 +517,29 @@ mod tests {
     }
 
     #[test]
+    fn test_backoff_advance() {
+        let mut backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 5);
+        assert_eq!(backoff.current_interval, Duration::from_millis(100));
+
+        backoff.advance();
+        assert_eq!(backoff.attempts, 1);
+        assert_eq!(backoff.current_interval, Duration::from_millis(200));
+
+        backoff.advance();
+        assert_eq!(backoff.attempts, 2);
+        assert_eq!(backoff.current_interval, Duration::from_millis(400));
+    }
+
+    #[test]
+    fn test_backoff_advance_caps_at_max() {
+        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(1), 2.0, 10);
+        backoff.advance(); // 1s
+        backoff.advance(); // would be 2s, capped at 1s
+        assert_eq!(backoff.current_interval, Duration::from_secs(1));
+    }
+
+    #[test]
     fn test_should_reconnect() {
-        // Should reconnect
         assert!(should_reconnect(Code::Unavailable));
         assert!(should_reconnect(Code::Internal));
         assert!(should_reconnect(Code::Unknown));
@@ -385,7 +549,6 @@ mod tests {
         assert!(should_reconnect(Code::Aborted));
         assert!(should_reconnect(Code::DataLoss));
 
-        // Should NOT reconnect
         assert!(!should_reconnect(Code::InvalidArgument));
         assert!(!should_reconnect(Code::NotFound));
         assert!(!should_reconnect(Code::PermissionDenied));
@@ -430,19 +593,23 @@ mod tests {
         assert_eq!(extract_slot(&msg), None);
     }
 
-    #[test]
-    fn test_dedup_tracker_record_and_detect() {
-        let mut dedup = DedupTracker::default();
-        let msg = SubscribeUpdate {
+    fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
+        SubscribeUpdate {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
+                slot,
                 parent: None,
-                status: 0,
+                status,
                 dead_error: None,
             })),
             created_at: None,
-        };
+        }
+    }
+
+    #[test]
+    fn test_dedup_record_and_detect() {
+        let mut dedup = DedupState::default();
+        let msg = make_slot_msg(100, 0);
 
         assert!(!dedup.is_duplicate(&msg));
         dedup.record(&msg);
@@ -450,60 +617,32 @@ mod tests {
     }
 
     #[test]
-    fn test_dedup_tracker_different_slots_not_duplicate() {
-        let mut dedup = DedupTracker::default();
-        let msg1 = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
-                parent: None,
-                status: 0,
-                dead_error: None,
-            })),
-            created_at: None,
-        };
-        let msg2 = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 101,
-                parent: None,
-                status: 0,
-                dead_error: None,
-            })),
-            created_at: None,
-        };
+    fn test_dedup_different_slots_not_duplicate() {
+        let mut dedup = DedupState::default();
+        let msg1 = make_slot_msg(100, 0);
+        let msg2 = make_slot_msg(101, 0);
 
         dedup.record(&msg1);
         assert!(!dedup.is_duplicate(&msg2));
     }
 
     #[test]
-    fn test_dedup_tracker_ping_ignored() {
-        let mut dedup = DedupTracker::default();
+    fn test_dedup_ping_ignored() {
+        let mut dedup = DedupState::default();
         let msg = SubscribeUpdate {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
             created_at: None,
         };
 
-        // Ping has no key, so it's never a duplicate
         dedup.record(&msg);
         assert!(!dedup.is_duplicate(&msg));
     }
 
     #[test]
-    fn test_dedup_tracker_clear() {
-        let mut dedup = DedupTracker::default();
-        let msg = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
-                parent: None,
-                status: 0,
-                dead_error: None,
-            })),
-            created_at: None,
-        };
+    fn test_dedup_clear() {
+        let mut dedup = DedupState::default();
+        let msg = make_slot_msg(100, 0);
 
         dedup.record(&msg);
         assert!(dedup.is_duplicate(&msg));
@@ -512,30 +651,26 @@ mod tests {
     }
 
     #[test]
-    fn test_dedup_tracker_same_slot_different_status() {
-        let mut dedup = DedupTracker::default();
-        let msg1 = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
-                parent: None,
-                status: 0,
-                dead_error: None,
-            })),
-            created_at: None,
-        };
-        let msg2 = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
-                parent: None,
-                status: 1,
-                dead_error: None,
-            })),
-            created_at: None,
-        };
+    fn test_dedup_same_slot_different_status() {
+        let mut dedup = DedupState::default();
+        let msg1 = make_slot_msg(100, 0);
+        let msg2 = make_slot_msg(100, 1);
 
         dedup.record(&msg1);
         assert!(!dedup.is_duplicate(&msg2));
+    }
+
+    #[test]
+    fn test_dedup_prune() {
+        let mut dedup = DedupState::new(DedupConfig { max_slot: 3 });
+
+        dedup.record(&make_slot_msg(100, 0));
+        dedup.record(&make_slot_msg(101, 0));
+        dedup.record(&make_slot_msg(102, 0));
+        assert!(dedup.is_duplicate(&make_slot_msg(100, 0)));
+
+        dedup.record(&make_slot_msg(103, 0));
+        assert!(!dedup.is_duplicate(&make_slot_msg(100, 0)));
+        assert!(dedup.is_duplicate(&make_slot_msg(101, 0)));
     }
 }
