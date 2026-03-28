@@ -161,11 +161,11 @@ pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EncodedDeshredTransaction {
-  signature: Vec<u8>,
+  signature: String,
   is_vote: bool,
   transaction: EncodedTransaction,
-  loaded_writable_addresses: Vec<Vec<u8>>,
-  loaded_readonly_addresses: Vec<Vec<u8>>,
+  loaded_writable_addresses: Vec<String>,
+  loaded_readonly_addresses: Vec<String>,
 }
 
 #[napi]
@@ -210,11 +210,19 @@ pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> na
   })?;
 
   let encoded = EncodedDeshredTransaction {
-    signature: tx.signature,
+    signature: bs58::encode(tx.signature).into_string(),
     is_vote: tx.is_vote,
     transaction: transaction.encode_with_meta(encoding.into(), &meta),
-    loaded_writable_addresses: tx.loaded_writable_addresses,
-    loaded_readonly_addresses: tx.loaded_readonly_addresses,
+    loaded_writable_addresses: tx
+      .loaded_writable_addresses
+      .into_iter()
+      .map(|address| bs58::encode(address).into_string())
+      .collect(),
+    loaded_readonly_addresses: tx
+      .loaded_readonly_addresses
+      .into_iter()
+      .map(|address| bs58::encode(address).into_string())
+      .collect(),
   };
 
   serde_json::to_string(&encoded).map_err(|error| {
