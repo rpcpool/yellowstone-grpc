@@ -9,7 +9,7 @@ cd "$repo_root"
 # Ensure commit signing is enabled before allowing commit to continue.
 if [[ "$(git config --bool --get commit.gpgsign || true)" != "true" ]]; then
   echo "[pre-commit] ERROR: commit signing is not enabled."
-  echo "[pre-commit] Set it with: git config commit.gpgsign true"
+  echo "[pre-commit] Commit is the -S flag OR Set it with: git config commit.gpgsign true"
   exit 1
 fi
 
