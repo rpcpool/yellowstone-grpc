@@ -48,7 +48,15 @@ fn init_crypto_provider() {
   });
 }
 
-fn capture_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>, message: String) {
+fn to_napi_cause(status: napi::Status, source: &dyn std::error::Error) -> napi::Error {
+  let mut cause = napi::Error::new(status, source.to_string());
+  if let Some(next) = source.source() {
+    cause.set_cause(to_napi_cause(status, next));
+  }
+  cause
+}
+
+fn capture_terminal_error(terminal_error: &Arc<StdMutex<Option<napi::Error>>>, error: napi::Error) {
   // First terminal failure wins: preserve the earliest causal error and avoid
   // replacing it with follow-up shutdown noise from the same worker.
   let mut error_guard = match terminal_error.lock() {
@@ -56,27 +64,27 @@ fn capture_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>, messag
     Err(poisoned) => poisoned.into_inner(),
   };
   if error_guard.is_none() {
-    *error_guard = Some(message);
+    *error_guard = Some(error);
   }
 }
 
-fn get_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>) -> Option<String> {
+fn get_terminal_error(terminal_error: &Arc<StdMutex<Option<napi::Error>>>) -> Option<napi::Error> {
   // Recover poisoned state and still return any stored terminal error so JS
   // observes the native failure instead of a silent EOF.
-  let error_guard = match terminal_error.lock() {
+  let mut error_guard = match terminal_error.lock() {
     Ok(guard) => guard,
     Err(poisoned) => poisoned.into_inner(),
   };
-  error_guard.clone()
+  error_guard.take()
 }
 
 fn napi_error_with_cause(
   status: napi::Status,
   reason: impl Into<String>,
-  cause: impl std::fmt::Display,
+  cause: &dyn std::error::Error,
 ) -> napi::Error {
   let mut error = napi::Error::new(status, reason.into());
-  error.set_cause(napi::Error::new(status, cause.to_string()));
+  error.set_cause(to_napi_cause(status, cause));
   error
 }
 
@@ -104,7 +112,7 @@ struct DuplexStream {
   /// Terminal worker error captured from gRPC send/recv failures.
   ///
   /// `read()` surfaces this to JS once the update channel is closed.
-  terminal_error: Arc<StdMutex<Option<String>>>,
+  terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
 }
@@ -135,7 +143,7 @@ impl DuplexStream {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "failed to open subscribe stream",
-              error,
+              &error,
             )
           })?
         };
@@ -169,7 +177,11 @@ impl DuplexStream {
                     }
                     capture_terminal_error(
                       &terminal_error_worker,
-                      format!("subscribe stream send failed: {error}"),
+                      napi_error_with_cause(
+                        napi::Status::GenericFailure,
+                        "subscribe stream send failed",
+                        &error,
+                      ),
                     );
                     break;
                   }
@@ -198,7 +210,11 @@ impl DuplexStream {
                     }
                     capture_terminal_error(
                       &terminal_error_worker,
-                      format!("subscribe stream receive failed: {error}"),
+                      napi_error_with_cause(
+                        napi::Status::GenericFailure,
+                        "subscribe stream receive failed",
+                        &error,
+                      ),
                     );
                     break;
                   }
@@ -255,7 +271,7 @@ impl DuplexStream {
       napi_error_with_cause(
         napi::Status::GenericFailure,
         "Failed to acquire writable lock",
-        error,
+        &error,
       )
     })?;
     // Dropping the last sender closes the channel and causes
@@ -282,7 +298,7 @@ impl DuplexStream {
         napi_error_with_cause(
           napi::Status::InvalidArg,
           "invalid SubscribeRequest payload",
-          error,
+          &error,
         )
       })?;
 
@@ -307,7 +323,7 @@ impl DuplexStream {
         napi_error_with_cause(
           napi::Status::GenericFailure,
           "Failed to acquire writable lock",
-          error,
+          &error,
         )
       })?
       .as_ref()
@@ -326,7 +342,7 @@ impl DuplexStream {
 
   async fn recv_update_or_error(
     readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdate>>>,
-    terminal_error: Arc<StdMutex<Option<String>>>,
+    terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<SubscribeUpdate>> {
     match readable.lock().await.recv().await {
       Some(update) => Ok(Some(update)),
@@ -335,10 +351,10 @@ impl DuplexStream {
       None => {
         // EOF without terminal error => graceful end-of-stream.
         // EOF with terminal error => reject read promise so TS emits `error`.
-        let error_message = get_terminal_error(&terminal_error);
+        let error = get_terminal_error(&terminal_error);
 
-        if let Some(message) = error_message {
-          Err(napi::Error::from_reason(message))
+        if let Some(error) = error {
+          Err(error)
         } else {
           Ok(None)
         }
@@ -359,7 +375,7 @@ struct DuplexStreamDeshred {
   /// Terminal worker error captured from gRPC send/recv failures.
   ///
   /// `read()` surfaces this to JS once the update channel is closed.
-  terminal_error: Arc<StdMutex<Option<String>>>,
+  terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
 }
@@ -389,7 +405,7 @@ impl DuplexStreamDeshred {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "failed to open deshred subscribe stream",
-              error,
+              &error,
             )
           })?
         };
@@ -417,7 +433,11 @@ impl DuplexStreamDeshred {
                     }
                     capture_terminal_error(
                       &terminal_error_worker,
-                      format!("deshred stream send failed: {error}"),
+                      napi_error_with_cause(
+                        napi::Status::GenericFailure,
+                        "deshred stream send failed",
+                        &error,
+                      ),
                     );
                     break;
                   }
@@ -439,7 +459,11 @@ impl DuplexStreamDeshred {
                     }
                     capture_terminal_error(
                       &terminal_error_worker,
-                      format!("deshred stream receive failed: {error}"),
+                      napi_error_with_cause(
+                        napi::Status::GenericFailure,
+                        "deshred stream receive failed",
+                        &error,
+                      ),
                     );
                     break;
                   }
@@ -490,7 +514,7 @@ impl DuplexStreamDeshred {
       napi_error_with_cause(
         napi::Status::GenericFailure,
         "Failed to acquire writable lock",
-        error,
+        &error,
       )
     })?;
     *writable_guard = None;
@@ -511,7 +535,7 @@ impl DuplexStreamDeshred {
         napi_error_with_cause(
           napi::Status::InvalidArg,
           "invalid SubscribeDeshredRequest payload",
-          error,
+          &error,
         )
       })?;
 
@@ -535,7 +559,7 @@ impl DuplexStreamDeshred {
         napi_error_with_cause(
           napi::Status::GenericFailure,
           "Failed to acquire writable lock",
-          error,
+          &error,
         )
       })?
       .as_ref()
@@ -556,17 +580,17 @@ impl DuplexStreamDeshred {
 
   async fn recv_update_or_error(
     readable: Arc<Mutex<UnboundedReceiver<SubscribeUpdateDeshred>>>,
-    terminal_error: Arc<StdMutex<Option<String>>>,
+    terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<SubscribeUpdateDeshred>> {
     match readable.lock().await.recv().await {
       Some(update) => Ok(Some(update)),
       None => {
         // Match regular subscribe semantics: graceful EOF when no terminal
         // error, otherwise reject and bubble root cause to TypeScript caller.
-        let error_message = get_terminal_error(&terminal_error);
+        let error = get_terminal_error(&terminal_error);
 
-        if let Some(message) = error_message {
-          Err(napi::Error::from_reason(message))
+        if let Some(error) = error {
+          Err(error)
         } else {
           Ok(None)
         }
@@ -579,12 +603,13 @@ impl DuplexStreamDeshred {
 mod tests {
   use crate::{
     js_types::{
-      JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeRequestFilterDeshredTransactions,
-      JsSubscribeRequestPing,
+      JsSubscribeDeshredRequest, JsSubscribeRequest, JsSubscribeRequestAccountsDataSlice,
+      JsSubscribeRequestFilterDeshredTransactions, JsSubscribeRequestPing,
     },
     DuplexStream, DuplexStreamDeshred,
   };
   use napi::bindgen_prelude::Buffer;
+  use napi::Status;
   use prost::Message;
   use std::collections::HashMap;
   use std::sync::{
@@ -739,6 +764,15 @@ mod tests {
       },
       writable_rx,
     )
+  }
+
+  fn terminal_error_with_cause(reason: &str, cause_message: &str) -> napi::Error {
+    let mut error = napi::Error::new(Status::GenericFailure, reason.to_string());
+    error.set_cause(napi::Error::new(
+      Status::GenericFailure,
+      cause_message.to_string(),
+    ));
+    error
   }
 
   #[tokio::test]
@@ -987,6 +1021,34 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn write_rejects_invalid_u64_input_with_nested_parse_cause() {
+    let (stream, _writable_rx) = make_test_stream();
+    let mut request = empty_subscribe_request();
+    request.accounts_data_slice = vec![JsSubscribeRequestAccountsDataSlice {
+      offset: "not-a-number".to_string(),
+      length: "1".to_string(),
+    }];
+
+    let error = stream
+      .write(request)
+      .expect_err("invalid u64 input should be rejected");
+    assert!(
+      error.to_string().contains("Invalid u64 value"),
+      "unexpected error message: {error}"
+    );
+    let cause_message = error
+      .cause
+      .as_ref()
+      .map(ToString::to_string)
+      .unwrap_or_default()
+      .to_lowercase();
+    assert!(
+      cause_message.contains("invalid digit"),
+      "expected parse error cause details, got: {cause_message}"
+    );
+  }
+
+  #[tokio::test]
   async fn write_raw_rejects_filter_without_variant() {
     let (stream, _writable_rx) = make_test_stream();
     let mut request = subscribe_request_with_memcmp_filter();
@@ -1123,9 +1185,10 @@ mod tests {
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdate>();
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
-    let terminal_error = Arc::new(StdMutex::new(Some(
-      "subscribe stream receive failed: channel closed".to_string(),
-    )));
+    let terminal_error = Arc::new(StdMutex::new(Some(terminal_error_with_cause(
+      "subscribe stream receive failed: channel closed",
+      "upstream grpc status unavailable",
+    ))));
 
     let error = DuplexStream::recv_update_or_error(readable, terminal_error)
       .await
@@ -1136,6 +1199,10 @@ mod tests {
         .to_string()
         .contains("subscribe stream receive failed: channel closed"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected terminal error cause to propagate through read()"
     );
   }
 
@@ -1151,7 +1218,9 @@ mod tests {
         let mut guard = terminal_error_poison
           .lock()
           .expect("lock should be available before intentional poison");
-        *guard = Some("subscribe stream receive failed: poisoned lock".to_string());
+        *guard = Some(napi::Error::from_reason(
+          "subscribe stream receive failed: poisoned lock",
+        ));
         panic!("intentional poison");
       });
     }
@@ -1463,9 +1532,10 @@ mod tests {
     let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
-    let terminal_error = Arc::new(StdMutex::new(Some(
-      "deshred stream receive failed: channel closed".to_string(),
-    )));
+    let terminal_error = Arc::new(StdMutex::new(Some(terminal_error_with_cause(
+      "deshred stream receive failed: channel closed",
+      "upstream grpc status unavailable",
+    ))));
 
     let error = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
       .await
@@ -1476,6 +1546,10 @@ mod tests {
         .to_string()
         .contains("deshred stream receive failed: channel closed"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected terminal error cause to propagate through deshred read()"
     );
   }
 
@@ -1491,7 +1565,9 @@ mod tests {
         let mut guard = terminal_error_poison
           .lock()
           .expect("lock should be available before intentional poison");
-        *guard = Some("deshred stream receive failed: poisoned lock".to_string());
+        *guard = Some(napi::Error::from_reason(
+          "deshred stream receive failed: poisoned lock",
+        ));
         panic!("intentional poison");
       });
     }

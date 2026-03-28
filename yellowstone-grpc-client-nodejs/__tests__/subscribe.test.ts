@@ -673,7 +673,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     await closeStreamAndWait(stream);
   });
 
-  test("read: NO_UPDATE_AVAILABLE is treated as graceful end (no error event)", async () => {
+  test("read: native NO_UPDATE_AVAILABLE rejection is surfaced as error", async () => {
     const nativeClose = jest.fn();
     const nativeRead = jest
       .fn()
@@ -690,12 +690,13 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       { objectMode: true },
     );
 
-    const terminalEventPromise = waitForTerminalEvent(stream, 1000);
+    const streamError = waitForStreamError(stream, 1000);
     (stream as any)._read(0);
-    const terminalEvent = await terminalEventPromise;
+    const observedError = await streamError;
 
-    expect(terminalEvent).not.toBe("timeout");
-    expect(terminalEvent).not.toBe("error");
+    expect(String(observedError.message).toLowerCase()).toContain(
+      "no update available",
+    );
     expect(nativeClose).toHaveBeenCalledTimes(1);
   });
 
@@ -1172,7 +1173,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     }
   });
 
-  test("deshred read: NO_UPDATE_AVAILABLE is treated as graceful end (no error event)", async () => {
+  test("deshred read: native NO_UPDATE_AVAILABLE rejection is surfaced as error", async () => {
     const nativeClose = jest.fn();
     const nativeRead = jest.fn().mockRejectedValue({
       code: "NO_UPDATE_AVAILABLE",
@@ -1187,12 +1188,13 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       { objectMode: true },
     );
 
-    const terminalEventPromise = waitForTerminalEvent(stream, 1000);
+    const streamError = waitForStreamError(stream, 1000);
     (stream as any)._read(0);
-    const terminalEvent = await terminalEventPromise;
+    const observedError = await streamError;
 
-    expect(terminalEvent).not.toBe("timeout");
-    expect(terminalEvent).not.toBe("error");
+    expect(String(observedError.message).toLowerCase()).toContain(
+      "no update available",
+    );
     expect(nativeClose).toHaveBeenCalledTimes(1);
   });
 

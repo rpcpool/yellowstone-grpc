@@ -414,24 +414,20 @@ export class ClientDuplexStream extends Duplex {
         }
         this._terminalErrorSeen = true;
 
-        // Detect normal end-of-stream / "no update available" sentinel from native side.
-        const e = err as any;
-        const isNormalEof =
-          err == null ||
-          (e && typeof e.code === "string" && e.code === "NO_UPDATE_AVAILABLE") ||
-          (e &&
-            typeof e.message === "string" &&
-            e.message.toLowerCase().includes("no update available"));
-
         this.push(null); // Signal end of stream
-
-        if (isNormalEof) {
-          // Graceful shutdown: end without emitting an error event.
-          this.destroy();
+        let terminalError: Error;
+        if (err instanceof Error) {
+          terminalError = err;
+        } else if (
+          err &&
+          typeof err === "object" &&
+          typeof (err as { message?: unknown }).message === "string"
+        ) {
+          terminalError = new Error((err as { message: string }).message);
         } else {
-          // Real error: propagate as a stream error.
-          this.destroy(err as Error);
+          terminalError = new Error(String(err ?? "native stream read failed"));
         }
+        this.destroy(terminalError);
       });
   }
 
@@ -549,21 +545,20 @@ export class ClientDeshredDuplexStream extends Duplex {
         }
         this._terminalErrorSeen = true;
 
-        const e = err as any;
-        const isNormalEof =
-          err == null ||
-          (e && typeof e.code === "string" && e.code === "NO_UPDATE_AVAILABLE") ||
-          (e &&
-            typeof e.message === "string" &&
-            e.message.toLowerCase().includes("no update available"));
-
         this.push(null);
-
-        if (isNormalEof) {
-          this.destroy();
+        let terminalError: Error;
+        if (err instanceof Error) {
+          terminalError = err;
+        } else if (
+          err &&
+          typeof err === "object" &&
+          typeof (err as { message?: unknown }).message === "string"
+        ) {
+          terminalError = new Error((err as { message: string }).message);
         } else {
-          this.destroy(err as Error);
+          terminalError = new Error(String(err ?? "native stream read failed"));
         }
+        this.destroy(terminalError);
       });
   }
 

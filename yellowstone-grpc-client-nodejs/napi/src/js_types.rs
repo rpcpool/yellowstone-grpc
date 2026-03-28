@@ -5,6 +5,23 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
+fn __typegen_to_napi_cause(source: &dyn std::error::Error) -> napi::Error {
+  let mut cause = napi::Error::new(napi::Status::InvalidArg, source.to_string());
+  if let Some(next) = source.source() {
+    cause.set_cause(__typegen_to_napi_cause(next));
+  }
+  cause
+}
+
+fn __typegen_invalid_arg_with_cause(
+  reason: impl Into<String>,
+  cause: &dyn std::error::Error,
+) -> napi::Error {
+  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.into());
+  error.set_cause(__typegen_to_napi_cause(cause));
+  error
+}
+
 use napi::bindgen_prelude::{BufferSlice, Date, Env};
 use napi_derive::napi;
 use yellowstone_grpc_proto::geyser::*;
@@ -99,9 +116,9 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
         ));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Datasize(
@@ -210,9 +227,9 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
         ));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Eq(
@@ -230,9 +247,9 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
         ));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Ne(
@@ -250,9 +267,9 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
         ));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Lt(
@@ -270,9 +287,9 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
         ));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Gt(
@@ -998,9 +1015,9 @@ impl<'env> JsSubscribeRequest<'env> {
         .from_slot
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -1126,9 +1143,9 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
   ) -> napi::Result<SubscribeRequestFilterAccountsFilterMemcmp> {
     Ok(SubscribeRequestFilterAccountsFilterMemcmp {
       offset: self.offset.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       data: self
@@ -1444,15 +1461,15 @@ impl JsSubscribeRequestAccountsDataSlice {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestAccountsDataSlice> {
     Ok(SubscribeRequestAccountsDataSlice {
       offset: self.offset.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       length: self.length.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1615,9 +1632,9 @@ impl<'env> JsSubscribeUpdateAccount<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       is_startup: Ok::<_, napi::Error>(self.is_startup)?,
@@ -1658,24 +1675,24 @@ impl<'env> JsSubscribeUpdateAccountInfo<'env> {
     Ok(SubscribeUpdateAccountInfo {
       pubkey: Ok::<_, napi::Error>(self.pubkey.as_ref().to_vec())?,
       lamports: self.lamports.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       owner: Ok::<_, napi::Error>(self.owner.as_ref().to_vec())?,
       executable: Ok::<_, napi::Error>(self.executable)?,
       rent_epoch: self.rent_epoch.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
       write_version: self.write_version.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       txn_signature: self
@@ -1711,18 +1728,18 @@ impl JsSubscribeUpdateSlot {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateSlot> {
     Ok(SubscribeUpdateSlot {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent: self
         .parent
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -1762,9 +1779,9 @@ impl<'env> JsSubscribeUpdateTransaction<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1812,9 +1829,9 @@ impl<'env> JsSubscribeUpdateTransactionInfo<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1849,17 +1866,17 @@ impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateTransactionStatus> {
     Ok(SubscribeUpdateTransactionStatus {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
       is_vote: Ok::<_, napi::Error>(self.is_vote)?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       err: self
@@ -1940,9 +1957,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlock> {
     Ok(SubscribeUpdateBlock {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
@@ -1959,17 +1976,17 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
@@ -1982,9 +1999,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .updated_account_count
         .parse::<u64>()
         .map_err(|parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         })?,
       accounts: self
@@ -1993,9 +2010,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       entries: self
@@ -2052,9 +2069,9 @@ impl JsSubscribeUpdateBlockMeta {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlockMeta> {
     Ok(SubscribeUpdateBlockMeta {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
@@ -2071,24 +2088,24 @@ impl JsSubscribeUpdateBlockMeta {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
       entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2124,37 +2141,37 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateEntry> {
     Ok(SubscribeUpdateEntry {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       num_hashes: self.num_hashes.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       hash: Ok::<_, napi::Error>(self.hash.as_ref().to_vec())?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
       starting_transaction_index: self.starting_transaction_index.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
@@ -2188,9 +2205,9 @@ impl<'env> JsSubscribeUpdateDeshredTransaction<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2378,9 +2395,9 @@ impl JsSubscribeReplayInfoResponse {
         .first_available
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2469,17 +2486,17 @@ impl JsGetLatestBlockhashResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetLatestBlockhashResponse> {
     Ok(GetLatestBlockhashResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
       last_valid_block_height: self.last_valid_block_height.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
@@ -2523,9 +2540,9 @@ impl JsGetBlockHeightResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetBlockHeightResponse> {
     Ok(GetBlockHeightResponse {
       block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2568,9 +2585,9 @@ impl JsGetSlotResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetSlotResponse> {
     Ok(GetSlotResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2649,9 +2666,9 @@ impl JsIsBlockhashValidResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<IsBlockhashValidResponse> {
     Ok(IsBlockhashValidResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       valid: Ok::<_, napi::Error>(self.valid)?,
@@ -2710,9 +2727,9 @@ impl<'env> JsConfirmedBlock<'env> {
       previous_blockhash: Ok::<_, napi::Error>(self.previous_blockhash)?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       transactions: self
@@ -3026,9 +3043,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       fee: self.fee.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       pre_balances: self
@@ -3036,9 +3053,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .into_iter()
         .map(|vec_inner_value| {
           vec_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -3048,9 +3065,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .into_iter()
         .map(|vec_inner_value| {
           vec_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -3101,9 +3118,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .compute_units_consumed
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -3112,9 +3129,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .cost_units
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -3326,15 +3343,15 @@ impl JsReward {
     Ok(Reward {
       pubkey: Ok::<_, napi::Error>(self.pubkey)?,
       lamports: self.lamports.parse::<i64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid i64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       post_balance: self.post_balance.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       reward_type: Ok::<_, napi::Error>(self.reward_type)?,
@@ -3392,9 +3409,9 @@ impl JsUnixTimestamp {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<UnixTimestamp> {
     Ok(UnixTimestamp {
       timestamp: self.timestamp.parse::<i64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid i64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -3414,9 +3431,9 @@ impl JsBlockHeight {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<BlockHeight> {
     Ok(BlockHeight {
       block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -3436,9 +3453,9 @@ impl JsNumPartitions {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<NumPartitions> {
     Ok(NumPartitions {
       num_partitions: self.num_partitions.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })

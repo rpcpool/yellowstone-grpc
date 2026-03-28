@@ -48,10 +48,18 @@ use crate::{
 fn napi_error_with_cause(
   status: napi::Status,
   reason: impl Into<String>,
-  cause: impl std::fmt::Display,
+  cause: &dyn std::error::Error,
 ) -> napi::Error {
+  fn to_napi_cause(status: napi::Status, source: &dyn std::error::Error) -> napi::Error {
+    let mut cause = napi::Error::new(status, source.to_string());
+    if let Some(next) = source.source() {
+      cause.set_cause(to_napi_cause(status, next));
+    }
+    cause
+  }
+
   let mut error = napi::Error::new(status, reason.into());
-  error.set_cause(napi::Error::new(status, cause.to_string()));
+  error.set_cause(to_napi_cause(status, cause));
   error
 }
 
@@ -136,7 +144,7 @@ impl GrpcClient {
       napi_error_with_cause(
         napi::Status::GenericFailure,
         "failed to connect to gRPC endpoint",
-        error,
+        &error,
       )
     })?;
 
@@ -175,7 +183,7 @@ impl GrpcClient {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "get_latest_blockhash request failed",
-              error,
+              &error,
             )
           })?;
 
@@ -208,7 +216,7 @@ impl GrpcClient {
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
         let protobuf_response = grpc_client_guard.ping(ping_count).await.map_err(|error| {
-          napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", error)
+          napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", &error)
         })?;
 
         Ok(protobuf_response)
@@ -245,7 +253,7 @@ impl GrpcClient {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "get_block_height request failed",
-              error,
+              &error,
             )
           })?;
 
@@ -283,7 +291,7 @@ impl GrpcClient {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "get_slot request failed",
-              error,
+              &error,
             )
           })?;
 
@@ -322,7 +330,7 @@ impl GrpcClient {
             napi_error_with_cause(
               napi::Status::GenericFailure,
               "is_blockhash_valid request failed",
-              error,
+              &error,
             )
           })?;
 
@@ -357,7 +365,7 @@ impl GrpcClient {
           napi_error_with_cause(
             napi::Status::GenericFailure,
             "get_version request failed",
-            error,
+            &error,
           )
         })?;
 
@@ -393,7 +401,7 @@ impl GrpcClient {
               napi_error_with_cause(
                 napi::Status::GenericFailure,
                 "subscribe_replay_info request failed",
-                error,
+                &error,
               )
             })?;
 

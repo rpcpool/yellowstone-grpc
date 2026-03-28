@@ -196,6 +196,21 @@ pub fn generate_types() {
     "#![allow(dead_code)]\n",
     "#![allow(unused_imports)]\n",
     "#![allow(unused_variables)]\n\n",
+    "fn __typegen_to_napi_cause(source: &dyn std::error::Error) -> napi::Error {\n",
+    "  let mut cause = napi::Error::new(napi::Status::InvalidArg, source.to_string());\n",
+    "  if let Some(next) = source.source() {\n",
+    "    cause.set_cause(__typegen_to_napi_cause(next));\n",
+    "  }\n",
+    "  cause\n",
+    "}\n\n",
+    "fn __typegen_invalid_arg_with_cause(\n",
+    "  reason: impl Into<String>,\n",
+    "  cause: &dyn std::error::Error,\n",
+    ") -> napi::Error {\n",
+    "  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.into());\n",
+    "  error.set_cause(__typegen_to_napi_cause(cause));\n",
+    "  error\n",
+    "}\n\n",
   );
 
   let input_root = match resolve_proto_out_dir() {
@@ -1245,9 +1260,9 @@ fn map_js_value_to_protobuf_conversion_result_expression(
       return quote!(#js_value_expression
       .parse::<u64>()
       .map_err(|parse_error| {
-          napi::Error::new(
-              napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
           )
       }));
     }
@@ -1256,9 +1271,9 @@ fn map_js_value_to_protobuf_conversion_result_expression(
       return quote!(#js_value_expression
       .parse::<i64>()
       .map_err(|parse_error| {
-          napi::Error::new(
-              napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
               format!("Invalid i64 value: {}", parse_error),
+              &parse_error,
           )
       }));
     }
@@ -2307,6 +2322,10 @@ pub mod outer_mod {
       &oneof_map,
     );
     assert_contains_squashed(u64_conversion.to_string(), "parse::<u64>()");
+    assert_contains_squashed(
+      u64_conversion.to_string(),
+      "__typegen_invalid_arg_with_cause",
+    );
 
     let i64_conversion = map_js_value_to_protobuf_conversion_result_expression(
       &parse_type("i64"),
@@ -2315,6 +2334,10 @@ pub mod outer_mod {
       &oneof_map,
     );
     assert_contains_squashed(i64_conversion.to_string(), "parse::<i64>()");
+    assert_contains_squashed(
+      i64_conversion.to_string(),
+      "__typegen_invalid_arg_with_cause",
+    );
 
     let bytes_conversion = map_js_value_to_protobuf_conversion_result_expression(
       &parse_type("Vec<u8>"),
@@ -2650,6 +2673,7 @@ pub mod env_transitive {
     assert!(generated.contains("#![allow(dead_code)]"));
     assert!(generated.contains("#![allow(unused_imports)]"));
     assert!(generated.contains("#![allow(unused_variables)]"));
+    assert!(generated.contains("fn __typegen_invalid_arg_with_cause("));
     assert!(generated.contains("pub struct JsSubscribeRequest"));
     assert!(generated.contains("pub struct JsSubscribeRequestMode"));
     assert!(generated.contains("from_js_to_protobuf_type"));
