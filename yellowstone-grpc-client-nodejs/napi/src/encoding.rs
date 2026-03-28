@@ -1,4 +1,5 @@
 use {
+  napi::Status,
   napi_derive::napi,
   prost011::Message as Prost11Message,
   serde::Serialize,
@@ -8,15 +9,32 @@ use {
   solana_transaction::versioned::VersionedTransaction,
   solana_transaction_error::TransactionError as TransactionErrorSolana,
   solana_transaction_status::{
-    Encodable, EncodedTransaction, TransactionWithStatusMeta, UiTransactionEncoding,
+    EncodableWithMeta, EncodedTransaction, TransactionWithStatusMeta, UiTransactionEncoding,
     VersionedTransactionWithStatusMeta,
   },
-  std::panic::{catch_unwind, AssertUnwindSafe},
   yellowstone_grpc_proto::{
     prelude::{SubscribeUpdateDeshredTransactionInfo, SubscribeUpdateTransactionInfo},
     prost::Message as Prost14Message,
   },
 };
+
+fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
+  let mut cause = napi::Error::new(status, source.to_string());
+  if let Some(next) = source.source() {
+    cause.set_cause(to_napi_cause(status, next));
+  }
+  cause
+}
+
+fn napi_error_with_cause(
+  status: Status,
+  reason: impl Into<String>,
+  cause: &dyn std::error::Error,
+) -> napi::Error {
+  let mut error = napi::Error::new(status, reason.into());
+  error.set_cause(to_napi_cause(status, cause));
+  error
+}
 
 #[napi]
 #[derive(Debug, Clone, Copy)]
@@ -48,27 +66,47 @@ pub fn encode_tx(
   max_supported_transaction_version: Option<u8>,
   show_rewards: bool,
 ) -> napi::Result<String> {
-  let tx = SubscribeUpdateTransactionInfo::decode(data)
-    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+  let tx = SubscribeUpdateTransactionInfo::decode(data).map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to decode SubscribeUpdateTransactionInfo payload",
+      &error,
+    )
+  })?;
 
   let transaction_proto = tx
     .transaction
     .ok_or_else(|| napi::Error::from_reason("failed to get transaction payload"))?;
   let transaction =
     <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
-      .map_err(|e| {
-        napi::Error::from_reason(format!("failed to decode transaction payload: {e}"))
+      .map_err(|error| {
+        napi_error_with_cause(
+          Status::InvalidArg,
+          "failed to decode transaction payload",
+          &error,
+        )
       })?;
-  let transaction = catch_unwind(AssertUnwindSafe(|| transaction.into()))
-    .map_err(|_| napi::Error::from_reason("failed to decode transaction payload"))?;
+  let transaction = transaction.into();
   let meta_proto = tx
     .meta
     .ok_or_else(|| napi::Error::from_reason("failed to get transaction meta"))?;
   let meta =
     <StorageTransactionStatusMeta as Prost11Message>::decode(meta_proto.encode_to_vec().as_slice())
-      .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?
+      .map_err(|error| {
+        napi_error_with_cause(
+          Status::InvalidArg,
+          "failed to decode transaction meta",
+          &error,
+        )
+      })?
       .try_into()
-      .map_err(|e| napi::Error::from_reason(format!("failed to decode transaction meta: {e}")))?;
+      .map_err(|error| {
+        napi_error_with_cause(
+          Status::InvalidArg,
+          "failed to decode transaction meta",
+          &error,
+        )
+      })?;
 
   let tx_with_meta =
     TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta { transaction, meta });
@@ -81,9 +119,21 @@ pub fn encode_tx(
           max_supported_transaction_version,
           show_rewards,
         )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?,
+        .map_err(|error| {
+          napi_error_with_cause(
+            Status::InvalidArg,
+            "failed to encode transaction with selected encoding",
+            &error,
+          )
+        })?,
     )
-    .map_err(|e| napi::Error::from_reason(e.to_string()))
+    .map_err(|error| {
+      napi_error_with_cause(
+        Status::InvalidArg,
+        "failed to serialize encoded transaction as JSON",
+        &error,
+      )
+    })
   } else {
     Err(napi::Error::from_reason("tx with missing metadata"))
   }
@@ -91,58 +141,89 @@ pub fn encode_tx(
 
 #[napi]
 pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
-  let tx_error = catch_unwind(AssertUnwindSafe(|| {
-    wincode::deserialize::<TransactionErrorSolana>(&err)
-  }))
-  .map_err(|_| napi::Error::from_reason("failed to decode TransactionError"))?
-  .map_err(|e| napi::Error::from_reason(format!("failed to decode TransactionError: {e}")))?;
+  let tx_error = wincode::deserialize::<TransactionErrorSolana>(&err).map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to decode TransactionError",
+      &error,
+    )
+  })?;
 
-  serde_json::to_string(&tx_error).map_err(Into::into)
+  serde_json::to_string(&tx_error).map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to serialize TransactionError as JSON",
+      &error,
+    )
+  })
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EncodedDeshredTransaction {
-  signature: String,
+  signature: Vec<u8>,
   is_vote: bool,
   transaction: EncodedTransaction,
-  loaded_writable_addresses: Vec<String>,
-  loaded_readonly_addresses: Vec<String>,
+  loaded_writable_addresses: Vec<Vec<u8>>,
+  loaded_readonly_addresses: Vec<Vec<u8>>,
 }
 
 #[napi]
 pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> napi::Result<String> {
-  let tx = SubscribeUpdateDeshredTransactionInfo::decode(data)
-    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+  let tx = SubscribeUpdateDeshredTransactionInfo::decode(data).map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to decode SubscribeUpdateDeshredTransactionInfo payload",
+      &error,
+    )
+  })?;
 
   let transaction_proto = tx
     .transaction
     .ok_or_else(|| napi::Error::from_reason("failed to get deshred transaction payload"))?;
   let transaction =
     <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
-      .map_err(|e| {
-        napi::Error::from_reason(format!("failed to decode deshred transaction payload: {e}"))
+      .map_err(|error| {
+        napi_error_with_cause(
+          Status::InvalidArg,
+          "failed to decode deshred transaction payload",
+          &error,
+        )
       })?;
-  let transaction: VersionedTransaction = catch_unwind(AssertUnwindSafe(|| transaction.into()))
-    .map_err(|_| napi::Error::from_reason("failed to decode deshred transaction payload"))?;
+  let transaction: VersionedTransaction = transaction.into();
+
+  let meta: solana_transaction_status::TransactionStatusMeta = StorageTransactionStatusMeta {
+    loaded_writable_addresses: tx.loaded_writable_addresses.clone(),
+    loaded_readonly_addresses: tx.loaded_readonly_addresses.clone(),
+    inner_instructions_none: true,
+    log_messages_none: true,
+    return_data_none: true,
+    ..StorageTransactionStatusMeta::default()
+  }
+  .try_into()
+  .map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to build deshred transaction status meta",
+      &error,
+    )
+  })?;
 
   let encoded = EncodedDeshredTransaction {
-    signature: bs58::encode(tx.signature).into_string(),
+    signature: tx.signature,
     is_vote: tx.is_vote,
-    transaction: transaction.encode(encoding.into()),
-    loaded_writable_addresses: tx
-      .loaded_writable_addresses
-      .into_iter()
-      .map(|address| bs58::encode(address).into_string())
-      .collect(),
-    loaded_readonly_addresses: tx
-      .loaded_readonly_addresses
-      .into_iter()
-      .map(|address| bs58::encode(address).into_string())
-      .collect(),
+    transaction: transaction.encode_with_meta(encoding.into(), &meta),
+    loaded_writable_addresses: tx.loaded_writable_addresses,
+    loaded_readonly_addresses: tx.loaded_readonly_addresses,
   };
 
-  serde_json::to_string(&encoded).map_err(Into::into)
+  serde_json::to_string(&encoded).map_err(|error| {
+    napi_error_with_cause(
+      Status::InvalidArg,
+      "failed to serialize encoded deshred transaction as JSON",
+      &error,
+    )
+  })
 }
 
 #[cfg(test)]
@@ -160,6 +241,10 @@ mod tests {
     assert!(
       error.to_string().to_lowercase().contains("decode"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for protobuf decode error"
     );
   }
 

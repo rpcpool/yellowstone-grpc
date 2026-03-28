@@ -4,6 +4,12 @@ use std::time::Duration;
 use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcBuilder};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
+fn invalid_arg_with_cause(reason: impl Into<String>, cause: impl std::fmt::Display) -> napi::Error {
+  let mut error = napi::Error::new(Status::InvalidArg, reason.into());
+  error.set_cause(napi::Error::new(Status::InvalidArg, cause.to_string()));
+  error
+}
+
 pub async fn get_client_builder(
   endpoint: String,
   x_token: Option<String>,
@@ -13,19 +19,34 @@ pub async fn get_client_builder(
 
   let mut grpc_client_builder = match GeyserGrpcBuilder::from_shared(endpoint) {
     Ok(builder) => builder,
-    Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
+    Err(error) => {
+      return Err(invalid_arg_with_cause(
+        "invalid gRPC endpoint configuration",
+        error,
+      ))
+    }
   };
 
   grpc_client_builder = match grpc_client_builder.x_token(x_token) {
     Ok(builder) => builder,
-    Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
+    Err(error) => {
+      return Err(invalid_arg_with_cause(
+        "invalid x-token configuration",
+        error,
+      ))
+    }
   };
 
   if use_tls {
     grpc_client_builder =
       match grpc_client_builder.tls_config(ClientTlsConfig::new().with_enabled_roots()) {
         Ok(builder) => builder,
-        Err(error) => return Err(napi::Error::new(Status::InvalidArg, error)),
+        Err(error) => {
+          return Err(invalid_arg_with_cause(
+            "invalid TLS configuration for gRPC endpoint",
+            error,
+          ))
+        }
       };
   }
 

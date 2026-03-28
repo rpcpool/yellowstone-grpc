@@ -45,6 +45,16 @@ use crate::{
   utils,
 };
 
+fn napi_error_with_cause(
+  status: napi::Status,
+  reason: impl Into<String>,
+  cause: impl std::fmt::Display,
+) -> napi::Error {
+  let mut error = napi::Error::new(status, reason.into());
+  error.set_cause(napi::Error::new(status, cause.to_string()));
+  error
+}
+
 /// Internal module containing the generic client holder implementation.
 /// This is kept separate from the NAPI-exposed types to avoid generic type exposure.
 pub mod internal {
@@ -122,10 +132,13 @@ impl GrpcClient {
     let builder = utils::get_client_builder(endpoint, x_token, channel_options).await?;
 
     // Connect and get the client (returns GeyserGrpcClient<impl Interceptor>)
-    let client = builder
-      .connect()
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let client = builder.connect().await.map_err(|error| {
+      napi_error_with_cause(
+        napi::Status::GenericFailure,
+        "failed to connect to gRPC endpoint",
+        error,
+      )
+    })?;
 
     // Wrap in our generic holder which can accept any interceptor type
     let holder = internal::ClientHolder::new(client);
@@ -158,7 +171,13 @@ impl GrpcClient {
         let protobuf_response = grpc_client_guard
           .get_latest_blockhash(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_latest_blockhash request failed",
+              error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -188,10 +207,9 @@ impl GrpcClient {
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .ping(ping_count)
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response = grpc_client_guard.ping(ping_count).await.map_err(|error| {
+          napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", error)
+        })?;
 
         Ok(protobuf_response)
       },
@@ -223,7 +241,13 @@ impl GrpcClient {
         let protobuf_response = grpc_client_guard
           .get_block_height(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_block_height request failed",
+              error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -255,7 +279,13 @@ impl GrpcClient {
         let protobuf_response = grpc_client_guard
           .get_slot(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_slot request failed",
+              error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -288,7 +318,13 @@ impl GrpcClient {
         let protobuf_response = grpc_client_guard
           .is_blockhash_valid(blockhash_value, commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "is_blockhash_valid request failed",
+              error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -317,10 +353,13 @@ impl GrpcClient {
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .get_version()
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response = grpc_client_guard.get_version().await.map_err(|error| {
+          napi_error_with_cause(
+            napi::Status::GenericFailure,
+            "get_version request failed",
+            error,
+          )
+        })?;
 
         Ok(protobuf_response)
       },
@@ -346,10 +385,17 @@ impl GrpcClient {
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .subscribe_replay_info()
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response =
+          grpc_client_guard
+            .subscribe_replay_info()
+            .await
+            .map_err(|error| {
+              napi_error_with_cause(
+                napi::Status::GenericFailure,
+                "subscribe_replay_info request failed",
+                error,
+              )
+            })?;
 
         Ok(protobuf_response)
       },

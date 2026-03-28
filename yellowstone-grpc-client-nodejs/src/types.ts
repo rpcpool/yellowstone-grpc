@@ -31,11 +31,11 @@ export type MapTransactionEncodingToReturnType = {
 export type DeshredTransactionEncodingToReturnType<
   T extends keyof MapTransactionEncodingToReturnType = keyof MapTransactionEncodingToReturnType,
 > = {
-  signature: string;
+  signature: number[];
   isVote: boolean;
   transaction: MapTransactionEncodingToReturnType[T];
-  loadedWritableAddresses: string[];
-  loadedReadonlyAddresses: string[];
+  loadedWritableAddresses: number[][];
+  loadedReadonlyAddresses: number[][];
 };
 
 export type TransactionErrorSolana = TransactionError;

@@ -70,6 +70,16 @@ fn get_terminal_error(terminal_error: &Arc<StdMutex<Option<String>>>) -> Option<
   error_guard.clone()
 }
 
+fn napi_error_with_cause(
+  status: napi::Status,
+  reason: impl Into<String>,
+  cause: impl std::fmt::Display,
+) -> napi::Error {
+  let mut error = napi::Error::new(status, reason.into());
+  error.set_cause(napi::Error::new(status, cause.to_string()));
+  error
+}
+
 /// DuplexStream Engine
 ///
 /// The inner engine for a custom implementation of stream.Duplex
@@ -121,10 +131,13 @@ impl DuplexStream {
         // Acquire lock, call subscribe, and immediately release the lock.
         let (mut stream_tx, mut stream_rx) = {
           let mut client = holder.client.lock().await;
-          client
-            .subscribe()
-            .await
-            .map_err(|error| napi::Error::from_reason(error.to_string()))?
+          client.subscribe().await.map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "failed to open subscribe stream",
+              error,
+            )
+          })?
         };
 
         // TODO : Fine tune unbounded channels.
@@ -238,10 +251,13 @@ impl DuplexStream {
   pub fn close(&self) -> Result<()> {
     self.is_closing.store(true, Ordering::Release);
 
-    let mut writable_guard = self
-      .writable
-      .lock()
-      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    let mut writable_guard = self.writable.lock().map_err(|error| {
+      napi_error_with_cause(
+        napi::Status::GenericFailure,
+        "Failed to acquire writable lock",
+        error,
+      )
+    })?;
     // Dropping the last sender closes the channel and causes
     // `writable_rx.recv()` to return `None` in the worker.
     *writable_guard = None;
@@ -252,8 +268,9 @@ impl DuplexStream {
   #[napi]
   pub fn write(&self, request: JsSubscribeRequest) -> Result<()> {
     let protobuf_subscribe_request: SubscribeRequest = request.from_js_to_protobuf_type()?;
-    validate_subscribe_request(&protobuf_subscribe_request)
-      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
+    validate_subscribe_request(&protobuf_subscribe_request).map_err(|error| {
+      napi_error_with_cause(napi::Status::InvalidArg, error.to_string(), &error)
+    })?;
 
     self.enqueue_subscribe_request(protobuf_subscribe_request)
   }
@@ -262,14 +279,16 @@ impl DuplexStream {
   pub fn write_raw(&self, request_bytes: Buffer) -> Result<()> {
     let protobuf_subscribe_request =
       SubscribeRequest::decode(request_bytes.as_ref()).map_err(|error| {
-        napi::Error::new(
+        napi_error_with_cause(
           napi::Status::InvalidArg,
-          format!("invalid SubscribeRequest payload: {error}"),
+          "invalid SubscribeRequest payload",
+          error,
         )
       })?;
 
-    validate_subscribe_request(&protobuf_subscribe_request)
-      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
+    validate_subscribe_request(&protobuf_subscribe_request).map_err(|error| {
+      napi_error_with_cause(napi::Status::InvalidArg, error.to_string(), &error)
+    })?;
 
     self.enqueue_subscribe_request(protobuf_subscribe_request)
   }
@@ -284,13 +303,23 @@ impl DuplexStream {
     let writable = self
       .writable
       .lock()
-      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?
+      .map_err(|error| {
+        napi_error_with_cause(
+          napi::Status::GenericFailure,
+          "Failed to acquire writable lock",
+          error,
+        )
+      })?
       .as_ref()
       .cloned()
       .ok_or_else(|| napi::Error::from_reason("Cannot write to a closed subscription stream"))?;
 
     if let Err(e) = writable.send(protobuf_subscribe_request) {
-      return Err(napi::Error::from_reason(e.to_string()));
+      return Err(napi_error_with_cause(
+        napi::Status::GenericFailure,
+        e.to_string(),
+        &e,
+      ));
     }
     Ok(())
   }
@@ -356,10 +385,13 @@ impl DuplexStreamDeshred {
         // Acquire lock, open stream, and release lock immediately.
         let (mut stream_tx, mut stream_rx) = {
           let mut client = holder.client.lock().await;
-          client
-            .subscribe_deshred()
-            .await
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?
+          client.subscribe_deshred().await.map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "failed to open deshred subscribe stream",
+              error,
+            )
+          })?
         };
 
         let (readable_tx, readable_rx) = unbounded_channel::<SubscribeUpdateDeshred>();
@@ -454,10 +486,13 @@ impl DuplexStreamDeshred {
   pub fn close(&self) -> Result<()> {
     self.is_closing.store(true, Ordering::Release);
 
-    let mut writable_guard = self
-      .writable
-      .lock()
-      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?;
+    let mut writable_guard = self.writable.lock().map_err(|error| {
+      napi_error_with_cause(
+        napi::Status::GenericFailure,
+        "Failed to acquire writable lock",
+        error,
+      )
+    })?;
     *writable_guard = None;
 
     Ok(())
@@ -473,9 +508,10 @@ impl DuplexStreamDeshred {
   pub fn write_raw(&self, request_bytes: Buffer) -> Result<()> {
     let protobuf_subscribe_request = SubscribeDeshredRequest::decode(request_bytes.as_ref())
       .map_err(|error| {
-        napi::Error::new(
+        napi_error_with_cause(
           napi::Status::InvalidArg,
-          format!("invalid SubscribeDeshredRequest payload: {error}"),
+          "invalid SubscribeDeshredRequest payload",
+          error,
         )
       })?;
 
@@ -495,7 +531,13 @@ impl DuplexStreamDeshred {
     let writable = self
       .writable
       .lock()
-      .map_err(|_| napi::Error::from_reason("Failed to acquire writable lock"))?
+      .map_err(|error| {
+        napi_error_with_cause(
+          napi::Status::GenericFailure,
+          "Failed to acquire writable lock",
+          error,
+        )
+      })?
       .as_ref()
       .cloned()
       .ok_or_else(|| {
@@ -503,7 +545,11 @@ impl DuplexStreamDeshred {
       })?;
 
     if let Err(e) = writable.send(protobuf_subscribe_request) {
-      return Err(napi::Error::from_reason(e.to_string()));
+      return Err(napi_error_with_cause(
+        napi::Status::GenericFailure,
+        e.to_string(),
+        &e,
+      ));
     }
     Ok(())
   }
@@ -792,6 +838,10 @@ mod tests {
       message.contains("channel closed"),
       "unexpected error message: {error}"
     );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for channel error"
+    );
   }
 
   #[tokio::test]
@@ -816,6 +866,10 @@ mod tests {
         .contains("Failed to acquire writable lock"),
       "unexpected error message: {error}"
     );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for poisoned lock error"
+    );
   }
 
   #[tokio::test]
@@ -839,6 +893,10 @@ mod tests {
         .to_string()
         .contains("Failed to acquire writable lock"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for poisoned lock error"
     );
   }
 
@@ -943,6 +1001,10 @@ mod tests {
       message.contains("filter should be defined"),
       "unexpected error message: {error}"
     );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for validation error"
+    );
   }
 
   #[tokio::test]
@@ -961,6 +1023,10 @@ mod tests {
     assert!(
       message.contains("lamports comparator should be defined"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for validation error"
     );
   }
 
@@ -1241,6 +1307,10 @@ mod tests {
       message.contains("channel closed"),
       "unexpected error message: {error}"
     );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for channel error"
+    );
   }
 
   #[tokio::test]
@@ -1340,6 +1410,10 @@ mod tests {
         .contains("Failed to acquire writable lock"),
       "unexpected error message: {error}"
     );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for poisoned lock error"
+    );
   }
 
   #[tokio::test]
@@ -1363,6 +1437,10 @@ mod tests {
         .to_string()
         .contains("Failed to acquire writable lock"),
       "unexpected error message: {error}"
+    );
+    assert!(
+      error.cause.is_some(),
+      "expected nested cause for poisoned lock error"
     );
   }
 
