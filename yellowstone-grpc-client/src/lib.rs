@@ -5,6 +5,7 @@ use {
         channel::mpsc,
         sink::{Sink, SinkExt},
         stream::Stream,
+        StreamExt,
     },
     std::{path::PathBuf, time::Duration},
     tokio::net::UnixStream,
@@ -53,19 +54,20 @@ impl Interceptor for InterceptorXToken {
 pub enum GeyserGrpcClientError {
     #[error("gRPC status: {0}")]
     TonicStatus(#[from] Status),
-    #[error("Failed to send subscribe request: {0}")]
-    SubscribeSendError(#[from] mpsc::SendError),
 }
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
+///
+/// See [`GeyserGrpcBuilder`] for constructing a client with custom options.
+///
 #[derive(Clone)]
-pub struct GeyserGrpcClient<F> {
-    pub health: HealthClient<InterceptedService<Channel, F>>,
-    pub geyser: GeyserClient<InterceptedService<Channel, F>>,
+pub struct GeyserGrpcClient {
+    pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
+    pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
 }
 
-impl GeyserGrpcClient<()> {
+impl GeyserGrpcClient {
     pub fn build_from_shared(
         endpoint: impl Into<Bytes>,
     ) -> GeyserGrpcBuilderResult<GeyserGrpcBuilder> {
@@ -77,10 +79,145 @@ impl GeyserGrpcClient<()> {
     }
 }
 
-impl<F: Interceptor> GeyserGrpcClient<F> {
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SubscribeRequestSinkError(#[from] mpsc::SendError);
+
+///
+/// A sink returned by the [`GeyserGrpcClient::subscribe`].
+///
+/// The sink is used to send [`SubscribeRequest`] updates to the server.
+///
+#[derive(Clone)]
+pub struct SubscribeRequestSink {
+    inner: mpsc::UnboundedSender<SubscribeRequest>,
+}
+
+impl Sink<SubscribeRequest> for SubscribeRequestSink {
+    type Error = SubscribeRequestSinkError;
+
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn start_send(
+        mut self: std::pin::Pin<&mut Self>,
+        item: SubscribeRequest,
+    ) -> Result<(), Self::Error> {
+        self.inner.start_send_unpin(item).map_err(Into::into)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_flush_unpin(cx).map_err(Into::into)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_close_unpin(cx).map_err(Into::into)
+    }
+}
+
+///
+/// Streams returned by the [`GeyserGrpcClient::subscribe`].
+///
+/// The stream yields [`SubscribeUpdate`] from the server.
+///
+pub struct GeyserStream {
+    inner: Streaming<SubscribeUpdate>,
+}
+
+impl Stream for GeyserStream {
+    type Item = Result<SubscribeUpdate, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
+///
+/// Streams returned by the [`GeyserGrpcClient::subscribe_deshred`].
+///
+/// The stream yields [`SubscribeUpdateDeshred`] from the server.
+///
+pub struct DeshredStream {
+    inner: Streaming<SubscribeUpdateDeshred>,
+}
+
+impl Stream for DeshredStream {
+    type Item = Result<SubscribeUpdateDeshred, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
+///
+/// Errors returns by the [`SubscribeDeshredRequestSink`] when sending subscription updates to the server.
+///
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SubscribeDeshredRequestSinkError(#[from] mpsc::SendError);
+
+///
+/// Sinks returned by the [`GeyserGrpcClient::subscribe_deshred`].
+///
+/// The sink is used to send [`SubscribeDeshredRequest`] updates to the server.
+///
+pub struct SubscribeDeshredRequestSink {
+    inner: mpsc::UnboundedSender<SubscribeDeshredRequest>,
+}
+
+impl Sink<SubscribeDeshredRequest> for SubscribeDeshredRequestSink {
+    type Error = SubscribeDeshredRequestSinkError;
+
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn start_send(
+        mut self: std::pin::Pin<&mut Self>,
+        item: SubscribeDeshredRequest,
+    ) -> Result<(), Self::Error> {
+        self.inner.start_send_unpin(item).map_err(Into::into)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_flush_unpin(cx).map_err(Into::into)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_close_unpin(cx).map_err(Into::into)
+    }
+}
+
+impl GeyserGrpcClient {
+    // TODO: check if we need to make this function `pub(crate` instead as users of the lib should use the builder to construct a client anyway.
     pub const fn new(
-        health: HealthClient<InterceptedService<Channel, F>>,
-        geyser: GeyserClient<InterceptedService<Channel, F>>,
+        health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
+        geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
     ) -> Self {
         Self { health, geyser }
     }
@@ -104,35 +241,70 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
         Ok(response.into_inner())
     }
 
-    // Subscribe
+    ///
+    /// Establish a subscription to the gRPC server without an initial request.
+    ///
+    /// If you don't plan to change the [`SubscribeRequest`] after the initial subscription, consider using [`GeyserGrpcClient::subscribe_once`] instead for a simpler API.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of ([`SubscribeRequestSink`], [`GeyserStream`]):
+    ///
+    /// - [`SubscribeRequestSink`]: a sink to send `SubscribeRequest` updates to the server.
+    ///   The server will update the subscription based on the latest request received from the sink.
+    ///   request received from the sink.
+    /// - [`GeyserStream`]: a stream of `SubscribeUpdate` from the server.
+    ///   The stream will yield updates based on the latest request received from the sink.
+    ///
+    /// # Lifecyle and dropping rules
+    ///
+    /// The subscription will remain active until the stream is dropped or the server closes the connection.
+    ///
+    /// # Initial [`SubscribeRequest`]
+    ///
+    /// You have to provide a [`SubscribeRequest`] to the server to start receiving updates.
+    ///
     pub async fn subscribe(
         &mut self,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>>,
-    )> {
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
         self.subscribe_with_request(None).await
     }
 
+    ///
+    /// Similar to [`GeyserGrpcClient::subscribe`] but allows you to provide an initial [`SubscribeRequest`] to the server.
+    ///
     pub async fn subscribe_with_request(
         &mut self,
         request: Option<SubscribeRequest>,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeRequest, Error = mpsc::SendError> + use<F>,
-        impl Stream<Item = Result<SubscribeUpdate, Status>> + use<F>,
-    )> {
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
-            subscribe_tx
-                .send(request)
-                .await
-                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+            match subscribe_tx.send(request).await {
+                Ok(_) => (),
+                Err(e) => unreachable!(
+                    "channel cannot be disconnect or full at this point, got error: {e}"
+                ),
+            }
         }
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
-        Ok((subscribe_tx, response.into_inner()))
+        Ok((
+            SubscribeRequestSink {
+                inner: subscribe_tx,
+            },
+            GeyserStream {
+                inner: response.into_inner(),
+            },
+        ))
     }
 
+    ///
+    /// Subscribe to updates with an initial request.
+    ///
+    /// Unlike [`GeyserGrpcClient::subscribe`], it does not return the sink to send subsequent requests,
+    /// so it is only useful for one-off subscription that does not need to update the request after
+    /// the initial subscription.
+    ///
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
@@ -142,35 +314,57 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
             .map(|(_sink, stream)| stream)
     }
 
-    // Subscribe Deshred
+    ///
+    /// Subscribe to deshred (only transaction right now).
+    ///
+    /// Deshred updates only supports deshredded transaction updates.
+    /// Deshredded update are event happening before any replay, they are not guarantee to be valid or even included in the ledger,
+    /// but they are emitted at the earliest possible time with the most information available.
+    ///
+    /// # Deshred vs Processed
+    ///
+    /// Deshred transactions have not been replayed yet, so they do not contains any replayed metadata, such as status, log messages, or compute units used.
+    ///
     pub async fn subscribe_deshred(
         &mut self,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>,
-        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>,
-    )> {
+    ) -> GeyserGrpcClientResult<(SubscribeDeshredRequestSink, DeshredStream)> {
         self.subscribe_deshred_with_request(None).await
     }
 
+    ///
+    /// See [`GeyserGrpcClient::subscribe_deshred`] for more details.
     pub async fn subscribe_deshred_with_request(
         &mut self,
         request: Option<SubscribeDeshredRequest>,
-    ) -> GeyserGrpcClientResult<(
-        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError> + use<F>,
-        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>> + use<F>,
-    )> {
+    ) -> GeyserGrpcClientResult<(SubscribeDeshredRequestSink, DeshredStream)> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
         if let Some(request) = request {
-            subscribe_tx
-                .send(request)
-                .await
-                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+            match subscribe_tx.send(request).await {
+                Ok(_) => (),
+                Err(e) => unreachable!(
+                    "channel cannot be disconnect or full at this point, got error: {e}"
+                ),
+            }
         }
         let response: Response<Streaming<SubscribeUpdateDeshred>> =
             self.geyser.subscribe_deshred(subscribe_rx).await?;
-        Ok((subscribe_tx, response.into_inner()))
+        Ok((
+            SubscribeDeshredRequestSink {
+                inner: subscribe_tx,
+            },
+            DeshredStream {
+                inner: response.into_inner(),
+            },
+        ))
     }
 
+    ///
+    /// Subscribe to deshred updates with an initial request.
+    ///
+    /// Unlike [`GeyserGrpcClient::subscribe_deshred`], it does not return the sink to send subsequent requests,
+    /// so it is only useful for one-off subscription that does not need to update the request after
+    /// the initial subscription.
+    ///
     pub async fn subscribe_deshred_once(
         &mut self,
         request: SubscribeDeshredRequest,
@@ -252,14 +446,26 @@ impl<F: Interceptor> GeyserGrpcClient<F> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeyserGrpcBuilderError {
+    ///
+    /// Raised when invalid x-token is provided, such as empty string or string with non-ASCII characters.
     #[error("Failed to parse x-token: {0}")]
     MetadataValueError(#[from] InvalidMetadataValue),
+    ///
+    /// Raised when there is an error in the underlying gRPC transport, such as invalid URI, connection failure, TLS configuration error, etc.
+    ///
     #[error("gRPC transport error: {0}")]
     TonicError(#[from] tonic::transport::Error),
 }
 
 pub type GeyserGrpcBuilderResult<T> = Result<T, GeyserGrpcBuilderError>;
 
+///
+/// The builder for constructing a [`GeyserGrpcClient`] with custom options.
+///
+/// The builder provides a fluent API to configure both the gRPC transport options and the Geyser client options.
+/// For transport options, it exposes the similar configuration as [`Endpoint`] builder since it is used to construct.
+///
+/// Use [`GeyserGrpcBuilder::connect`] or [`GeyserGrpcBuilder::connect_lazy`] to create a [`GeyserGrpcClient`] from configured builder.
 #[derive(Debug)]
 pub struct GeyserGrpcBuilder {
     pub endpoint: Endpoint,
@@ -294,10 +500,7 @@ impl GeyserGrpcBuilder {
     }
 
     // Create client
-    fn build(
-        self,
-        channel: Channel,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    fn build(self, channel: Channel) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let interceptor = InterceptorXToken {
             x_token: self.x_token,
             x_request_snapshot: self.x_request_snapshot,
@@ -323,16 +526,19 @@ impl GeyserGrpcBuilder {
         ))
     }
 
-    pub async fn connect(
-        self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ///
+    /// Builds an instance of [`GeyserGrpcClient`] by connecting to the gRPC server.
+    ///
+    pub async fn connect(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect().await?;
         self.build(channel)
     }
 
-    pub fn connect_lazy(
-        self,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ///
+    /// Builds an instance of [`GeyserGrpcClient`] without actually connecting to the gRPC server.
+    /// This will wait for the first gRPC call to trigger the connection to the server, and it will use the configured options in the builder for that connection.
+    ///
+    pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect_lazy();
         self.build(channel)
     }
@@ -345,7 +551,7 @@ impl GeyserGrpcBuilder {
     pub async fn connect_uds(
         self,
         path: impl Into<PathBuf>,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient<impl Interceptor + Clone>> {
+    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let path = path.into();
 
         // tonic needs an Endpoint to hang config off of, but the URI is ignored
@@ -363,7 +569,8 @@ impl GeyserGrpcBuilder {
         self.build(channel)
     }
 
-    // Set x-token
+    ///
+    /// Sets `x-token` credentials for the client. The token will be included in the metadata of every gRPC request sent by the client.
     pub fn x_token<T>(self, x_token: Option<T>) -> GeyserGrpcBuilderResult<Self>
     where
         T: TryInto<AsciiMetadataValue, Error = InvalidMetadataValue>,
@@ -374,7 +581,8 @@ impl GeyserGrpcBuilder {
         })
     }
 
-    // Include `x-request-snapshot`
+    ///
+    /// Sets the `x-request-snapshot` flag for the client. This flag will be included in the metadata of every gRPC request sent by the client.
     pub fn set_x_request_snapshot(self, value: bool) -> Self {
         Self {
             x_request_snapshot: value,
@@ -382,7 +590,9 @@ impl GeyserGrpcBuilder {
         }
     }
 
-    // Endpoint options
+    ///
+    /// Sets endpoint options
+    ///
     pub fn connect_timeout(self, dur: Duration) -> Self {
         Self {
             endpoint: self.endpoint.connect_timeout(dur),

@@ -8,10 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## 2026-03-31
+
+- yellowstone-grpc-client-13.0.0
+- yellowstone-grpc-client-nodejs-5.0.7
+- yellowstone-grpc-client-simple-12.2.0
+- yellowstone-grpc-geyser-12.2.0
+- yellowstone-grpc-proto-12.1.0
+
+
+### Breaking
+
+Introduce API breaking that should facilitate maintenance and compilation errors.
+
+- Removed generic interceptor types from `GeyserGrpcClient`
+- Replaced `impl Sink<SubscribeRequest, Error = mpsc::SendError>` with `SubscribeRequestSink` type.
+- Replaced `impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>` with `SubscribeDeshredRequestSink` type.
+- Replaced `impl Stream<Item = Result<SubscribeUpdate, Status>>` with `GeyserStream` type.
+- Replaced `impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>` with `DeshredStream` type
+- `SubscribeRequestSink`now returns `SubscribeRequestSinkError` instead of `mpsc::SendError`.
+- Removed `GeyserGrpcClientError::SubscribeSendError` variant as no code branch could raise this error.
+
+Referenced PR(s) :[721](https://github.com/rpcpool/yellowstone-grpc/pull/721)
+
+
 # 2026-03-31
 
-- yellowstone-grpc-client-nodejs-5.0.7
 - yellowstone-grpc-client-12.2.0
+- yellowstone-grpc-client-nodejs-5.0.7
 - yellowstone-grpc-client-simple-12.2.0
 - yellowstone-grpc-geyser-12.2.0
 - yellowstone-grpc-proto-12.1.0
