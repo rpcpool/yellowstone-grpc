@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
+## 2026-03-23
+
+- yellowstone-grpc-client-12.3.0
+- yellowstone-grpc-client-simple-12.3.0
+
+### Features
+
+- client: auto-reconnect stream for yellowstone-grpc-client ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
+
+### Breaking
+
+- client: `GeyserGrpcClient::new` takes 3 args (added `Option<GeyserGrpcBuilder>`)
+- client: `subscribe_once` requires `F: 'static`
 
 ## 2026-03-31
 
