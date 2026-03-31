@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
+## 2026-04-01
+
+- yellowstone-grpc-client-13.1.0
+- yellowstone-grpc-client-simple-13.1.0
+
+### Features
+
+- client: auto-reconnect stream for yellowstone-grpc-client ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
 
 ## 2026-03-31
 

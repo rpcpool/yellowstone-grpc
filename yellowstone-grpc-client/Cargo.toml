@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "13.0.0"
+version = "13.1.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -16,9 +16,12 @@ account-data-as-bytes = [
 ]
 
 [dependencies]
+arc-swap = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
+log = { workspace = true }
+pin-project = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
