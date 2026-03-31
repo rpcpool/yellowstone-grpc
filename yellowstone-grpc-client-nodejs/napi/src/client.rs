@@ -63,6 +63,13 @@ fn napi_error_with_cause(
   error
 }
 
+fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(status, reason.clone());
+  error.set_cause(napi::Error::new(status, reason));
+  error
+}
+
 /// Internal module containing the generic client holder implementation.
 /// This is kept separate from the NAPI-exposed types to avoid generic type exposure.
 pub mod internal {
@@ -172,7 +179,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -211,7 +218,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -242,7 +249,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -280,7 +287,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -319,7 +326,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -357,7 +364,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
@@ -389,7 +396,7 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 

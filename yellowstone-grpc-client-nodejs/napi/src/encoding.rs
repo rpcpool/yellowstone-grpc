@@ -36,6 +36,13 @@ fn napi_error_with_cause(
   error
 }
 
+fn napi_error(status: Status, reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(status, reason.clone());
+  error.set_cause(napi::Error::new(status, reason));
+  error
+}
+
 #[napi]
 #[derive(Debug, Clone, Copy)]
 pub enum WasmUiTransactionEncoding {
@@ -76,7 +83,7 @@ pub fn encode_tx(
 
   let transaction_proto = tx
     .transaction
-    .ok_or_else(|| napi::Error::from_reason("failed to get transaction payload"))?;
+    .ok_or_else(|| napi_error(Status::InvalidArg, "failed to get transaction payload"))?;
   let transaction =
     <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
       .map_err(|error| {
@@ -89,7 +96,7 @@ pub fn encode_tx(
   let transaction = transaction.into();
   let meta_proto = tx
     .meta
-    .ok_or_else(|| napi::Error::from_reason("failed to get transaction meta"))?;
+    .ok_or_else(|| napi_error(Status::InvalidArg, "failed to get transaction meta"))?;
   let meta =
     <StorageTransactionStatusMeta as Prost11Message>::decode(meta_proto.encode_to_vec().as_slice())
       .map_err(|error| {
@@ -135,7 +142,7 @@ pub fn encode_tx(
       )
     })
   } else {
-    Err(napi::Error::from_reason("tx with missing metadata"))
+    Err(napi_error(Status::InvalidArg, "tx with missing metadata"))
   }
 }
 
@@ -178,9 +185,12 @@ pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> na
     )
   })?;
 
-  let transaction_proto = tx
-    .transaction
-    .ok_or_else(|| napi::Error::from_reason("failed to get deshred transaction payload"))?;
+  let transaction_proto = tx.transaction.ok_or_else(|| {
+    napi_error(
+      Status::InvalidArg,
+      "failed to get deshred transaction payload",
+    )
+  })?;
   let transaction =
     <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
       .map_err(|error| {

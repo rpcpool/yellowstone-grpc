@@ -88,6 +88,13 @@ fn napi_error_with_cause(
   error
 }
 
+fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(status, reason.clone());
+  error.set_cause(napi::Error::new(status, reason));
+  error
+}
+
 /// DuplexStream Engine
 ///
 /// The inner engine for a custom implementation of stream.Duplex
@@ -134,7 +141,7 @@ impl DuplexStream {
           .downcast_ref::<crate::client::internal::ClientHolder<
             yellowstone_grpc_client::InterceptorXToken,
           >>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         // Acquire lock, call subscribe, and immediately release the lock.
         let (mut stream_tx, mut stream_rx) = {
@@ -311,7 +318,8 @@ impl DuplexStream {
 
   fn enqueue_subscribe_request(&self, protobuf_subscribe_request: SubscribeRequest) -> Result<()> {
     if self.is_closing.load(Ordering::Acquire) {
-      return Err(napi::Error::from_reason(
+      return Err(napi_error(
+        napi::Status::GenericFailure,
         "Cannot write to a closing subscription stream",
       ));
     }
@@ -328,7 +336,12 @@ impl DuplexStream {
       })?
       .as_ref()
       .cloned()
-      .ok_or_else(|| napi::Error::from_reason("Cannot write to a closed subscription stream"))?;
+      .ok_or_else(|| {
+        napi_error(
+          napi::Status::GenericFailure,
+          "Cannot write to a closed subscription stream",
+        )
+      })?;
 
     if let Err(e) = writable.send(protobuf_subscribe_request) {
       return Err(napi_error_with_cause(
@@ -396,7 +409,7 @@ impl DuplexStreamDeshred {
           .downcast_ref::<crate::client::internal::ClientHolder<
             yellowstone_grpc_client::InterceptorXToken,
           >>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         // Acquire lock, open stream, and release lock immediately.
         let (mut stream_tx, mut stream_rx) = {
@@ -547,7 +560,8 @@ impl DuplexStreamDeshred {
     protobuf_subscribe_request: SubscribeDeshredRequest,
   ) -> Result<()> {
     if self.is_closing.load(Ordering::Acquire) {
-      return Err(napi::Error::from_reason(
+      return Err(napi_error(
+        napi::Status::GenericFailure,
         "Cannot write to a closing deshred subscription stream",
       ));
     }
@@ -565,7 +579,10 @@ impl DuplexStreamDeshred {
       .as_ref()
       .cloned()
       .ok_or_else(|| {
-        napi::Error::from_reason("Cannot write to a closed deshred subscription stream")
+        napi_error(
+          napi::Status::GenericFailure,
+          "Cannot write to a closed deshred subscription stream",
+        )
       })?;
 
     if let Err(e) = writable.send(protobuf_subscribe_request) {
@@ -807,6 +824,7 @@ mod tests {
         .contains("Cannot write to a closing subscription stream"),
       "unexpected error message: {error}"
     );
+    assert!(error.cause.is_some(), "expected cause on close-state error");
   }
 
   #[tokio::test]
@@ -1164,6 +1182,7 @@ mod tests {
       message.contains("closing") || message.contains("closed"),
       "unexpected error message: {error}"
     );
+    assert!(error.cause.is_some(), "expected cause on close-state error");
   }
 
   #[tokio::test]
@@ -1360,6 +1379,7 @@ mod tests {
       message.contains("closing") || message.contains("closed"),
       "unexpected error message: {error}"
     );
+    assert!(error.cause.is_some(), "expected cause on close-state error");
   }
 
   #[tokio::test]
@@ -1402,6 +1422,7 @@ mod tests {
       message.contains("closing") || message.contains("closed"),
       "unexpected error message: {error}"
     );
+    assert!(error.cause.is_some(), "expected cause on close-state error");
   }
 
   #[tokio::test]

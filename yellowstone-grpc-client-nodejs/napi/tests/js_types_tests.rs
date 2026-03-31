@@ -217,6 +217,10 @@ fn js_subscribe_request_accounts_data_slice_rejects_invalid_u64_strings() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid u64 value"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on parse conversion error"
+  );
 }
 
 #[test]
@@ -246,6 +250,10 @@ fn js_unix_timestamp_rejects_invalid_i64_string() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid i64 value"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on parse conversion error"
+  );
 }
 
 #[test]
@@ -291,6 +299,10 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_multiple_var
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -306,6 +318,10 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_missing_vari
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("No variant set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -336,6 +352,10 @@ fn js_subscribe_request_filter_accounts_filter_filter_rejects_multiple_variants(
   let conversion_error = js_filter_value.from_js_to_protobuf_type().unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -391,6 +411,10 @@ fn js_subscribe_update_update_oneof_rejects_multiple_variants() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -565,6 +589,10 @@ fn js_subscribe_update_deshred_update_oneof_rejects_multiple_variants() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]

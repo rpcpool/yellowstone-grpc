@@ -22,6 +22,13 @@ fn __typegen_invalid_arg_with_cause(
   error
 }
 
+fn __typegen_invalid_arg(reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.clone());
+  error.set_cause(napi::Error::new(napi::Status::InvalidArg, reason));
+  error
+}
+
 use napi::bindgen_prelude::{BufferSlice, Date, Env};
 use napi_derive::napi;
 use yellowstone_grpc_proto::geyser::*;
@@ -92,13 +99,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     > = None;
     if let Some(oneof_variant_value) = memcmp {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
@@ -107,13 +111,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = datasize {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
         __typegen_invalid_arg_with_cause(
@@ -127,13 +128,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = token_account_state {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -144,13 +142,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = lamports {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Lamports(
@@ -159,13 +154,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter::Filter"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter::Filter"
+      ))),
     }
   }
 }
@@ -218,13 +210,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     > = None;
     if let Some(oneof_variant_value) = eq {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
         __typegen_invalid_arg_with_cause(
@@ -238,13 +227,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = ne {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
         __typegen_invalid_arg_with_cause(
@@ -258,13 +244,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = lt {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
         __typegen_invalid_arg_with_cause(
@@ -278,13 +261,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = gt {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
         __typegen_invalid_arg_with_cause(
@@ -298,13 +278,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter_lamports::Cmp"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter_lamports::Cmp"
+      ))),
     }
   }
 }
@@ -356,13 +333,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     > = None;
     if let Some(oneof_variant_value) = bytes {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value.as_ref().to_vec())?;
       selected_oneof_variant =
@@ -370,13 +344,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     if let Some(oneof_variant_value) = base58 {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -385,13 +356,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     if let Some(oneof_variant_value) = base64 {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -400,13 +368,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter_memcmp::Data"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter_memcmp::Data"
+      ))),
     }
   }
 }
@@ -570,13 +535,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     let mut selected_oneof_variant: ::core::option::Option<subscribe_update::UpdateOneof> = None;
     if let Some(oneof_variant_value) = account {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Account(
@@ -585,26 +547,20 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = slot {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Slot(converted_variant_value));
     }
     if let Some(oneof_variant_value) = transaction {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Transaction(
@@ -613,13 +569,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = transaction_status {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::TransactionStatus(
@@ -628,13 +581,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = block {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Block(
@@ -643,39 +593,30 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = ping {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Ping(converted_variant_value));
     }
     if let Some(oneof_variant_value) = pong {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Pong(converted_variant_value));
     }
     if let Some(oneof_variant_value) = block_meta {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::BlockMeta(
@@ -684,13 +625,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = entry {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Entry(
@@ -699,10 +637,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!("No variant set for {}", "subscribe_update::UpdateOneof"),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_update::UpdateOneof"
+      ))),
     }
   }
 }
@@ -753,13 +691,10 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
       None;
     if let Some(oneof_variant_value) = deshred_transaction {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update_deshred::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::DeshredTransaction(
@@ -768,13 +703,10 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = ping {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update_deshred::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Ping(
@@ -783,13 +715,10 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = pong {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update_deshred::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Pong(
@@ -798,13 +727,10 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_update_deshred::UpdateOneof"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_update_deshred::UpdateOneof"
+      ))),
     }
   }
 }

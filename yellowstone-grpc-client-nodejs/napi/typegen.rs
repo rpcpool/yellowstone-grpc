@@ -211,6 +211,12 @@ pub fn generate_types() {
     "  error.set_cause(__typegen_to_napi_cause(cause));\n",
     "  error\n",
     "}\n\n",
+    "fn __typegen_invalid_arg(reason: impl Into<String>) -> napi::Error {\n",
+    "  let reason = reason.into();\n",
+    "  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.clone());\n",
+    "  error.set_cause(napi::Error::new(napi::Status::InvalidArg, reason));\n",
+    "  error\n",
+    "}\n\n",
   );
 
   let input_root = match resolve_proto_out_dir() {
@@ -417,8 +423,7 @@ pub fn generate_types() {
       oneof_reverse_conversion_tokens.push(quote!(
           if let Some(#variant_value_ident) = #variant_field_ident {
               if selected_oneof_variant.is_some() {
-                  return Err(napi::Error::new(
-                      napi::Status::InvalidArg,
+                  return Err(__typegen_invalid_arg(
                       format!("Multiple variants set for {}", #oneof_type_name_string),
                   ));
               }
@@ -453,8 +458,7 @@ pub fn generate_types() {
                   #(#oneof_reverse_conversion_tokens)*
                   match selected_oneof_variant {
                       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-                      None => Err(napi::Error::new(
-                          napi::Status::InvalidArg,
+                      None => Err(__typegen_invalid_arg(
                           format!("No variant set for {}", #oneof_type_name_string),
                       )),
                   }
@@ -486,8 +490,7 @@ pub fn generate_types() {
                   #(#oneof_reverse_conversion_tokens)*
                   match selected_oneof_variant {
                       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-                      None => Err(napi::Error::new(
-                          napi::Status::InvalidArg,
+                      None => Err(__typegen_invalid_arg(
                           format!("No variant set for {}", #oneof_type_name_string),
                       )),
                   }
@@ -2674,6 +2677,7 @@ pub mod env_transitive {
     assert!(generated.contains("#![allow(unused_imports)]"));
     assert!(generated.contains("#![allow(unused_variables)]"));
     assert!(generated.contains("fn __typegen_invalid_arg_with_cause("));
+    assert!(generated.contains("fn __typegen_invalid_arg("));
     assert!(generated.contains("pub struct JsSubscribeRequest"));
     assert!(generated.contains("pub struct JsSubscribeRequestMode"));
     assert!(generated.contains("from_js_to_protobuf_type"));
