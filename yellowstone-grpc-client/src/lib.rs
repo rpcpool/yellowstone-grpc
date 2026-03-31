@@ -282,7 +282,7 @@ impl GeyserGrpcClient {
             match subscribe_tx.send(request).await {
                 Ok(_) => (),
                 Err(e) => unreachable!(
-                    "channel cannot be disconnect or full at this point, got error: {e}"
+                    "channel cannot be disconnected or full at this point, got error: {e}"
                 ),
             }
         }
@@ -315,15 +315,14 @@ impl GeyserGrpcClient {
     }
 
     ///
-    /// Subscribe to deshred (only transaction right now).
+    /// Subscribe to deshred (only transactions right now).
     ///
-    /// Deshred updates only supports deshredded transaction updates.
-    /// Deshredded update are event happening before any replay, they are not guarantee to be valid or even included in the ledger,
+    /// Deshredded updates are events happening before any replay, they are not guaranteed to be valid or even to be included in the ledger,
     /// but they are emitted at the earliest possible time with the most information available.
     ///
     /// # Deshred vs Processed
     ///
-    /// Deshred transactions have not been replayed yet, so they do not contains any replayed metadata, such as status, log messages, or compute units used.
+    /// Deshredded transactions have not been replayed yet, so they do not contains any replayed metadata, such as status, log messages, or compute units used.
     ///
     pub async fn subscribe_deshred(
         &mut self,
@@ -333,6 +332,13 @@ impl GeyserGrpcClient {
 
     ///
     /// See [`GeyserGrpcClient::subscribe_deshred`] for more details.
+    ///
+    /// # Arguments
+    ///
+    /// * `request`: an optional initial [`SubscribeDeshredRequest`] to send to the server when establishing the subscription.
+    ///   If provided, the server will start sending deshredded updates based on the request immediately after the subscription is established.
+    ///   If not provided, the server will wait for the first request from the sink before sending any updates.
+    ///
     pub async fn subscribe_deshred_with_request(
         &mut self,
         request: Option<SubscribeDeshredRequest>,
@@ -342,7 +348,7 @@ impl GeyserGrpcClient {
             match subscribe_tx.send(request).await {
                 Ok(_) => (),
                 Err(e) => unreachable!(
-                    "channel cannot be disconnect or full at this point, got error: {e}"
+                    "channel cannot be disconnected or full at this point, got error: {e}"
                 ),
             }
         }
