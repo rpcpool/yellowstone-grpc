@@ -5,6 +5,30 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
+fn __typegen_to_napi_cause(source: &dyn std::error::Error) -> napi::Error {
+  let mut cause = napi::Error::new(napi::Status::InvalidArg, source.to_string());
+  if let Some(next) = source.source() {
+    cause.set_cause(__typegen_to_napi_cause(next));
+  }
+  cause
+}
+
+fn __typegen_invalid_arg_with_cause(
+  reason: impl Into<String>,
+  cause: &dyn std::error::Error,
+) -> napi::Error {
+  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.into());
+  error.set_cause(__typegen_to_napi_cause(cause));
+  error
+}
+
+fn __typegen_invalid_arg(reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(napi::Status::InvalidArg, reason.clone());
+  error.set_cause(napi::Error::new(napi::Status::InvalidArg, reason));
+  error
+}
+
 use napi::bindgen_prelude::{BufferSlice, Date, Env};
 use napi_derive::napi;
 use yellowstone_grpc_proto::geyser::*;
@@ -75,13 +99,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     > = None;
     if let Some(oneof_variant_value) = memcmp {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Memcmp(
@@ -90,18 +111,15 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = datasize {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Datasize(
@@ -110,13 +128,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = token_account_state {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -127,13 +142,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     if let Some(oneof_variant_value) = lamports {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter::Filter"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter::Filter"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter::Filter::Lamports(
@@ -142,13 +154,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterFilter<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter::Filter"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter::Filter"
+      ))),
     }
   }
 }
@@ -201,18 +210,15 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     > = None;
     if let Some(oneof_variant_value) = eq {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Eq(
@@ -221,18 +227,15 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = ne {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Ne(
@@ -241,18 +244,15 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = lt {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Lt(
@@ -261,18 +261,15 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     if let Some(oneof_variant_value) = gt {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_lamports::Cmp"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_lamports::Cmp"
+        )));
       }
       let converted_variant_value = oneof_variant_value.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?;
       selected_oneof_variant = Some(subscribe_request_filter_accounts_filter_lamports::Cmp::Gt(
@@ -281,13 +278,10 @@ impl JsSubscribeRequestFilterAccountsFilterLamportsCmp {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter_lamports::Cmp"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter_lamports::Cmp"
+      ))),
     }
   }
 }
@@ -339,13 +333,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     > = None;
     if let Some(oneof_variant_value) = bytes {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value.as_ref().to_vec())?;
       selected_oneof_variant =
@@ -353,13 +344,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     if let Some(oneof_variant_value) = base58 {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -368,13 +356,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     if let Some(oneof_variant_value) = base64 {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_request_filter_accounts_filter_memcmp::Data"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_request_filter_accounts_filter_memcmp::Data"
+        )));
       }
       let converted_variant_value = Ok::<_, napi::Error>(oneof_variant_value)?;
       selected_oneof_variant = Some(
@@ -383,13 +368,10 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmpData<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!(
-          "No variant set for {}",
-          "subscribe_request_filter_accounts_filter_memcmp::Data"
-        ),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_request_filter_accounts_filter_memcmp::Data"
+      ))),
     }
   }
 }
@@ -553,13 +535,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     let mut selected_oneof_variant: ::core::option::Option<subscribe_update::UpdateOneof> = None;
     if let Some(oneof_variant_value) = account {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Account(
@@ -568,26 +547,20 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = slot {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Slot(converted_variant_value));
     }
     if let Some(oneof_variant_value) = transaction {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Transaction(
@@ -596,13 +569,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = transaction_status {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::TransactionStatus(
@@ -611,13 +581,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = block {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Block(
@@ -626,39 +593,30 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = ping {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Ping(converted_variant_value));
     }
     if let Some(oneof_variant_value) = pong {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Pong(converted_variant_value));
     }
     if let Some(oneof_variant_value) = block_meta {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::BlockMeta(
@@ -667,13 +625,10 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     if let Some(oneof_variant_value) = entry {
       if selected_oneof_variant.is_some() {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Multiple variants set for {}",
-            "subscribe_update::UpdateOneof"
-          ),
-        ));
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update::UpdateOneof"
+        )));
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update::UpdateOneof::Entry(
@@ -682,10 +637,100 @@ impl<'env> JsSubscribeUpdateUpdateOneof<'env> {
     }
     match selected_oneof_variant {
       Some(selected_oneof_variant) => Ok(selected_oneof_variant),
-      None => Err(napi::Error::new(
-        napi::Status::InvalidArg,
-        format!("No variant set for {}", "subscribe_update::UpdateOneof"),
-      )),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_update::UpdateOneof"
+      ))),
+    }
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshredUpdateOneof<'env> {
+  pub deshred_transaction: ::core::option::Option<JsSubscribeUpdateDeshredTransaction<'env>>,
+  pub ping: ::core::option::Option<JsSubscribeUpdatePing>,
+  pub pong: ::core::option::Option<JsSubscribeUpdatePong>,
+}
+impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: subscribe_update_deshred::UpdateOneof,
+  ) -> napi::Result<Self> {
+    match value {
+      subscribe_update_deshred::UpdateOneof::DeshredTransaction(oneof_variant_value) => Ok(Self {
+        deshred_transaction: Some(
+          JsSubscribeUpdateDeshredTransaction::from_protobuf_to_js_type(env, oneof_variant_value)?,
+        ),
+        ping: None,
+        pong: None,
+      }),
+      subscribe_update_deshred::UpdateOneof::Ping(oneof_variant_value) => Ok(Self {
+        ping: Some(JsSubscribeUpdatePing::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
+        deshred_transaction: None,
+        pong: None,
+      }),
+      subscribe_update_deshred::UpdateOneof::Pong(oneof_variant_value) => Ok(Self {
+        pong: Some(JsSubscribeUpdatePong::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
+        deshred_transaction: None,
+        ping: None,
+      }),
+    }
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<subscribe_update_deshred::UpdateOneof> {
+    let JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction,
+      ping,
+      pong,
+    } = self;
+    let mut selected_oneof_variant: ::core::option::Option<subscribe_update_deshred::UpdateOneof> =
+      None;
+    if let Some(oneof_variant_value) = deshred_transaction {
+      if selected_oneof_variant.is_some() {
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::DeshredTransaction(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = ping {
+      if selected_oneof_variant.is_some() {
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Ping(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = pong {
+      if selected_oneof_variant.is_some() {
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Pong(
+        converted_variant_value,
+      ));
+    }
+    match selected_oneof_variant {
+      Some(selected_oneof_variant) => Ok(selected_oneof_variant),
+      None => Err(__typegen_invalid_arg(format!(
+        "No variant set for {}",
+        "subscribe_update_deshred::UpdateOneof"
+      ))),
     }
   }
 }
@@ -896,9 +941,9 @@ impl<'env> JsSubscribeRequest<'env> {
         .from_slot
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -1024,9 +1069,9 @@ impl<'env> JsSubscribeRequestFilterAccountsFilterMemcmp<'env> {
   ) -> napi::Result<SubscribeRequestFilterAccountsFilterMemcmp> {
     Ok(SubscribeRequestFilterAccountsFilterMemcmp {
       offset: self.offset.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       data: self
@@ -1266,6 +1311,65 @@ impl JsSubscribeRequestFilterEntry {
 }
 #[napi(object)]
 #[derive(Debug, Clone)]
+pub struct JsSubscribeRequestFilterDeshredTransactions {
+  pub vote: ::core::option::Option<bool>,
+  pub account_include: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub account_exclude: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub account_required: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+impl JsSubscribeRequestFilterDeshredTransactions {
+  pub fn from_protobuf_to_js_type(
+    env: &Env,
+    value: SubscribeRequestFilterDeshredTransactions,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      vote: value
+        .vote
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      account_include: value
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_exclude: value
+        .account_exclude
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_required: value
+        .account_required
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterDeshredTransactions> {
+    Ok(SubscribeRequestFilterDeshredTransactions {
+      vote: self
+        .vote
+        .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      account_include: self
+        .account_include
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_exclude: self
+        .account_exclude
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      account_required: self
+        .account_required
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+}
+#[napi(object)]
+#[derive(Debug, Clone)]
 pub struct JsSubscribeRequestAccountsDataSlice {
   pub offset: String,
   pub length: String,
@@ -1283,15 +1387,15 @@ impl JsSubscribeRequestAccountsDataSlice {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestAccountsDataSlice> {
     Ok(SubscribeRequestAccountsDataSlice {
       offset: self.offset.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       length: self.length.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1311,6 +1415,56 @@ impl JsSubscribeRequestPing {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestPing> {
     Ok(SubscribeRequestPing {
       id: Ok::<_, napi::Error>(self.id)?,
+    })
+  }
+}
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct JsSubscribeDeshredRequest {
+  pub deshred_transactions: ::std::collections::HashMap<
+    ::prost::alloc::string::String,
+    JsSubscribeRequestFilterDeshredTransactions,
+  >,
+  pub ping: ::core::option::Option<JsSubscribeRequestPing>,
+}
+impl JsSubscribeDeshredRequest {
+  pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeDeshredRequest) -> napi::Result<Self> {
+    Ok(Self {
+      deshred_transactions: value
+        .deshred_transactions
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_value =
+            JsSubscribeRequestFilterDeshredTransactions::from_protobuf_to_js_type(
+              env,
+              hash_map_entry_value,
+            )?;
+          Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      ping: value
+        .ping
+        .map(|option_inner_value| {
+          JsSubscribeRequestPing::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeDeshredRequest> {
+    Ok(SubscribeDeshredRequest {
+      deshred_transactions: self
+        .deshred_transactions
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      ping: self
+        .ping
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
     })
   }
 }
@@ -1404,9 +1558,9 @@ impl<'env> JsSubscribeUpdateAccount<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       is_startup: Ok::<_, napi::Error>(self.is_startup)?,
@@ -1447,24 +1601,24 @@ impl<'env> JsSubscribeUpdateAccountInfo<'env> {
     Ok(SubscribeUpdateAccountInfo {
       pubkey: Ok::<_, napi::Error>(self.pubkey.as_ref().to_vec())?,
       lamports: self.lamports.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       owner: Ok::<_, napi::Error>(self.owner.as_ref().to_vec())?,
       executable: Ok::<_, napi::Error>(self.executable)?,
       rent_epoch: self.rent_epoch.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
       write_version: self.write_version.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       txn_signature: self
@@ -1500,18 +1654,18 @@ impl JsSubscribeUpdateSlot {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateSlot> {
     Ok(SubscribeUpdateSlot {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent: self
         .parent
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -1551,9 +1705,9 @@ impl<'env> JsSubscribeUpdateTransaction<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1601,9 +1755,9 @@ impl<'env> JsSubscribeUpdateTransactionInfo<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1638,17 +1792,17 @@ impl<'env> JsSubscribeUpdateTransactionStatus<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateTransactionStatus> {
     Ok(SubscribeUpdateTransactionStatus {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
       is_vote: Ok::<_, napi::Error>(self.is_vote)?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       err: self
@@ -1729,9 +1883,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlock> {
     Ok(SubscribeUpdateBlock {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
@@ -1748,17 +1902,17 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
@@ -1771,9 +1925,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .updated_account_count
         .parse::<u64>()
         .map_err(|parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         })?,
       accounts: self
@@ -1782,9 +1936,9 @@ impl<'env> JsSubscribeUpdateBlock<'env> {
         .map(|vec_inner_value| vec_inner_value.from_js_to_protobuf_type())
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
       entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       entries: self
@@ -1841,9 +1995,9 @@ impl JsSubscribeUpdateBlockMeta {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateBlockMeta> {
     Ok(SubscribeUpdateBlockMeta {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
@@ -1860,24 +2014,24 @@ impl JsSubscribeUpdateBlockMeta {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       parent_blockhash: Ok::<_, napi::Error>(self.parent_blockhash)?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
       entries_count: self.entries_count.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -1913,40 +2067,128 @@ impl<'env> JsSubscribeUpdateEntry<'env> {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateEntry> {
     Ok(SubscribeUpdateEntry {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       index: self.index.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       num_hashes: self.num_hashes.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       hash: Ok::<_, napi::Error>(self.hash.as_ref().to_vec())?,
       executed_transaction_count: self.executed_transaction_count.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
       starting_transaction_index: self.starting_transaction_index.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
+    })
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshredTransaction<'env> {
+  pub transaction: ::core::option::Option<JsSubscribeUpdateDeshredTransactionInfo<'env>>,
+  pub slot: String,
+}
+impl<'env> JsSubscribeUpdateDeshredTransaction<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshredTransaction,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      transaction: value
+        .transaction
+        .map(|option_inner_value| {
+          JsSubscribeUpdateDeshredTransactionInfo::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+      slot: Ok::<_, napi::Error>(value.slot.to_string())?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshredTransaction> {
+    Ok(SubscribeUpdateDeshredTransaction {
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      slot: self.slot.parse::<u64>().map_err(|parse_error| {
+        __typegen_invalid_arg_with_cause(
+          format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
+        )
+      })?,
+    })
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshredTransactionInfo<'env> {
+  pub signature: BufferSlice<'env>,
+  pub is_vote: bool,
+  pub transaction: ::core::option::Option<JsTransaction<'env>>,
+  pub loaded_writable_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
+  pub loaded_readonly_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
+}
+impl<'env> JsSubscribeUpdateDeshredTransactionInfo<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshredTransactionInfo,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      signature: BufferSlice::copy_from(env, &value.signature)?,
+      is_vote: Ok::<_, napi::Error>(value.is_vote)?,
+      transaction: value
+        .transaction
+        .map(|option_inner_value| JsTransaction::from_protobuf_to_js_type(env, option_inner_value))
+        .transpose()?,
+      loaded_writable_addresses: value
+        .loaded_writable_addresses
+        .into_iter()
+        .map(|vec_inner_value| BufferSlice::copy_from(env, &vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_readonly_addresses: value
+        .loaded_readonly_addresses
+        .into_iter()
+        .map(|vec_inner_value| BufferSlice::copy_from(env, &vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshredTransactionInfo> {
+    Ok(SubscribeUpdateDeshredTransactionInfo {
+      signature: Ok::<_, napi::Error>(self.signature.as_ref().to_vec())?,
+      is_vote: Ok::<_, napi::Error>(self.is_vote)?,
+      transaction: self
+        .transaction
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
+      loaded_writable_addresses: self
+        .loaded_writable_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      loaded_readonly_addresses: self
+        .loaded_readonly_addresses
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
     })
   }
 }
@@ -1975,6 +2217,70 @@ impl JsSubscribeUpdatePong {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdatePong> {
     Ok(SubscribeUpdatePong {
       id: Ok::<_, napi::Error>(self.id)?,
+    })
+  }
+}
+#[napi(object)]
+pub struct JsSubscribeUpdateDeshred<'env> {
+  pub filters: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+  pub created_at: ::core::option::Option<Date<'env>>,
+  pub update_oneof: ::core::option::Option<JsSubscribeUpdateDeshredUpdateOneof<'env>>,
+}
+impl<'env> JsSubscribeUpdateDeshred<'env> {
+  pub fn from_protobuf_to_js_type(
+    env: &'env Env,
+    value: SubscribeUpdateDeshred,
+  ) -> napi::Result<Self> {
+    Ok(Self {
+      filters: value
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      created_at: value
+        .created_at
+        .map(|option_inner_value| {
+          let timestamp_value_for_date_conversion = option_inner_value;
+          let timestamp_millis_for_date_conversion = (timestamp_value_for_date_conversion.seconds
+            * 1000) as f64
+            + (timestamp_value_for_date_conversion.nanos as f64 / 1_000_000.0);
+          env.create_date(timestamp_millis_for_date_conversion)
+        })
+        .transpose()?,
+      update_oneof: value
+        .update_oneof
+        .map(|option_inner_value| {
+          JsSubscribeUpdateDeshredUpdateOneof::from_protobuf_to_js_type(env, option_inner_value)
+        })
+        .transpose()?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshred> {
+    Ok(SubscribeUpdateDeshred {
+      filters: self
+        .filters
+        .into_iter()
+        .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value))
+        .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      created_at: self
+        .created_at
+        .map(|option_inner_value| {
+          let timestamp_millis_value_for_conversion = option_inner_value.value_of()?;
+          let timestamp_seconds_for_conversion =
+            (timestamp_millis_value_for_conversion / 1000.0).floor() as i64;
+          let timestamp_nanos_for_conversion = ((timestamp_millis_value_for_conversion
+            - (timestamp_seconds_for_conversion as f64 * 1000.0))
+            * 1_000_000.0) as i32;
+          Ok::<_, napi::Error>(::prost_types::Timestamp {
+            seconds: timestamp_seconds_for_conversion,
+            nanos: timestamp_nanos_for_conversion,
+          })
+        })
+        .transpose()?,
+      update_oneof: self
+        .update_oneof
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
+        .transpose()?,
     })
   }
 }
@@ -2015,9 +2321,9 @@ impl JsSubscribeReplayInfoResponse {
         .first_available
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2106,17 +2412,17 @@ impl JsGetLatestBlockhashResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetLatestBlockhashResponse> {
     Ok(GetLatestBlockhashResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
       last_valid_block_height: self.last_valid_block_height.parse::<u64>().map_err(
         |parse_error| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
+          __typegen_invalid_arg_with_cause(
             format!("Invalid u64 value: {}", parse_error),
+            &parse_error,
           )
         },
       )?,
@@ -2160,9 +2466,9 @@ impl JsGetBlockHeightResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetBlockHeightResponse> {
     Ok(GetBlockHeightResponse {
       block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2205,9 +2511,9 @@ impl JsGetSlotResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<GetSlotResponse> {
     Ok(GetSlotResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -2286,9 +2592,9 @@ impl JsIsBlockhashValidResponse {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<IsBlockhashValidResponse> {
     Ok(IsBlockhashValidResponse {
       slot: self.slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       valid: Ok::<_, napi::Error>(self.valid)?,
@@ -2347,9 +2653,9 @@ impl<'env> JsConfirmedBlock<'env> {
       previous_blockhash: Ok::<_, napi::Error>(self.previous_blockhash)?,
       blockhash: Ok::<_, napi::Error>(self.blockhash)?,
       parent_slot: self.parent_slot.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       transactions: self
@@ -2663,9 +2969,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
       fee: self.fee.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       pre_balances: self
@@ -2673,9 +2979,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .into_iter()
         .map(|vec_inner_value| {
           vec_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2685,9 +2991,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .into_iter()
         .map(|vec_inner_value| {
           vec_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2738,9 +3044,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .compute_units_consumed
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2749,9 +3055,9 @@ impl<'env> JsTransactionStatusMeta<'env> {
         .cost_units
         .map(|option_inner_value| {
           option_inner_value.parse::<u64>().map_err(|parse_error| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
+            __typegen_invalid_arg_with_cause(
               format!("Invalid u64 value: {}", parse_error),
+              &parse_error,
             )
           })
         })
@@ -2963,15 +3269,15 @@ impl JsReward {
     Ok(Reward {
       pubkey: Ok::<_, napi::Error>(self.pubkey)?,
       lamports: self.lamports.parse::<i64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid i64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       post_balance: self.post_balance.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
       reward_type: Ok::<_, napi::Error>(self.reward_type)?,
@@ -3029,9 +3335,9 @@ impl JsUnixTimestamp {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<UnixTimestamp> {
     Ok(UnixTimestamp {
       timestamp: self.timestamp.parse::<i64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid i64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -3051,9 +3357,9 @@ impl JsBlockHeight {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<BlockHeight> {
     Ok(BlockHeight {
       block_height: self.block_height.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })
@@ -3073,9 +3379,9 @@ impl JsNumPartitions {
   pub fn from_js_to_protobuf_type(self) -> napi::Result<NumPartitions> {
     Ok(NumPartitions {
       num_partitions: self.num_partitions.parse::<u64>().map_err(|parse_error| {
-        napi::Error::new(
-          napi::Status::InvalidArg,
+        __typegen_invalid_arg_with_cause(
           format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
         )
       })?,
     })

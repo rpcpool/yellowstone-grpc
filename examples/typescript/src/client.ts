@@ -2,10 +2,11 @@ import yargs from "yargs";
 import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
+  SubscribeDeshredRequest,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
-  SubscribeUpdateTransactionInfo,
+  txDeshredEncode,
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
@@ -57,6 +58,10 @@ async function main() {
       await subscribeCommand(client, args);
       break;
 
+    case "subscribeDeshred":
+      await subscribeDeshredCommand(client, args);
+      break;
+
     default:
       console.error(
         `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
@@ -74,7 +79,8 @@ function parseCommitmentLevel(commitment: string | undefined) {
   return CommitmentLevel[typedCommitment];
 }
 
-async function subscribeCommand(client, args) {
+async function subscribeCommand(client: Client, args) {
+
   // Subscribe for events
   const stream = await client.subscribe();
 
@@ -264,6 +270,79 @@ async function subscribeCommand(client, args) {
   }
 
   // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
+}
+
+async function subscribeDeshredCommand(client: Client, args) {
+  const stream = await client.subscribeDeshred();
+
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on("error", (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on("end", () => {
+      resolve();
+    });
+    stream.on("close", () => {
+      resolve();
+    });
+  });
+
+  stream.on("data", (data) => {
+    const txMessage = data.deshredTransaction?.transaction;
+
+    if (data.deshredTransaction && args.deshredParsed) {
+      if (!txMessage?.transaction) {
+        console.log("data", data);
+        return;
+      }
+
+      try {
+        const tx = txDeshredEncode.encode(
+          txMessage,
+          txDeshredEncode.encoding.JsonParsed,
+        );
+        console.log(
+          `DESHRED filters: ${data.filters}, slot#${data.deshredTransaction.slot}, tx: ${JSON.stringify(tx)}`
+        );
+      } catch (error) {
+        console.error(
+          `failed to parse deshred tx (slot#${data.deshredTransaction.slot})`,
+          error
+        );
+      }
+      return;
+    }
+
+    console.log("data", data);
+  });
+  
+  const request: SubscribeDeshredRequest = {
+    deshredTransactions: {
+      client: {
+        vote: args.deshredVote,
+        accountInclude: args.deshredAccountInclude,
+        accountExclude: args.deshredAccountExclude,
+        accountRequired: args.deshredAccountRequired,
+      },
+    },
+    ping: args.ping ? { id: args.ping } : undefined,
+  };
+
   await new Promise<void>((resolve, reject) => {
     stream.write(request, (err) => {
       if (err === null || err === undefined) {
@@ -487,6 +566,42 @@ function parseCommandLineArgs() {
         ping: {
           default: undefined,
           description: "send ping request in subscribe",
+          type: "number",
+        },
+      });
+    })
+    .command("subscribeDeshred", "subscribe to deshred transactions", (yargs) => {
+      return yargs.options({
+        "deshred-parsed": {
+          default: false,
+          describe: "parse deshred transactions using txDeshredEncode",
+          type: "boolean",
+        },
+        "deshred-vote": {
+          description: "filter vote transactions",
+          type: "boolean",
+        },
+        "deshred-account-include": {
+          default: [],
+          description:
+            "filter included accounts in deshred transactions (static + ALT)",
+          type: "array",
+        },
+        "deshred-account-exclude": {
+          default: [],
+          description:
+            "filter excluded accounts in deshred transactions (static + ALT)",
+          type: "array",
+        },
+        "deshred-account-required": {
+          default: [],
+          description:
+            "filter required accounts in deshred transactions (static + ALT)",
+          type: "array",
+        },
+        ping: {
+          default: undefined,
+          description: "send ping request in subscribeDeshred",
           type: "number",
         },
       });

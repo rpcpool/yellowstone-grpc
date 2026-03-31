@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use yellowstone_grpc_napi::js_types::*;
 use yellowstone_grpc_proto::geyser::{
   subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
-  subscribe_request_filter_accounts_filter_memcmp, subscribe_update,
+  subscribe_request_filter_accounts_filter_memcmp, subscribe_update, subscribe_update_deshred,
 };
 use yellowstone_grpc_proto::prelude::*;
 use yellowstone_grpc_proto::solana::storage::confirmed_block::*;
@@ -42,6 +42,10 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     JsSubscribeUpdateUpdateOneof,
     subscribe_update::UpdateOneof
   );
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredUpdateOneof,
+    subscribe_update_deshred::UpdateOneof
+  );
   assert_conversion_signatures_for_env_type!(JsConfirmedBlock, ConfirmedBlock);
   assert_conversion_signatures_for_env_type!(JsConfirmedTransaction, ConfirmedTransaction);
   assert_conversion_signatures_for_env_type!(JsTransaction, Transaction);
@@ -70,6 +74,7 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     SubscribeRequestFilterAccountsFilterMemcmp
   );
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdate, SubscribeUpdate);
+  assert_conversion_signatures_for_env_type!(JsSubscribeUpdateDeshred, SubscribeUpdateDeshred);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateAccount, SubscribeUpdateAccount);
   assert_conversion_signatures_for_env_type!(
     JsSubscribeUpdateAccountInfo,
@@ -89,6 +94,14 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   );
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateBlock, SubscribeUpdateBlock);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateEntry, SubscribeUpdateEntry);
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredTransaction,
+    SubscribeUpdateDeshredTransaction
+  );
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeUpdateDeshredTransactionInfo,
+    SubscribeUpdateDeshredTransactionInfo
+  );
 
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterAccountsFilterLamportsCmp,
@@ -117,6 +130,14 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterBlocks,
     SubscribeRequestFilterBlocks
+  );
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeDeshredRequest,
+    SubscribeDeshredRequest
+  );
+  assert_conversion_signatures_for_non_env_type!(
+    JsSubscribeRequestFilterDeshredTransactions,
+    SubscribeRequestFilterDeshredTransactions
   );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterBlocksMeta,
@@ -196,6 +217,10 @@ fn js_subscribe_request_accounts_data_slice_rejects_invalid_u64_strings() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid u64 value"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on parse conversion error"
+  );
 }
 
 #[test]
@@ -225,6 +250,10 @@ fn js_unix_timestamp_rejects_invalid_i64_string() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Invalid i64 value"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on parse conversion error"
+  );
 }
 
 #[test]
@@ -270,6 +299,10 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_multiple_var
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -285,6 +318,10 @@ fn js_subscribe_request_filter_accounts_filter_lamports_cmp_rejects_missing_vari
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("No variant set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -315,6 +352,10 @@ fn js_subscribe_request_filter_accounts_filter_filter_rejects_multiple_variants(
   let conversion_error = js_filter_value.from_js_to_protobuf_type().unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -370,6 +411,10 @@ fn js_subscribe_update_update_oneof_rejects_multiple_variants() {
     .unwrap_err();
   let conversion_error_message = conversion_error.to_string();
   assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]
@@ -426,6 +471,128 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
   );
   assert_eq!(protobuf_subscribe_request_value.ping.unwrap().id, 7);
   assert_eq!(protobuf_subscribe_request_value.from_slot, Some(42));
+}
+
+#[test]
+fn js_subscribe_request_conversion_preserves_transactions_vote_false() {
+  let mut transactions = HashMap::new();
+  transactions.insert(
+    "client".to_string(),
+    JsSubscribeRequestFilterTransactions {
+      vote: Some(false),
+      failed: None,
+      signature: None,
+      account_include: vec!["acc1".to_string()],
+      account_exclude: vec!["acc2".to_string()],
+      account_required: vec!["acc3".to_string()],
+    },
+  );
+
+  let js_subscribe_request_value: JsSubscribeRequest<'static> = JsSubscribeRequest {
+    accounts: HashMap::new(),
+    slots: HashMap::new(),
+    transactions,
+    transactions_status: HashMap::new(),
+    blocks: HashMap::new(),
+    blocks_meta: HashMap::new(),
+    entry: HashMap::new(),
+    commitment: Some(1),
+    accounts_data_slice: Vec::new(),
+    ping: None,
+    from_slot: None,
+  };
+
+  let protobuf_subscribe_request_value = js_subscribe_request_value
+    .from_js_to_protobuf_type()
+    .unwrap();
+
+  let tx_filter = protobuf_subscribe_request_value
+    .transactions
+    .get("client")
+    .expect("client tx filter should exist");
+  assert_eq!(tx_filter.vote, Some(false));
+  assert_eq!(tx_filter.account_include, vec!["acc1".to_string()]);
+  assert_eq!(tx_filter.account_exclude, vec!["acc2".to_string()]);
+  assert_eq!(tx_filter.account_required, vec!["acc3".to_string()]);
+}
+
+#[test]
+fn js_subscribe_deshred_request_conversion_preserves_vote_false_and_ping() {
+  let mut deshred_transactions = HashMap::new();
+  deshred_transactions.insert(
+    "client".to_string(),
+    JsSubscribeRequestFilterDeshredTransactions {
+      vote: Some(false),
+      account_include: vec!["acc1".to_string()],
+      account_exclude: vec!["acc2".to_string()],
+      account_required: vec!["acc3".to_string()],
+    },
+  );
+
+  let js_subscribe_deshred_request_value = JsSubscribeDeshredRequest {
+    deshred_transactions,
+    ping: Some(JsSubscribeRequestPing { id: 17 }),
+  };
+
+  let protobuf_subscribe_deshred_request_value = js_subscribe_deshred_request_value
+    .from_js_to_protobuf_type()
+    .unwrap();
+
+  let client_filter = protobuf_subscribe_deshred_request_value
+    .deshred_transactions
+    .get("client")
+    .expect("client filter should exist");
+
+  assert_eq!(client_filter.vote, Some(false));
+  assert_eq!(client_filter.account_include, vec!["acc1".to_string()]);
+  assert_eq!(client_filter.account_exclude, vec!["acc2".to_string()]);
+  assert_eq!(client_filter.account_required, vec!["acc3".to_string()]);
+  assert_eq!(
+    protobuf_subscribe_deshred_request_value.ping.unwrap().id,
+    17
+  );
+}
+
+#[test]
+fn js_subscribe_update_deshred_update_oneof_accepts_deshred_transaction_variant() {
+  let js_update_oneof_value: JsSubscribeUpdateDeshredUpdateOneof<'static> =
+    JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction: Some(JsSubscribeUpdateDeshredTransaction {
+        transaction: None,
+        slot: "9".to_string(),
+      }),
+      ping: None,
+      pong: None,
+    };
+
+  let protobuf_update_oneof_value = js_update_oneof_value.from_js_to_protobuf_type().unwrap();
+  assert!(matches!(
+    protobuf_update_oneof_value,
+    subscribe_update_deshred::UpdateOneof::DeshredTransaction(value) if value.slot == 9
+  ));
+}
+
+#[test]
+fn js_subscribe_update_deshred_update_oneof_rejects_multiple_variants() {
+  let js_update_oneof_value: JsSubscribeUpdateDeshredUpdateOneof<'static> =
+    JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction: Some(JsSubscribeUpdateDeshredTransaction {
+        transaction: None,
+        slot: "9".to_string(),
+      }),
+      ping: Some(JsSubscribeUpdatePing {}),
+      pong: None,
+    };
+
+  let conversion_error = js_update_oneof_value
+    .from_js_to_protobuf_type()
+    .unwrap_err();
+  let conversion_error_message = conversion_error.to_string();
+  assert!(conversion_error_message.contains("Multiple variants set"));
+  assert!(
+    conversion_error.cause.is_some(),
+    "expected cause on oneof validation error"
+  );
 }
 
 #[test]

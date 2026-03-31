@@ -28,4 +28,14 @@ export type MapTransactionEncodingToReturnType = {
   4: typeof jsonParsed;
 };
 
+export type DeshredTransactionEncodingToReturnType<
+  T extends keyof MapTransactionEncodingToReturnType = keyof MapTransactionEncodingToReturnType,
+> = {
+  signature: string;
+  isVote: boolean;
+  transaction: MapTransactionEncodingToReturnType[T];
+  loadedWritableAddresses: string[];
+  loadedReadonlyAddresses: string[];
+};
+
 export type TransactionErrorSolana = TransactionError;

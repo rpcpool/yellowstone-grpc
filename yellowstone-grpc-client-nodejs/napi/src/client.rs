@@ -45,6 +45,31 @@ use crate::{
   utils,
 };
 
+fn napi_error_with_cause(
+  status: napi::Status,
+  reason: impl Into<String>,
+  cause: &dyn std::error::Error,
+) -> napi::Error {
+  fn to_napi_cause(status: napi::Status, source: &dyn std::error::Error) -> napi::Error {
+    let mut cause = napi::Error::new(status, source.to_string());
+    if let Some(next) = source.source() {
+      cause.set_cause(to_napi_cause(status, next));
+    }
+    cause
+  }
+
+  let mut error = napi::Error::new(status, reason.into());
+  error.set_cause(to_napi_cause(status, cause));
+  error
+}
+
+fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(status, reason.clone());
+  error.set_cause(napi::Error::new(status, reason));
+  error
+}
+
 /// Internal module containing the generic client holder implementation.
 /// This is kept separate from the NAPI-exposed types to avoid generic type exposure.
 pub mod internal {
@@ -122,10 +147,13 @@ impl GrpcClient {
     let builder = utils::get_client_builder(endpoint, x_token, channel_options).await?;
 
     // Connect and get the client (returns GeyserGrpcClient<impl Interceptor>)
-    let client = builder
-      .connect()
-      .await
-      .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let client = builder.connect().await.map_err(|error| {
+      napi_error_with_cause(
+        napi::Status::GenericFailure,
+        "failed to connect to gRPC endpoint",
+        &error,
+      )
+    })?;
 
     // Wrap in our generic holder which can accept any interceptor type
     let holder = internal::ClientHolder::new(client);
@@ -151,14 +179,20 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
         let protobuf_response = grpc_client_guard
           .get_latest_blockhash(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_latest_blockhash request failed",
+              &error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -184,14 +218,13 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .ping(ping_count)
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response = grpc_client_guard.ping(ping_count).await.map_err(|error| {
+          napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", &error)
+        })?;
 
         Ok(protobuf_response)
       },
@@ -216,14 +249,20 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
         let protobuf_response = grpc_client_guard
           .get_block_height(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_block_height request failed",
+              &error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -248,14 +287,20 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
         let protobuf_response = grpc_client_guard
           .get_slot(commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "get_slot request failed",
+              &error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -281,14 +326,20 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
         let protobuf_response = grpc_client_guard
           .is_blockhash_valid(blockhash_value, commitment_level_option)
           .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+          .map_err(|error| {
+            napi_error_with_cause(
+              napi::Status::GenericFailure,
+              "is_blockhash_valid request failed",
+              &error,
+            )
+          })?;
 
         Ok(protobuf_response)
       },
@@ -313,14 +364,17 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .get_version()
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response = grpc_client_guard.get_version().await.map_err(|error| {
+          napi_error_with_cause(
+            napi::Status::GenericFailure,
+            "get_version request failed",
+            &error,
+          )
+        })?;
 
         Ok(protobuf_response)
       },
@@ -342,14 +396,21 @@ impl GrpcClient {
       async move {
         let grpc_client_holder = grpc_client_holder
           .downcast_ref::<internal::ClientHolder<yellowstone_grpc_client::InterceptorXToken>>()
-          .ok_or_else(|| napi::Error::from_reason("Invalid client type"))?;
+          .ok_or_else(|| napi_error(napi::Status::GenericFailure, "Invalid client type"))?;
 
         let mut grpc_client_guard = grpc_client_holder.client.lock().await;
 
-        let protobuf_response = grpc_client_guard
-          .subscribe_replay_info()
-          .await
-          .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let protobuf_response =
+          grpc_client_guard
+            .subscribe_replay_info()
+            .await
+            .map_err(|error| {
+              napi_error_with_cause(
+                napi::Status::GenericFailure,
+                "subscribe_replay_info request failed",
+                &error,
+              )
+            })?;
 
         Ok(protobuf_response)
       },
@@ -370,7 +431,24 @@ impl GrpcClient {
   // subscribe should only be available via the `GrpcClient`
   #[allow(private_interfaces)]
   #[napi]
-  pub fn subscribe(&self, env: &napi::Env) -> napi::Result<crate::DuplexStream> {
+  pub fn subscribe<'env>(
+    &self,
+    env: &'env napi::Env,
+  ) -> napi::Result<PromiseRaw<'env, crate::DuplexStream>> {
     crate::DuplexStream::subscribe(env, self)
+  }
+
+  /// Creates a deshred subscription stream bound to this client connection.
+  ///
+  /// Unlike `subscribe()`, this method opens the underlying gRPC stream before
+  /// resolving, so server-side `UNIMPLEMENTED` errors bubble to TypeScript
+  /// callers through the returned Promise.
+  #[allow(private_interfaces)]
+  #[napi]
+  pub fn subscribe_deshred<'env>(
+    &self,
+    env: &'env napi::Env,
+  ) -> napi::Result<PromiseRaw<'env, crate::DuplexStreamDeshred>> {
+    crate::DuplexStreamDeshred::subscribe(env, self)
   }
 }

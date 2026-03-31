@@ -8,8 +8,10 @@ import {
   GetVersionResponse as GetVersionResponseMessage,
   IsBlockhashValidResponse as IsBlockhashValidResponseMessage,
   PongResponse as PongResponseMessage,
+  SubscribeDeshredRequest as SubscribeDeshredRequestMessage,
   SubscribeRequest as SubscribeRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
+  SubscribeUpdateDeshredTransactionInfo,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
 import type {
@@ -20,18 +22,23 @@ import type {
   GetVersionResponse,
   IsBlockhashValidResponse,
   PongResponse,
+  SubscribeDeshredRequest,
   SubscribeReplayInfoResponse,
   SubscribeRequest,
+  SubscribeUpdateDeshred,
   SubscribeUpdate,
 } from "./grpc/geyser";
 
 // Reexport automatically generated types
 export {
   CommitmentLevel,
+  SubscribeDeshredRequest,
+  SubscribeDeshredRequest_DeshredTransactionsEntry,
   SubscribeRequest,
   SubscribeRequest_AccountsEntry,
   SubscribeRequest_BlocksEntry,
   SubscribeRequest_BlocksMetaEntry,
+  SubscribeRequestFilterDeshredTransactions,
   SubscribeRequest_SlotsEntry,
   SubscribeRequest_TransactionsEntry,
   SubscribeRequestAccountsDataSlice,
@@ -49,6 +56,9 @@ export {
   SubscribeUpdateAccountInfo,
   SubscribeUpdateBlock,
   SubscribeUpdateBlockMeta,
+  SubscribeUpdateDeshred,
+  SubscribeUpdateDeshredTransaction,
+  SubscribeUpdateDeshredTransactionInfo,
   SubscribeUpdatePing,
   SubscribeUpdateSlot,
   SubscribeUpdateTransaction,
@@ -58,6 +68,7 @@ export {
 import type {
   TransactionErrorSolana,
   // Import mapper to get return type based on WasmUiTransactionEncoding
+  DeshredTransactionEncodingToReturnType,
   MapTransactionEncodingToReturnType,
 } from "./types";
 
@@ -92,6 +103,70 @@ function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate 
     blockMeta: oneof.blockMeta as any,
     entry: oneof.entry as any,
   } as SubscribeUpdate;
+}
+
+/**
+ * Convert N-API `JsSubscribeUpdateDeshred` shape (with `updateOneof`) into the
+ * generated protobuf-friendly SDK shape (`SubscribeUpdateDeshred`).
+ */
+function fromJsSubscribeUpdateDeshred(
+  update: napi.JsSubscribeUpdateDeshred,
+): SubscribeUpdateDeshred {
+  const oneof = update.updateOneof ?? {};
+
+  return {
+    filters: update.filters ?? [],
+    createdAt: update.createdAt,
+    deshredTransaction: oneof.deshredTransaction as any,
+    ping: oneof.ping as any,
+    pong: oneof.pong as any,
+  } as SubscribeUpdateDeshred;
+}
+
+function parseOptionalBool(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  throw new Error(
+    `Invalid ${fieldName}: expected true/false, got ${JSON.stringify(value)}`,
+  );
+}
+
+function normalizeSubscribeDeshredRequest(
+  request: SubscribeDeshredRequest,
+): SubscribeDeshredRequest {
+  const normalizedEntries = Object.fromEntries(
+    Object.entries(request.deshredTransactions ?? {}).map(([name, filter]) => [
+      name,
+      {
+        ...filter,
+        vote: parseOptionalBool(
+          (filter as { vote?: unknown }).vote,
+          `deshredTransactions.${name}.vote`,
+        ),
+      },
+    ]),
+  );
+
+  return {
+    ...request,
+    deshredTransactions: normalizedEntries,
+  };
 }
 
 export default class Client {
@@ -238,11 +313,33 @@ export default class Client {
 
     // Native stream produces N-API generated JS objects; wrapper below adapts
     // to public protobuf-generated SDK shapes and Node stream semantics.
-    const stream = grpcClient.subscribe();
+    const stream = await grpcClient.subscribe();
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {
         resolve(new ClientDuplexStream(stream, options));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async subscribeDeshred(): Promise<ClientDeshredDuplexStream> {
+    const grpcClient = this._connectedGrpcClient();
+
+    // Same stream options used by regular subscribe() wrapper.
+    const options = {
+      objectMode: true,
+      decodeStrings: false,
+    };
+
+    // Native layer opens the gRPC stream before resolving this Promise, so
+    // unsupported RPCs (UNIMPLEMENTED) throw here and bubble to caller.
+    const stream = await grpcClient.subscribeDeshred();
+
+    return new Promise<ClientDeshredDuplexStream>((resolve, reject) => {
+      try {
+        resolve(new ClientDeshredDuplexStream(stream, options));
       } catch (err) {
         reject(err);
       }
@@ -317,24 +414,20 @@ export class ClientDuplexStream extends Duplex {
         }
         this._terminalErrorSeen = true;
 
-        // Detect normal end-of-stream / "no update available" sentinel from native side.
-        const e = err as any;
-        const isNormalEof =
-          err == null ||
-          (e && typeof e.code === "string" && e.code === "NO_UPDATE_AVAILABLE") ||
-          (e &&
-            typeof e.message === "string" &&
-            e.message.toLowerCase().includes("no update available"));
-
         this.push(null); // Signal end of stream
-
-        if (isNormalEof) {
-          // Graceful shutdown: end without emitting an error event.
-          this.destroy();
+        let terminalError: Error;
+        if (err instanceof Error) {
+          terminalError = err;
+        } else if (
+          err &&
+          typeof err === "object" &&
+          typeof (err as { message?: unknown }).message === "string"
+        ) {
+          terminalError = new Error((err as { message: string }).message);
         } else {
-          // Real error: propagate as a stream error.
-          this.destroy(err as Error);
+          terminalError = new Error(String(err ?? "native stream read failed"));
         }
+        this.destroy(terminalError);
       });
   }
 
@@ -389,6 +482,138 @@ export class ClientDuplexStream extends Duplex {
   }
 }
 
+export class ClientDeshredDuplexStream extends Duplex {
+  private _napiDuplexStream: unknown;
+  private _readInFlight: boolean;
+  private _isClosed: boolean;
+  private _isDestroying: boolean;
+  private _terminalErrorSeen: boolean;
+
+  constructor(stream: unknown, options: object | undefined) {
+    super({ ...options });
+    this._napiDuplexStream = stream;
+    this._readInFlight = false;
+    this._isClosed = false;
+    this._isDestroying = false;
+    this._terminalErrorSeen = false;
+
+    this.once("close", () => {
+      this._isClosed = true;
+    });
+  }
+
+  _pullNextUpdate() {
+    if (this._isClosed || this._isDestroying || this._readInFlight) {
+      return;
+    }
+
+    this._readInFlight = true;
+
+    (this._napiDuplexStream as {
+      read: () => Promise<napi.JsSubscribeUpdateDeshred | undefined | null>;
+    })
+      .read()
+      .then((update) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        if (update == null) {
+          this.push(null);
+          this.destroy();
+          return;
+        }
+
+        const grpcUpdate = fromJsSubscribeUpdateDeshred(update);
+
+        const canContinue = this.push(grpcUpdate);
+        if (canContinue) {
+          this._pullNextUpdate();
+        }
+      })
+      .catch((err) => {
+        this._readInFlight = false;
+
+        if (this._isClosed || this._isDestroying) {
+          return;
+        }
+
+        if (this._terminalErrorSeen) {
+          return;
+        }
+        this._terminalErrorSeen = true;
+
+        this.push(null);
+        let terminalError: Error;
+        if (err instanceof Error) {
+          terminalError = err;
+        } else if (
+          err &&
+          typeof err === "object" &&
+          typeof (err as { message?: unknown }).message === "string"
+        ) {
+          terminalError = new Error((err as { message: string }).message);
+        } else {
+          terminalError = new Error(String(err ?? "native stream read failed"));
+        }
+        this.destroy(terminalError);
+      });
+  }
+
+  _read(_size: number) {
+    this._pullNextUpdate();
+  }
+
+  _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    this._isDestroying = true;
+    this._isClosed = true;
+    this._terminalErrorSeen = true;
+
+    try {
+      const nativeStream = this._napiDuplexStream as { close?: () => void };
+      if (typeof nativeStream.close === "function") {
+        nativeStream.close();
+      }
+    } catch {}
+
+    callback(error);
+  }
+
+  _write(
+    chunk: SubscribeDeshredRequest,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    if (this._isClosed || this._isDestroying) {
+      callback(new Error("Cannot write to a closed deshred subscription stream"));
+      return;
+    }
+
+    try {
+      const normalizedChunk = normalizeSubscribeDeshredRequest(chunk);
+      const encodedRequest = SubscribeDeshredRequestMessage.encode(
+        normalizedChunk,
+      ).finish();
+      const nativeStream = this._napiDuplexStream as unknown as {
+        writeRaw?: (requestBytes: Uint8Array) => void;
+      };
+
+      if (typeof nativeStream.writeRaw !== "function") {
+        throw new Error(
+          "Native stream does not support writeRaw; reinstall the SDK so JS and native bindings match",
+        );
+      }
+
+      nativeStream.writeRaw(encodedRequest);
+      callback();
+    } catch (err) {
+      callback(err as Error);
+    }
+  }
+}
+
 export const txEncode = {
   encoding: (napi as any).WasmUiTransactionEncoding,
   encode_raw: napi.encodeTx,
@@ -404,6 +629,22 @@ export const txEncode = {
         encoding,
         max_supported_transaction_version,
         show_rewards,
+      ),
+    );
+  },
+};
+
+export const txDeshredEncode = {
+  encoding: (napi as any).WasmUiTransactionEncoding,
+  encode_raw: napi.encodeDeshredTx,
+  encode: <T extends napi.WasmUiTransactionEncoding>(
+    message: SubscribeUpdateDeshredTransactionInfo,
+    encoding: T,
+  ): DeshredTransactionEncodingToReturnType<T> => {
+    return JSON.parse(
+      napi.encodeDeshredTx(
+        SubscribeUpdateDeshredTransactionInfo.encode(message).finish(),
+        encoding,
       ),
     );
   },
