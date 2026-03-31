@@ -1,6 +1,6 @@
 {
   "name": "yellowstone-grpc-napi",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Yellowstone gRPC NAPI bindings",
   "main": "index.js",
   "types": "index.d.ts",
