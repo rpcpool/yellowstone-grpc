@@ -1022,23 +1022,31 @@ impl FilteredUpdateEntry {
 
 #[cfg(any(test, feature = "bench"))]
 pub mod tests {
+    #[cfg(test)]
+    use super::{FilteredUpdate, FilteredUpdateOneof};
+    #[cfg(test)]
+    use crate::plugin::{
+        filter::{
+            encoder::{AccountEncoder, TransactionEncoder},
+            message::{FilteredUpdateAccount, FilteredUpdateTransaction},
+        },
+        message::{MessageSlot, MessageTransaction, SlotStatus},
+    };
+    #[cfg(test)]
+    use prost::Message as _;
+    #[cfg(test)]
+    use yellowstone_grpc_proto::geyser::SubscribeUpdate;
     use {
-        super::{FilteredUpdate, FilteredUpdateBlock, FilteredUpdateFilters, FilteredUpdateOneof},
+        super::{FilteredUpdateBlock, FilteredUpdateFilters},
         crate::plugin::{
             convert_to,
-            filter::{
-                encoder::{AccountEncoder, TransactionEncoder},
-                message::{FilteredUpdateAccount, FilteredUpdateTransaction},
-                name::FilterName,
-                FilterAccountsDataSlice,
-            },
+            filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
-                MessageTransaction, MessageTransactionInfo, SlotStatus,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                MessageTransactionInfo,
             },
         },
         bytes::Bytes,
-        prost::Message as _,
         prost_011::Message as _,
         prost_types::Timestamp,
         solana_hash::Hash,
@@ -1054,7 +1062,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockMeta},
+        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {
@@ -1273,6 +1281,7 @@ pub mod tests {
             .collect()
     }
 
+    #[cfg(test)]
     fn encode_decode_cmp(filters: &[&str], message: FilteredUpdateOneof) {
         let msg = FilteredUpdate {
             filters: create_message_filters(filters),

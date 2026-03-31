@@ -21,9 +21,7 @@ use {
     },
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
-    yellowstone_grpc_client::{
-        GeyserGrpcBuilder, GeyserGrpcClient, GeyserGrpcClientError, Interceptor,
-    },
+    yellowstone_grpc_client::{GeyserGrpcBuilder, GeyserGrpcClient},
     yellowstone_grpc_geyser::plugin::{convert_from, filter::message::FilteredUpdate},
     yellowstone_grpc_proto::{
         geyser::SlotStatus,
@@ -659,7 +657,7 @@ impl Action {
 }
 
 async fn run_action(
-    mut client: GeyserGrpcClient<impl Interceptor>,
+    mut client: GeyserGrpcClient,
     action: &Action,
     commitment: Option<CommitmentLevel>,
 ) -> anyhow::Result<()> {
@@ -782,7 +780,7 @@ async fn main() -> anyhow::Result<()> {
     .await
 }
 
-async fn geyser_health_watch(mut client: GeyserGrpcClient<impl Interceptor>) -> anyhow::Result<()> {
+async fn geyser_health_watch(mut client: GeyserGrpcClient) -> anyhow::Result<()> {
     let mut stream = client.health_watch().await?;
     info!("stream opened");
     while let Some(message) = stream.next().await {
@@ -793,7 +791,7 @@ async fn geyser_health_watch(mut client: GeyserGrpcClient<impl Interceptor>) -> 
 }
 
 async fn geyser_subscribe(
-    mut client: GeyserGrpcClient<impl Interceptor>,
+    mut client: GeyserGrpcClient,
     request: SubscribeRequest,
     resub: usize,
     stats: bool,
@@ -1047,8 +1045,7 @@ async fn geyser_subscribe(
                     ping: None,
                     from_slot: None,
                 })
-                .await
-                .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+                .await?;
         }
     }
     info!("stream closed");
@@ -1056,7 +1053,7 @@ async fn geyser_subscribe(
 }
 
 async fn geyser_subscribe_deshred(
-    mut client: GeyserGrpcClient<impl Interceptor>,
+    mut client: GeyserGrpcClient,
     request: SubscribeDeshredRequest,
     stats: bool,
 ) -> anyhow::Result<()> {
