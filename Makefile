@@ -20,6 +20,9 @@ clean-napi:
 	rm -rf yellowstone-grpc-client-nodejs/napi/index.js
 	rm -rf yellowstone-grpc-client-nodejs/napi/index.d.ts
 
+install-hooks:
+	git config core.hooksPath .githooks
+
 solana-encoding-napi-clippy:
 	cd yellowstone-grpc-client-nodejs/napi && \
 		cargo clippy
