@@ -34,6 +34,7 @@ yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compres
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-stream = { workspace = true }
 
 [lints]
 workspace = true

@@ -5330,6 +5330,7 @@ dependencies = [
  "pin-project",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tower 0.4.13",
