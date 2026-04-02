@@ -21,7 +21,6 @@ base64 = "0.21"
 wincode = "0.4.4"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tonic = { version = "0.11", features = ["transport", "tls", "gzip", "zstd"] }
 rustls = { version = "0.23", features = ["ring"] }
 bytes = "1"
 futures = "0.3"
