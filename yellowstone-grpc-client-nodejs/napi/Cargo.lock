@@ -3956,6 +3956,7 @@ version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
@@ -4537,15 +4538,18 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "12.1.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a31478dd10ad437b6b39cb463706915ca9668201a6889957f740ed1b3cd8ec8"
+checksum = "d9c3e9328306945410423b40714b0fe9bfe361e5eba1da3e0a63288228313bfb"
 dependencies = [
  "bytes",
  "futures",
+ "hyper-util",
  "thiserror 2.0.18",
+ "tokio",
  "tonic 0.14.3",
  "tonic-health",
+ "tower 0.4.13",
  "yellowstone-grpc-proto",
 ]
 
