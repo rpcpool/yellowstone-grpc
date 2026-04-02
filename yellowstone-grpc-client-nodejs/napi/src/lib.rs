@@ -132,7 +132,7 @@ impl DuplexStream {
     grpc_client: &GrpcClient,
   ) -> Result<PromiseRaw<'env, Self>> {
     let client = grpc_client.client.clone();
-    
+
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // reject the Promise and bubble to TypeScript callers.
     env.spawn_future_with_callback(
@@ -394,13 +394,12 @@ impl DuplexStreamDeshred {
     env: &'env Env,
     grpc_client: &GrpcClient,
   ) -> Result<PromiseRaw<'env, Self>> {
-  let client = grpc_client.client.clone();
+    let client = grpc_client.client.clone();
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // (e.g. UNIMPLEMENTED) reject the Promise and bubble to TypeScript callers.
     env.spawn_future_with_callback(
       async move {
-
         // Acquire lock, open stream, and release lock immediately.
         let (mut stream_tx, mut stream_rx) = {
           let mut client = client.lock().await;

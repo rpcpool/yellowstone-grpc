@@ -3,10 +3,10 @@
 use napi::bindgen_prelude::PromiseRaw;
 use napi::Env;
 use napi_derive::napi;
-use yellowstone_grpc_client::GeyserGrpcClient;
 use std::sync::Arc;
-use yellowstone_grpc_proto::geyser::CommitmentLevel;
 use tokio::sync::Mutex;
+use yellowstone_grpc_client::GeyserGrpcClient;
+use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
 use crate::{
   bindings::JsChannelOptions,
@@ -86,7 +86,7 @@ impl GrpcClient {
     })?;
 
     Ok(Self {
-      client: Arc::new(Mutex::new(client))
+      client: Arc::new(Mutex::new(client)),
     })
   }
 
@@ -140,7 +140,6 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
         let mut grpc_client_guard = client.lock().await;
 
         let protobuf_response = grpc_client_guard.ping(ping_count).await.map_err(|error| {
@@ -165,11 +164,10 @@ impl GrpcClient {
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-      let client = self.client.clone();
-      
+    let client = self.client.clone();
+
     environment.spawn_future_with_callback(
       async move {
-
         let mut grpc_client_guard = client.lock().await;
 
         let protobuf_response = grpc_client_guard
@@ -205,7 +203,6 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
         let mut grpc_client_guard = client.lock().await;
 
         let protobuf_response = grpc_client_guard
@@ -272,8 +269,7 @@ impl GrpcClient {
     environment: &'env Env,
     _get_version_request: JsGetVersionRequest,
   ) -> napi::Result<PromiseRaw<'env, JsGetVersionResponse>> {
-
-let client = self.client.clone();
+    let client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
@@ -301,11 +297,10 @@ let client = self.client.clone();
     environment: &'env Env,
     _subscribe_replay_info_request: JsSubscribeReplayInfoRequest,
   ) -> napi::Result<PromiseRaw<'env, JsSubscribeReplayInfoResponse>> {
-let client = self.client.clone();
+    let client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-
         let mut grpc_client_guard = client.lock().await;
 
         let protobuf_response =
