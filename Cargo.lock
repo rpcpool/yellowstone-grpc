@@ -5359,6 +5359,7 @@ dependencies = [
  "solana-signature",
  "solana-transaction-status",
  "tokio",
+ "tokio-stream",
  "tonic",
  "yellowstone-grpc-client",
  "yellowstone-grpc-geyser",

@@ -29,6 +29,7 @@ maplit = { workspace = true }
 serde_json = { workspace = true }
 solana-transaction-status = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
+tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["zstd", "gzip", "tls-native-roots", "tls-ring"] }
 
 # Agave Monorepo
