@@ -83,9 +83,7 @@ impl GrpcClient {
       )
     })?;
 
-    Ok(Self {
-      client: client,
-    })
+    Ok(Self { client: client })
   }
 
   #[napi]
@@ -136,7 +134,6 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
         let protobuf_response = client.ping(ping_count).await.map_err(|error| {
           napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", &error)
         })?;
@@ -196,17 +193,17 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
-        let protobuf_response = client
-          .get_slot(commitment_level_option)
-          .await
-          .map_err(|error| {
-            napi_error_with_cause(
-              napi::Status::GenericFailure,
-              "get_slot request failed",
-              &error,
-            )
-          })?;
+        let protobuf_response =
+          client
+            .get_slot(commitment_level_option)
+            .await
+            .map_err(|error| {
+              napi_error_with_cause(
+                napi::Status::GenericFailure,
+                "get_slot request failed",
+                &error,
+              )
+            })?;
 
         Ok(protobuf_response)
       },
@@ -231,7 +228,6 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
         let protobuf_response = client
           .is_blockhash_valid(blockhash_value, commitment_level_option)
           .await
@@ -264,7 +260,6 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
         let protobuf_response = client.get_version().await.map_err(|error| {
           napi_error_with_cause(
             napi::Status::GenericFailure,
@@ -291,18 +286,13 @@ impl GrpcClient {
 
     environment.spawn_future_with_callback(
       async move {
-
-        let protobuf_response =
-          client
-            .subscribe_replay_info()
-            .await
-            .map_err(|error| {
-              napi_error_with_cause(
-                napi::Status::GenericFailure,
-                "subscribe_replay_info request failed",
-                &error,
-              )
-            })?;
+        let protobuf_response = client.subscribe_replay_info().await.map_err(|error| {
+          napi_error_with_cause(
+            napi::Status::GenericFailure,
+            "subscribe_replay_info request failed",
+            &error,
+          )
+        })?;
 
         Ok(protobuf_response)
       },
