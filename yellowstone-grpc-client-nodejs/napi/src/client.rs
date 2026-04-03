@@ -3,8 +3,6 @@
 use napi::bindgen_prelude::PromiseRaw;
 use napi::Env;
 use napi_derive::napi;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
@@ -51,7 +49,7 @@ fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
 /// in the constructor and reused for all subsequent operations.
 #[napi]
 pub struct GrpcClient {
-  pub(crate) client: Arc<Mutex<GeyserGrpcClient>>,
+  pub(crate) client: GeyserGrpcClient,
 }
 
 #[napi]
@@ -86,7 +84,7 @@ impl GrpcClient {
     })?;
 
     Ok(Self {
-      client: Arc::new(Mutex::new(client)),
+      client: client,
     })
   }
 
@@ -100,13 +98,11 @@ impl GrpcClient {
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
-
-        let protobuf_response = grpc_client_guard
+        let protobuf_response = client
           .get_latest_blockhash(commitment_level_option)
           .await
           .map_err(|error| {
@@ -136,13 +132,12 @@ impl GrpcClient {
   ) -> napi::Result<PromiseRaw<'env, JsPongResponse>> {
     let ping_count = request.count;
 
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
 
-        let protobuf_response = grpc_client_guard.ping(ping_count).await.map_err(|error| {
+        let protobuf_response = client.ping(ping_count).await.map_err(|error| {
           napi_error_with_cause(napi::Status::GenericFailure, "ping request failed", &error)
         })?;
 
@@ -164,13 +159,11 @@ impl GrpcClient {
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
-
-        let protobuf_response = grpc_client_guard
+        let protobuf_response = client
           .get_block_height(commitment_level_option)
           .await
           .map_err(|error| {
@@ -199,13 +192,12 @@ impl GrpcClient {
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
 
-        let protobuf_response = grpc_client_guard
+        let protobuf_response = client
           .get_slot(commitment_level_option)
           .await
           .map_err(|error| {
@@ -235,13 +227,12 @@ impl GrpcClient {
       .commitment
       .and_then(|c| CommitmentLevel::try_from(c).ok());
 
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
 
-        let protobuf_response = grpc_client_guard
+        let protobuf_response = client
           .is_blockhash_valid(blockhash_value, commitment_level_option)
           .await
           .map_err(|error| {
@@ -269,13 +260,12 @@ impl GrpcClient {
     environment: &'env Env,
     _get_version_request: JsGetVersionRequest,
   ) -> napi::Result<PromiseRaw<'env, JsGetVersionResponse>> {
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
 
-        let protobuf_response = grpc_client_guard.get_version().await.map_err(|error| {
+        let protobuf_response = client.get_version().await.map_err(|error| {
           napi_error_with_cause(
             napi::Status::GenericFailure,
             "get_version request failed",
@@ -297,14 +287,13 @@ impl GrpcClient {
     environment: &'env Env,
     _subscribe_replay_info_request: JsSubscribeReplayInfoRequest,
   ) -> napi::Result<PromiseRaw<'env, JsSubscribeReplayInfoResponse>> {
-    let client = self.client.clone();
+    let mut client = self.client.clone();
 
     environment.spawn_future_with_callback(
       async move {
-        let mut grpc_client_guard = client.lock().await;
 
         let protobuf_response =
-          grpc_client_guard
+          client
             .subscribe_replay_info()
             .await
             .map_err(|error| {

@@ -131,7 +131,7 @@ impl DuplexStream {
     env: &'env Env,
     grpc_client: &GrpcClient,
   ) -> Result<PromiseRaw<'env, Self>> {
-    let client = grpc_client.client.clone();
+    let mut client = grpc_client.client.clone();
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // reject the Promise and bubble to TypeScript callers.
@@ -139,8 +139,6 @@ impl DuplexStream {
       async move {
         // Acquire lock, call subscribe, and immediately release the lock.
         let (mut stream_tx, mut stream_rx) = {
-          let mut client = client.lock().await;
-
           client.subscribe().await.map_err(|error| {
             napi_error_with_cause(
               napi::Status::GenericFailure,
@@ -394,7 +392,7 @@ impl DuplexStreamDeshred {
     env: &'env Env,
     grpc_client: &GrpcClient,
   ) -> Result<PromiseRaw<'env, Self>> {
-    let client = grpc_client.client.clone();
+    let mut client = grpc_client.client.clone();
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // (e.g. UNIMPLEMENTED) reject the Promise and bubble to TypeScript callers.
@@ -402,7 +400,6 @@ impl DuplexStreamDeshred {
       async move {
         // Acquire lock, open stream, and release lock immediately.
         let (mut stream_tx, mut stream_rx) = {
-          let mut client = client.lock().await;
           client.subscribe_deshred().await.map_err(|error| {
             napi_error_with_cause(
               napi::Status::GenericFailure,
