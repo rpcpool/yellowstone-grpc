@@ -469,7 +469,9 @@ function writeAndWaitCallback(
     };
 
     const timeoutId = setTimeout(() => {
-      settleOnce(new Error(`Timed out waiting for write callback after ${timeoutMs}ms`));
+      settleOnce(
+        new Error(`Timed out waiting for write callback after ${timeoutMs}ms`),
+      );
     }, timeoutMs);
 
     try {
@@ -480,6 +482,37 @@ function writeAndWaitCallback(
       settleOnce(err as Error);
     }
   });
+}
+
+async function callAllUnaryMethodsAndAssert(client: Client): Promise<void> {
+  const latestBlockhash = await client.getLatestBlockhash(2);
+  expect(typeof latestBlockhash.slot).toBe("string");
+  expect(typeof latestBlockhash.blockhash).toBe("string");
+  expect(typeof latestBlockhash.lastValidBlockHeight).toBe("string");
+
+  const pingResponse = await client.ping(7);
+  expect(typeof pingResponse.count).toBe("number");
+  expect(pingResponse.count).toBe(7);
+
+  const blockHeight = await client.getBlockHeight(2);
+  expect(typeof blockHeight.blockHeight).toBe("string");
+
+  const slot = await client.getSlot(2);
+  expect(typeof slot.slot).toBe("string");
+
+  const blockhashValidity = await client.isBlockhashValid(
+    latestBlockhash.blockhash,
+    2,
+  );
+  expect(typeof blockhashValidity.slot).toBe("string");
+  expect(typeof blockhashValidity.valid).toBe("boolean");
+
+  const version = await client.getVersion();
+  expect(typeof version.version).toBe("string");
+  expect(version.version.length).toBeGreaterThan(0);
+
+  const replayInfo = await client.subscribeReplayInfo();
+  expect(typeof replayInfo).toBe("object");
 }
 
 function getAllGeyserMessageFns(): Array<[string, any]> {
@@ -675,12 +708,10 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
 
   test("read: native NO_UPDATE_AVAILABLE rejection is surfaced as error", async () => {
     const nativeClose = jest.fn();
-    const nativeRead = jest
-      .fn()
-      .mockRejectedValue({
-        code: "NO_UPDATE_AVAILABLE",
-        message: "no update available",
-      });
+    const nativeRead = jest.fn().mockRejectedValue({
+      code: "NO_UPDATE_AVAILABLE",
+      message: "no update available",
+    });
     const stream = new ClientDuplexStream(
       {
         close: nativeClose,
@@ -1415,6 +1446,118 @@ describe("Client subscription independence behavior", () => {
   });
 });
 
+// subscribe to both subscribe & subscribeDeshred, do all unary calls, modify subscribe request for both, do unary calls again
+describe("Concurrent subscriptions with unary calls", () => {
+  const TEST_TIMEOUT = 180000;
+
+  // .env
+  const { TEST_ENDPOINT: endpoint, TEST_TOKEN: xToken } = process.env;
+
+  const channelOptions = {};
+  const client = new Client(endpoint, xToken, channelOptions);
+
+  beforeAll(async () => {
+    await client.connect();
+  });
+
+  test(
+    "subscribe + subscribeDeshred remain active while unary calls run before and after request updates",
+    async () => {
+      const subscribeStream = await client.subscribe();
+      const subscribeDeshredStream = await client.subscribeDeshred();
+
+      try {
+        // 1) Send initial requests on both streams to establish active subscriptions.
+        const subscribeInitialRequest: SubscribeRequest = {
+          ...makeMinimalSubscribeRequest(),
+          slots: {
+            initial_slot_client: {
+              filterByCommitment: true,
+              interslotUpdates: false,
+            },
+          },
+          ping: { id: 100 },
+        };
+        const subscribeDeshredInitialRequest: SubscribeDeshredRequest = {
+          deshredTransactions: {
+            initial_deshred_client: {
+              vote: true,
+              accountInclude: [],
+              accountExclude: [],
+              accountRequired: [],
+            },
+          },
+          ping: { id: 101 },
+        };
+
+        expect(
+          await writeAndWaitCallback(subscribeStream, subscribeInitialRequest),
+        ).toBeNull();
+        expect(
+          await writeAndWaitCallback(
+            subscribeDeshredStream,
+            subscribeDeshredInitialRequest,
+          ),
+        ).toBeNull();
+
+        // 2) While both subscriptions are open, execute every unary method once.
+        await callAllUnaryMethodsAndAssert(client);
+
+        // 3) Update both subscription requests without recreating streams.
+        const subscribeUpdatedRequest: SubscribeRequest = {
+          ...makeMinimalSubscribeRequest(),
+          accounts: {
+            updated_accounts_client: {
+              account: [],
+              owner: [],
+              filters: [{ datasize: "165" }],
+            },
+          },
+          transactions: {
+            updated_tx_client: {
+              vote: false,
+              failed: false,
+              accountInclude: [],
+              accountExclude: [],
+              accountRequired: [],
+            },
+          },
+          ping: { id: 200 },
+          fromSlot: "1",
+        };
+        const subscribeDeshredUpdatedRequest: SubscribeDeshredRequest = {
+          deshredTransactions: {
+            updated_deshred_client: {
+              vote: false,
+              accountInclude: ["11111111111111111111111111111111"],
+              accountExclude: [],
+              accountRequired: [],
+            },
+          },
+          ping: { id: 201 },
+        };
+
+        expect(
+          await writeAndWaitCallback(subscribeStream, subscribeUpdatedRequest),
+        ).toBeNull();
+        expect(
+          await writeAndWaitCallback(
+            subscribeDeshredStream,
+            subscribeDeshredUpdatedRequest,
+          ),
+        ).toBeNull();
+
+        // 4) Call every unary method again while updated subscriptions are still running.
+        await callAllUnaryMethodsAndAssert(client);
+      } finally {
+        await closeStreamAndWait(subscribeStream);
+        await closeStreamAndWait(subscribeDeshredStream);
+      }
+    },
+    TEST_TIMEOUT,
+  );
+});
+
 describe("subscribe response schema tests", () => {
   const TEST_TIMEOUT = 100000;
 
@@ -1627,33 +1770,37 @@ describe("subscribe response schema tests", () => {
     await assertRequestsAcceptedOnSingleStream(requests);
   }, 180000);
 
-  test("runtime server errors are propagated via stream error event", async () => {
-    const stream = await client.subscribe();
-    try {
-      // Ensure `_read()` is driven so native terminal errors can surface to JS.
-      stream.on("data", () => {});
-      const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
-      const request = baseSubscribeRequest();
-      request.transactions = {
-        invalid_pubkey_filter: {
-          signature: "abc",
-          accountInclude: ["not_base58_!!!"],
-          accountExclude: [],
-          accountRequired: [],
-        },
-      };
+  test(
+    "runtime server errors are propagated via stream error event",
+    async () => {
+      const stream = await client.subscribe();
+      try {
+        // Ensure `_read()` is driven so native terminal errors can surface to JS.
+        stream.on("data", () => {});
+        const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
+        const request = baseSubscribeRequest();
+        request.transactions = {
+          invalid_pubkey_filter: {
+            signature: "abc",
+            accountInclude: ["not_base58_!!!"],
+            accountExclude: [],
+            accountRequired: [],
+          },
+        };
 
-      const writeError = await writeAndWaitCallback(stream, request);
-      expect(writeError).toBeNull();
+        const writeError = await writeAndWaitCallback(stream, request);
+        expect(writeError).toBeNull();
 
-      const observedError = await runtimeError;
-      const message = String(observedError?.message ?? "").toLowerCase();
-      expect(message.length).toBeGreaterThan(0);
-      expect(message.includes("no update available")).toBe(false);
-    } finally {
-      await closeStreamAndWait(stream);
-    }
-  }, TEST_TIMEOUT);
+        const observedError = await runtimeError;
+        const message = String(observedError?.message ?? "").toLowerCase();
+        expect(message.length).toBeGreaterThan(0);
+        expect(message.includes("no update available")).toBe(false);
+      } finally {
+        await closeStreamAndWait(stream);
+      }
+    },
+    TEST_TIMEOUT,
+  );
 
   test(
     "account",
@@ -2434,33 +2581,37 @@ describe("subscribeDeshred response schema tests", () => {
     await assertDeshredRequestsAcceptedOnSingleStream(requests);
   }, 180000);
 
-  test("deshred runtime server errors are propagated via stream error event", async () => {
-    const stream = await client.subscribeDeshred();
-    try {
-      // Ensure `_read()` is driven so native terminal errors can surface to JS.
-      stream.on("data", () => {});
-      const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
-      const request: SubscribeDeshredRequest = {
-        deshredTransactions: {
-          invalid_pubkey_filter: {
-            accountInclude: ["not_base58_!!!"],
-            accountExclude: [],
-            accountRequired: [],
+  test(
+    "deshred runtime server errors are propagated via stream error event",
+    async () => {
+      const stream = await client.subscribeDeshred();
+      try {
+        // Ensure `_read()` is driven so native terminal errors can surface to JS.
+        stream.on("data", () => {});
+        const runtimeError = waitForStreamError(stream, TEST_TIMEOUT);
+        const request: SubscribeDeshredRequest = {
+          deshredTransactions: {
+            invalid_pubkey_filter: {
+              accountInclude: ["not_base58_!!!"],
+              accountExclude: [],
+              accountRequired: [],
+            },
           },
-        },
-      };
+        };
 
-      const writeError = await writeAndWaitCallback(stream, request);
-      expect(writeError).toBeNull();
+        const writeError = await writeAndWaitCallback(stream, request);
+        expect(writeError).toBeNull();
 
-      const observedError = await runtimeError;
-      const message = String(observedError?.message ?? "").toLowerCase();
-      expect(message.length).toBeGreaterThan(0);
-      expect(message.includes("no update available")).toBe(false);
-    } finally {
-      await closeStreamAndWait(stream);
-    }
-  }, TEST_TIMEOUT);
+        const observedError = await runtimeError;
+        const message = String(observedError?.message ?? "").toLowerCase();
+        expect(message.length).toBeGreaterThan(0);
+        expect(message.includes("no update available")).toBe(false);
+      } finally {
+        await closeStreamAndWait(stream);
+      }
+    },
+    TEST_TIMEOUT,
+  );
 
   test(
     "deshred ping/pong",
