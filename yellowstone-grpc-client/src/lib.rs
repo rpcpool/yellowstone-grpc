@@ -2,9 +2,7 @@ mod stream;
 
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
-    crate::stream::{
-        AutoReconnect, Backoff, DedupState, DedupStream, TonicGrpcConnector, DEFAULT_SLOT_RETENTION,
-    },
+    crate::stream::{Backoff, DEFAULT_SLOT_RETENTION},
     arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
@@ -38,6 +36,8 @@ use {
         SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
 };
+
+pub use stream::{AutoReconnect, DedupState, DedupStream, GrpcConnector, TonicGrpcConnector};
 
 #[derive(Debug, Clone)]
 /// Interceptor that injects optional auth and snapshot metadata into requests.

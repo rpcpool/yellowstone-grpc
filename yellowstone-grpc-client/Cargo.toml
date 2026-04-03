@@ -16,17 +16,14 @@ account-data-as-bytes = [
 ]
 
 [dependencies]
-anyhow = { workspace = true }
 arc-swap = { workspace = true }
 bytes = { workspace = true }
-clap = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
 pin-project = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 tower = { workspace = true, features = ["util"] }
@@ -40,7 +37,3 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
-
-[[bin]]
-name = "unstable-server"
-path = "src/bin/unstable_server.rs"

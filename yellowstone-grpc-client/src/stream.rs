@@ -494,7 +494,7 @@ where
     Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
 {
     /// Creates an auto-reconnecting stream from an initial stream and connector.
-    pub(crate) fn new(
+    pub fn new(
         stream: DedupStream<S>,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,

@@ -14,6 +14,7 @@ name = "client"
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
 bincode = { workspace = true }
 bs58 = { workspace = true }
