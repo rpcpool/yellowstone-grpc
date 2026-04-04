@@ -50,6 +50,19 @@ cargo run --bin client -- -e "https://api.rpcpool.com" \
   --transactions-account-include "<Pubkey>"
 ```
 
+### subscribe to deshred transaction updates
+```shell
+cargo run --bin client -- -e "https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe-deshred \
+  --vote false \
+  --account-include "<Pubkey>"
+```
+
+`subscribe-deshred` uses the `SubscribeDeshred` RPC, which streams transactions reconstructed from shreds before Replay executes them. The sample client prints the `slot`, `signature`, vote flag, and the resolved ALT addresses from `loadedWritableAddresses` / `loadedReadonlyAddresses`.
+
+This RPC is only available on Triton extension servers. The open-source `yellowstone-grpc-geyser` server in this repository currently returns `UNIMPLEMENTED` for `SubscribeDeshred`.
+
 ### unary Ping
 ```shell
 cargo run --bin client -- -e "https://api.rpcpool.com" \
