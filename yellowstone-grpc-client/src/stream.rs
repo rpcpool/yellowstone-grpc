@@ -19,8 +19,12 @@ use {
         Status, Streaming,
     },
     yellowstone_grpc_proto::{
-        geyser::geyser_client::GeyserClient,
-        prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
+        geyser::{geyser_client::GeyserClient, SubscribeUpdateDeshred},
+        prelude::{
+            subscribe_update::UpdateOneof,
+            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, SubscribeRequest,
+            SubscribeUpdate,
+        },
     },
 };
 
@@ -43,11 +47,12 @@ impl<S> DedupStream<S> {
     }
 }
 
-impl<S> Stream for DedupStream<S>
+impl<S, T> Stream for DedupStream<S>
 where
-    S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin,
+    T: Dedupable,
+    S: Stream<Item = Result<T, Status>> + Unpin,
 {
-    type Item = Result<SubscribeUpdate, Status>;
+    type Item = Result<T, Status>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -71,7 +76,7 @@ where
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum DedupKey {
+pub(crate) enum DedupKey {
     Slot(i32),                           // status
     Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
     Transaction(u64),                    // index
@@ -79,6 +84,7 @@ enum DedupKey {
     Entry(u64),                          // index
     BlockMeta,
     Block,
+    DeshredTransaction([u8; 64]), // signature
 }
 
 #[derive(Debug, Clone)]
@@ -99,18 +105,14 @@ impl Default for DedupState {
     }
 }
 
-impl DedupState {
-    /// Creates dedup state with a custom retained slot window size.
-    pub fn with_slot_retention(slot_retention: usize) -> Self {
-        Self {
-            slot_retention,
-            ..Default::default()
-        }
-    }
+pub(crate) trait Dedupable {
+    fn extract_key(&self) -> Option<(u64, DedupKey)>;
+}
 
+impl Dedupable for SubscribeUpdate {
     /// Extracts a comparable `(slot, key)` pair from a subscribe update.
-    fn extract_key(msg: &SubscribeUpdate) -> Option<(u64, DedupKey)> {
-        let oneof = msg.update_oneof.as_ref()?;
+    fn extract_key(&self) -> Option<(u64, DedupKey)> {
+        let oneof = self.update_oneof.as_ref()?;
         match oneof {
             UpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
             UpdateOneof::Account(m) => {
@@ -136,10 +138,35 @@ impl DedupState {
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }
     }
+}
+
+impl Dedupable for SubscribeUpdateDeshred {
+    /// Extracts a comparable `(slot, key)` pair from a subscribe update.
+    fn extract_key(&self) -> Option<(u64, DedupKey)> {
+        let oneof = self.update_oneof.as_ref()?;
+        match oneof {
+            DeshredUpdateOneof::DeshredTransaction(m) => {
+                let info = m.transaction.as_ref()?;
+                let sig = <[u8; 64]>::try_from(info.signature.as_slice()).ok()?;
+                Some((m.slot, DedupKey::DeshredTransaction(sig)))
+            }
+            DeshredUpdateOneof::Ping(_) | DeshredUpdateOneof::Pong(_) => None,
+        }
+    }
+}
+
+impl DedupState {
+    /// Creates dedup state with a custom retained slot window size.
+    pub fn with_slot_retention(slot_retention: usize) -> Self {
+        Self {
+            slot_retention,
+            ..Default::default()
+        }
+    }
 
     /// Returns true if this update was previously recorded for its slot.
-    pub fn is_duplicate(&self, msg: &SubscribeUpdate) -> bool {
-        if let Some((slot, key)) = Self::extract_key(msg) {
+    pub fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
+        if let Some((slot, key)) = msg.extract_key() {
             if let Some(keys) = self.seen_messages.get(&slot) {
                 return keys.contains(&key);
             }
@@ -148,8 +175,8 @@ impl DedupState {
     }
 
     /// Records an update key and prunes old slots when retention is exceeded.
-    pub fn record(&mut self, msg: &SubscribeUpdate) {
-        if let Some((slot, key)) = Self::extract_key(msg) {
+    pub fn record(&mut self, msg: &impl Dedupable) {
+        if let Some((slot, key)) = msg.extract_key() {
             let is_new_slot = !self.seen_messages.contains_key(&slot);
             self.seen_messages.entry(slot).or_default().insert(key);
             if is_new_slot {
