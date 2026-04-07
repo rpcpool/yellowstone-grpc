@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 13.0.0+triton-ext
-    "yellowstone-grpc-client", # 13.0.0+triton-ext
-    "yellowstone-grpc-geyser", # 13.0.0+triton-ext
-    "yellowstone-grpc-proto", # 13.0.0+triton-ext
+    "examples/rust", # 13.0.0+triton-ext.solana.4.0.0-beta.6
+    "yellowstone-grpc-client", # 13.0.0+triton-ext.solana.4.0.0-beta.6
+    "yellowstone-grpc-geyser", # 13.0.0+triton-ext.solana.4.0.0-beta.6
+    "yellowstone-grpc-proto", # 13.0.0+triton-ext.solana.4.0.0-beta.6
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
@@ -73,11 +73,11 @@ vergen = "9.0.6"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-beta.6-triton-public" }
-solana-account-decoder = "~4.0.0-beta.6"
+solana-account-decoder = "=4.0.0-beta.6"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~4.0.0-beta.6", features = ["agave-unstable-api"] }
-solana-transaction-context = "~4.0.0-beta.6"
-solana-transaction-status = "~4.0.0-beta.6"
+solana-storage-proto = { version = "=4.0.0-beta.6", features = ["agave-unstable-api"] }
+solana-transaction-context = "=4.0.0-beta.6"
+solana-transaction-status = "=4.0.0-beta.6"
 
 # Solana SDK
 solana-account = "3.4.0"
@@ -95,9 +95,9 @@ solana-transaction-error = "3.0.0"
 spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.0.0+triton-ext" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.0.0+triton-ext" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "13.0.0+triton-ext", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.0.0+triton-ext.solana.4.0.0-beta.6" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.0.0+triton-ext.solana.4.0.0-beta.6" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "13.0.0+triton-ext.solana.4.0.0-beta.6", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
