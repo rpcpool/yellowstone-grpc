@@ -1,9 +1,11 @@
-mod stream;
+mod dedup;
+mod reconnect;
 
 pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
-    crate::stream::{
-        AutoReconnect, Backoff, DedupState, DedupStream, TonicGrpcConnector, DEFAULT_SLOT_RETENTION,
+    crate::{
+        dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
+        reconnect::{AutoReconnect, Backoff, TonicGrpcConnector},
     },
     arc_swap::ArcSwap,
     bytes::Bytes,
@@ -70,6 +72,7 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone)]
+/// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
     pub backoff: Backoff,
     pub slot_retention: usize,

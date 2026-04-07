@@ -1,13 +1,11 @@
 use {
-    crate::{GeyserGrpcClientError, InterceptorXToken, ReconnectConfig},
-    arc_swap::ArcSwap,
-    futures::{
-        channel::mpsc,
-        sink::SinkExt,
-        stream::{Stream, StreamExt},
+    crate::{
+        dedup::{DedupState, DedupStream},
+        GeyserGrpcClientError, InterceptorXToken, ReconnectConfig,
     },
+    arc_swap::ArcSwap,
+    futures::{channel::mpsc, sink::SinkExt, stream::Stream},
     std::{
-        collections::{HashMap, HashSet, VecDeque},
         future::Future,
         pin::Pin,
         sync::{Arc, Mutex},
@@ -19,12 +17,8 @@ use {
         Status, Streaming,
     },
     yellowstone_grpc_proto::{
-        geyser::{geyser_client::GeyserClient, SubscribeUpdateDeshred},
-        prelude::{
-            subscribe_update::UpdateOneof,
-            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, SubscribeRequest,
-            SubscribeUpdate,
-        },
+        geyser::geyser_client::GeyserClient,
+        prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     },
 };
 
@@ -32,175 +26,6 @@ use {
 /// Conservative buffer to account for late-arriving events
 /// and out-of-order delivery within a slot.
 const CHECKPOINT_SLOT_BUFFER: u64 = 2;
-
-pub(crate) const DEFAULT_SLOT_RETENTION: usize = 1000;
-
-/// Wrapper stream that filters out duplicate subscribe updates.
-pub struct DedupStream<S> {
-    state: DedupState,
-    inner: S,
-}
-
-impl<S> DedupStream<S> {
-    pub const fn new(inner: S, state: DedupState) -> Self {
-        Self { state, inner }
-    }
-}
-
-impl<S, T> Stream for DedupStream<S>
-where
-    T: Dedupable,
-    S: Stream<Item = Result<T, Status>> + Unpin,
-{
-    type Item = Result<T, Status>;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        loop {
-            match this.inner.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(msg))) => {
-                    if this.state.is_duplicate(&msg) {
-                        continue;
-                    }
-
-                    this.state.record(&msg);
-                    return Poll::Ready(Some(Ok(msg)));
-                }
-                other => return other,
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) enum DedupKey {
-    Slot(i32),                           // status
-    Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
-    Transaction(u64),                    // index
-    TransactionStatus(u64),              // index
-    Entry(u64),                          // index
-    BlockMeta,
-    Block,
-    DeshredTransaction([u8; 64]), // signature
-}
-
-#[derive(Debug, Clone)]
-/// Tracks seen messages per slot so we can filter duplicates during replay after reconnect.
-pub struct DedupState {
-    seen_messages: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
-    slot_order: VecDeque<u64>,
-    slot_retention: usize,
-}
-
-impl Default for DedupState {
-    fn default() -> Self {
-        Self {
-            seen_messages: Default::default(),
-            slot_order: Default::default(),
-            slot_retention: DEFAULT_SLOT_RETENTION,
-        }
-    }
-}
-
-pub(crate) trait Dedupable {
-    fn extract_key(&self) -> Option<(u64, DedupKey)>;
-}
-
-impl Dedupable for SubscribeUpdate {
-    /// Extracts a comparable `(slot, key)` pair from a subscribe update.
-    fn extract_key(&self) -> Option<(u64, DedupKey)> {
-        let oneof = self.update_oneof.as_ref()?;
-        match oneof {
-            UpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
-            UpdateOneof::Account(m) => {
-                let info = m.account.as_ref()?;
-                let pubkey = <[u8; 32]>::try_from(info.pubkey.as_slice()).ok()?;
-
-                let sig = info
-                    .txn_signature
-                    .as_ref()
-                    .and_then(|s| <[u8; 64]>::try_from(s.as_slice()).ok());
-                Some((m.slot, DedupKey::Account(pubkey, sig)))
-            }
-            UpdateOneof::Transaction(m) => {
-                let info = m.transaction.as_ref()?;
-                Some((m.slot, DedupKey::Transaction(info.index)))
-            }
-            UpdateOneof::TransactionStatus(m) => {
-                Some((m.slot, DedupKey::TransactionStatus(m.index)))
-            }
-            UpdateOneof::Entry(m) => Some((m.slot, DedupKey::Entry(m.index))),
-            UpdateOneof::BlockMeta(m) => Some((m.slot, DedupKey::BlockMeta)),
-            UpdateOneof::Block(m) => Some((m.slot, DedupKey::Block)),
-            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
-        }
-    }
-}
-
-impl Dedupable for SubscribeUpdateDeshred {
-    /// Extracts a comparable `(slot, key)` pair from a subscribe update.
-    fn extract_key(&self) -> Option<(u64, DedupKey)> {
-        let oneof = self.update_oneof.as_ref()?;
-        match oneof {
-            DeshredUpdateOneof::DeshredTransaction(m) => {
-                let info = m.transaction.as_ref()?;
-                let sig = <[u8; 64]>::try_from(info.signature.as_slice()).ok()?;
-                Some((m.slot, DedupKey::DeshredTransaction(sig)))
-            }
-            DeshredUpdateOneof::Ping(_) | DeshredUpdateOneof::Pong(_) => None,
-        }
-    }
-}
-
-impl DedupState {
-    /// Creates dedup state with a custom retained slot window size.
-    pub fn with_slot_retention(slot_retention: usize) -> Self {
-        Self {
-            slot_retention,
-            ..Default::default()
-        }
-    }
-
-    /// Returns true if this update was previously recorded for its slot.
-    pub fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
-        if let Some((slot, key)) = msg.extract_key() {
-            if let Some(keys) = self.seen_messages.get(&slot) {
-                return keys.contains(&key);
-            }
-        }
-        false
-    }
-
-    /// Records an update key and prunes old slots when retention is exceeded.
-    pub fn record(&mut self, msg: &impl Dedupable) {
-        if let Some((slot, key)) = msg.extract_key() {
-            let is_new_slot = !self.seen_messages.contains_key(&slot);
-            self.seen_messages.entry(slot).or_default().insert(key);
-            if is_new_slot {
-                self.slot_order.push_back(slot);
-                self.prune();
-            }
-        }
-    }
-
-    /// Keeps seen_messages bounded to slot_retention window.
-    pub fn prune(&mut self) {
-        while self.slot_order.len() > self.slot_retention {
-            if let Some(slot) = self.slot_order.pop_front() {
-                self.seen_messages.remove(&slot);
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.seen_messages.clear();
-        self.slot_order.clear();
-    }
-}
 
 type ConnectFuture<S> =
     Pin<Box<dyn Future<Output = Result<DedupStream<S>, GeyserGrpcClientError>> + Send + 'static>>;
@@ -231,6 +56,7 @@ impl<E> ErrorCategory<E> {
 }
 
 #[derive(Debug, Clone)]
+/// Mutable runtime state for a single backoff execution.
 struct BackoffInstance {
     current_interval: Duration,
     attempts: u32,
@@ -250,10 +76,12 @@ impl BackoffInstance {
         }
     }
 
+    /// Returns true once the configured retry budget has been consumed.
     const fn exhausted(&self) -> bool {
         self.attempts >= self.max_retries
     }
 
+    /// Advances retry counters and computes the next interval.
     fn advance(&mut self) {
         self.attempts += 1;
         self.current_interval = self
@@ -280,6 +108,7 @@ impl Backoff {
         3
     }
 
+    /// Creates a new backoff policy.
     pub const fn new(
         initial_interval: Duration,
         max_interval: Duration,
@@ -299,6 +128,9 @@ impl Backoff {
     }
 
     /// Retries an async operation with exponential backoff
+    ///
+    /// The operation returns `ErrorCategory::Retryable` for transient failures,
+    /// and `ErrorCategory::Unrecoverable` for terminal failures.
     pub(crate) fn retry<F, Fut, T, E>(&self, mut operation: F) -> impl Future<Output = Result<T, E>>
     where
         F: FnMut() -> Fut,
@@ -618,6 +450,7 @@ where
     }
 }
 
+/// Returns true if a client error is considered transient and reconnectable.
 fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     match err {
         GeyserGrpcClientError::TonicStatus(status) => is_recoverable_status_code(status.code()),
@@ -625,6 +458,7 @@ fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     }
 }
 
+/// Returns true for gRPC status codes that should trigger reconnect.
 const fn is_recoverable_status_code(code: Code) -> bool {
     matches!(
         code,
@@ -639,6 +473,7 @@ const fn is_recoverable_status_code(code: Code) -> bool {
     )
 }
 
+/// Extracts the slot number from a subscribe update when available.
 pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
     match msg.update_oneof.as_ref()? {
         UpdateOneof::Account(m) => Some(m.slot),
@@ -656,7 +491,7 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
 mod tests {
     use {
         super::*,
-        futures::stream,
+        futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
             sync::{Arc, Mutex},
