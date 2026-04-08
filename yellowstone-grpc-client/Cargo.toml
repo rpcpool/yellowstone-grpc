@@ -17,13 +17,16 @@ account-data-as-bytes = [
 
 [dependencies]
 arc-swap = { workspace = true }
+anyhow = { workspace = true }
 bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+env_logger = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
 pin-project = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 tower = { workspace = true, features = ["util"] }
@@ -33,7 +36,11 @@ tower = { workspace = true, features = ["util"] }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "unstable-client"
+path = "src/bin/unstable_client.rs"

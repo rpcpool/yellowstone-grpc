@@ -144,9 +144,22 @@ async fn main() -> anyhow::Result<()> {
     let mut blocks_meta = HashMap::new();
     blocks_meta.insert("".to_owned(), SubscribeRequestFilterBlocksMeta::default());
 
+    let mut accounts = HashMap::new();
+    accounts.insert("".to_owned(), SubscribeRequestFilterAccounts::default());
+
+    let mut transactions = HashMap::new();
+    transactions.insert("".to_owned(), SubscribeRequestFilterTransactions::default());
+
+    let mut entry = HashMap::new();
+    entry.insert("".to_owned(), SubscribeRequestFilterEntry::default());
+
+
     let request = SubscribeRequest {
         slots,
         blocks_meta,
+        accounts,
+        transactions,
+        entry,
         commitment: Some(CommitmentLevel::Processed as i32),
         ..Default::default()
     };
@@ -177,8 +190,24 @@ async fn main() -> anyhow::Result<()> {
         match msg {
             Ok(update) => {
                 count += 1;
-                if let Some(subscribe_update::UpdateOneof::Slot(s)) = update.update_oneof.as_ref() {
-                    log::info!("slot={} count={count}", s.slot);
+                // Log Tx, Act and Entries in debug since they are more of them, the rest in info
+                match update.update_oneof.as_ref() {
+                    Some(subscribe_update::UpdateOneof::Slot(s)) => {
+                        log::info!("slot={} status={} count={count}", s.slot, s.status);
+                    }
+                    Some(subscribe_update::UpdateOneof::Account(a)) => {
+                        log::debug!("account slot={} count={count}", a.slot);
+                    }
+                    Some(subscribe_update::UpdateOneof::Transaction(t)) => {
+                        log::debug!("tx slot={} count={count}", t.slot);
+                    }
+                    Some(subscribe_update::UpdateOneof::Entry(e)) => {
+                        log::debug!("entry slot={} count={count}", e.slot);
+                    }
+                    Some(subscribe_update::UpdateOneof::BlockMeta(b)) => {
+                        log::info!("block_meta slot={} count={count}", b.slot);
+                    }
+                    _ => {}
                 }
             }
             Err(status) => {
