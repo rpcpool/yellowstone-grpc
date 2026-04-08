@@ -91,6 +91,7 @@ solana-signature = "3.1.0"
 solana-signer = "3.0.0"
 solana-transaction = "3.0.1"
 solana-transaction-error = "3.0.0"
+solana-commitment-config = "3.0.0"
 
 # Solana Misc
 spl-token-2022-interface = "2.0.0"
@@ -99,6 +100,11 @@ spl-token-2022-interface = "2.0.0"
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.2.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.1.0", default-features = false }
+yellowstone-block-machine = { version = "0.6", features = ["dragonsmouth"] }
+
+[patch.crates-io]
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto" }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client" }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

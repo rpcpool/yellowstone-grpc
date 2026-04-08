@@ -25,6 +25,7 @@ futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
 pin-project = { workspace = true }
+solana-commitment-config = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
@@ -34,7 +35,7 @@ tower = { workspace = true, features = ["util"] }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
-
+yellowstone-block-machine = { workspace = true, features = ["dragonsmouth"] }
 [dev-dependencies]
 
 
@@ -42,5 +43,9 @@ yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compres
 workspace = true
 
 [[bin]]
-name = "unstable-client"
+name = "unstable_client"
 path = "src/bin/unstable_client.rs"
+
+[[bin]]
+name = "unstable_stream_blocks"
+path = "src/bin/unstable_stream_blocks.rs"
