@@ -10,8 +10,8 @@ use {
     tonic::{metadata::AsciiMetadataValue, transport::Endpoint},
     yellowstone_grpc_client::{
         test_tools::{Unstable, UnstableConnector},
-        AutoReconnect, DedupState, DedupStream, InterceptorXToken, ReconnectConfig,
-        TonicGrpcConnector, Backoff
+        AutoReconnect, Backoff, DedupState, DedupStream, InterceptorXToken, ReconnectConfig,
+        TonicGrpcConnector,
     },
     yellowstone_grpc_proto::{geyser::geyser_client::GeyserClient, prelude::*},
 };
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         DedupStream::new(unstable_stream, DedupState::with_slot_retention(1000)),
         connector,
         Arc::clone(&shared_request),
-        Backoff::default()
+        Backoff::default(),
     );
 
     let mut stream = auto_reconnect;

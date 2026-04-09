@@ -353,7 +353,7 @@ where
         stream: DedupStream<S>,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,
-        backoff: Backoff
+        backoff: Backoff,
     ) -> Self {
         Self {
             request,
@@ -860,12 +860,10 @@ mod tests {
     #[tokio::test]
     async fn test_autoreconnect_recovers_from_recoverable_stream_error() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(
-            vec![ConnectPlan {
-                expected_from_slot: Some(None),
-                result: Ok(vec![Ok(make_slot_msg(42, 0))]),
-            }],
-        );
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(None),
+            result: Ok(vec![Ok(make_slot_msg(42, 0))]),
+        }]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
@@ -891,7 +889,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(0)
+            backoff_with_retries(0),
         );
 
         let first = auto.next().await.expect("expected one item");
@@ -906,18 +904,16 @@ mod tests {
     #[tokio::test]
     async fn test_autoreconnect_passes_checkpoint_as_from_slot() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(
-            vec![ConnectPlan {
-                expected_from_slot: Some(Some(77)),
-                result: Ok(vec![Ok(make_slot_msg(90, 0))]),
-            }],
-        );
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(77)),
+            result: Ok(vec![Ok(make_slot_msg(90, 0))]),
+        }]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1)
+            backoff_with_retries(1),
         );
         auto.last_checkpoint = Some(77);
 
@@ -938,21 +934,19 @@ mod tests {
         ])
         .boxed();
 
-        let connector = MockGrpcConnector::new(
-            vec![ConnectPlan {
-                expected_from_slot: None,
-                result: Ok(vec![
-                    Ok(make_slot_msg(100, 0)), // duplicate — should be filtered
-                    Ok(make_slot_msg(101, 0)), // new — should pass through
-                ]),
-            }],
-        );
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: None,
+            result: Ok(vec![
+                Ok(make_slot_msg(100, 0)), // duplicate — should be filtered
+                Ok(make_slot_msg(101, 0)), // new — should pass through
+            ]),
+        }]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1)
+            backoff_with_retries(1),
         );
 
         let msg1 = auto
@@ -996,18 +990,16 @@ mod tests {
         ])
         .boxed();
 
-        let connector = MockGrpcConnector::new(
-            vec![ConnectPlan {
-                expected_from_slot: Some(Some(100 - CHECKPOINT_SLOT_BUFFER)),
-                result: Ok(vec![Ok(make_slot_msg(105, 0))]),
-            }],
-        );
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(100 - CHECKPOINT_SLOT_BUFFER)),
+            result: Ok(vec![Ok(make_slot_msg(105, 0))]),
+        }]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1)
+            backoff_with_retries(1),
         );
 
         let msg1 = auto
@@ -1036,7 +1028,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1)
+            backoff_with_retries(1),
         );
 
         let result = auto.next().await.expect("expected item");
