@@ -113,11 +113,7 @@ impl Backoff {
     }
 
     /// Creates a new backoff policy.
-    pub const fn new(
-        initial_interval: Duration,
-        multiplier: f64,
-        max_retries: u32,
-    ) -> Self {
+    pub const fn new(initial_interval: Duration, multiplier: f64, max_retries: u32) -> Self {
         Self {
             initial_interval,
             multiplier,
@@ -140,7 +136,6 @@ impl Backoff {
     {
         let mut state = self.instance();
         async move {
-
             loop {
                 match operation().await {
                     Ok(value) => return Ok(value),
@@ -337,7 +332,6 @@ impl GrpcConnector for TonicGrpcConnector {
     fn should_reconnect(&self) -> bool {
         self.backoff.max_retries > 0
     }
-
 }
 
 /// Stream wrapper that transparently reconnects on recoverable failures.

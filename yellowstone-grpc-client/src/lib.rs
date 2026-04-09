@@ -2,7 +2,10 @@ mod dedup;
 mod reconnect;
 
 use {
-    crate::{dedup::DEFAULT_SLOT_RETENTION, reconnect::{Backoff, TonicGeyserClientOptions}},
+    crate::{
+        dedup::DEFAULT_SLOT_RETENTION,
+        reconnect::{Backoff, TonicGeyserClientOptions},
+    },
     arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
@@ -17,13 +20,23 @@ use {
     },
     tokio::net::UnixStream,
     tonic::{
-        Request, Response, Status, codec::{CompressionEncoding, Streaming}, metadata::{AsciiMetadataValue, MetadataValue, errors::InvalidMetadataValue}, service::interceptor::InterceptedService, transport::{
-            Uri, channel::{Channel, Endpoint}
-        }
+        codec::{CompressionEncoding, Streaming},
+        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
+        service::interceptor::InterceptedService,
+        transport::{
+            channel::{Channel, Endpoint},
+            Uri,
+        },
+        Request, Response, Status,
     },
-    tonic_health::pb::{HealthCheckRequest, HealthCheckResponse, health_client::HealthClient},
+    tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
     yellowstone_grpc_proto::prelude::{
-        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred, geyser_client::GeyserClient
+        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
+        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
+        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
+        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
+        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
 };
 pub use {
@@ -33,6 +46,9 @@ pub use {
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
+
+#[cfg(feature = "test-tools")]
+pub mod test_tools;
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
@@ -88,12 +104,12 @@ impl ReconnectConfig {
         }
     }
 
-    pub fn with_backoff(mut self, backoff: Backoff) -> Self {
+    pub const fn with_backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
         self
     }
 
-    pub fn with_slot_retention(mut self, slot_retention: usize) -> Self {
+    pub const fn with_slot_retention(mut self, slot_retention: usize) -> Self {
         self.slot_retention = slot_retention;
         self
     }

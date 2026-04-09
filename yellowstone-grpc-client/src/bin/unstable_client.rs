@@ -1,105 +1,20 @@
 use {
     arc_swap::ArcSwap,
     clap::Parser,
-    futures::{
-        sink::SinkExt,
-        stream::{Stream, StreamExt},
-    },
+    futures::{sink::SinkExt, stream::StreamExt},
     std::{
         collections::HashMap,
-        future::Future,
-        pin::Pin,
         sync::{Arc, Mutex},
-        task::Poll,
-        time::{Duration, Instant},
+        time::Duration,
     },
-    tonic::{metadata::AsciiMetadataValue, transport::Endpoint, Status, Streaming},
+    tonic::{metadata::AsciiMetadataValue, transport::Endpoint},
     yellowstone_grpc_client::{
-        AutoReconnect, DedupState, DedupStream, GeyserGrpcClientError, GrpcConnector,
-        InterceptorXToken, ReconnectConfig, TonicGrpcConnector,
+        test_tools::{Unstable, UnstableConnector},
+        AutoReconnect, DedupState, DedupStream, InterceptorXToken, ReconnectConfig,
+        TonicGrpcConnector,
     },
     yellowstone_grpc_proto::{geyser::geyser_client::GeyserClient, prelude::*},
 };
-
-pub struct Unstable<S> {
-    inner: S,
-    drop_interval: Duration,
-    started_at: Instant,
-}
-
-impl<S> Stream for Unstable<S>
-where
-    S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin,
-{
-    type Item = Result<SubscribeUpdate, Status>;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        if this.started_at.elapsed() >= this.drop_interval {
-            log::warn!(
-                "unstable: simulated disconnect after {:?}",
-                this.drop_interval
-            );
-            return Poll::Ready(Some(Err(Status::aborted("unstable: simulated disconnect"))));
-        }
-
-        this.inner.poll_next_unpin(cx)
-    }
-}
-
-impl<S> Unstable<S> {
-    fn new(inner: S, drop_interval: Duration) -> Self {
-        Self {
-            inner,
-            drop_interval,
-            started_at: Instant::now(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct UnstableConnector {
-    inner: TonicGrpcConnector,
-    drop_interval: Duration,
-}
-
-impl UnstableConnector {
-    const fn new(inner: TonicGrpcConnector, drop_interval: Duration) -> Self {
-        Self {
-            inner,
-            drop_interval,
-        }
-    }
-}
-
-impl GrpcConnector for UnstableConnector {
-    type Stream = Unstable<Streaming<SubscribeUpdate>>;
-    type ConnectError = GeyserGrpcClientError;
-    type ConnectFuture =
-        Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>> + Send>>;
-
-    fn connect(
-        &self,
-        request: std::sync::Arc<SubscribeRequest>,
-        from_slot: Option<u64>,
-    ) -> Self::ConnectFuture {
-        let inner_fut = self.inner.connect(request, from_slot);
-        let drop_interval = self.drop_interval;
-
-        Box::pin(async move {
-            let stream = inner_fut.await?;
-            Ok(Unstable::new(stream, drop_interval))
-        })
-    }
-
-    fn should_reconnect(&self) -> bool {
-        true
-    }
-}
 
 #[derive(Debug, Parser)]
 #[clap(about = "Client with unstable connection for testing auto-reconnect")]
@@ -176,11 +91,11 @@ async fn main() -> anyhow::Result<()> {
     let unstable_stream = Unstable::new(raw_stream, drop_interval);
 
     let tonic_connector = TonicGrpcConnector::new(
-        endpoint, 
-        config, 
-        x_token.clone(), 
+        endpoint,
+        config,
+        x_token.clone(),
         Default::default(),
-        request_sink
+        request_sink,
     );
 
     let connector = UnstableConnector::new(tonic_connector, drop_interval);

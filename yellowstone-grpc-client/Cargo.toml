@@ -14,18 +14,25 @@ publish = true
 account-data-as-bytes = [
     "yellowstone-grpc-proto/account-data-as-bytes"
 ]
+test-tools = [
+    "dep:yellowstone-block-machine",
+    "dep:anyhow",
+    "dep:clap",
+    "dep:env_logger",
+    "dep:solana-commitment-config",
+]
 
 [dependencies]
 arc-swap = { workspace = true }
-anyhow = { workspace = true}
+anyhow = { workspace = true, optional = true }
 bytes = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-env_logger = { workspace = true}
+clap = { workspace = true, features = ["derive"], optional = true }
+env_logger = { workspace = true, optional = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
 pin-project = { workspace = true }
-solana-commitment-config = { workspace = true }
+solana-commitment-config = { workspace = true, optional = true}
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
@@ -35,7 +42,7 @@ tower = { workspace = true, features = ["util"] }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
-yellowstone-block-machine = { workspace = true, features = ["dragonsmouth-thin"] }
+yellowstone-block-machine = { version = "0.6", features = ["dragonsmouth-thin"], optional = true }
 
 [dev-dependencies]
 
@@ -45,7 +52,9 @@ workspace = true
 [[bin]]
 name = "unstable_client"
 path = "src/bin/unstable_client.rs"
+required-features = ["test-tools"]
 
 [[bin]]
 name = "unstable_stream_blocks"
 path = "src/bin/unstable_stream_blocks.rs"
+required-features = ["test-tools"]
