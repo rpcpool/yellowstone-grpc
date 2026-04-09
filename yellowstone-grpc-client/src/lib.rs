@@ -2,7 +2,7 @@ mod dedup;
 mod reconnect;
 
 use {
-    crate::{dedup::DEFAULT_SLOT_RETENTION, reconnect::Backoff},
+    crate::{dedup::DEFAULT_SLOT_RETENTION, reconnect::{Backoff, TonicGeyserClientOptions}},
     arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
@@ -17,23 +17,13 @@ use {
     },
     tokio::net::UnixStream,
     tonic::{
-        codec::{CompressionEncoding, Streaming},
-        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
-        service::interceptor::InterceptedService,
-        transport::{
-            channel::{Channel, Endpoint},
-            Uri,
-        },
-        Request, Response, Status,
+        Request, Response, Status, codec::{CompressionEncoding, Streaming}, metadata::{AsciiMetadataValue, MetadataValue, errors::InvalidMetadataValue}, service::interceptor::InterceptedService, transport::{
+            Uri, channel::{Channel, Endpoint}
+        }
     },
-    tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
+    tonic_health::pb::{HealthCheckRequest, HealthCheckResponse, health_client::HealthClient},
     yellowstone_grpc_proto::prelude::{
-        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
-        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
-        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
-        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
-        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
+        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred, geyser_client::GeyserClient
     },
 };
 pub use {
@@ -79,11 +69,6 @@ pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 pub struct ReconnectConfig {
     pub backoff: Backoff,
     pub slot_retention: usize,
-    pub x_request_snapshot: bool,
-    pub send_compressed: Option<CompressionEncoding>,
-    pub accept_compressed: Option<CompressionEncoding>,
-    pub max_decoding_message_size: Option<usize>,
-    pub max_encoding_message_size: Option<usize>,
 }
 
 impl Default for ReconnectConfig {
@@ -91,11 +76,6 @@ impl Default for ReconnectConfig {
         Self {
             backoff: Backoff::default(),
             slot_retention: DEFAULT_SLOT_RETENTION,
-            x_request_snapshot: false,
-            send_compressed: None,
-            accept_compressed: None,
-            max_decoding_message_size: None,
-            max_encoding_message_size: None,
         }
     }
 }
@@ -105,12 +85,17 @@ impl ReconnectConfig {
         Self {
             backoff: Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 1.0, 0),
             slot_retention: 0,
-            x_request_snapshot: false,
-            send_compressed: None,
-            accept_compressed: None,
-            max_decoding_message_size: None,
-            max_encoding_message_size: None,
         }
+    }
+
+    pub fn with_backoff(mut self, backoff: Backoff) -> Self {
+        self.backoff = backoff;
+        self
+    }
+
+    pub fn with_slot_retention(mut self, slot_retention: usize) -> Self {
+        self.slot_retention = slot_retention;
+        self
     }
 }
 
@@ -119,6 +104,7 @@ pub struct GeyserGrpcClient {
     pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
     pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
     reconnect_config: ReconnectConfig,
+    geyser_client_opts: TonicGeyserClientOptions,
     reconnect_endpoint: Option<Endpoint>,
     reconnect_x_token: Option<AsciiMetadataValue>,
 }
@@ -252,6 +238,13 @@ impl GeyserGrpcClient {
             reconnect_config: ReconnectConfig::no_reconnect(),
             reconnect_endpoint: None,
             reconnect_x_token: None,
+            geyser_client_opts: TonicGeyserClientOptions {
+                x_request_snapshot: false,
+                send_compressed: None,
+                accept_compressed: None,
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            },
         }
     }
 
@@ -319,6 +312,7 @@ impl GeyserGrpcClient {
                     endpoint,
                     reconnect_config.clone(),
                     reconnect_x_token,
+                    self.geyser_client_opts.clone(),
                     Arc::clone(&sink.inner),
                 );
                 let inner = AutoReconnect::new(
@@ -473,7 +467,7 @@ pub struct GeyserGrpcBuilder {
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
     pub max_encoding_message_size: Option<usize>,
-    reconnect_config: Option<ReconnectConfig>,
+    pub reconnect_config: ReconnectConfig,
 }
 
 impl GeyserGrpcBuilder {
@@ -487,7 +481,7 @@ impl GeyserGrpcBuilder {
             accept_compressed: None,
             max_decoding_message_size: None,
             max_encoding_message_size: None,
-            reconnect_config: None,
+            reconnect_config: ReconnectConfig::no_reconnect(),
         }
     }
 
@@ -502,18 +496,13 @@ impl GeyserGrpcBuilder {
     // Create client
     fn build(self, channel: Channel) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let reconnect_x_token = self.x_token.clone();
-        let reconnect_config = match self.reconnect_config {
-            Some(mut config) => {
-                config.x_request_snapshot = self.x_request_snapshot;
-                config.send_compressed = self.send_compressed;
-                config.accept_compressed = self.accept_compressed;
-                config.max_decoding_message_size = self.max_decoding_message_size;
-                config.max_encoding_message_size = self.max_encoding_message_size;
-                config
-            }
-            None => ReconnectConfig::no_reconnect(),
+        let geyser_client_opts = TonicGeyserClientOptions {
+            x_request_snapshot: self.x_request_snapshot,
+            send_compressed: self.send_compressed,
+            accept_compressed: self.accept_compressed,
+            max_decoding_message_size: self.max_decoding_message_size,
+            max_encoding_message_size: self.max_encoding_message_size,
         };
-
         let interceptor = InterceptorXToken {
             x_token: self.x_token,
             x_request_snapshot: self.x_request_snapshot,
@@ -536,9 +525,10 @@ impl GeyserGrpcBuilder {
         Ok(GeyserGrpcClient {
             health: HealthClient::with_interceptor(channel, interceptor),
             geyser,
-            reconnect_config,
+            reconnect_config: self.reconnect_config,
             reconnect_endpoint: Some(self.endpoint),
             reconnect_x_token,
+            geyser_client_opts,
         })
     }
 
@@ -710,7 +700,7 @@ impl GeyserGrpcBuilder {
 
     pub fn set_reconnect_config(self, config: ReconnectConfig) -> Self {
         Self {
-            reconnect_config: Some(config),
+            reconnect_config: config,
             ..self
         }
     }

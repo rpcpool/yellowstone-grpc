@@ -202,11 +202,33 @@ pub struct TonicGrpcConnector {
     max_encoding_message_size: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TonicGeyserClientOptions {
+    pub x_request_snapshot: bool,
+    pub send_compressed: Option<CompressionEncoding>,
+    pub accept_compressed: Option<CompressionEncoding>,
+    pub max_decoding_message_size: Option<usize>,
+    pub max_encoding_message_size: Option<usize>,
+}
+
+impl Default for TonicGeyserClientOptions {
+    fn default() -> Self {
+        Self {
+            x_request_snapshot: false,
+            send_compressed: None,
+            accept_compressed: None,
+            max_decoding_message_size: Some(50_000_000), // 50mb default max message size for tonic
+            max_encoding_message_size: Some(50_000_000),
+        }
+    }
+}
+
 impl TonicGrpcConnector {
     pub const fn new(
         endpoint: Endpoint,
         config: ReconnectConfig,
         x_token: Option<AsciiMetadataValue>,
+        options: TonicGeyserClientOptions,
         request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     ) -> Self {
         Self {
@@ -214,11 +236,11 @@ impl TonicGrpcConnector {
             request_sink,
             endpoint,
             x_token,
-            x_request_snapshot: config.x_request_snapshot,
-            send_compressed: config.send_compressed,
-            accept_compressed: config.accept_compressed,
-            max_decoding_message_size: config.max_decoding_message_size,
-            max_encoding_message_size: config.max_encoding_message_size,
+            x_request_snapshot: options.x_request_snapshot,
+            send_compressed: options.send_compressed,
+            accept_compressed: options.accept_compressed,
+            max_decoding_message_size: options.max_decoding_message_size,
+            max_encoding_message_size: options.max_encoding_message_size,
         }
     }
 }

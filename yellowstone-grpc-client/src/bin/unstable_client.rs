@@ -175,7 +175,13 @@ async fn main() -> anyhow::Result<()> {
     let drop_interval = Duration::from_secs(args.drop_interval_secs);
     let unstable_stream = Unstable::new(raw_stream, drop_interval);
 
-    let tonic_connector = TonicGrpcConnector::new(endpoint, config, x_token.clone(), request_sink);
+    let tonic_connector = TonicGrpcConnector::new(
+        endpoint, 
+        config, 
+        x_token.clone(), 
+        Default::default(),
+        request_sink
+    );
 
     let connector = UnstableConnector::new(tonic_connector, drop_interval);
 
