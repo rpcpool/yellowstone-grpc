@@ -49,7 +49,8 @@ async fn main() -> anyhow::Result<()> {
         x_request_snapshot: false,
     };
 
-    let mut geyser = GeyserClient::with_interceptor(channel, interceptor);
+    let mut geyser = GeyserClient::with_interceptor(channel, interceptor)
+        .max_decoding_message_size(16 * 1024 * 10224);
 
     let (mut tx, rx) = futures::channel::mpsc::channel(1000);
     let request_sink = Arc::new(Mutex::new(tx.clone()));
