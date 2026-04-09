@@ -234,10 +234,6 @@ impl DedupState {
                 break;
             }
         }
-        // HashMap doesn't release capacity on remove; reclaim it after pruning.
-        self.inflight_slots.shrink_to_fit();
-        self.inflight_slot_statuses.shrink_to_fit();
-        self.slot_processed.shrink_to_fit();
     }
 
     #[allow(dead_code)]
