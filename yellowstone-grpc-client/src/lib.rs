@@ -1,12 +1,8 @@
 mod dedup;
 mod reconnect;
 
-pub use tonic::{service::Interceptor, transport::ClientTlsConfig};
 use {
-    crate::{
-        dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
-        reconnect::{AutoReconnect, Backoff, TonicGrpcConnector},
-    },
+    crate::{dedup::DEFAULT_SLOT_RETENTION, reconnect::Backoff},
     arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
@@ -40,6 +36,13 @@ use {
         SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
 };
+pub use {
+    crate::{
+        dedup::{DedupState, DedupStream},
+        reconnect::{AutoReconnect, GrpcConnector, TonicGrpcConnector},
+    },
+    tonic::{service::Interceptor, transport::ClientTlsConfig},
+};
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
@@ -71,7 +74,7 @@ pub enum GeyserGrpcClientError {
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
     pub backoff: Backoff,
@@ -470,7 +473,7 @@ pub struct GeyserGrpcBuilder {
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
     pub max_encoding_message_size: Option<usize>,
-    auto_reconnect: bool,
+    reconnect_config: Option<ReconnectConfig>,
 }
 
 impl GeyserGrpcBuilder {
@@ -484,7 +487,7 @@ impl GeyserGrpcBuilder {
             accept_compressed: None,
             max_decoding_message_size: None,
             max_encoding_message_size: None,
-            auto_reconnect: false,
+            reconnect_config: None,
         }
     }
 
@@ -499,17 +502,16 @@ impl GeyserGrpcBuilder {
     // Create client
     fn build(self, channel: Channel) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let reconnect_x_token = self.x_token.clone();
-        let reconnect_config = if self.auto_reconnect {
-            ReconnectConfig {
-                x_request_snapshot: self.x_request_snapshot,
-                send_compressed: self.send_compressed,
-                accept_compressed: self.accept_compressed,
-                max_decoding_message_size: self.max_decoding_message_size,
-                max_encoding_message_size: self.max_encoding_message_size,
-                ..Default::default()
+        let reconnect_config = match self.reconnect_config {
+            Some(mut config) => {
+                config.x_request_snapshot = self.x_request_snapshot;
+                config.send_compressed = self.send_compressed;
+                config.accept_compressed = self.accept_compressed;
+                config.max_decoding_message_size = self.max_decoding_message_size;
+                config.max_encoding_message_size = self.max_encoding_message_size;
+                config
             }
-        } else {
-            ReconnectConfig::no_reconnect()
+            None => ReconnectConfig::no_reconnect(),
         };
 
         let interceptor = InterceptorXToken {
@@ -706,9 +708,9 @@ impl GeyserGrpcBuilder {
         }
     }
 
-    pub fn auto_reconnect(self, enabled: bool) -> Self {
+    pub fn set_reconnect_config(self, config: ReconnectConfig) -> Self {
         Self {
-            auto_reconnect: enabled,
+            reconnect_config: Some(config),
             ..self
         }
     }

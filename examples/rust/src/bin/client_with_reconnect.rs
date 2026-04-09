@@ -3,7 +3,7 @@ use {
     futures::stream::StreamExt,
     log::info,
     std::collections::HashMap,
-    yellowstone_grpc_client::GeyserGrpcClient,
+    yellowstone_grpc_client::{GeyserGrpcClient, ReconnectConfig},
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
-        .auto_reconnect(true)
+        .set_reconnect_config(ReconnectConfig::default())
         .connect()
         .await?;
 

@@ -17,13 +17,17 @@ account-data-as-bytes = [
 
 [dependencies]
 arc-swap = { workspace = true }
+anyhow = { workspace = true}
 bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+env_logger = { workspace = true}
 futures = { workspace = true }
 hyper-util = { workspace = true }
 log = { workspace = true }
 pin-project = { workspace = true }
+solana-commitment-config = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-health = { workspace = true }
 tower = { workspace = true, features = ["util"] }
@@ -31,9 +35,17 @@ tower = { workspace = true, features = ["util"] }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
+yellowstone-block-machine = { workspace = true, features = ["dragonsmouth-thin"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "unstable_client"
+path = "src/bin/unstable_client.rs"
+
+[[bin]]
+name = "unstable_stream_blocks"
+path = "src/bin/unstable_stream_blocks.rs"

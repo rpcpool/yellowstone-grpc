@@ -14,7 +14,7 @@ use {
     },
 };
 
-pub(crate) const DEFAULT_SLOT_RETENTION: usize = 1000;
+pub(crate) const DEFAULT_SLOT_RETENTION: usize = 250;
 
 /// Wrapper stream that filters out duplicate subscribe updates.
 pub struct DedupStream<S> {
@@ -146,7 +146,7 @@ impl DedupState {
     }
 
     /// Returns true if this update was previously recorded for its slot.
-    pub fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
+    pub(crate) fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
         if let Some((slot, key)) = msg.extract_key() {
             if let Some(keys) = self.seen_messages.get(&slot) {
                 return keys.contains(&key);
@@ -156,7 +156,7 @@ impl DedupState {
     }
 
     /// Records an update key and prunes old slots when retention is exceeded.
-    pub fn record(&mut self, msg: &impl Dedupable) {
+    pub(crate) fn record(&mut self, msg: &impl Dedupable) {
         if let Some((slot, key)) = msg.extract_key() {
             let is_new_slot = !self.seen_messages.contains_key(&slot);
             self.seen_messages.entry(slot).or_default().insert(key);
@@ -172,6 +172,8 @@ impl DedupState {
         while self.slot_order.len() > self.slot_retention {
             if let Some(slot) = self.slot_order.pop_front() {
                 self.seen_messages.remove(&slot);
+            } else {
+                break;
             }
         }
     }

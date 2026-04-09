@@ -333,7 +333,7 @@ where
     S: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static,
     Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
 {
-    pub(crate) fn new(
+    pub fn new(
         stream: DedupStream<S>,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,
