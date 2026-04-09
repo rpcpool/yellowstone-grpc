@@ -83,7 +83,7 @@ impl Default for ReconnectConfig {
 impl ReconnectConfig {
     pub const fn no_reconnect() -> Self {
         Self {
-            backoff: Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 1.0, 0),
+            backoff: Backoff::new(Duration::from_millis(0), 1.0, 0),
             slot_retention: 0,
         }
     }

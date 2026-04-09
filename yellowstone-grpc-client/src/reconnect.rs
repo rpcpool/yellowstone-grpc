@@ -33,7 +33,6 @@ type ConnectFuture<S> =
 #[derive(Debug, Clone)]
 pub struct Backoff {
     pub initial_interval: Duration,
-    pub max_interval: Duration,
     pub multiplier: f64,
     pub max_retries: u32,
 }
@@ -60,7 +59,6 @@ impl<E> ErrorCategory<E> {
 struct BackoffInstance {
     current_interval: Duration,
     attempts: u32,
-    max_interval: Duration,
     multiplier: f64,
     max_retries: u32,
 }
@@ -70,7 +68,6 @@ impl BackoffInstance {
         Self {
             current_interval: config.initial_interval,
             attempts: 0,
-            max_interval: config.max_interval,
             multiplier: config.multiplier,
             max_retries: config.max_retries,
         }
@@ -84,20 +81,27 @@ impl BackoffInstance {
     /// Advances retry counters and computes the next interval.
     fn advance(&mut self) {
         self.attempts += 1;
-        self.current_interval = self
-            .current_interval
-            .mul_f64(self.multiplier)
-            .min(self.max_interval);
+        self.current_interval = self.current_interval.mul_f64(self.multiplier);
+    }
+}
+
+impl Iterator for BackoffInstance {
+    type Item = Duration;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.exhausted() {
+            None
+        } else {
+            let interval = self.current_interval;
+            self.advance();
+            Some(interval)
+        }
     }
 }
 
 impl Backoff {
     const fn default_initial_interval() -> Duration {
         Duration::from_millis(10)
-    }
-
-    const fn default_max_interval() -> Duration {
-        Duration::from_secs(30)
     }
 
     const fn default_multiplier() -> f64 {
@@ -111,13 +115,11 @@ impl Backoff {
     /// Creates a new backoff policy.
     pub const fn new(
         initial_interval: Duration,
-        max_interval: Duration,
         multiplier: f64,
         max_retries: u32,
     ) -> Self {
         Self {
             initial_interval,
-            max_interval,
             multiplier,
             max_retries,
         }
@@ -138,16 +140,20 @@ impl Backoff {
     {
         let mut state = self.instance();
         async move {
+
             loop {
                 match operation().await {
                     Ok(value) => return Ok(value),
                     Err(error) => {
-                        if !error.is_retryable() || state.exhausted() {
+                        if !error.is_retryable() {
                             return Err(error.into_inner());
                         }
 
-                        tokio::time::sleep(state.current_interval).await;
-                        state.advance();
+                        let Some(sleep_for) = state.next() else {
+                            return Err(error.into_inner());
+                        };
+
+                        tokio::time::sleep(sleep_for).await;
                     }
                 }
             }
@@ -159,7 +165,6 @@ impl Default for Backoff {
     fn default() -> Self {
         Self::new(
             Self::default_initial_interval(),
-            Self::default_max_interval(),
             Self::default_multiplier(),
             Self::default_max_retries(),
         )
@@ -332,6 +337,7 @@ impl GrpcConnector for TonicGrpcConnector {
     fn should_reconnect(&self) -> bool {
         self.backoff.max_retries > 0
     }
+
 }
 
 /// Stream wrapper that transparently reconnects on recoverable failures.
@@ -597,12 +603,7 @@ mod tests {
     }
 
     fn backoff_with_retries(max_retries: u32) -> Backoff {
-        Backoff::new(
-            Duration::from_millis(0),
-            Duration::from_millis(0),
-            1.0,
-            max_retries,
-        )
+        Backoff::new(Duration::from_millis(0), 1.0, max_retries)
     }
 
     fn request_state(request: SubscribeRequest) -> Arc<ArcSwap<SubscribeRequest>> {
@@ -613,14 +614,13 @@ mod tests {
     fn test_backoff_default() {
         let backoff = Backoff::default();
         assert_eq!(backoff.initial_interval, Duration::from_millis(10));
-        assert_eq!(backoff.max_interval, Duration::from_secs(30));
         assert_eq!(backoff.multiplier, 2.0);
         assert_eq!(backoff.max_retries, 3);
     }
 
     #[test]
     fn test_backoff_instance_exhaustion() {
-        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
+        let backoff = Backoff::new(Duration::from_millis(100), 2.0, 3);
         let mut instance = backoff.instance();
 
         assert!(!instance.exhausted());
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_backoff_instance_starts_from_initial() {
-        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 3);
+        let backoff = Backoff::new(Duration::from_millis(100), 2.0, 3);
         let instance = backoff.instance();
         assert_eq!(instance.attempts, 0);
         assert_eq!(instance.current_interval, Duration::from_millis(100));
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_backoff_advance() {
-        let backoff = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 2.0, 5);
+        let backoff = Backoff::new(Duration::from_millis(100), 2.0, 5);
         let mut instance = backoff.instance();
         assert_eq!(instance.current_interval, Duration::from_millis(100));
 
@@ -652,17 +652,39 @@ mod tests {
     }
 
     #[test]
-    fn test_backoff_advance_caps_at_max() {
-        let backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(1), 2.0, 10);
+    fn test_backoff_advance_unbounded_growth() {
+        let backoff = Backoff::new(Duration::from_millis(500), 2.0, 10);
         let mut instance = backoff.instance();
         instance.advance(); // 1s
-        instance.advance(); // would be 2s, capped at 1s
-        assert_eq!(instance.current_interval, Duration::from_secs(1));
+        instance.advance(); // 2s
+        assert_eq!(instance.current_interval, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_backoff_iterator_yields_expected_intervals() {
+        let backoff = Backoff::new(Duration::from_millis(100), 2.0, 3);
+        let mut instance = backoff.instance();
+
+        assert_eq!(instance.next(), Some(Duration::from_millis(100)));
+        assert_eq!(instance.next(), Some(Duration::from_millis(200)));
+        assert_eq!(instance.next(), Some(Duration::from_millis(400)));
+        assert_eq!(instance.next(), None);
+    }
+
+    #[test]
+    fn test_backoff_iterator_stops_after_max_retries() {
+        let backoff = Backoff::new(Duration::from_millis(100), 2.0, 2);
+        let mut instance = backoff.instance();
+
+        assert_eq!(instance.next(), Some(Duration::from_millis(100)));
+        assert_eq!(instance.next(), Some(Duration::from_millis(200)));
+        assert_eq!(instance.next(), None);
+        assert_eq!(instance.next(), None);
     }
 
     #[tokio::test]
     async fn test_backoff_retry_eventually_succeeds() {
-        let backoff = Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 2.0, 5);
+        let backoff = Backoff::new(Duration::from_millis(0), 2.0, 5);
         let mut calls = 0;
 
         let result = backoff
@@ -685,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_backoff_retry_exhausted_returns_last_error() {
-        let backoff = Backoff::new(Duration::from_millis(0), Duration::from_millis(0), 2.0, 2);
+        let backoff = Backoff::new(Duration::from_millis(0), 2.0, 2);
         let mut calls = 0;
 
         let result = backoff
@@ -697,6 +719,22 @@ mod tests {
 
         assert_eq!(result, Err("still failing"));
         assert_eq!(calls, 3);
+    }
+
+    #[tokio::test]
+    async fn test_backoff_retry_with_zero_retries_does_not_retry() {
+        let backoff = Backoff::new(Duration::from_millis(0), 2.0, 0);
+        let mut calls = 0;
+
+        let result = backoff
+            .retry(|| {
+                calls += 1;
+                async { Err::<(), _>(ErrorCategory::Retryable("still failing")) }
+            })
+            .await;
+
+        assert_eq!(result, Err("still failing"));
+        assert_eq!(calls, 1);
     }
 
     #[test]
