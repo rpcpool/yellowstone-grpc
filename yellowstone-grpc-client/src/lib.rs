@@ -4,7 +4,7 @@ mod reconnect;
 use {
     crate::{
         dedup::DEFAULT_SLOT_RETENTION,
-        reconnect::{Backoff, TonicGeyserClientOptions},
+        reconnect::TonicGeyserClientOptions,
     },
     arc_swap::ArcSwap,
     bytes::Bytes,
@@ -42,7 +42,7 @@ use {
 pub use {
     crate::{
         dedup::{DedupState, DedupStream},
-        reconnect::{AutoReconnect, GrpcConnector, TonicGrpcConnector},
+        reconnect::{AutoReconnect, GrpcConnector, TonicGrpcConnector, Backoff},
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
@@ -338,6 +338,7 @@ impl GeyserGrpcClient {
                     ),
                     connector,
                     Arc::clone(&sink.shared),
+                    reconnect_config.backoff.clone()
                 );
                 (sink, GeyserStream { inner })
             })

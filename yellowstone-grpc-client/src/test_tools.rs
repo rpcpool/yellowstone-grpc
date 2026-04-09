@@ -85,8 +85,4 @@ impl GrpcConnector for UnstableConnector {
             Ok(Unstable::new(stream, drop_interval))
         })
     }
-
-    fn should_reconnect(&self) -> bool {
-        true
-    }
 }

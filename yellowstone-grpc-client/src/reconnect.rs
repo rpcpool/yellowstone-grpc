@@ -181,9 +181,6 @@ pub trait GrpcConnector: Clone + Send + Sync + 'static {
         request: Arc<SubscribeRequest>,
         from_slot: Option<u64>,
     ) -> Self::ConnectFuture;
-
-    /// `should_reconnect()` gates whether AutoReconnect attempts recovery at all.
-    fn should_reconnect(&self) -> bool;
 }
 
 /// Tonic connector implementation for AutoReconnect. on reconnect, creates a new channel,
@@ -328,10 +325,6 @@ impl GrpcConnector for TonicGrpcConnector {
 
         Box::pin(fut)
     }
-
-    fn should_reconnect(&self) -> bool {
-        self.backoff.max_retries > 0
-    }
 }
 
 /// Stream wrapper that transparently reconnects on recoverable failures.
@@ -346,6 +339,7 @@ pub struct AutoReconnect<GrpcStream, Connector> {
     last_checkpoint: Option<u64>,
     stop: bool,
     connector: Connector,
+    backoff: Backoff,
     inner_stream: Option<DedupStream<GrpcStream>>,
     pending_connecting_task: Option<ConnectFuture<GrpcStream>>,
 }
@@ -359,6 +353,7 @@ where
         stream: DedupStream<S>,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,
+        backoff: Backoff
     ) -> Self {
         Self {
             request,
@@ -367,6 +362,7 @@ where
             pending_connecting_task: None,
             stop: false,
             connector,
+            backoff,
         }
     }
 
@@ -420,7 +416,7 @@ where
                         return Poll::Ready(Some(Ok(msg)));
                     }
                     Poll::Ready(Some(Err(status))) if is_recoverable_status_code(status.code()) => {
-                        if !me.connector.should_reconnect() {
+                        if me.backoff.max_retries == 0 {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
@@ -526,7 +522,6 @@ mod tests {
 
     #[derive(Clone)]
     struct MockGrpcConnector {
-        backoff: Backoff,
         plans: Arc<Mutex<VecDeque<ConnectPlan>>>,
         from_slot_calls: Arc<Mutex<Vec<Option<u64>>>>,
     }
@@ -537,9 +532,8 @@ mod tests {
     }
 
     impl MockGrpcConnector {
-        fn new(backoff: Backoff, plans: Vec<ConnectPlan>) -> Self {
+        fn new(plans: Vec<ConnectPlan>) -> Self {
             Self {
-                backoff,
                 plans: Arc::new(Mutex::new(plans.into())),
                 from_slot_calls: Arc::new(Mutex::new(Vec::new())),
             }
@@ -589,10 +583,6 @@ mod tests {
                     Err(err) => Err(err),
                 }
             })
-        }
-
-        fn should_reconnect(&self) -> bool {
-            self.backoff.max_retries > 0
         }
     }
 
@@ -871,7 +861,6 @@ mod tests {
     async fn test_autoreconnect_recovers_from_recoverable_stream_error() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
         let connector = MockGrpcConnector::new(
-            backoff_with_retries(1),
             vec![ConnectPlan {
                 expected_from_slot: Some(None),
                 result: Ok(vec![Ok(make_slot_msg(42, 0))]),
@@ -882,6 +871,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
         );
 
         let next = auto.next().await;
@@ -895,12 +885,13 @@ mod tests {
     #[tokio::test]
     async fn test_autoreconnect_no_reconnect_when_max_retries_zero() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(backoff_with_retries(0), vec![]);
+        let connector = MockGrpcConnector::new(vec![]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(0)
         );
 
         let first = auto.next().await.expect("expected one item");
@@ -916,7 +907,6 @@ mod tests {
     async fn test_autoreconnect_passes_checkpoint_as_from_slot() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
         let connector = MockGrpcConnector::new(
-            backoff_with_retries(1),
             vec![ConnectPlan {
                 expected_from_slot: Some(Some(77)),
                 result: Ok(vec![Ok(make_slot_msg(90, 0))]),
@@ -927,6 +917,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(1)
         );
         auto.last_checkpoint = Some(77);
 
@@ -948,7 +939,6 @@ mod tests {
         .boxed();
 
         let connector = MockGrpcConnector::new(
-            backoff_with_retries(1),
             vec![ConnectPlan {
                 expected_from_slot: None,
                 result: Ok(vec![
@@ -962,6 +952,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(1)
         );
 
         let msg1 = auto
@@ -1006,7 +997,6 @@ mod tests {
         .boxed();
 
         let connector = MockGrpcConnector::new(
-            backoff_with_retries(1),
             vec![ConnectPlan {
                 expected_from_slot: Some(Some(100 - CHECKPOINT_SLOT_BUFFER)),
                 result: Ok(vec![Ok(make_slot_msg(105, 0))]),
@@ -1017,6 +1007,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(1)
         );
 
         let msg1 = auto
@@ -1039,12 +1030,13 @@ mod tests {
     async fn test_autoreconnect_unrecoverable_error_stops_stream() {
         let initial = stream::iter(vec![Err(Status::invalid_argument("bad filter"))]).boxed();
 
-        let connector = MockGrpcConnector::new(backoff_with_retries(1), vec![]);
+        let connector = MockGrpcConnector::new(vec![]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
+            backoff_with_retries(1)
         );
 
         let result = auto.next().await.expect("expected item");
