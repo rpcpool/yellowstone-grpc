@@ -789,6 +789,26 @@ mod tests {
         }
     }
 
+    fn make_block_meta_msg(slot: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::BlockMeta(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta {
+                    slot,
+                    blockhash: String::new(),
+                    rewards: None,
+                    block_time: None,
+                    block_height: None,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_blockhash: String::new(),
+                    executed_transaction_count: 0,
+                    entries_count: 0,
+                },
+            )),
+            created_at: None,
+        }
+    }
+
     #[test]
     fn test_dedup_record_and_detect() {
         let mut dedup = DedupState::default();
@@ -855,6 +875,17 @@ mod tests {
         dedup.record(&make_slot_msg(103, 0));
         assert!(!dedup.is_duplicate(&make_slot_msg(100, 0)));
         assert!(dedup.is_duplicate(&make_slot_msg(101, 0)));
+    }
+
+    #[test]
+    fn test_dedup_slot_status_moves_to_processed_on_blockmeta() {
+        let mut dedup = DedupState::default();
+
+        dedup.record(&make_slot_msg(200, 0));
+        dedup.record(&make_block_meta_msg(200));
+
+        assert!(dedup.is_duplicate(&make_slot_msg(200, 0)));
+        assert!(!dedup.is_duplicate(&make_slot_msg(200, 1)));
     }
 
     #[tokio::test]
@@ -966,23 +997,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_autoreconnect_checkpoint_buffer() {
-        let block_meta_msg = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::BlockMeta(
-                yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta {
-                    slot: 100,
-                    blockhash: String::new(),
-                    rewards: None,
-                    block_time: None,
-                    block_height: None,
-                    parent_slot: 99,
-                    parent_blockhash: String::new(),
-                    executed_transaction_count: 0,
-                    entries_count: 0,
-                },
-            )),
-            created_at: None,
-        };
+        let block_meta_msg = make_block_meta_msg(100);
 
         let initial = stream::iter(vec![
             Ok(block_meta_msg),

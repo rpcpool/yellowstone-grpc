@@ -8,8 +8,7 @@ use {
     yellowstone_grpc_proto::{
         geyser::SubscribeUpdateDeshred,
         prelude::{
-            subscribe_update::UpdateOneof,
-            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, SubscribeUpdate,
+            SubscribeUpdate, subscribe_update::UpdateOneof, subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof
         },
     },
 };
@@ -71,7 +70,12 @@ pub(crate) enum DedupKey {
 #[derive(Debug, Clone)]
 /// Tracks seen messages per slot so we can filter duplicates during replay after reconnect.
 pub struct DedupState {
-    seen_messages: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
+    // slot being processed -> set of message keys seen for that slot
+    inflight_slots: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
+    // slot being processed -> set of visited slot statuses
+    inflight_slot_statuses: HashMap<u64, HashSet<i32>>, // slot -> slot status
+    // slot already finalized by BlockMeta -> set of slot statuses seen for that slot
+    slot_processed: HashMap<u64, HashSet<i32>>, // slot -> slot status
     slot_order: VecDeque<u64>,
     slot_retention: usize,
 }
@@ -79,7 +83,9 @@ pub struct DedupState {
 impl Default for DedupState {
     fn default() -> Self {
         Self {
-            seen_messages: Default::default(),
+            inflight_slots: Default::default(),
+            inflight_slot_statuses: Default::default(),
+            slot_processed: Default::default(),
             slot_order: Default::default(),
             slot_retention: DEFAULT_SLOT_RETENTION,
         }
@@ -148,7 +154,22 @@ impl DedupState {
     /// Returns true if this update was previously recorded for its slot.
     pub(crate) fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
         if let Some((slot, key)) = msg.extract_key() {
-            if let Some(keys) = self.seen_messages.get(&slot) {
+            if let DedupKey::Slot(status) = key {
+                if self
+                    .slot_processed
+                    .get(&slot)
+                    .is_some_and(|statuses| statuses.contains(&status))
+                {
+                    return true;
+                }
+
+                return self
+                    .inflight_slot_statuses
+                    .get(&slot)
+                    .is_some_and(|statuses| statuses.contains(&status));
+            }
+
+            if let Some(keys) = self.inflight_slots.get(&slot) {
                 return keys.contains(&key);
             }
         }
@@ -158,12 +179,47 @@ impl DedupState {
     /// Records an update key and prunes old slots when retention is exceeded.
     pub(crate) fn record(&mut self, msg: &impl Dedupable) {
         if let Some((slot, key)) = msg.extract_key() {
-            let is_new_slot = !self.seen_messages.contains_key(&slot);
-            self.seen_messages.entry(slot).or_default().insert(key);
-            if is_new_slot {
-                self.slot_order.push_back(slot);
-                self.prune();
+            self.track_slot(slot);
+
+            match key {
+                DedupKey::Slot(status) => {
+                    if let Some(processed) = self.slot_processed.get_mut(&slot) {
+                        processed.insert(status);
+                    } else {
+                        self.inflight_slot_statuses
+                            .entry(slot)
+                            .or_default()
+                            .insert(status);
+                    }
+                }
+                DedupKey::BlockMeta => {
+                    self.mark_slot_processed(slot);
+                }
+                key => {
+                    self.inflight_slots.entry(slot).or_default().insert(key);
+                }
             }
+
+            self.prune();
+        }
+    }
+
+    fn track_slot(&mut self, slot: u64) {
+        if self.inflight_slots.contains_key(&slot)
+            || self.inflight_slot_statuses.contains_key(&slot)
+            || self.slot_processed.contains_key(&slot)
+        {
+            return;
+        }
+        self.slot_order.push_back(slot);
+    }
+
+    fn mark_slot_processed(&mut self, slot: u64) {
+        self.inflight_slots.remove(&slot);
+        let statuses = self.inflight_slot_statuses.remove(&slot).unwrap_or_default();
+
+        if !statuses.is_empty() {
+            self.slot_processed.entry(slot).or_default().extend(statuses);
         }
     }
 
@@ -171,18 +227,24 @@ impl DedupState {
     pub fn prune(&mut self) {
         while self.slot_order.len() > self.slot_retention {
             if let Some(slot) = self.slot_order.pop_front() {
-                self.seen_messages.remove(&slot);
+                self.inflight_slots.remove(&slot);
+                self.inflight_slot_statuses.remove(&slot);
+                self.slot_processed.remove(&slot);
             } else {
                 break;
             }
         }
         // HashMap doesn't release capacity on remove; reclaim it after pruning.
-        self.seen_messages.shrink_to_fit();
+        self.inflight_slots.shrink_to_fit();
+        self.inflight_slot_statuses.shrink_to_fit();
+        self.slot_processed.shrink_to_fit();
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.seen_messages.clear();
+        self.inflight_slots.clear();
+        self.inflight_slot_statuses.clear();
+        self.slot_processed.clear();
         self.slot_order.clear();
     }
 }
