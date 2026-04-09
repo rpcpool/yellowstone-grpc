@@ -176,6 +176,8 @@ impl DedupState {
                 break;
             }
         }
+        // HashMap doesn't release capacity on remove; reclaim it after pruning.
+        self.seen_messages.shrink_to_fit();
     }
 
     #[allow(dead_code)]
