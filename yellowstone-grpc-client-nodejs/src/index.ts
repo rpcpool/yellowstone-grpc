@@ -120,6 +120,7 @@ function fromJsSubscribeUpdateDeshred(
     deshredTransaction: oneof.deshredTransaction as any,
     ping: oneof.ping as any,
     pong: oneof.pong as any,
+    slot: oneof.slot as any,
   } as SubscribeUpdateDeshred;
 }
 
