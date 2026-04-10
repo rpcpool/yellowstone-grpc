@@ -138,6 +138,7 @@ message SubscribeRequestPing {
 message SubscribeDeshredRequest {
   map<string, SubscribeRequestFilterDeshredTransactions> deshred_transactions = 1;
   optional SubscribeRequestPing ping = 2;
+  map<string, SubscribeRequestFilterSlots> slots = 3;
 }
 
 message SubscribeUpdate {
@@ -249,6 +250,8 @@ message SubscribeUpdateDeshredTransactionInfo {
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   repeated bytes loaded_writable_addresses = 4;
   repeated bytes loaded_readonly_addresses = 5;
+  uint32 completed_data_set_starting_shred_index = 6;
+  uint32 completed_data_set_ending_shred_index_exclusive = 7;
 }
 
 message SubscribeUpdatePing {}
@@ -263,6 +266,8 @@ message SubscribeUpdateDeshred {
     SubscribeUpdateDeshredTransaction deshred_transaction = 2;
     SubscribeUpdatePing ping = 3;
     SubscribeUpdatePong pong = 4;
+    // field 5 is reserved for created_at (below the oneof)
+    SubscribeUpdateSlot slot = 6;
   }
   google.protobuf.Timestamp created_at = 5;
 }

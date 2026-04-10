@@ -434,6 +434,10 @@ struct ActionSubscribeDeshred {
     #[clap(long)]
     ping: Option<i32>,
 
+    /// Subscribe to slot updates on the deshred stream
+    #[clap(long, default_value_t = false)]
+    slots: bool,
+
     /// Show total stat instead of messages
     #[clap(long, default_value_t = false)]
     stats: bool,
@@ -643,10 +647,22 @@ impl Action {
 
                 let ping = args.ping.map(|id| SubscribeRequestPing { id });
 
+                let mut slots = HashMap::new();
+                if args.slots {
+                    slots.insert(
+                        "client".to_string(),
+                        SubscribeRequestFilterSlots {
+                            filter_by_commitment: Some(false),
+                            interslot_updates: Some(true),
+                        },
+                    );
+                }
+
                 Some((
                     SubscribeDeshredRequest {
                         deshred_transactions,
                         ping,
+                        slots,
                     },
                     args.stats,
                 ))
@@ -1078,6 +1094,7 @@ async fn geyser_subscribe_deshred(
                         Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
+                        Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_pp_c, &pb_pp),
                         None => {
                             pb_multi.println("update not found in the deshred message")?;
                             break;
@@ -1136,6 +1153,21 @@ async fn geyser_subscribe_deshred(
                             .await?;
                     }
                     Some(DeshredUpdateOneof::Pong(_)) => {}
+                    Some(DeshredUpdateOneof::Slot(msg)) => {
+                        let status = SlotStatus::try_from(msg.status)
+                            .context("failed to decode slot status")?;
+                        print_update(
+                            "slot",
+                            created_at,
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "parent": msg.parent,
+                                "status": status.as_str_name(),
+                                "deadError": msg.dead_error,
+                            }),
+                        );
+                    }
                     None => {
                         error!("update not found in the deshred message");
                         break;
