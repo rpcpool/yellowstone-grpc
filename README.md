@@ -2,7 +2,7 @@
 
 This repo contains a fully functional gRPC interface for Solana, built and maintained by [Triton One](https://triton.one). It is built around Solana's Geyser interface. In this repo, we have the plugin and sample clients for multiple languages.
 
-It provides the ability to get slots, blocks, transactions, and account update notifications over a standardised path.
+It provides the ability to get slots, blocks, transactions, deshred pre-execution transactions, and account update notifications over a standardised path.
 
 For additional documentation, please see: https://docs.triton.one/rpc-pool/grpc-subscriptions
 
@@ -71,6 +71,31 @@ If all fields are empty, then all accounts are broadcast. Otherwise, fields work
 - `account_required` — require all accounts from the list to be used in the transaction
 
 If all fields are empty, then all transactions are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR`.
+
+#### Deshred transactions
+
+`SubscribeDeshred` is a separate bi-directional stream for pre-execution transactions. Instead of waiting for Replay to execute a transaction and produce `TransactionStatusMeta`, the server reconstructs entries from incoming shreds and streams the decoded transaction as soon as it is available.
+
+This gives you an earlier signal than the regular `transactions` stream, but it comes with less context:
+
+   - available fields — `slot`, `signature`, `is_vote`, raw `transaction`, `loaded_writable_addresses`, `loaded_readonly_addresses`
+   - unavailable fields — execution status, error details, logs, inner instructions, balances, compute usage, `TransactionStatusMeta`
+
+`loaded_writable_addresses` and `loaded_readonly_addresses` contain addresses resolved from address lookup tables, so deshred filters can match both static account keys and dynamically loaded addresses.
+
+Availability:
+
+   - the protobuf API and Rust client expose `SubscribeDeshred`
+   - this RPC is only available on Triton extension servers
+   - the open-source `yellowstone-grpc-geyser` server in this repository currently returns `UNIMPLEMENTED` for `SubscribeDeshred`
+   - the implemented version currently lives on the [`master-triton-ext` branch](https://github.com/rpcpool/yellowstone-grpc/tree/master-triton-ext)
+
+The deshred transaction filter supports:
+
+   - `vote` — enable/disable broadcast `vote` transactions
+   - `account_include` — match transactions that mention any listed account, including ALT-loaded addresses
+   - `account_exclude` — exclude transactions that mention any listed account, including ALT-loaded addresses
+   - `account_required` — require all listed accounts to be present, including ALT-loaded addresses
 
 #### Entries
 
@@ -151,6 +176,8 @@ It's possible to add limits for filters in the config. If the `filters` field is
 - [Go](examples/golang)
 - [Rust](examples/rust)
 - [TypeScript](examples/typescript)
+
+For a `SubscribeDeshred` CLI example, see [examples/rust](examples/rust).
 
 > [!NOTE]
 > Some load balancers will terminate gRPC connections if no messages are sent from the client for a period of time.
