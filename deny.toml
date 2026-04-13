@@ -18,4 +18,8 @@ ignore = [
     # time 0.3.45 — fix (>=0.3.47) requires Rust 1.88.0, we are on 1.86.0
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0009
     "RUSTSEC-2026-0009",
+
+    # rand 0.8.5 — fix (>=0.9.3) not available, pinned by solana ecosystem
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0097
+    "RUSTSEC-2026-0097",
 ]

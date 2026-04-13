@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## 2026-04-10
+
+- yellowstone-grpc-proto-12.2.0
+
+### Features
+
+- proto: add `SubscribeUpdateSlot` variant to `SubscribeUpdateDeshred` oneof for slot status updates on the deshred stream (enables client-side reconnection checkpointing)
+- proto: add `slots` filter to `SubscribeDeshredRequest` (reuses `SubscribeRequestFilterSlots`)
+- proto: add `completed_data_set_starting_shred_index` and `completed_data_set_ending_shred_index_exclusive` fields to `SubscribeUpdateDeshredTransactionInfo` (V2 deshred transaction metadata)
+
 ## 2026-03-31
 
 - yellowstone-grpc-client-13.0.0
