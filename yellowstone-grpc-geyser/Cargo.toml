@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "12.2.0+triton-ext"
+version = "12.2.0+triton-ext.solana.3.1.13.rc.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
