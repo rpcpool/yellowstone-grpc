@@ -17,7 +17,7 @@ use {
         Status, Streaming,
     },
     yellowstone_grpc_proto::{
-        geyser::{geyser_client::GeyserClient, SubscribeReplayInfoRequest},
+        geyser::geyser_client::GeyserClient,
         prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     },
 };
