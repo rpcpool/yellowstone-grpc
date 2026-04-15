@@ -17,7 +17,7 @@ use {
         Status, Streaming,
     },
     yellowstone_grpc_proto::{
-        geyser::geyser_client::GeyserClient,
+        geyser::{geyser_client::GeyserClient, SubscribeReplayInfoRequest},
         prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     },
 };
@@ -306,6 +306,27 @@ impl GrpcConnector for TonicGrpcConnector {
                     .await
                     .expect("channel cannot be disconnected or full at this point");
 
+                if let Some(slot) = from_slot {
+                    let replay_info = geyser
+                        .subscribe_replay_info(tonic::Request::new(SubscribeReplayInfoRequest {}))
+                        .await
+                        .map_err(GeyserGrpcClientError::from)
+                        .map_err(ErrorCategory::Retryable)?;
+
+                    if let Some(first_available) = replay_info.into_inner().first_available {
+                        if slot < first_available {
+                            return Err(ErrorCategory::Retryable(
+                                GeyserGrpcClientError::TonicStatus(
+                                    Status::failed_precondition(format!(
+                                        "replay from slot {slot} not available, oldest: {first_available}"
+                                    ))
+                                )
+                            ));
+                        }
+                    }
+                }
+
+
                 let mut tonic_request = tonic::Request::new(subscribe_rx);
                 if let Some(slot) = from_slot {
                     tonic_request.metadata_mut().insert(
@@ -436,7 +457,7 @@ where
                         // If the server's replay buffer has moved past our checkpoint,
                         // clear it so the next reconnect starts from "now" instead of
                         // looping forever on an unavailable slot.
-                        if status.message().contains("is not available") {
+                        if status.code() == Code::OutOfRange {
                             me.last_checkpoint = None;
                         }
                         log::warn!(
@@ -515,6 +536,7 @@ const fn is_recoverable_status_code(code: Code) -> bool {
             | Code::Internal
             | Code::Unavailable
             | Code::DataLoss
+            | Code::OutOfRange
     )
 }
 
@@ -758,6 +780,7 @@ mod tests {
         assert!(is_recoverable_status_code(Code::ResourceExhausted));
         assert!(is_recoverable_status_code(Code::Aborted));
         assert!(is_recoverable_status_code(Code::DataLoss));
+        assert!(is_recoverable_status_code(Code::OutOfRange));
 
         assert!(!is_recoverable_status_code(Code::InvalidArgument));
         assert!(!is_recoverable_status_code(Code::NotFound));
@@ -765,7 +788,6 @@ mod tests {
         assert!(!is_recoverable_status_code(Code::Unauthenticated));
         assert!(!is_recoverable_status_code(Code::Unimplemented));
         assert!(!is_recoverable_status_code(Code::FailedPrecondition));
-        assert!(!is_recoverable_status_code(Code::OutOfRange));
     }
 
     #[test]

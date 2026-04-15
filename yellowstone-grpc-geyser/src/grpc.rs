@@ -1201,7 +1201,7 @@ impl GrpcService {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
                                             );
-                                            let _ = stream_tx.send(Err(Status::internal(message))).await;
+                                            let _ = stream_tx.send(Err(Status::out_of_range(message))).await;
                                         });
                                         session.disconnect_reason = "slot_unavailable";
                                         break 'outer;
