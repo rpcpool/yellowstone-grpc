@@ -306,27 +306,6 @@ impl GrpcConnector for TonicGrpcConnector {
                     .await
                     .expect("channel cannot be disconnected or full at this point");
 
-                if let Some(slot) = from_slot {
-                    let replay_info = geyser
-                        .subscribe_replay_info(tonic::Request::new(SubscribeReplayInfoRequest {}))
-                        .await
-                        .map_err(GeyserGrpcClientError::from)
-                        .map_err(ErrorCategory::Retryable)?;
-
-                    if let Some(first_available) = replay_info.into_inner().first_available {
-                        if slot < first_available {
-                            return Err(ErrorCategory::Retryable(
-                                GeyserGrpcClientError::TonicStatus(
-                                    Status::failed_precondition(format!(
-                                        "replay from slot {slot} not available, oldest: {first_available}"
-                                    ))
-                                )
-                            ));
-                        }
-                    }
-                }
-
-
                 let mut tonic_request = tonic::Request::new(subscribe_rx);
                 if let Some(slot) = from_slot {
                     tonic_request.metadata_mut().insert(
