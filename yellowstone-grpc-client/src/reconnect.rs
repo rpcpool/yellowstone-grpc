@@ -6,6 +6,7 @@ use {
     arc_swap::ArcSwap,
     futures::{channel::mpsc, sink::SinkExt, stream::Stream},
     std::{
+        error::Error,
         future::Future,
         pin::Pin,
         sync::{Arc, Mutex},
@@ -498,7 +499,15 @@ where
 /// Returns true if a client error is considered transient and reconnectable.
 fn is_recoverable_client_error(err: &GeyserGrpcClientError) -> bool {
     match err {
-        GeyserGrpcClientError::TonicStatus(status) => is_recoverable_status_code(status.code()),
+        GeyserGrpcClientError::TonicStatus(status) => {
+            // Transport errors can be wrapped inside a Status
+            if let Some(source) = status.source() {
+                if source.downcast_ref::<tonic::transport::Error>().is_some() {
+                    return true;
+                }
+            }
+            is_recoverable_status_code(status.code())
+        }
         GeyserGrpcClientError::TransportError(_) => true,
     }
 }
@@ -543,8 +552,11 @@ mod tests {
             sync::{Arc, Mutex},
         },
         tonic::Code,
-        yellowstone_grpc_proto::prelude::{
-            subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot,
+        yellowstone_grpc_proto::{
+            geyser::{
+                SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta,
+            },
+            prelude::{subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot},
         },
     };
 
@@ -960,6 +972,42 @@ mod tests {
         assert_eq!(connector.calls().len(), 0);
     }
 
+    #[test]
+    fn test_status_codes_recoverable() {
+        for code in [
+            Code::Unavailable,
+            Code::Aborted,
+            Code::Internal,
+            Code::Unknown,
+        ] {
+            let status = Status::new(code, "test");
+            let err = GeyserGrpcClientError::TonicStatus(status);
+            assert!(
+                is_recoverable_client_error(&err),
+                "expected {:?} to be recoverable",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_status_codes_unrecoverable() {
+        for code in [
+            Code::InvalidArgument,
+            Code::PermissionDenied,
+            Code::Unauthenticated,
+            Code::NotFound,
+        ] {
+            let status = Status::new(code, "test");
+            let err = GeyserGrpcClientError::TonicStatus(status);
+            assert!(
+                !is_recoverable_client_error(&err),
+                "expected {:?} to be unrecoverable",
+                code
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_autoreconnect_passes_checkpoint_as_from_slot() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
@@ -1083,5 +1131,194 @@ mod tests {
 
         assert!(auto.next().await.is_none());
         assert_eq!(connector.calls().len(), 0);
+    }
+
+    #[test]
+    fn test_custom_slot_retention_honored() {
+        let mut dedup = DedupState::with_slot_retention(5);
+
+        // Record slots 1-10
+        for slot in 1..=10 {
+            dedup.record(&make_slot_msg(slot, 0));
+        }
+
+        // Slots 1-5 should be pruned, 6-10 should remain
+        for slot in 1..=5 {
+            assert!(
+                !dedup.is_duplicate(&make_slot_msg(slot, 0)),
+                "slot {} should be pruned",
+                slot
+            );
+        }
+        for slot in 6..=10 {
+            assert!(
+                dedup.is_duplicate(&make_slot_msg(slot, 0)),
+                "slot {} should remain",
+                slot
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_checkpoint_when_no_block_meta() {
+        // Stream emits only account updates, no block_meta
+        let account_msg = SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(SubscribeUpdateAccountInfo {
+                    pubkey: vec![1; 32],
+                    lamports: 100,
+                    owner: vec![0; 32],
+                    executable: false,
+                    rent_epoch: 0,
+                    data: vec![].into(),
+                    write_version: 1,
+                    txn_signature: Some(vec![0; 64]),
+                }),
+                slot: 100,
+                is_startup: false,
+            })),
+            created_at: None,
+        };
+
+        let initial = stream::iter(vec![
+            Ok(account_msg),
+            Err(Status::unavailable("disconnect")),
+        ])
+        .boxed();
+
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(None), // <-- checkpoint should be None
+            result: Ok(vec![Ok(make_slot_msg(101, 0))]),
+        }]);
+
+        let mut auto = AutoReconnect::new(
+            DedupStream::new(initial, DedupState::default()),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        );
+
+        // Consume account message
+        let _ = auto.next().await;
+
+        // Reconnect happens, verify from_slot is None (not Some(100))
+        let _ = auto.next().await;
+
+        assert_eq!(
+            connector.calls(),
+            vec![None],
+            "from_slot should be None when no block_meta received"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_updates_on_block_meta() {
+        let block_meta_msg = SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                slot: 100,
+                ..Default::default()
+            })),
+            created_at: None,
+        };
+
+        let initial = stream::iter(vec![
+            Ok(block_meta_msg),
+            Err(Status::unavailable("disconnect")),
+        ])
+        .boxed();
+
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(98)), // 100 - CHECKPOINT_SLOT_BUFFER (2)
+            result: Ok(vec![Ok(make_slot_msg(101, 0))]),
+        }]);
+
+        let mut auto = AutoReconnect::new(
+            DedupStream::new(initial, DedupState::default()),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        );
+
+        // Consume block_meta — should set checkpoint
+        let _ = auto.next().await;
+
+        // Reconnect happens
+        let _ = auto.next().await;
+
+        assert_eq!(
+            connector.calls(),
+            vec![Some(98)],
+            "from_slot should be checkpoint - buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dedup_stream_standalone() {
+        // DedupStream works without AutoReconnect wrapper
+        let messages = vec![
+            Ok(make_slot_msg(100, 0)),
+            Ok(make_slot_msg(100, 0)), // duplicate
+            Ok(make_slot_msg(101, 0)),
+        ];
+
+        let inner = stream::iter(messages).boxed();
+        let mut dedup = DedupStream::new(inner, DedupState::default());
+
+        // First message passes
+        let msg1 = dedup
+            .next()
+            .await
+            .expect("expected item")
+            .expect("expected ok");
+        assert_eq!(extract_slot(&msg1), Some(100));
+
+        // Duplicate filtered, get next unique
+        let msg2 = dedup
+            .next()
+            .await
+            .expect("expected item")
+            .expect("expected ok");
+        assert_eq!(extract_slot(&msg2), Some(101));
+
+        // Stream ends
+        assert!(dedup.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_exhausts_retries_then_stops() {
+        let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
+
+        // Connector fails every reconnect attempt
+        let connector = MockGrpcConnector::new(vec![
+            ConnectPlan {
+                expected_from_slot: Some(None),
+                result: Err(GeyserGrpcClientError::TonicStatus(Status::unavailable(
+                    "still down",
+                ))),
+            },
+            ConnectPlan {
+                expected_from_slot: Some(None),
+                result: Err(GeyserGrpcClientError::TonicStatus(Status::unavailable(
+                    "still down",
+                ))),
+            },
+        ]);
+
+        let mut auto = AutoReconnect::new(
+            DedupStream::new(initial, DedupState::default()),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(2), // 2 retries allowed
+        );
+
+        // Should get error after retries exhausted
+        let result = auto.next().await;
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+
+        // Stream should end
+        assert!(auto.next().await.is_none());
     }
 }
