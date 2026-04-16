@@ -256,8 +256,6 @@ impl GrpcConnector for TonicGrpcConnector {
         request: Arc<SubscribeRequest>,
         from_slot: Option<u64>,
     ) -> Self::ConnectFuture {
-        log::info!("reconnecting with from_slot={:?}", from_slot);
-        
         let backoff = self.backoff.clone();
         let endpoint = self.endpoint.clone();
         let request_sink = Arc::clone(&self.request_sink);
