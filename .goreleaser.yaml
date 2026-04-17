@@ -34,7 +34,7 @@ builds:
       - x86_64-unknown-linux-gnu
     flags:
       - --release
-      - --package=yellowstone-grpc-client
+      - --package=yellowstone-grpc-client-simple
       - --bin=client
     hooks:
       post:
