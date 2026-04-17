@@ -34,6 +34,7 @@ builds:
       - x86_64-unknown-linux-gnu
     flags:
       - --release
+      - --package=yellowstone-grpc-client
       - --bin=client
     hooks:
       post:
@@ -46,6 +47,7 @@ builds:
       - x86_64-unknown-linux-gnu
     flags:
       - --release
+      - --package=yellowstone-grpc-geyser
       - --bin=config-check
     hooks:
       post:
