@@ -10,17 +10,21 @@ on:
       - .goreleaser.yaml
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   goreleaser-check:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 1
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           install-only: true
 
       - name: goreleaser check
         run: goreleaser check
+
