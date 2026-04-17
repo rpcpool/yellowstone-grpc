@@ -23,7 +23,8 @@ before:
     # plugin_name=yellowstone-grpc-geyser, plugin_lib_name=yellowstone_grpc_geyser.
     - bash -c 'tar cjf yellowstone-grpc-geyser-release-x86_64-unknown-linux-gnu.tar.bz2 -C target/x86_64-unknown-linux-gnu/release libyellowstone_grpc_geyser.so'
     # Produce a release metadata file consumed by downstream tooling (nomad, terraform).
-    - bash -c 'printf "channel: %s\ncommit: %s\ntarget: x86_64-unknown-linux-gnu\n" "$(git describe --tags --exact-match)" "$(git rev-parse HEAD)" > yellowstone-grpc-geyser-release-x86_64-unknown-linux-gnu.yml'
+    - >-
+      bash -c 'printf "channel: %s\ncommit: %s\ntarget: x86_64-unknown-linux-gnu\n" "$(git describe --tags --exact-match 2>/dev/null || echo "")" "$(git rev-parse HEAD)" > yellowstone-grpc-geyser-release-x86_64-unknown-linux-gnu.yml'
 
 builds:
   - id: client
