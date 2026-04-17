@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 12.1.0
-    "yellowstone-grpc-client", # 13.1.0
-    "yellowstone-grpc-geyser", # 12.1.0
+    "examples/rust", # 12.3.0
+    "yellowstone-grpc-client", # 13.2.0
+    "yellowstone-grpc-geyser", # 12.3.0
     "yellowstone-grpc-proto", # 12.2.0
 ]
 exclude = [
