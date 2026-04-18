@@ -1,56 +1,38 @@
-# Golang client for Solana gRPC interface
+# Golang client example for Yellowstone gRPC
 
 ## DISCLAIMER
 
-This example can contains errors or be behind of the latest stable version, please use it only as an example of how your subscription can looks like. If you want well tested production ready example, please check our implementation on Rust.
+This example may contain errors or lag behind the latest stable version —
+use it only as a reference for what a subscription looks like. For a
+well-tested production example, see the Rust implementation.
 
 <hr>
 
-This is a sample golang client for the Solana gRPC interface.
+Sample Go client for the Yellowstone gRPC interface. Built on top of the
+[yellowstone-grpc-client-go](../../yellowstone-grpc-client-go) library,
+which provides the typed client, builder, auth interceptor, and generated
+protobuf bindings.
 
-Requires golang 1.21
+Requires Go 1.24.
 
-Sample usage:
-
-```
-go run ./cmd/grpc-client/ -endpoint https://api.rpcpool.com:443 -x-token <token> -slots
-```
-
-You can also make non SSL connections:
+## Running
 
 ```
-go run ./cmd/grpc-client/ -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
+go run ./cmd/grpc-client -endpoint https://api.rpcpool.com:443 -x-token <token> -slots
 ```
 
-## Updating protofiles
-
-Make sure you have protoc installed:
-
-```bash
-$ protoc --version
-libprotoc 28.3
-```
-
-And the golang plugins:
-
-```bash
-$ go list -f '{{.Path}} {{.Version}}' -m google.golang.org/protobuf
-google.golang.org/protobuf v1.35.1
-$ go list -f '{{.Path}} {{.Version}}' -m google.golang.org/grpc
-google.golang.org/grpc v1.67.1
-```
-
-If you don't have the protobuf go plugins installed, you can install them with:
+Plaintext:
 
 ```
-$ go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.1
-$ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+go run ./cmd/grpc-client -endpoint http://api.rpcpool.com:80 -x-token <token> -blocks
 ```
 
-If you have `dnf` package manager:
+## Updating the generated protobuf
+
+The proto files now live in the library. To regenerate them:
 
 ```
-dnf install golang-google-grpc golang-google-protobuf
+cd ../../yellowstone-grpc-client-go
+make install-protoc  # once
+make protoc
 ```
-
-You can run `make` to update the protofiles.
