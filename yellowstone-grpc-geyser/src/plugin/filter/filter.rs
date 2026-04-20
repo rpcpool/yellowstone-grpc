@@ -1230,6 +1230,7 @@ mod tests {
                 account: vec![],
                 owner: vec![],
                 filters: vec![],
+                cuckoo_filter: None
             },
         );
 

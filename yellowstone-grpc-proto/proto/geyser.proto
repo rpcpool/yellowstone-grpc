@@ -49,11 +49,21 @@ message SubscribeRequest {
   optional uint64 from_slot = 11;
 }
 
+message CuckooFilter {
+  bytes data = 1;                    // bucket data
+  uint32 bucket_count = 2;           // number of buckets
+  uint32 entries_per_bucket = 3;     // slots per bucket (typically 4)
+  uint32 fingerprint_bits = 4;       // fingerprint size (8, 12, or 16)
+  uint64 hash_seed = 5;              // seed for deterministic hashing
+}
+
 message SubscribeRequestFilterAccounts {
   repeated string account = 2;
   repeated string owner = 3;
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
   optional bool nonempty_txn_signature = 5;
+
+  optional CuckooFilter cuckoo_filter = 6;
 }
 
 message SubscribeRequestFilterAccountsFilter {
