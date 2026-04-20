@@ -670,6 +670,15 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+
+        // Warn if replay buffer is too small for auto-reconnect
+        if config.replay_stored_slots < 150 {
+            log::warn!(
+                "replay_stored_slots={} may be too low for auto-reconnect; recommend >= 150",
+                config.replay_stored_slots
+            );
+        }
+
         task_tracker.spawn(async move {
             Self::geyser_loop(
                 messages_rx,
@@ -740,6 +749,11 @@ impl GrpcService {
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const PROCESSED_MESSAGES_SLEEP: Duration = Duration::from_millis(10);
+
+        /// Slots retained beyond replay buffer for parent chain status propagation
+        /// and late-arriving block_meta messages.
+        const FINALIZATION_SAFETY_BUFFER: u64 = 10;
+
         let mut msgid_gen = MessageId::default();
         let mut messages: BTreeMap<u64, SlotMessages> = Default::default();
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
@@ -780,7 +794,7 @@ impl GrpcService {
                         }
                         Message::Slot(msg) if msg.status == SlotStatus::Finalized => {
                             // keep extra 10 slots + slots for replay
-                            if let Some(msg_slot) = msg.slot.checked_sub(10 + replay_stored_slots) {
+                            if let Some(msg_slot) = msg.slot.checked_sub(FINALIZATION_SAFETY_BUFFER + replay_stored_slots) {
                                 loop {
                                     match messages.keys().next().cloned() {
                                         Some(slot) if slot < msg_slot => {
@@ -1201,7 +1215,7 @@ impl GrpcService {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
                                             );
-                                            let _ = stream_tx.send(Err(Status::internal(message))).await;
+                                            let _ = stream_tx.send(Err(Status::out_of_range(message))).await;
                                         });
                                         session.disconnect_reason = "slot_unavailable";
                                         break 'outer;
