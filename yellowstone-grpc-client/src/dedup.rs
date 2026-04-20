@@ -95,6 +95,15 @@ impl Default for DedupState {
 
 pub(crate) trait Dedupable {
     fn extract_key(&self) -> Option<(u64, DedupKey)>;
+
+    /// Returns true if this message signals that its slot is fully processed.
+    /// For regular subscribe, this is `BlockMeta`. For deshred, this is `SlotProcessed`.
+    fn marks_slot_complete(&self) -> bool { false }
+
+    /// Returns the slot to checkpoint for reconnect replay.
+    /// For regular subscribe, this is the BlockMeta slot.
+    /// For deshred, this is the SlotProcessed slot.
+    fn checkpoint_slot(&self) -> Option<u64> { None }
 }
 
 impl Dedupable for SubscribeUpdate {
@@ -126,6 +135,20 @@ impl Dedupable for SubscribeUpdate {
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }
     }
+
+    fn marks_slot_complete(&self) -> bool {
+        matches!(
+            self.update_oneof.as_ref(),
+            Some(UpdateOneof::BlockMeta(_))
+        )
+    }
+
+    fn checkpoint_slot(&self) -> Option<u64> {
+        match self.update_oneof.as_ref()? {
+            UpdateOneof::BlockMeta(m) => Some(m.slot),
+            _ => None,
+        }
+    }
 }
 
 impl Dedupable for SubscribeUpdateDeshred {
@@ -140,6 +163,20 @@ impl Dedupable for SubscribeUpdateDeshred {
             }
             DeshredUpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
             DeshredUpdateOneof::Ping(_) | DeshredUpdateOneof::Pong(_) => None,
+        }
+    }
+
+    fn marks_slot_complete(&self) -> bool {
+        matches!(
+            self.update_oneof.as_ref(),
+            Some(DeshredUpdateOneof::Slot(m)) if m.status == 0
+        )
+    }
+
+    fn checkpoint_slot(&self) -> Option<u64> {
+        match self.update_oneof.as_ref()? {
+            DeshredUpdateOneof::Slot(m) if m.status == 0 => Some(m.slot),
+            _ => None,
         }
     }
 }
@@ -204,13 +241,15 @@ impl DedupState {
                             .insert(status);
                     }
                 }
-                DedupKey::BlockMeta => {
-                    self.mark_slot_as_processed(slot);
-                }
                 key => {
                     self.inflight_slots.entry(slot).or_default().insert(key);
                 }
             }
+
+            if msg.marks_slot_complete() {
+                self.mark_slot_as_processed(slot);
+            }
+
 
             self.prune();
         }
