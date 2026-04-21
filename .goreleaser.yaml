@@ -58,7 +58,7 @@ builds:
 archives:
   - id: geyser
     ids: [geyser]
-    formats: [tar.bz2]
+    formats: [binary]
 
   - id: client
     formats: [binary]
