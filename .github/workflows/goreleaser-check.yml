@@ -5,6 +5,9 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  push:
+    paths:
+      - .goreleaser.yaml
   pull_request:
     paths:
       - .goreleaser.yaml
