@@ -5424,6 +5424,8 @@ dependencies = [
  "prost 0.14.3",
  "prost-types 0.14.3",
  "protoc-bin-vendored",
+ "rand",
+ "thiserror 2.0.18",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",

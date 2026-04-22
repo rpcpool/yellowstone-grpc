@@ -266,7 +266,7 @@ struct FilterAccounts {
     nonempty_txn_signature_required: HashSet<FilterName>,
     account: HashMap<Pubkey, HashSet<FilterName>>,
     account_required: HashSet<FilterName>,
-    account_cuckoo: HashMap<FilterName, Arc<CuckooFilter>>,
+    account_cuckoo: HashMap<FilterName, Arc<CuckooFilter<Pubkey>>>,
     owner: HashMap<Pubkey, HashSet<FilterName>>,
     owner_required: HashSet<FilterName>,
     filters: Vec<(FilterName, FilterAccountsState)>,
@@ -291,7 +291,7 @@ impl FilterAccounts {
 
             let has_filter_criteria = !filter.account.is_empty()
                 || !filter.owner.is_empty()
-                || filter.cuckoo_filter.is_some();
+                || filter.cuckoo_accounts_filter.is_some();
 
             FilterLimits::check_any(!has_filter_criteria, limits.any)?;
             FilterLimits::check_pubkey_max(filter.account.len(), limits.account_max)?;
@@ -316,7 +316,7 @@ impl FilterAccounts {
             this.filters
                 .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
 
-            if let Some(proto_cuckoo) = &filter.cuckoo_filter {
+            if let Some(proto_cuckoo) = &filter.cuckoo_accounts_filter {
                 FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
                 let cuckoo = Arc::new(CuckooFilter::from(proto_cuckoo));
                 this.account_cuckoo.insert(names.get(name)?, cuckoo);
@@ -561,7 +561,7 @@ impl<'a> FilterAccountsMatch<'a> {
 
     fn match_cuckoo(&mut self, pubkey: &Pubkey) {
         for (name, cuckoo) in &self.filter.account_cuckoo {
-            if matches!(cuckoo.contains(pubkey), Ok(true)) {
+            if cuckoo.contains(pubkey) {
                 self.cuckoo.insert(name.as_ref());
             }
         }
@@ -1258,7 +1258,7 @@ mod tests {
                 account: vec![],
                 owner: vec![],
                 filters: vec![],
-                cuckoo_filter: None,
+                cuckoo_accounts_filter: None,
             },
         );
 
@@ -1707,7 +1707,7 @@ mod cuckoo_tests {
                 owner: vec![],
                 filters: vec![],
                 nonempty_txn_signature: None,
-                cuckoo_filter: Some(cuckoo),
+                cuckoo_accounts_filter: Some(cuckoo),
             },
         );
 
@@ -1755,7 +1755,7 @@ mod cuckoo_tests {
                 owner: vec![],
                 filters: vec![],
                 nonempty_txn_signature: None,
-                cuckoo_filter: Some(cuckoo),
+                cuckoo_accounts_filter: Some(cuckoo),
             },
         );
 
@@ -1799,7 +1799,7 @@ mod cuckoo_tests {
                 owner: vec![],
                 filters: vec![],
                 nonempty_txn_signature: None,
-                cuckoo_filter: Some(cuckoo),
+                cuckoo_accounts_filter: Some(cuckoo),
             },
         );
 
@@ -1855,7 +1855,7 @@ mod cuckoo_tests {
                 owner: vec![owner.to_string()],
                 filters: vec![],
                 nonempty_txn_signature: None,
-                cuckoo_filter: Some(cuckoo),
+                cuckoo_accounts_filter: Some(cuckoo),
             },
         );
 

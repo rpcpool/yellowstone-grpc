@@ -63,7 +63,7 @@ message SubscribeRequestFilterAccounts {
   repeated SubscribeRequestFilterAccountsFilter filters = 4;
   optional bool nonempty_txn_signature = 5;
 
-  optional CuckooFilter cuckoo_filter = 6;
+  optional CuckooFilter cuckoo_accounts_filter = 6;
 }
 
 message SubscribeRequestFilterAccountsFilter {

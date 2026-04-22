@@ -14,7 +14,7 @@ use {
 /// The `HashSet` ensures exact membership checks and guards against unsafe removes.
 pub struct LocalCuckooMap<T> {
     items: HashSet<T>,
-    filter: CuckooFilter,
+    filter: CuckooFilter<T>,
     dirty: bool,
 }
 
@@ -49,7 +49,6 @@ where
     /// # Errors
     ///
     /// - `CuckooError::TableFull`: Filter cannot accommodate more items
-    /// - `CuckooError::InvalidState`: Filter is corrupted
     pub fn insert(&mut self, v: T) -> Result<bool, CuckooError> {
         if self.items.contains(&v) {
             return Ok(false);
@@ -73,16 +72,13 @@ where
     /// This prevents the cuckoo filter footgun where removing a non-existent
     /// item could accidentally remove a different item sharing the same fingerprint.
     ///
-    /// # Errors
-    ///
-    /// Returns `CuckooError::InvalidState` if the filter is corrupted.
-    pub fn remove(&mut self, v: &T) -> Result<bool, CuckooError> {
+    pub fn remove(&mut self, v: &T) -> bool {
         if self.items.remove(v) {
-            self.filter.remove(v)?;
+            self.filter.remove(v);
             self.dirty = true;
-            Ok(true)
+            true
         } else {
-            Ok(false)
+            false
         }
     }
 
@@ -119,7 +115,7 @@ where
             owner: vec![],
             filters: vec![],
             nonempty_txn_signature: None,
-            cuckoo_filter: Some(self.into_proto_cuckoo_filter()),
+            cuckoo_accounts_filter: Some(self.into_proto_cuckoo_filter()),
         };
 
         req.accounts.clear();
@@ -150,7 +146,7 @@ mod tests {
     fn remove_existing() {
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
-        assert!(map.remove(&"hello").unwrap());
+        assert!(map.remove(&"hello"));
         assert!(!map.contains(&"hello"));
     }
 
@@ -161,7 +157,7 @@ mod tests {
         map.insert("hello").unwrap();
 
         // Remove something never inserted — should be safe
-        assert!(!map.remove(&"world").unwrap());
+        assert!(!map.remove(&"world"));
 
         // Original item still there
         assert!(map.contains(&"hello"));
@@ -178,7 +174,7 @@ mod tests {
         assert!(!map.is_empty());
         assert_eq!(map.len(), 2);
 
-        map.remove(&"a").unwrap();
+        map.remove(&"a");
         assert_eq!(map.len(), 1);
     }
 
@@ -203,7 +199,7 @@ mod tests {
 
         assert!(req.accounts.contains_key("default"));
         let filter = req.accounts.get("default").unwrap();
-        assert!(filter.cuckoo_filter.is_some());
+        assert!(filter.cuckoo_accounts_filter.is_some());
     }
 
     #[test]
