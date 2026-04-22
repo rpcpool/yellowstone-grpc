@@ -17,7 +17,6 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
-affinity = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
@@ -86,6 +85,9 @@ required-features = ["bench"]
 
 [features]
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+affinity = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
