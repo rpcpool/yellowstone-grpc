@@ -2,9 +2,9 @@
 resolver = "2"
 members = [
     "examples/rust", # 12.3.0
-    "yellowstone-grpc-client", # 13.2.0
-    "yellowstone-grpc-geyser", # 12.3.0
-    "yellowstone-grpc-proto", # 12.2.0
+    "yellowstone-grpc-client", # 13.1.0-triton-ext+solana.3.1.13.rc.1
+    "yellowstone-grpc-geyser", # 12.3.0-triton-ext+solana.3.1.13.rc.1
+    "yellowstone-grpc-proto", # 12.2.0-triton-ext+solana.3.1.13.rc.1
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
@@ -75,12 +75,12 @@ vergen = "9.0.6"
 tikv-jemallocator = "0.6.1"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-account-decoder = "~3.1.0"
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-account-decoder = "=3.1.13"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~3.1.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "~3.1.0"
-solana-transaction-status = "~3.1.0"
+solana-storage-proto = { version = "=3.1.13", features = ["agave-unstable-api"] }
+solana-transaction-context = "=3.1.13"
+solana-transaction-status = "=3.1.13"
 
 # Solana SDK
 solana-account = "3.0.0"
@@ -98,9 +98,9 @@ solana-transaction-error = "3.0.0"
 spl-token-2022-interface = "2.0.0"
 
 # Yellowstone
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.0.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.2.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.2.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0-triton-ext+solana.3.1.13.rc.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "12.3.0-triton-ext+solana.3.1.13.rc.1" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.2.0-triton-ext+solana.3.1.13.rc.1", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
@@ -108,16 +108,16 @@ missing_const_for_fn = "deny"
 trivially_copy_pass_by_ref = "deny"
 
 [patch.crates-io]
-agave-feature-set = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-storage-proto = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "v3.1-triton-public" }
+agave-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-storage-proto = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v3.1.13-triton-public.rc.1" }
 
 [profile.release]
 lto = true
