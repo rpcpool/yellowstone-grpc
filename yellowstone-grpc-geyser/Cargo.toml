@@ -78,6 +78,10 @@ prost_011 = { workspace = true, optional = true }
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# wrapped in mod cpu_core_affinity
+affinity = { workspace = true }
+
 [[bench]]
 name = "encode"
 harness = false
@@ -85,9 +89,6 @@ required-features = ["bench"]
 
 [features]
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
-
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-affinity = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
