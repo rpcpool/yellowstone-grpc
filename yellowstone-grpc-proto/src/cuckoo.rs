@@ -62,6 +62,7 @@ const HASH_SEED: u64 = 0x_796c_6c77_7374_6e21;
 ///
 /// Stores fingerprints (short hashes) of items rather than items themselves.
 /// Supports insert, lookup, and delete operations.
+#[derive(Debug)]
 pub struct CuckooFilter {
     buckets: Vec<Bucket>,
 }

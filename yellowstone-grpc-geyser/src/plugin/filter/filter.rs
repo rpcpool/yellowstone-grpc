@@ -17,9 +17,9 @@ use {
             MessageSlot, MessageTransaction, SlotStatus,
         },
     },
-    base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
+    base64::{Engine, engine::general_purpose::STANDARD as base64_engine},
     bytes::buf::BufMut,
-    prost::encoding::{encode_key, encode_varint, WireType},
+    prost::encoding::{WireType, encode_key, encode_varint},
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
     spl_token_2022_interface::{
@@ -31,17 +31,9 @@ use {
         str::FromStr,
         sync::Arc,
     },
-    yellowstone_grpc_proto::geyser::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions,
-    },
+    yellowstone_grpc_proto::{cuckoo::CuckooFilter, geyser::{
+        CommitmentLevel as CommitmentLevelProto, SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports, SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof, subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports, subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof
+    }},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -263,6 +255,7 @@ struct FilterAccounts {
     nonempty_txn_signature_required: HashSet<FilterName>,
     account: HashMap<Pubkey, HashSet<FilterName>>,
     account_required: HashSet<FilterName>,
+    account_cuckoo: HashMap<FilterName, Arc<CuckooFilter>>,
     owner: HashMap<Pubkey, HashSet<FilterName>>,
     owner_required: HashSet<FilterName>,
     filters: Vec<(FilterName, FilterAccountsState)>,
@@ -285,10 +278,11 @@ impl FilterAccounts {
                     .insert(names.get(name)?);
             }
 
-            FilterLimits::check_any(
-                filter.account.is_empty() && filter.owner.is_empty(),
-                limits.any,
-            )?;
+            let has_filter_criteria = !filter.account.is_empty() 
+                       || !filter.owner.is_empty() 
+                       || filter.cuckoo_filter.is_some();
+
+            FilterLimits::check_any(!has_filter_criteria, limits.any)?;
             FilterLimits::check_pubkey_max(filter.account.len(), limits.account_max)?;
             FilterLimits::check_pubkey_max(filter.owner.len(), limits.owner_max)?;
 
@@ -310,7 +304,14 @@ impl FilterAccounts {
 
             this.filters
                 .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
+
+            if let Some(proto_cuckoo) = &filter.cuckoo_filter {
+                FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
+                let cuckoo = Arc::new(CuckooFilter::from(proto_cuckoo));
+                this.account_cuckoo.insert(names.get(name)?, cuckoo);
+            }
         }
+
         Ok(this)
     }
 
@@ -342,6 +343,7 @@ impl FilterAccounts {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
+        filter.match_cuckoo(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
         let filters = filter.get_filters();
@@ -503,6 +505,7 @@ struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
     nonempty_txn_signature: HashSet<&'a str>,
     account: HashSet<&'a str>,
+    cuckoo: HashSet<&'a str>,
     owner: HashSet<&'a str>,
     data: HashSet<&'a str>,
 }
@@ -513,6 +516,7 @@ impl<'a> FilterAccountsMatch<'a> {
             filter,
             nonempty_txn_signature: Default::default(),
             account: Default::default(),
+            cuckoo: Default::default(),
             owner: Default::default(),
             data: Default::default(),
         }
@@ -544,6 +548,14 @@ impl<'a> FilterAccountsMatch<'a> {
         Self::extend(&mut self.account, &self.filter.account, pubkey)
     }
 
+    fn match_cuckoo(&mut self, pubkey: &Pubkey) {
+        for (name, cuckoo) in &self.filter.account_cuckoo {
+            if matches!(cuckoo.contains(pubkey), Ok(true)) {
+                self.cuckoo.insert(name.as_ref());
+            }
+        }
+    }
+
     fn match_owner(&mut self, pubkey: &Pubkey) {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
     }
@@ -570,9 +582,15 @@ impl<'a> FilterAccountsMatch<'a> {
                 {
                     return None;
                 }
-                if af.account_required.contains(name) && !self.account.contains(name) {
+                
+                let needs_pubkey = af.account_required.contains(name) 
+                                || af.account_cuckoo.contains_key(name);
+                let has_pubkey = self.account.contains(name) 
+                            || self.cuckoo.contains(name);
+                if needs_pubkey && !has_pubkey {
                     return None;
                 }
+
                 if af.owner_required.contains(name) && !self.owner.contains(name) {
                     return None;
                 }
