@@ -35,7 +35,6 @@ pub mod prelude {
     pub use super::{geyser::*, solana::storage::confirmed_block::*};
 }
 
-
 #[cfg(feature = "tonic")]
 pub use tonic;
 pub use {prost, prost_types};

@@ -34,8 +34,10 @@
 //!
 //! This enables cross-language deserialization.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
-use crate::geyser::CuckooFilter as ProtoCuckooFilter;
+use {
+    crate::geyser::CuckooFilter as ProtoCuckooFilter,
+    std::hash::{DefaultHasher, Hash, Hasher},
+};
 
 /// Slots per bucket.
 const ENTRIES_PER_BUCKET: usize = 4;
@@ -71,9 +73,8 @@ pub struct CuckooFilter {
 pub enum CuckooError {
     CapacityOverflow,
     TableFull,
-    InvalidState,  // corrupted or empty buckets
+    InvalidState, // corrupted or empty buckets
 }
-
 
 impl CuckooFilter {
     /// Creates a new filter sized to hold `max_capacity` items.
@@ -92,8 +93,9 @@ impl CuckooFilter {
     /// let filter = CuckooFilter::with_capacity(2_000_000)?;
     /// `
     pub fn with_capacity(max_capacity: usize) -> Result<Self, CuckooError> {
-        let buckets_needed = (max_capacity as f64 / (LOAD_FACTOR * ENTRIES_PER_BUCKET as f64)).ceil() as usize;
-        
+        let buckets_needed =
+            (max_capacity as f64 / (LOAD_FACTOR * ENTRIES_PER_BUCKET as f64)).ceil() as usize;
+
         let bucket_count = buckets_needed
             .checked_next_power_of_two()
             .ok_or(CuckooError::CapacityOverflow)?
@@ -103,7 +105,7 @@ impl CuckooFilter {
         buckets
             .try_reserve_exact(bucket_count)
             .map_err(|_| CuckooError::CapacityOverflow)?;
-        
+
         buckets.resize(bucket_count, [0; ENTRIES_PER_BUCKET]);
 
         Ok(Self { buckets })
@@ -131,7 +133,7 @@ impl CuckooFilter {
         if self.try_insert_to_bucket(i1, fp) {
             return Ok(());
         }
-        
+
         if self.try_insert_to_bucket(i2, fp) {
             return Ok(());
         }
@@ -142,9 +144,9 @@ impl CuckooFilter {
         for n in 0..MAX_KICKS {
             let slot = (n + fp as usize) % ENTRIES_PER_BUCKET;
             std::mem::swap(&mut fp, &mut self.buckets[i][slot]);
-            
-            i = i ^ self.index(Self::hash(&fp));
-            
+
+            i ^= self.index(Self::hash(&fp));
+
             if self.try_insert_to_bucket(i, fp) {
                 return Ok(());
             }
@@ -213,7 +215,11 @@ impl CuckooFilter {
     fn fingerprint<T: Hash>(item: &T) -> Fingerprint {
         let h = Self::hash(item);
         let fp = (h >> 32) as u16;
-        if fp == 0 { 1 } else { fp }
+        if fp == 0 {
+            1
+        } else {
+            fp
+        }
     }
 
     /// Maps a hash to a bucket index using bitmask (why bucket_count is power of 2).
@@ -258,10 +264,13 @@ impl CuckooFilter {
 impl From<&ProtoCuckooFilter> for CuckooFilter {
     fn from(proto: &ProtoCuckooFilter) -> Self {
         if proto.data.is_empty() {
-            return Self { buckets: vec![[0; ENTRIES_PER_BUCKET]; 1] };
+            return Self {
+                buckets: vec![[0; ENTRIES_PER_BUCKET]; 1],
+            };
         }
 
-        let buckets: Vec<Bucket> = proto.data
+        let buckets: Vec<Bucket> = proto
+            .data
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<u16>>()
@@ -270,7 +279,9 @@ impl From<&ProtoCuckooFilter> for CuckooFilter {
             .collect();
 
         if buckets.is_empty() {
-            return Self { buckets: vec![[0; ENTRIES_PER_BUCKET]; 1] };
+            return Self {
+                buckets: vec![[0; ENTRIES_PER_BUCKET]; 1],
+            };
         }
 
         Self { buckets }
@@ -280,7 +291,8 @@ impl From<&ProtoCuckooFilter> for CuckooFilter {
 /// Serializes to proto wire format for cross-language interop.
 impl From<&CuckooFilter> for ProtoCuckooFilter {
     fn from(filter: &CuckooFilter) -> Self {
-        let data: Vec<u8> = filter.buckets
+        let data: Vec<u8> = filter
+            .buckets
             .iter()
             .flat_map(|bucket| bucket.iter())
             .flat_map(|fp| fp.to_le_bytes())
@@ -388,7 +400,12 @@ mod tests {
         for cap in [1, 10, 100, 1000, 1337, 10000] {
             let filter = CuckooFilter::with_capacity(cap).unwrap();
             let len = filter.buckets.len();
-            assert!(len.is_power_of_two(), "capacity {} gave {} buckets", cap, len);
+            assert!(
+                len.is_power_of_two(),
+                "capacity {} gave {} buckets",
+                cap,
+                len
+            );
         }
     }
 
@@ -541,17 +558,21 @@ mod tests {
     #[test]
     fn fill_then_remove_then_fill() {
         let mut filter = CuckooFilter::with_capacity(50).unwrap();
-        
+
         for i in 0..50u64 {
             let _ = filter.insert(&i);
         }
-        
+
         for i in 0..50u64 {
             let _ = filter.remove(&i);
         }
-        
+
         for i in 100..150u64 {
-            assert!(filter.insert(&i).is_ok(), "failed to insert {} after remove cycle", i);
+            assert!(
+                filter.insert(&i).is_ok(),
+                "failed to insert {} after remove cycle",
+                i
+            );
         }
     }
 
@@ -559,11 +580,11 @@ mod tests {
     fn false_positive_rate() {
         let n = 10_000;
         let mut filter = CuckooFilter::with_capacity(n).unwrap();
-        
+
         for i in 0..n as u64 {
             let _ = filter.insert(&i);
         }
-        
+
         let mut false_positives = 0;
         let test_count = 100_000;
         for i in n as u64..(n as u64 + test_count) {
@@ -571,28 +592,32 @@ mod tests {
                 false_positives += 1;
             }
         }
-        
+
         let fp_rate = false_positives as f64 / test_count as f64;
         println!("False positive rate: {:.4}%", fp_rate * 100.0);
-        
-        assert!(fp_rate < 0.01, "false positive rate too high: {:.4}%", fp_rate * 100.0);
+
+        assert!(
+            fp_rate < 0.01,
+            "false positive rate too high: {:.4}%",
+            fp_rate * 100.0
+        );
     }
 
     #[test]
     fn pubkey_like_data() {
         // 32-byte arrays like Solana pubkeys
         let mut filter = CuckooFilter::with_capacity(1000).unwrap();
-        
+
         for i in 0..100u8 {
             let pubkey = [i; 32];
             filter.insert(&pubkey).unwrap();
         }
-        
+
         for i in 0..100u8 {
             let pubkey = [i; 32];
             assert!(filter.contains(&pubkey).unwrap());
         }
-        
+
         // not inserted
         let missing = [255u8; 32];
         assert!(!filter.contains(&missing).unwrap());
@@ -602,15 +627,15 @@ mod tests {
     fn similar_pubkeys() {
         // pubkeys that differ by one byte
         let mut filter = CuckooFilter::with_capacity(100).unwrap();
-        
-        let mut pk1 = [0u8; 32];
+
+        let pk1 = [0u8; 32];
         let mut pk2 = [0u8; 32];
-        pk2[31] = 1;  // differ only in last byte
-        
+        pk2[31] = 1; // differ only in last byte
+
         filter.insert(&pk1).unwrap();
-        
+
         assert!(filter.contains(&pk1).unwrap());
-        assert!(!filter.contains(&pk2).unwrap());  // should NOT match
+        assert!(!filter.contains(&pk2).unwrap()); // should NOT match
     }
 
     // determinism
@@ -620,15 +645,15 @@ mod tests {
         // same inputs should produce same filter state
         let mut filter1 = CuckooFilter::with_capacity(100).unwrap();
         let mut filter2 = CuckooFilter::with_capacity(100).unwrap();
-        
+
         for i in 0..50u64 {
             filter1.insert(&i).unwrap();
             filter2.insert(&i).unwrap();
         }
-        
+
         let proto1 = ProtoCuckooFilter::from(&filter1);
         let proto2 = ProtoCuckooFilter::from(&filter2);
-        
+
         assert_eq!(proto1.data, proto2.data);
     }
 
@@ -638,16 +663,16 @@ mod tests {
         for i in 0..50u64 {
             filter.insert(&i).unwrap();
         }
-        
+
         // roundtrip multiple times
         let proto1 = ProtoCuckooFilter::from(&filter);
         let restored1 = CuckooFilter::from(&proto1);
         let proto2 = ProtoCuckooFilter::from(&restored1);
         let restored2 = CuckooFilter::from(&proto2);
-        
+
         // should be identical
         assert_eq!(proto1.data, proto2.data);
-        
+
         // should still work
         for i in 0..50u64 {
             assert!(restored2.contains(&i).unwrap());
@@ -660,14 +685,14 @@ mod tests {
     fn hundred_thousand_items() {
         let n = 100_000;
         let mut filter = CuckooFilter::with_capacity(n).unwrap();
-        
+
         let mut inserted = 0;
         for i in 0..n as u64 {
             if filter.insert(&i).is_ok() {
                 inserted += 1;
             }
         }
-        
+
         println!("Inserted {} / {} items", inserted, n);
         assert!(inserted > n * 90 / 100, "should insert at least 90%");
     }
@@ -676,17 +701,20 @@ mod tests {
     fn proto_size_at_scale() {
         let n = 100_000;
         let mut filter = CuckooFilter::with_capacity(n).unwrap();
-        
+
         for i in 0..n as u64 {
             let _ = filter.insert(&i);
         }
-        
+
         let proto = ProtoCuckooFilter::from(&filter);
         let size_bytes = proto.data.len();
         let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
-        
-        println!("Filter size for {} items: {} bytes ({:.2} MB)", n, size_bytes, size_mb);
-        
+
+        println!(
+            "Filter size for {} items: {} bytes ({:.2} MB)",
+            n, size_bytes, size_mb
+        );
+
         // should be much smaller than raw pubkeys
         // n pubkeys * 32 bytes = 3.2 MB
         // filter should be < 1 MB
@@ -698,32 +726,32 @@ mod tests {
     #[test]
     fn interleaved_insert_remove_contains() {
         let mut filter = CuckooFilter::with_capacity(100).unwrap();
-        
+
         // insert 1-50
         for i in 1..=50u64 {
             filter.insert(&i).unwrap();
         }
-        
+
         // remove even numbers
         for i in (2..=50u64).step_by(2) {
             filter.remove(&i).unwrap();
         }
-        
+
         // insert 51-75
         for i in 51..=75u64 {
             filter.insert(&i).unwrap();
         }
-        
+
         // check odd 1-50 still there
         for i in (1..=50u64).step_by(2) {
             assert!(filter.contains(&i).unwrap(), "{} should exist", i);
         }
-        
+
         // check even 1-50 gone
         for i in (2..=50u64).step_by(2) {
             assert!(!filter.contains(&i).unwrap(), "{} should be gone", i);
         }
-        
+
         // check 51-75 there
         for i in 51..=75u64 {
             assert!(filter.contains(&i).unwrap(), "{} should exist", i);
@@ -734,16 +762,16 @@ mod tests {
 
     #[test]
     fn insert_at_exact_capacity() {
-        let cap = 64;  // small, power of 2
+        let cap = 64; // small, power of 2
         let mut filter = CuckooFilter::with_capacity(cap).unwrap();
-        
+
         let mut inserted = 0;
         for i in 0..cap as u64 {
             if filter.insert(&i).is_ok() {
                 inserted += 1;
             }
         }
-        
+
         println!("Inserted {} at capacity {}", inserted, cap);
         // should get close to capacity
         assert!(inserted >= cap * 80 / 100);

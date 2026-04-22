@@ -1,9 +1,11 @@
-use std::collections::HashSet;
-use std::hash::Hash;
-use yellowstone_grpc_proto::cuckoo::{CuckooFilter, CuckooError};
-use yellowstone_grpc_proto::geyser::{
-    CuckooFilter as ProtoCuckooFilter,
-    SubscribeRequest, SubscribeRequestFilterAccounts,
+use {
+    std::{collections::HashSet, hash::Hash},
+    yellowstone_grpc_proto::{
+        cuckoo::{CuckooError, CuckooFilter},
+        geyser::{
+            CuckooFilter as ProtoCuckooFilter, SubscribeRequest, SubscribeRequestFilterAccounts,
+        },
+    },
 };
 
 /// A HashMap-like wrapper around `CuckooFilter` for safe client-side usage.
@@ -27,10 +29,12 @@ where
     /// Returns `CuckooError::CapacityOverflow` if capacity exceeds system limits.
     pub fn with_capacity(max_capacity: usize) -> Result<Self, CuckooError> {
         let filter = CuckooFilter::with_capacity(max_capacity)?;
-        
+
         let mut items: HashSet<T> = HashSet::new();
-        items.try_reserve(max_capacity).map_err(|_| CuckooError::CapacityOverflow)?;
-        
+        items
+            .try_reserve(max_capacity)
+            .map_err(|_| CuckooError::CapacityOverflow)?;
+
         Ok(Self {
             items,
             filter,
@@ -87,7 +91,7 @@ where
     /// Uses the internal `HashSet` for exact matching — no false positives.
     /// This differs from `CuckooFilter::contains` which has a small false positive rate.
     pub fn contains(&self, v: &T) -> bool {
-        self.items.contains(v)  // exact, uses HashSet — no error possible
+        self.items.contains(v) // exact, uses HashSet — no error possible
     }
 
     pub fn len(&self) -> usize {
@@ -117,7 +121,7 @@ where
             nonempty_txn_signature: None,
             cuckoo_filter: Some(self.into_proto_cuckoo_filter()),
         };
-        
+
         req.accounts.clear();
         req.accounts.insert("default".to_string(), filter);
     }
@@ -139,7 +143,7 @@ mod tests {
     fn insert_duplicate_returns_false() {
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         assert!(map.insert("hello").unwrap());
-        assert!(!map.insert("hello").unwrap());  // already exists
+        assert!(!map.insert("hello").unwrap()); // already exists
     }
 
     #[test]
@@ -155,10 +159,10 @@ mod tests {
         // This is the footgun protection test
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
-        
+
         // Remove something never inserted — should be safe
         assert!(!map.remove(&"world").unwrap());
-        
+
         // Original item still there
         assert!(map.contains(&"hello"));
     }
@@ -168,12 +172,12 @@ mod tests {
         let mut map = LocalCuckooMap::<&str>::with_capacity(100).unwrap();
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
-        
+
         map.insert("a").unwrap();
         map.insert("b").unwrap();
         assert!(!map.is_empty());
         assert_eq!(map.len(), 2);
-        
+
         map.remove(&"a").unwrap();
         assert_eq!(map.len(), 1);
     }
@@ -183,7 +187,7 @@ mod tests {
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
         map.insert("world").unwrap();
-        
+
         let proto = map.into_proto_cuckoo_filter();
         assert!(!proto.data.is_empty());
         assert!(proto.bucket_count > 0);
@@ -193,10 +197,10 @@ mod tests {
     fn override_subscribe_request_creates_filter() {
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
-        
+
         let mut req = SubscribeRequest::default();
         map.override_subscribe_request(&mut req);
-        
+
         assert!(req.accounts.contains_key("default"));
         let filter = req.accounts.get("default").unwrap();
         assert!(filter.cuckoo_filter.is_some());
@@ -206,12 +210,15 @@ mod tests {
     fn override_subscribe_request_clears_existing() {
         let mut map = LocalCuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
-        
+
         let mut req = SubscribeRequest::default();
-        req.accounts.insert("old_filter".to_string(), SubscribeRequestFilterAccounts::default());
-        
+        req.accounts.insert(
+            "old_filter".to_string(),
+            SubscribeRequestFilterAccounts::default(),
+        );
+
         map.override_subscribe_request(&mut req);
-        
+
         assert!(!req.accounts.contains_key("old_filter"));
         assert!(req.accounts.contains_key("default"));
     }
@@ -219,20 +226,20 @@ mod tests {
     #[test]
     fn pubkey_like_usage() {
         let mut map = LocalCuckooMap::with_capacity(1000).unwrap();
-        
+
         // Simulate 32-byte pubkeys
         for i in 0..100u8 {
             let pubkey = [i; 32];
             map.insert(pubkey).unwrap();
         }
-        
+
         assert_eq!(map.len(), 100);
-        
+
         for i in 0..100u8 {
             let pubkey = [i; 32];
             assert!(map.contains(&pubkey));
         }
-        
+
         let missing = [255u8; 32];
         assert!(!map.contains(&missing));
     }
