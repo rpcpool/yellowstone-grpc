@@ -15,6 +15,14 @@ It is a thin wrapper around the generated gRPC client with:
 - helpers for the two bidi streams (`Subscribe`, `SubscribeDeshred`),
   including `SubscribeOnce` / `SubscribeDeshredOnce` for the common case
   of a single initial request
+- pooled borrow-semantics stream helpers (`SubscribeForEach`,
+  `SubscribeDeshredForEach`) for hot paths — updates come from a
+  `sync.Pool` and are recycled as soon as the callback returns
+- vtproto-backed gRPC codec enabled by default: faster marshal/unmarshal
+  than the stock `google.golang.org/protobuf` path, with wire buffers
+  served from `mem.BufferPool`. Scoped per-connection via
+  `grpc.ForceCodecV2` so the global encoding registry is left untouched;
+  opt out with `Builder.WithVTProtoCodec(false)`.
 - typed wrappers around every unary RPC (`Ping`, `GetLatestBlockhash`,
   `GetBlockHeight`, `GetSlot`, `IsBlockhashValid`, `GetVersion`,
   `SubscribeReplayInfo`)
@@ -80,6 +88,32 @@ func main() {
 
 A runnable CLI example lives at [examples/golang](../examples/golang).
 
+### Pooled stream iteration
+
+For hot streams (account updates, deshredded txs), `SubscribeForEach`
+and `SubscribeDeshredForEach` reuse `*SubscribeUpdate` /
+`*SubscribeUpdateDeshred` instances across iterations via the
+vtproto-generated pool, cutting allocation pressure on every received
+message. The pointer handed to the callback is borrowed — it must not
+be retained past the callback return.
+
+```go
+err := c.SubscribeForEach(ctx, &pb.SubscribeRequest{
+    Slots: map[string]*pb.SubscribeRequestFilterSlots{"slots": {}},
+}, func(u *pb.SubscribeUpdate) error {
+    // u is valid only for the duration of this callback.
+    // To keep data, copy it or call u.CloneVT().
+    log.Printf("slot=%d", u.GetSlot().GetSlot())
+    return nil // return client.ErrStopIteration to end cleanly
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+`SubscribeOnce` / `SubscribeDeshredOnce` remain available for callers
+that need to drive `stream.Recv()` themselves or retain updates.
+
 ### Unix Domain Socket
 
 ```go
@@ -114,13 +148,22 @@ client.NewBuilder("https://...").
 ## Regenerating protobuf
 
 The `proto/` package is generated from
-[../yellowstone-grpc-proto/proto](../yellowstone-grpc-proto/proto).
+[../yellowstone-grpc-proto/proto](../yellowstone-grpc-proto/proto). Two
+files are produced per `.proto`: the standard `*.pb.go` (plus
+`*_grpc.pb.go` for the service) from `protoc-gen-go` /
+`protoc-gen-go-grpc`, and a companion `*_vtproto.pb.go` from
+`protoc-gen-go-vtproto` that adds `MarshalVT` / `UnmarshalVT` /
+`SizeVT` / `CloneVT` / `EqualVT` and, for `SubscribeUpdate` and
+`SubscribeUpdateDeshred`, a `sync.Pool`-backed
+`ResetVT` / `ReturnToVTPool` / `*FromVTPool` trio.
 
 ```sh
-make install-protoc  # once
+make install-protoc  # once — installs protoc-gen-go, -go-grpc, -go-vtproto
 make protoc
 ```
 
 The Makefile passes `--go_opt=M<file>=<this module's proto path>` so the
 generated code lives inside this module (rather than the examples
-module), which is what allows this library to import it cleanly.
+module), which is what allows this library to import it cleanly. To add
+or drop a pooled type, edit `VTPROTO_POOL` in the Makefile and rerun
+`make protoc`.

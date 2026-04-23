@@ -216,6 +216,8 @@ type Builder struct {
 
 	useGzip bool
 
+	disableVTCodec bool
+
 	extraDialOptions []grpc.DialOption
 }
 
@@ -329,6 +331,17 @@ func (b *Builder) WithGzip() *Builder {
 	return b
 }
 
+// WithVTProtoCodec toggles the vtproto-backed gRPC codec (enabled by
+// default). The codec is installed per-connection via grpc.ForceCodecV2
+// and never touches the global encoding registry, so disabling it here
+// affects only this Client. Pass false to fall back to grpc-go's
+// built-in proto codec — useful for A/B measurement or if you hit a
+// bug in the generated vtproto methods.
+func (b *Builder) WithVTProtoCodec(enabled bool) *Builder {
+	b.disableVTCodec = !enabled
+	return b
+}
+
 // WithDialOption appends arbitrary grpc.DialOption values. Use for any
 // transport option not covered by the helpers above.
 func (b *Builder) WithDialOption(opts ...grpc.DialOption) *Builder {
@@ -433,6 +446,13 @@ func (b *Builder) baseDialOptions(plaintext bool) ([]grpc.DialOption, error) {
 	}
 	if b.useGzip {
 		callOpts = append(callOpts, grpc.UseCompressor(gzip.Name))
+	}
+	if !b.disableVTCodec {
+		// Scope the vtproto codec to this ClientConn — ForceCodecV2 hands
+		// the codec directly to the call path without touching the
+		// package-level encoding registry, so other gRPC clients in the
+		// user's process keep the stock proto codec.
+		callOpts = append(callOpts, grpc.ForceCodecV2(defaultVTCodec))
 	}
 	if len(callOpts) > 0 {
 		opts = append(opts, grpc.WithDefaultCallOptions(callOpts...))

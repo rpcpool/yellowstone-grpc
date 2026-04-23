@@ -9,6 +9,7 @@ require github.com/rpcpool/yellowstone-grpc/yellowstone-grpc-client-go v0.0.0
 replace github.com/rpcpool/yellowstone-grpc/yellowstone-grpc-client-go => ../../yellowstone-grpc-client-go
 
 require (
+	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
