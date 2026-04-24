@@ -43,9 +43,7 @@ where
         if let Some(stream) = &mut this.inner {
             return stream.poll_next_unpin(cx);
         }
-        {
-            return Poll::Ready(None);
-        }
+        Poll::Ready(None)
     }
 }
 
@@ -66,7 +64,7 @@ pub struct UnstableConnector {
 }
 
 impl UnstableConnector {
-    pub fn new(inner: TonicGrpcConnector, drop_interval: Duration) -> Self {
+    pub const fn new(inner: TonicGrpcConnector, drop_interval: Duration) -> Self {
         Self {
             inner,
             drop_interval,

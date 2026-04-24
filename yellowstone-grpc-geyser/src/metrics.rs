@@ -171,7 +171,7 @@ lazy_static::lazy_static! {
 
     static ref GRPC_SERVICE_OUTBOUND_BYTES: IntGaugeVec = IntGaugeVec::new(
         Opts::new("yellowstone_grpc_service_outbound_bytes", "Current emitted bytes by tonic service response bodies per active subscriber stream"),
-        &["subscriber_id"]
+        &["subscriber_id", "uri_path"]
     ).unwrap();
 
 
@@ -581,15 +581,22 @@ pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
         .inc();
 }
 
-pub fn add_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S, bytes: u64) {
+pub fn add_grpc_service_outbound_bytes<S: AsRef<str>, P: AsRef<str>>(
+    subscriber_id: S,
+    uri_path: P,
+    bytes: u64,
+) {
     GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
+        .with_label_values(&[subscriber_id.as_ref(), uri_path.as_ref()])
         .add(bytes as i64);
 }
 
-pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>>(subscriber_id: S) {
+pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>, P: AsRef<str>>(
+    subscriber_id: S,
+    uri_path: P,
+) {
     GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref()])
+        .with_label_values(&[subscriber_id.as_ref(), uri_path.as_ref()])
         .set(0);
 }
 
