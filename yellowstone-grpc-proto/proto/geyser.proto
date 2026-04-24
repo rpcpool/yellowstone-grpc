@@ -49,12 +49,21 @@ message SubscribeRequest {
   optional uint64 from_slot = 11;
 }
 
+// Hash algorithm used to build the filter. Carried on the wire so future
+// releases can add alternative algorithms (e.g., xxh3) without breaking
+// existing clients. Readers should verify this matches a supported algorithm
+// before deserializing.
+enum CuckooHashAlgorithm {
+  SIP_HASH = 0;
+}
+
 message CuckooFilter {
   bytes data = 1;                    // bucket data
   uint32 bucket_count = 2;           // number of buckets
   uint32 entries_per_bucket = 3;     // slots per bucket (typically 4)
   uint32 fingerprint_bits = 4;       // fingerprint size (8, 12, or 16)
   uint64 hash_seed = 5;              // seed for deterministic hashing
+  CuckooHashAlgorithm hash_algorithm = 6;
 }
 
 message SubscribeRequestFilterAccounts {

@@ -46,7 +46,7 @@ use {
         error::{CuckooBuildError, TableFullError},
         hasher::YellowstoneHasherBuilder,
     },
-    crate::geyser::CuckooFilter as ProtoCuckooFilter,
+    crate::geyser::{CuckooFilter as ProtoCuckooFilter, CuckooHashAlgorithm},
     std::{
         hash::{BuildHasher, Hash},
         marker::PhantomData,
@@ -382,6 +382,7 @@ impl<T> From<&CuckooFilter<T, YellowstoneHasherBuilder>> for ProtoCuckooFilter {
             entries_per_bucket: ENTRIES_PER_BUCKET as u32,
             fingerprint_bits: FINGERPRINT_BITS,
             hash_seed: filter.hasher_builder.seed(),
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
         }
     }
 }
@@ -539,6 +540,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         assert!(!filter.contains(&"anything"));
@@ -552,6 +554,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         // should not panic, truncates odd byte
@@ -566,6 +569,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
@@ -579,6 +583,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
