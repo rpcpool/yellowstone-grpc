@@ -524,6 +524,7 @@ impl Action {
                             owner: args.accounts_owner.clone(),
                             filters,
                             nonempty_txn_signature: args.accounts_nonempty_txn_signature,
+                            cuckoo_accounts_filter: None,
                         },
                     );
                 }

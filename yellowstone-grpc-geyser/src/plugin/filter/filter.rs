@@ -31,16 +31,19 @@ use {
         str::FromStr,
         sync::Arc,
     },
-    yellowstone_grpc_proto::geyser::{
-        subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
-        subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
-        subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
-        CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
-        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions,
+    yellowstone_grpc_proto::{
+        cuckoo::CuckooFilter,
+        geyser::{
+            subscribe_request_filter_accounts_filter::Filter as AccountsFilterDataOneof,
+            subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
+            subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
+            CommitmentLevel as CommitmentLevelProto, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions,
+        },
     },
 };
 
@@ -263,6 +266,7 @@ struct FilterAccounts {
     nonempty_txn_signature_required: HashSet<FilterName>,
     account: HashMap<Pubkey, HashSet<FilterName>>,
     account_required: HashSet<FilterName>,
+    account_cuckoo: HashMap<FilterName, Arc<CuckooFilter<Pubkey>>>,
     owner: HashMap<Pubkey, HashSet<FilterName>>,
     owner_required: HashSet<FilterName>,
     filters: Vec<(FilterName, FilterAccountsState)>,
@@ -285,10 +289,11 @@ impl FilterAccounts {
                     .insert(names.get(name)?);
             }
 
-            FilterLimits::check_any(
-                filter.account.is_empty() && filter.owner.is_empty(),
-                limits.any,
-            )?;
+            let has_filter_criteria = !filter.account.is_empty()
+                || !filter.owner.is_empty()
+                || filter.cuckoo_accounts_filter.is_some();
+
+            FilterLimits::check_any(!has_filter_criteria, limits.any)?;
             FilterLimits::check_pubkey_max(filter.account.len(), limits.account_max)?;
             FilterLimits::check_pubkey_max(filter.owner.len(), limits.owner_max)?;
 
@@ -310,7 +315,14 @@ impl FilterAccounts {
 
             this.filters
                 .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
+
+            if let Some(proto_cuckoo) = &filter.cuckoo_accounts_filter {
+                FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
+                let cuckoo = Arc::new(CuckooFilter::from(proto_cuckoo));
+                this.account_cuckoo.insert(names.get(name)?, cuckoo);
+            }
         }
+
         Ok(this)
     }
 
@@ -342,6 +354,7 @@ impl FilterAccounts {
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
+        filter.match_cuckoo(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
         filter.match_data_lamports(&message.account.data, message.account.lamports);
         let filters = filter.get_filters();
@@ -503,6 +516,7 @@ struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
     nonempty_txn_signature: HashSet<&'a str>,
     account: HashSet<&'a str>,
+    cuckoo: HashSet<&'a str>,
     owner: HashSet<&'a str>,
     data: HashSet<&'a str>,
 }
@@ -513,6 +527,7 @@ impl<'a> FilterAccountsMatch<'a> {
             filter,
             nonempty_txn_signature: Default::default(),
             account: Default::default(),
+            cuckoo: Default::default(),
             owner: Default::default(),
             data: Default::default(),
         }
@@ -544,6 +559,14 @@ impl<'a> FilterAccountsMatch<'a> {
         Self::extend(&mut self.account, &self.filter.account, pubkey)
     }
 
+    fn match_cuckoo(&mut self, pubkey: &Pubkey) {
+        for (name, cuckoo) in &self.filter.account_cuckoo {
+            if cuckoo.contains(pubkey) {
+                self.cuckoo.insert(name.as_ref());
+            }
+        }
+    }
+
     fn match_owner(&mut self, pubkey: &Pubkey) {
         Self::extend(&mut self.owner, &self.filter.owner, pubkey)
     }
@@ -570,9 +593,14 @@ impl<'a> FilterAccountsMatch<'a> {
                 {
                     return None;
                 }
-                if af.account_required.contains(name) && !self.account.contains(name) {
+
+                let needs_pubkey =
+                    af.account_required.contains(name) || af.account_cuckoo.contains_key(name);
+                let has_pubkey = self.account.contains(name) || self.cuckoo.contains(name);
+                if needs_pubkey && !has_pubkey {
                     return None;
                 }
+
                 if af.owner_required.contains(name) && !self.owner.contains(name) {
                     return None;
                 }
@@ -1139,7 +1167,7 @@ mod tests {
         },
     };
 
-    fn create_filter_names() -> FilterNames {
+    pub(super) fn create_filter_names() -> FilterNames {
         FilterNames::new(64, 1024, Duration::from_secs(1))
     }
 
@@ -1230,6 +1258,7 @@ mod tests {
                 account: vec![],
                 owner: vec![],
                 filters: vec![],
+                cuckoo_accounts_filter: None,
             },
         );
 
@@ -1621,5 +1650,244 @@ mod tests {
         for message in filter.get_updates(&message, None) {
             assert!(message.filters.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod cuckoo_tests {
+    use {
+        super::{tests::create_filter_names, *},
+        crate::plugin::message::MessageAccountInfo,
+        yellowstone_grpc_proto::{cuckoo::CuckooFilter, geyser::CuckooFilter as ProtoCuckooFilter},
+    };
+
+    fn create_cuckoo_with_pubkeys(pubkeys: &[Pubkey]) -> ProtoCuckooFilter {
+        let mut filter = CuckooFilter::with_capacity(pubkeys.len().max(1)).unwrap();
+        for pk in pubkeys {
+            filter.insert(pk).unwrap();
+        }
+        ProtoCuckooFilter::from(&filter)
+    }
+
+    fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> MessageAccount {
+        use {
+            bytes::Bytes,
+            prost_types::Timestamp,
+            std::{sync::Arc, time::SystemTime},
+        };
+
+        MessageAccount {
+            account: Arc::new(MessageAccountInfo {
+                pubkey,
+                lamports: 1000,
+                owner,
+                executable: false,
+                rent_epoch: 0,
+                data: Bytes::new(),
+                write_version: 1,
+                txn_signature: None,
+                pre_encoded: std::sync::OnceLock::new(),
+            }),
+            slot: 100,
+            is_startup: false,
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+
+    #[test]
+    fn test_cuckoo_filter_matches_pubkey() {
+        let pubkey = Pubkey::new_unique();
+        let cuckoo = create_cuckoo_with_pubkeys(&[pubkey]);
+
+        let mut accounts = HashMap::new();
+        accounts.insert(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![],
+                owner: vec![],
+                filters: vec![],
+                nonempty_txn_signature: None,
+                cuckoo_accounts_filter: Some(cuckoo),
+            },
+        );
+
+        let config = SubscribeRequest {
+            accounts,
+            slots: HashMap::new(),
+            transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
+            blocks: HashMap::new(),
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: None,
+            accounts_data_slice: vec![],
+            ping: None,
+            from_slot: None,
+        };
+
+        let filter = Filter::new(
+            &config,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+        let message = create_message_account(pubkey, Pubkey::new_unique());
+        let updates = filter.get_updates(&Message::Account(message), None);
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("test")])
+        );
+    }
+
+    #[test]
+    fn test_cuckoo_filter_no_match() {
+        let in_filter = Pubkey::new_unique();
+        let not_in_filter = Pubkey::new_unique();
+        let cuckoo = create_cuckoo_with_pubkeys(&[in_filter]);
+
+        let mut accounts = HashMap::new();
+        accounts.insert(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![],
+                owner: vec![],
+                filters: vec![],
+                nonempty_txn_signature: None,
+                cuckoo_accounts_filter: Some(cuckoo),
+            },
+        );
+
+        let config = SubscribeRequest {
+            accounts,
+            slots: HashMap::new(),
+            transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
+            blocks: HashMap::new(),
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: None,
+            accounts_data_slice: vec![],
+            ping: None,
+            from_slot: None,
+        };
+
+        let filter = Filter::new(
+            &config,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+        let message = create_message_account(not_in_filter, Pubkey::new_unique());
+        let updates = filter.get_updates(&Message::Account(message), None);
+
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn test_cuckoo_or_explicit_account() {
+        let pk_in_cuckoo = Pubkey::new_unique();
+        let pk_in_list = Pubkey::new_unique();
+        let cuckoo = create_cuckoo_with_pubkeys(&[pk_in_cuckoo]);
+
+        let mut accounts = HashMap::new();
+        accounts.insert(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![pk_in_list.to_string()],
+                owner: vec![],
+                filters: vec![],
+                nonempty_txn_signature: None,
+                cuckoo_accounts_filter: Some(cuckoo),
+            },
+        );
+
+        let config = SubscribeRequest {
+            accounts,
+            slots: HashMap::new(),
+            transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
+            blocks: HashMap::new(),
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: None,
+            accounts_data_slice: vec![],
+            ping: None,
+            from_slot: None,
+        };
+
+        let filter = Filter::new(
+            &config,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        // Match via cuckoo
+        let message1 = create_message_account(pk_in_cuckoo, Pubkey::new_unique());
+        let updates1 = filter.get_updates(&Message::Account(message1), None);
+        assert_eq!(updates1.len(), 1);
+
+        // Match via explicit list
+        let message2 = create_message_account(pk_in_list, Pubkey::new_unique());
+        let updates2 = filter.get_updates(&Message::Account(message2), None);
+        assert_eq!(updates2.len(), 1);
+
+        // Match neither
+        let message3 = create_message_account(Pubkey::new_unique(), Pubkey::new_unique());
+        let updates3 = filter.get_updates(&Message::Account(message3), None);
+        assert!(updates3.is_empty());
+    }
+
+    #[test]
+    fn test_cuckoo_with_owner_filter() {
+        let pubkey = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let wrong_owner = Pubkey::new_unique();
+        let cuckoo = create_cuckoo_with_pubkeys(&[pubkey]);
+
+        let mut accounts = HashMap::new();
+        accounts.insert(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![],
+                owner: vec![owner.to_string()],
+                filters: vec![],
+                nonempty_txn_signature: None,
+                cuckoo_accounts_filter: Some(cuckoo),
+            },
+        );
+
+        let config = SubscribeRequest {
+            accounts,
+            slots: HashMap::new(),
+            transactions: HashMap::new(),
+            transactions_status: HashMap::new(),
+            blocks: HashMap::new(),
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: None,
+            accounts_data_slice: vec![],
+            ping: None,
+            from_slot: None,
+        };
+
+        let filter = Filter::new(
+            &config,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        // pubkey in cuckoo AND owner matches
+        let message1 = create_message_account(pubkey, owner);
+        let updates1 = filter.get_updates(&Message::Account(message1), None);
+        assert_eq!(updates1.len(), 1);
+
+        // pubkey in cuckoo BUT owner doesn't match
+        let message2 = create_message_account(pubkey, wrong_owner);
+        let updates2 = filter.get_updates(&Message::Account(message2), None);
+        assert!(updates2.is_empty());
     }
 }

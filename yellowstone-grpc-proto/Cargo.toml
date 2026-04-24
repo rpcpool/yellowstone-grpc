@@ -14,8 +14,13 @@ publish = true
 bytes = { workspace = true, optional = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+siphasher ={ workspace = true}
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
