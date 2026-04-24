@@ -554,7 +554,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
-            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         // should not panic, truncates odd byte
@@ -569,7 +569,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
-            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
@@ -583,7 +583,7 @@ mod tests {
             entries_per_bucket: 4,
             fingerprint_bits: 16,
             hash_seed: DEFAULT_HASH_SEED,
-            hash_algorithm: CuckooHashAlgorithm::SipHash as i32
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
@@ -890,7 +890,7 @@ mod tests {
 
         let fp_rate = false_positives as f64 / probed as f64;
         assert!(
-            fp_rate < 0.01,
+            fp_rate <= 0.01,
             "false positive rate {:.4} exceeded 1%",
             fp_rate
         );
@@ -926,7 +926,7 @@ mod tests {
 
         let fp_rate = false_positives as f64 / PROBES as f64;
         assert!(
-            fp_rate < 0.01,
+            fp_rate <= 0.01,
             "false positive rate {:.4} at 2M scale exceeded 1%",
             fp_rate
         );

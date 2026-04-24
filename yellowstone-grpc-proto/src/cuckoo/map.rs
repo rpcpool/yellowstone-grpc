@@ -62,6 +62,7 @@ use {
 pub struct CuckooMap<T> {
     items: HashSet<T>,
     filter: CuckooFilter<T>,
+    dirty: bool,
 }
 
 impl<T> CuckooMap<T>
@@ -97,7 +98,11 @@ where
             .try_reserve(max_capacity)
             .map_err(|_| CuckooBuildError::CapacityOverflow)?;
 
-        Ok(Self { items, filter })
+        Ok(Self {
+            items,
+            filter,
+            dirty: false,
+        })
     }
 
     /// Inserts an item into the map.
@@ -121,6 +126,7 @@ where
         }
         self.filter.insert(&v)?;
         self.items.insert(v);
+        self.dirty = true;
         Ok(true)
     }
 
@@ -141,6 +147,7 @@ where
     pub fn remove(&mut self, v: &T) -> bool {
         if self.items.remove(v) {
             self.filter.remove(v);
+            self.dirty = true;
             true
         } else {
             false
@@ -162,9 +169,84 @@ where
         self.items.len()
     }
 
+    /// Returns the number of items the map can hold without reallocating.
+    ///
+    /// Typically larger than the `max_capacity` passed to [`with_capacity`],
+    /// the underlying [`HashSet`] rounds allocation up to its own sizing
+    /// policy. Use this to check remaining headroom before a batch of inserts
+    /// or to report occupancy alongside [`len`].
+    ///
+    /// ```
+    /// use yellowstone_grpc_proto::cuckoo::CuckooMap;
+    ///
+    /// let map = CuckooMap::<u64>::with_capacity(1000).unwrap();
+    /// assert!(map.capacity() >= 1000);
+    /// ```
+    ///
+    /// [`with_capacity`]: CuckooMap::with_capacity
+    /// [`len`]: CuckooMap::len
+    /// [`HashSet`]: std::collections::HashSet
+    pub fn capacity(&self) -> usize {
+        self.items.capacity()
+    }
+
+    /// Returns an iterator over the items in the map in arbitrary order.
+    ///
+    /// Reads from the internal [`HashSet`], so iteration order matches
+    /// `HashSet` semantics; no ordering guarantee, and two calls on the
+    /// same map may yield items in different orders.
+    ///
+    /// ```
+    /// use yellowstone_grpc_proto::cuckoo::CuckooMap;
+    ///
+    /// let mut map = CuckooMap::<u64>::with_capacity(100).unwrap();
+    /// map.insert(1).unwrap();
+    /// map.insert(2).unwrap();
+    /// map.insert(3).unwrap();
+    ///
+    /// let sum: u64 = map.iter().sum();
+    /// assert_eq!(sum, 6);
+    /// ```
+    ///
+    /// [`HashSet`]: std::collections::HashSet
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.iter()
+    }
+
     /// Returns `true` if the map contains no items.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Returns `true` if the map has been mutated since the last call to
+    /// [`take_dirty`] (or since construction).
+    ///
+    /// Use this to check whether the filter needs to be re-sent without
+    /// clearing the flag.
+    pub const fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Returns the dirty flag and clears it.
+    ///
+    /// Call this when transmitting the filter: if it returns `true`, rebuild
+    /// and send; if `false`, skip the send. Clearing means subsequent
+    /// mutations will flip the flag back to `true` for the next cycle.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use yellowstone_grpc_proto::cuckoo::CuckooMap;
+    ///
+    /// let mut map = CuckooMap::<u64>::with_capacity(100).unwrap();
+    /// assert!(!map.take_dirty());    // fresh map is clean
+    ///
+    /// map.insert(42).unwrap();
+    /// assert!(map.take_dirty());     // mutation flipped it
+    /// assert!(!map.take_dirty());    // and clearing it takes effect
+    /// ```
+    pub const fn take_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
     }
 
     /// Serializes the underlying cuckoo filter to its proto wire format.
@@ -176,49 +258,57 @@ where
         ProtoCuckooFilter::from(&self.filter)
     }
 
-    /// Replaces any existing account filters in the request with this map's cuckoo filter.
+    /// Returns a `SubscribeRequestFilterAccounts` that carries only this cuckoo
+    /// filter in essence no explicit account list, no owner, no predicates.
     ///
-    /// Clears `req.accounts` and inserts a single entry named `"default"` carrying
-    /// the cuckoo filter in the `cuckoo_accounts_filter` field. Other account filter
-    /// fields (explicit `account` list, `owner`, predicate `filters`,
-    /// `nonempty_txn_signature`) are left empty.
-    ///
-    /// # When to Use
-    ///
-    /// Call this when the cuckoo filter is your *only* account matching strategy.
-    /// For setups that combine cuckoo matching with explicit pubkey lists or owner
-    /// filters, construct the [`SubscribeRequestFilterAccounts`] directly rather
-    /// than using this helper — this method is destructive and discards any
-    /// existing filter configuration.
-    ///
-    /// # Example
+    /// Use this when you want to add the cuckoo filter to a subscribe request
+    /// yourself, under a name of your choosing, alongside other account filters
+    /// or other subscription types:
     ///
     /// ```no_run
-    /// use yellowstone_grpc_proto::{
-    ///     cuckoo::CuckooMap,
-    ///     geyser::SubscribeRequest,
-    /// };
+    /// use yellowstone_grpc_proto::{cuckoo::CuckooMap, geyser::SubscribeRequest};
     ///
     /// let mut map = CuckooMap::<[u8; 32]>::with_capacity(1000).unwrap();
     /// map.insert([1u8; 32]).unwrap();
     ///
     /// let mut req = SubscribeRequest::default();
-    /// map.override_subscribe_request(&mut req);
-    /// // req now has one account filter named "default" with the cuckoo data.
+    /// req.accounts.insert("my_cuckoo".to_string(), map.to_account_filter());
     /// ```
-    ///
-    /// [`SubscribeRequestFilterAccounts`]: crate::geyser::SubscribeRequestFilterAccounts
-    pub fn override_subscribe_request(&self, req: &mut SubscribeRequest) {
-        let filter = SubscribeRequestFilterAccounts {
+    pub fn to_account_filter(&self) -> SubscribeRequestFilterAccounts {
+        SubscribeRequestFilterAccounts {
             account: vec![],
             owner: vec![],
             filters: vec![],
             nonempty_txn_signature: None,
             cuckoo_accounts_filter: Some(self.to_proto()),
-        };
+        }
+    }
 
-        req.accounts.clear();
-        req.accounts.insert("default".to_string(), filter);
+    /// Inserts this cuckoo filter into `req.accounts` under the given name.
+    ///
+    /// Existing entries in `req.accounts` are preserved. If an entry already
+    /// exists under `name`, it is replaced. Other fields of `req` (transactions,
+    /// blocks, slots, etc.) are untouched.
+    ///
+    /// Marks the map as clean — subsequent mutations will flip the dirty flag
+    /// back to `true` for the next transmission cycle.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use yellowstone_grpc_proto::{cuckoo::CuckooMap, geyser::SubscribeRequest};
+    ///
+    /// let mut map = CuckooMap::<[u8; 32]>::with_capacity(1000).unwrap();
+    /// map.insert([1u8; 32]).unwrap();
+    ///
+    /// let mut req = SubscribeRequest::default();
+    /// map.insert_into_subscribe_request(&mut req, "tracked_accounts");
+    /// // req.accounts["tracked_accounts"] now carries the cuckoo filter
+    /// ```
+    pub fn insert_into_subscribe_request(&mut self, req: &mut SubscribeRequest, name: &str) {
+        req.accounts
+            .insert(name.to_string(), self.to_account_filter());
+        self.dirty = false;
     }
 }
 
@@ -289,33 +379,52 @@ mod tests {
     }
 
     #[test]
-    fn override_subscribe_request_creates_filter() {
+    fn to_account_filter_carries_cuckoo_and_no_other_matchers() {
+        let mut map = CuckooMap::with_capacity(100).unwrap();
+        map.insert("hello").unwrap();
+
+        let filter = map.to_account_filter();
+
+        assert!(filter.cuckoo_accounts_filter.is_some());
+        assert!(filter.account.is_empty());
+        assert!(filter.owner.is_empty());
+        assert!(filter.filters.is_empty());
+        assert_eq!(filter.nonempty_txn_signature, None);
+    }
+
+    #[test]
+    fn insert_into_subscribe_request_uses_given_name_and_preserves_other_filters() {
         let mut map = CuckooMap::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
 
         let mut req = SubscribeRequest::default();
-        map.override_subscribe_request(&mut req);
 
-        assert!(req.accounts.contains_key("default"));
-        let filter = req.accounts.get("default").unwrap();
+        // pre-existing filter under a different name should survive
+        req.accounts.insert(
+            "pre_existing".to_string(),
+            SubscribeRequestFilterAccounts::default(),
+        );
+
+        map.insert_into_subscribe_request(&mut req, "tracked_accounts");
+
+        assert!(req.accounts.contains_key("tracked_accounts"));
+        assert!(req.accounts.contains_key("pre_existing"));
+        assert_eq!(req.accounts.len(), 2);
+
+        let filter = req.accounts.get("tracked_accounts").unwrap();
         assert!(filter.cuckoo_accounts_filter.is_some());
     }
 
     #[test]
-    fn override_subscribe_request_clears_existing() {
-        let mut map = CuckooMap::with_capacity(100).unwrap();
+    fn insert_into_subscribe_request_clears_dirty_flag() {
+        let mut map = CuckooMap::<&str>::with_capacity(100).unwrap();
         map.insert("hello").unwrap();
+        assert!(map.is_dirty());
 
         let mut req = SubscribeRequest::default();
-        req.accounts.insert(
-            "old_filter".to_string(),
-            SubscribeRequestFilterAccounts::default(),
-        );
+        map.insert_into_subscribe_request(&mut req, "default");
 
-        map.override_subscribe_request(&mut req);
-
-        assert!(!req.accounts.contains_key("old_filter"));
-        assert!(req.accounts.contains_key("default"));
+        assert!(!map.is_dirty());
     }
 
     #[test]
@@ -343,5 +452,24 @@ mod tests {
     fn capacity_overflow() {
         let result = CuckooMap::<u64>::with_capacity(usize::MAX);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn dirty_tracking() {
+        let mut map = CuckooMap::<u64>::with_capacity(100).unwrap();
+        assert!(!map.is_dirty());
+
+        map.insert(1).unwrap();
+        assert!(map.is_dirty());
+
+        assert!(map.take_dirty());
+        assert!(!map.is_dirty());
+
+        map.insert(1).unwrap(); // no-op, already present
+        assert!(!map.is_dirty());
+
+        map.insert(2).unwrap();
+        map.remove(&2);
+        assert!(map.is_dirty());
     }
 }
