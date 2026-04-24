@@ -1,5 +1,4 @@
 mod dedup;
-mod filter_set;
 mod reconnect;
 
 use {
@@ -43,7 +42,6 @@ use {
 pub use {
     crate::{
         dedup::{DedupState, DedupStream},
-        filter_set::LocalCuckooMap,
         reconnect::{AutoReconnect, Backoff, GrpcConnector, TonicGrpcConnector},
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},

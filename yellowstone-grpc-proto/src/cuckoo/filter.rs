@@ -7,53 +7,51 @@
 //!
 //! Key properties:
 //! - **No false negatives**: If `contains` returns `false`, the item is definitely not in the set
-//! - **Possible false positives**: If `contains` returns `true`, the item is probably in the set (~0.01% error rate)
-//! - **Space efficient**: 2M items compress to ~2-3MB (vs 64MB for explicit list)
+//! - **Bounded false positives**: If `contains` returns `true`, the item is probably in the set
+//!   (<1% false positive rate at full load with default configuration)
+//! - **Space efficient**: 2M items compress to ~2-3MB (vs 64MB for an explicit pubkey list)
+//! - **Deterministic hashing**: Uses SipHash-2-4 with a configurable seed, making filter
+//!   bytes wire-compatible across Rust versions and client languages
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use yellowstone_grpc_proto::cuckoo::CuckooFilter;
 //!
-//! let mut filter = CuckooFilter::with_capacity(1000)?;
-//! filter.insert(&"hello")?;
-//! assert!(filter.contains(&"hello")?);
-//! assert!(!filter.contains(&"world")?);
-//! filter.remove(&"hello")?;
-//! assert!(!filter.contains(&"hello")?);
+//! let mut filter = CuckooFilter::<&str>::with_capacity(1000).unwrap();
+//! filter.insert(&"hello").unwrap();
+//! assert!(filter.contains(&"hello"));
+//! assert!(!filter.contains(&"world"));
+//! filter.remove(&"hello");
+//! assert!(!filter.contains(&"hello"));
 //! ```
 //!
 //! # Wire Format
 //!
 //! The filter serializes to a `CuckooFilter` proto message containing:
-//! - `data`: Raw bucket bytes
+//! - `data`: Raw bucket bytes (little-endian u16 fingerprints)
 //! - `bucket_count`: Number of buckets (power of 2)
 //! - `entries_per_bucket`: Slots per bucket (4)
 //! - `fingerprint_bits`: Bits per fingerprint (16)
-//! - `hash_seed`: Seed for deterministic hashing
+//! - `hash_seed`: Seed for the SipHash hasher
 //!
-//! This enables cross-language deserialization.
+//! The seed is carried on the wire rather than hardcoded, so client and server
+//! produce matching hashes without needing to agree on a constant out-of-band.
+//! Cross-language clients must use SipHash-2-4 with the same seed-to-key
+//! derivation (see `YellowstoneHasherBuilder::keys_from_seed`).
 
 use {
+    super::{
+        constants::*,
+        error::{CuckooBuildError, TableFullError},
+        hasher::YellowstoneHasherBuilder,
+    },
     crate::geyser::CuckooFilter as ProtoCuckooFilter,
     std::{
-        hash::{BuildHasher, DefaultHasher, Hash, Hasher},
+        hash::{BuildHasher, Hash},
         marker::PhantomData,
     },
-    thiserror::Error,
 };
-
-/// Slots per bucket.
-const ENTRIES_PER_BUCKET: usize = 4;
-
-/// Target load factor. 95% occupancy is achievable with 4 entries/bucket.
-const LOAD_FACTOR: f64 = 0.95;
-
-/// Maximum relocations before declaring table full.
-const MAX_KICKS: usize = 500;
-
-/// Fingerprint size in bits. 16 bits gives ~0.0001% false positive rate.
-const FINGERPRINT_BITS: u32 = 16;
 
 /// Fingerprint type. Must match FINGERPRINT_BITS.
 type Fingerprint = u16; // must match FINGERPRINT_BITS
@@ -61,51 +59,30 @@ type Fingerprint = u16; // must match FINGERPRINT_BITS
 /// A bucket holds ENTRIES_PER_BUCKET fingerprints. Value 0 means empty slot.
 type Bucket = [Fingerprint; ENTRIES_PER_BUCKET];
 
-/// Hash seed for deterministic behavior. ASCII: "yllwstn!"
-const HASH_SEED: u64 = 0x_796c_6c77_7374_6e21;
-
-/// Deterministic BuildHasher used as the default for `CuckooFilter`.
-///
-/// Produces hashers pre-seeded with `HASH_SEED`, ensuring wire-compatible
-/// hashing across client and server without requiring explicit seed coordination.
-#[derive(Debug, Clone, Default)]
-pub struct YellowstoneHasherBuilder;
-
-impl BuildHasher for YellowstoneHasherBuilder {
-    type Hasher = SeededDefaultHasher;
-
-    fn build_hasher(&self) -> SeededDefaultHasher {
-        SeededDefaultHasher::new(HASH_SEED)
-    }
-}
-
-/// A `DefaultHasher` pre-seeded at construction.
-pub struct SeededDefaultHasher {
-    inner: DefaultHasher,
-}
-
-impl SeededDefaultHasher {
-    fn new(seed: u64) -> Self {
-        let mut inner = DefaultHasher::new();
-        seed.hash(&mut inner);
-        Self { inner }
-    }
-}
-
-impl Hasher for SeededDefaultHasher {
-    fn finish(&self) -> u64 {
-        self.inner.finish()
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        self.inner.write(bytes)
-    }
-}
-
 /// A space-efficient probabilistic set membership filter.
 ///
-/// Stores fingerprints (short hashes) of items rather than items themselves.
-/// Supports insert, lookup, and delete operations.
+/// Stores fingerprints (short hashes) of items rather than items themselves,
+/// achieving ~3 bytes per item at 95% load factor. Supports insert, lookup,
+/// and delete operations with O(1) amortized cost.
+///
+/// # Type Parameters
+///
+/// - `T`: The item type. Typed at the struct level so a single filter can only
+///   hold items of one type — you cannot accidentally mix `&str` and `u64` in
+///   the same filter.
+/// - `S`: The hasher builder. Defaults to [`YellowstoneHasherBuilder`] which
+///   uses SipHash-2-4 for stable, wire-compatible hashing. Custom hashers can
+///   be supplied via [`with_capacity_and_hasher`] for in-process use, but are
+///   not wire-compatible with the default.
+///
+/// # Footgun: `remove`
+///
+/// Calling `remove` on an item that was never inserted may accidentally remove
+/// a different item that shares the same fingerprint. For safe tracked usage,
+/// prefer [`CuckooMap`] which guards removes against this case.
+///
+/// [`with_capacity_and_hasher`]: CuckooFilter::with_capacity_and_hasher
+/// [`CuckooMap`]: crate::cuckoo::CuckooMap
 #[derive(Debug)]
 pub struct CuckooFilter<T, S = YellowstoneHasherBuilder> {
     buckets: Vec<Bucket>,
@@ -113,22 +90,55 @@ pub struct CuckooFilter<T, S = YellowstoneHasherBuilder> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-#[derive(Debug, Error)]
-pub enum CuckooError {
-    #[error("capacity overflow: requested capacity exceeds maximum")]
-    CapacityOverflow,
-    #[error("cuckoo table full after {} kicks", MAX_KICKS)]
-    TableFull,
-}
-
 impl<T> CuckooFilter<T, YellowstoneHasherBuilder> {
-    pub fn with_capacity(max_capacity: usize) -> Result<Self, CuckooError> {
-        Self::with_capacity_and_hasher(max_capacity, YellowstoneHasherBuilder)
+    /// Creates a filter sized to hold `max_capacity` items using the default hasher.
+    ///
+    /// Uses [`YellowstoneHasherBuilder::default`] which seeds SipHash with
+    /// [`DEFAULT_HASH_SEED`]. The resulting filter serializes to a proto with
+    /// the default seed on the wire.
+    ///
+    /// For custom seeds or hasher builders, use [`with_capacity_and_hasher`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CuckooBuildError::CapacityOverflow`] if `max_capacity` requires
+    /// more buckets than the system can allocate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use yellowstone_grpc_proto::cuckoo::CuckooFilter;
+    ///
+    /// let mut filter = CuckooFilter::<u64>::with_capacity(100).unwrap();
+    /// filter.insert(&42).unwrap();
+    /// assert!(filter.contains(&42));
+    /// ```
+    ///
+    /// [`with_capacity_and_hasher`]: CuckooFilter::with_capacity_and_hasher
+    /// [`DEFAULT_HASH_SEED`]: crate::cuckoo::DEFAULT_HASH_SEED
+    pub fn with_capacity(max_capacity: usize) -> Result<Self, CuckooBuildError> {
+        Self::with_capacity_and_hasher(max_capacity, YellowstoneHasherBuilder::default())
     }
 }
 
 impl<T, S: BuildHasher> CuckooFilter<T, S> {
-    /// Creates a new filter with a custom hasher builder.
+    /// Creates a filter with a custom hasher builder.
+    ///
+    /// The filter's actual bucket count is rounded up to the next power of two
+    /// and adjusted for the target load factor (~95%), so the allocated capacity
+    /// may be slightly larger than `max_capacity`.
+    ///
+    /// # Wire Compatibility
+    ///
+    /// Only filters built with [`YellowstoneHasherBuilder`] are wire-compatible with
+    /// filters reconstructed via `From<&ProtoCuckooFilter>`. Custom hasher types
+    /// are useful for tests, benchmarks, and in-process scenarios where the filter
+    /// never crosses a process boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CuckooBuildError::CapacityOverflow`] if the requested capacity
+    /// cannot be allocated.
     ///
     /// # Example
     ///
@@ -137,26 +147,26 @@ impl<T, S: BuildHasher> CuckooFilter<T, S> {
     ///
     /// let filter = CuckooFilter::<u64, YellowstoneHasherBuilder>::with_capacity_and_hasher(
     ///     1000,
-    ///     YellowstoneHasherBuilder,
+    ///     YellowstoneHasherBuilder::default(),
     /// ).unwrap();
     /// assert!(!filter.contains(&42));
     /// ```
     pub fn with_capacity_and_hasher(
         max_capacity: usize,
         hasher_builder: S,
-    ) -> Result<Self, CuckooError> {
+    ) -> Result<Self, CuckooBuildError> {
         let buckets_needed =
             (max_capacity as f64 / (LOAD_FACTOR * ENTRIES_PER_BUCKET as f64)).ceil() as usize;
 
         let bucket_count = buckets_needed
             .checked_next_power_of_two()
-            .ok_or(CuckooError::CapacityOverflow)?
+            .ok_or(CuckooBuildError::CapacityOverflow)?
             .max(1);
 
         let mut buckets = Vec::new();
         buckets
             .try_reserve_exact(bucket_count)
-            .map_err(|_| CuckooError::CapacityOverflow)?;
+            .map_err(|_| CuckooBuildError::CapacityOverflow)?;
 
         buckets.resize(bucket_count, [0; ENTRIES_PER_BUCKET]);
 
@@ -169,9 +179,7 @@ impl<T, S: BuildHasher> CuckooFilter<T, S> {
 
     /// Hashes an item using the seeded hasher.
     fn hash<H: Hash>(&self, item: &H) -> u64 {
-        let mut hasher = self.hasher_builder.build_hasher();
-        item.hash(&mut hasher);
-        hasher.finish()
+        self.hasher_builder.hash_one(item)
     }
 
     /// Maps a hash to a bucket index using bitmask (why bucket_count is power of 2).
@@ -210,14 +218,19 @@ impl<T, S: BuildHasher> CuckooFilter<T, S> {
 impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
     /// Inserts an item into the filter.
     ///
-    /// Uses partial-key cuckoo hashing: if both candidate buckets are full,
-    /// existing fingerprints are relocated to make room.
+    /// Uses partial-key cuckoo hashing: when both candidate buckets are full,
+    /// an existing fingerprint is evicted and relocated to its alternate bucket.
+    /// If no relocation path succeeds within [`MAX_KICKS`] attempts, the filter
+    /// is considered saturated.
     ///
     /// # Errors
     ///
-    /// - `CuckooError::InvalidState`: Filter has no buckets (corrupted state)
-    /// - `CuckooError::TableFull`: Could not insert after MAX_KICKS relocations
-    pub fn insert(&mut self, item: &T) -> Result<(), CuckooError> {
+    /// Returns [`TableFullError`] if the filter could not accommodate the item.
+    /// This typically indicates the filter was under-sized for the workload;
+    /// rebuild with a larger `max_capacity`.
+    ///
+    /// [`MAX_KICKS`]: crate::cuckoo
+    pub fn insert(&mut self, item: &T) -> Result<(), TableFullError> {
         let fp = self.fingerprint(item);
         let h = self.hash(item);
         let i1 = self.index(h);
@@ -244,17 +257,20 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
             }
         }
 
-        Err(CuckooError::TableFull)
+        Err(TableFullError)
     }
 
     /// Checks if an item is probably in the filter.
     ///
-    /// - Returns `Ok(false)`: Item is definitely NOT in the set
-    /// - Returns `Ok(true)`: Item is probably in the set (small false positive chance)
+    /// - Returns `false`: the item is definitely not in the filter (no false negatives)
+    /// - Returns `true`: the item is probably in the filter (small false positive chance)
     ///
-    /// # Errors
+    /// False positives are the fundamental tradeoff of probabilistic filters. For
+    /// exact membership checks, maintain a [`HashSet`] alongside the filter; this
+    /// is what [`CuckooMap`] does internally.
     ///
-    /// Returns `CuckooError::InvalidState` if filter has no buckets.
+    /// [`HashSet`]: std::collections::HashSet
+    /// [`CuckooMap`]: crate::cuckoo::CuckooMap
     pub fn contains(&self, item: &T) -> bool {
         let fp = self.fingerprint(item);
         let h = self.hash(item);
@@ -266,17 +282,17 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
 
     /// Removes an item from the filter.
     ///
-    /// Returns `Ok(true)` if a matching fingerprint was found and removed,
-    /// `Ok(false)` if no matching fingerprint existed.
+    /// Returns `true` if a matching fingerprint was found and cleared, `false`
+    /// if no matching fingerprint existed.
     ///
     /// # Warning
     ///
-    /// Only remove items that were previously inserted. Removing a non-inserted
-    /// item may accidentally remove a different item with the same fingerprint.
+    /// Only remove items that were previously inserted. The filter stores
+    /// fingerprints, not items and removing an item that shares a fingerprint with
+    /// a different inserted item will remove the wrong entry. For safely tracked
+    /// removes, use [`CuckooMap`] which keeps an exact-membership guard.
     ///
-    /// # Errors
-    ///
-    /// Returns `CuckooError::InvalidState` if filter has no buckets.
+    /// [`CuckooMap`]: crate::cuckoo::CuckooMap
     pub fn remove(&mut self, item: &T) -> bool {
         let fp = self.fingerprint(item);
         let h = self.hash(item);
@@ -301,16 +317,22 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
 
 /// Deserializes from proto wire format.
 ///
+/// The seed from `proto.hash_seed` is preserved into the reconstructed filter,
+/// so subsequent `contains` calls match what the serializing side computed.
+/// Callers do not need to negotiate a seed out-of-band.
+///
 /// Handles malformed input gracefully:
-/// - Empty data -> single empty bucket
-/// - Odd bytes -> truncated (via chunks_exact)
-/// - Misaligned data -> incomplete buckets dropped
+/// - Empty data → single empty bucket
+/// - Odd bytes → truncated (via chunks_exact)
+/// - Misaligned data → incomplete buckets dropped
 impl<T> From<&ProtoCuckooFilter> for CuckooFilter<T, YellowstoneHasherBuilder> {
     fn from(proto: &ProtoCuckooFilter) -> Self {
+        let hasher_builder = YellowstoneHasherBuilder::new(proto.hash_seed);
+
         if proto.data.is_empty() {
             return Self {
                 buckets: vec![[0; ENTRIES_PER_BUCKET]; 1],
-                hasher_builder: YellowstoneHasherBuilder,
+                hasher_builder,
                 _phantom: PhantomData,
             };
         }
@@ -327,22 +349,26 @@ impl<T> From<&ProtoCuckooFilter> for CuckooFilter<T, YellowstoneHasherBuilder> {
         if buckets.is_empty() {
             return Self {
                 buckets: vec![[0; ENTRIES_PER_BUCKET]; 1],
-                hasher_builder: YellowstoneHasherBuilder,
+                hasher_builder,
                 _phantom: PhantomData,
             };
         }
 
         Self {
             buckets,
-            hasher_builder: YellowstoneHasherBuilder,
+            hasher_builder,
             _phantom: PhantomData,
         }
     }
 }
 
 /// Serializes to proto wire format for cross-language interop.
-impl<T, S> From<&CuckooFilter<T, S>> for ProtoCuckooFilter {
-    fn from(filter: &CuckooFilter<T, S>) -> Self {
+///
+/// The filter's seed is written to `hash_seed` so deserialization can
+/// reconstruct a matching hasher. All other parameters (bucket count,
+/// entries per bucket, fingerprint bits) are self-describing on the wire.
+impl<T> From<&CuckooFilter<T, YellowstoneHasherBuilder>> for ProtoCuckooFilter {
+    fn from(filter: &CuckooFilter<T, YellowstoneHasherBuilder>) -> Self {
         let data: Vec<u8> = filter
             .buckets
             .iter()
@@ -355,7 +381,7 @@ impl<T, S> From<&CuckooFilter<T, S>> for ProtoCuckooFilter {
             bucket_count: filter.buckets.len() as u32,
             entries_per_bucket: ENTRIES_PER_BUCKET as u32,
             fingerprint_bits: FINGERPRINT_BITS,
-            hash_seed: HASH_SEED,
+            hash_seed: filter.hasher_builder.seed(),
         }
     }
 }
@@ -428,11 +454,10 @@ mod tests {
         for i in 0..1000u64 {
             match filter.insert(&i) {
                 Ok(()) => {}
-                Err(CuckooError::TableFull) => {
+                Err(TableFullError) => {
                     table_full_seen = true;
                     break;
                 }
-                Err(other) => panic!("unexpected error: {:?}", other),
             }
         }
         assert!(table_full_seen, "expected TableFull error");
@@ -471,13 +496,13 @@ mod tests {
     #[test]
     fn capacity_usize_max() {
         let result = CuckooFilter::<u64>::with_capacity(usize::MAX);
-        assert!(matches!(result, Err(CuckooError::CapacityOverflow)));
+        assert!(matches!(result, Err(CuckooBuildError::CapacityOverflow)));
     }
 
     #[test]
     fn capacity_usize_max_minus_one() {
         let result = CuckooFilter::<u64>::with_capacity(usize::MAX - 1);
-        assert!(matches!(result, Err(CuckooError::CapacityOverflow)));
+        assert!(matches!(result, Err(CuckooBuildError::CapacityOverflow)));
     }
 
     #[test]
@@ -513,7 +538,7 @@ mod tests {
             bucket_count: 0,
             entries_per_bucket: 4,
             fingerprint_bits: 16,
-            hash_seed: HASH_SEED,
+            hash_seed: DEFAULT_HASH_SEED,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         assert!(!filter.contains(&"anything"));
@@ -526,7 +551,7 @@ mod tests {
             bucket_count: 1,
             entries_per_bucket: 4,
             fingerprint_bits: 16,
-            hash_seed: HASH_SEED,
+            hash_seed: DEFAULT_HASH_SEED,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         // should not panic, truncates odd byte
@@ -540,7 +565,7 @@ mod tests {
             bucket_count: 1,
             entries_per_bucket: 4,
             fingerprint_bits: 16,
-            hash_seed: HASH_SEED,
+            hash_seed: DEFAULT_HASH_SEED,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
@@ -553,7 +578,7 @@ mod tests {
             bucket_count: 10,
             entries_per_bucket: 4,
             fingerprint_bits: 16,
-            hash_seed: HASH_SEED,
+            hash_seed: DEFAULT_HASH_SEED,
         };
         let filter = CuckooFilter::<&str>::from(&proto);
         let _ = filter.contains(&"test");
@@ -809,9 +834,10 @@ mod tests {
     // send/sync
 
     #[test]
-    fn error_type_is_send_sync() {
+    fn error_types_are_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CuckooError>();
+        assert_send_sync::<CuckooBuildError>();
+        assert_send_sync::<TableFullError>();
     }
 
     #[test]
@@ -939,9 +965,13 @@ mod tests {
 
     // helpers that mirror the internal hash
     fn seeded_hash_for_test(item: &[u8; 32]) -> u64 {
-        use std::hash::{BuildHasher, Hash, Hasher};
-        let builder = YellowstoneHasherBuilder;
-        let mut hasher = builder.build_hasher();
+        use {
+            siphasher::sip::SipHasher24,
+            std::hash::{Hash, Hasher},
+        };
+
+        let (k0, k1) = YellowstoneHasherBuilder::keys_from_seed(DEFAULT_HASH_SEED);
+        let mut hasher = SipHasher24::new_with_keys(k0, k1);
         item.hash(&mut hasher);
         hasher.finish()
     }
