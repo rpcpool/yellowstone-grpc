@@ -20,30 +20,34 @@ pub const X_SUBSCRIPTION_ID_HEADER: &str = "x-subscription-id";
 pub const UNKNOWN_SUBSCRIBER_ID: &str = "unknown";
 
 static ACTIVE_METERED_BODIES_PER_SUBSCRIBER_ID: LazyLock<
-    Mutex<HashMap<String /* subscriber_id */, u64 /* cumulative bytes */>>,
+    Mutex<HashMap<(String /* subscriber_id */, String /* uri_path */), u64 /* active bodies */>>,
 > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn increment_active_metered_bodies_for_subscriber_id(subscriber_id: &str) {
+fn increment_active_metered_bodies_for_subscriber_and_path(subscriber_id: &str, uri_path: &str) {
     let mut active_by_subscriber = ACTIVE_METERED_BODIES_PER_SUBSCRIBER_ID
         .lock()
         .expect("ACTIVE_METERED_BODIES_PER_SUBSCRIBER_ID mutex poisoned");
     active_by_subscriber
-        .entry(subscriber_id.to_owned())
+        .entry((subscriber_id.to_owned(), uri_path.to_owned()))
         .and_modify(|count| *count += 1)
         .or_insert(1);
 }
 
-fn decrement_active_metered_bodies_for_subscriber_id(subscriber_id: &str) -> bool {
+fn decrement_active_metered_bodies_for_subscriber_and_path(
+    subscriber_id: &str,
+    uri_path: &str,
+) -> bool {
     let mut active_by_subscriber = ACTIVE_METERED_BODIES_PER_SUBSCRIBER_ID
         .lock()
         .expect("ACTIVE_METERED_BODIES_PER_SUBSCRIBER_ID mutex poisoned");
-    if let Some(count) = active_by_subscriber.get_mut(subscriber_id) {
+    let key = (subscriber_id.to_owned(), uri_path.to_owned());
+    if let Some(count) = active_by_subscriber.get_mut(&key) {
         if *count > 1 {
             *count -= 1;
             false
         } else {
-            active_by_subscriber.remove(subscriber_id);
-            metrics::reset_grpc_service_outbound_bytes(subscriber_id);
+            active_by_subscriber.remove(&key);
+            metrics::reset_grpc_service_outbound_bytes(subscriber_id, uri_path);
             true
         }
     } else {
@@ -83,6 +87,7 @@ pub struct MeteredService<S> {
 pub struct MeteredFuture<F, B, E> {
     #[pin]
     future: F,
+    uri_path: String,
     subscriber_id: String,
     _marker: std::marker::PhantomData<(B, E)>,
 }
@@ -95,13 +100,14 @@ pub struct MeteredBody<B> {
     #[pin]
     inner: B,
     subscriber_id: String,
+    uri_path: String,
 }
 
 #[pinned_drop]
 impl<B> PinnedDrop for MeteredBody<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.project();
-        decrement_active_metered_bodies_for_subscriber_id(this.subscriber_id);
+        decrement_active_metered_bodies_for_subscriber_and_path(this.subscriber_id, this.uri_path);
     }
 }
 
@@ -122,6 +128,7 @@ where
                 if let Some(data) = frame.data_ref() {
                     metrics::add_grpc_service_outbound_bytes(
                         this.subscriber_id,
+                        this.uri_path,
                         data.remaining() as u64,
                     );
                 }
@@ -153,13 +160,15 @@ where
         let this = self.as_mut().project();
         let result = ready!(this.future.poll(cx));
         let subscriber_id = this.subscriber_id.clone();
+        let uri_path = this.uri_path.clone();
         match result {
             Ok(response) => {
                 let (parts, body) = response.into_parts();
-                increment_active_metered_bodies_for_subscriber_id(&subscriber_id);
+                increment_active_metered_bodies_for_subscriber_and_path(&subscriber_id, &uri_path);
                 let metered_body = MeteredBody {
                     inner: body,
                     subscriber_id,
+                    uri_path,
                 };
                 Poll::Ready(Ok(Response::from_parts(parts, metered_body)))
             }
@@ -190,10 +199,12 @@ where
             .and_then(|value| value.to_str().ok())
             .unwrap_or(UNKNOWN_SUBSCRIBER_ID)
             .to_owned();
+        let uri_path = request.uri().path().to_string();
         let future = self.inner.call(request);
         MeteredFuture {
             future,
             subscriber_id,
+            uri_path,
             _marker: std::marker::PhantomData,
         }
     }
@@ -247,13 +258,21 @@ mod tests {
         let _ = metrics::PrometheusService::spawn(None, None, token, tracker).await;
     }
 
-    fn outbound_bytes_for_subscriber_id(subscriber_id: &str) -> u64 {
+    fn outbound_bytes_for_subscriber_id_and_path(subscriber_id: &str, uri_path: &str) -> u64 {
         for metric_family in metrics::REGISTRY.gather() {
             if metric_family.name() == "yellowstone_grpc_service_outbound_bytes" {
                 for metric in metric_family.get_metric() {
-                    let matched = metric.get_label().iter().any(|label| {
-                        label.name() == "subscriber_id" && label.value() == subscriber_id
-                    });
+                    let mut has_subscriber_id = false;
+                    let mut has_uri_path = false;
+                    for label in metric.get_label() {
+                        if label.name() == "subscriber_id" && label.value() == subscriber_id {
+                            has_subscriber_id = true;
+                        }
+                        if label.name() == "uri_path" && label.value() == uri_path {
+                            has_uri_path = true;
+                        }
+                    }
+                    let matched = has_subscriber_id && has_uri_path;
                     if matched {
                         return metric.get_gauge().value() as u64;
                     }
@@ -291,9 +310,15 @@ mod tests {
             frame.expect("frame");
         }
 
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-1"), 8);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-1", "/geyser.Geyser/Subscribe"),
+            8
+        );
         drop(response);
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-1"), 0);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-1", "/geyser.Geyser/Subscribe"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -317,9 +342,15 @@ mod tests {
             frame.expect("frame");
         }
 
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-2"), 2);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-2", "/foo.Bar/Baz"),
+            2
+        );
         drop(response);
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-2"), 0);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-2", "/foo.Bar/Baz"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -346,10 +377,16 @@ mod tests {
             .expect("expected first frame")
             .expect("frame");
         assert!(first_frame.is_data());
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-drop"), 3);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-drop", "/geyser.Geyser/Subscribe"),
+            3
+        );
 
         drop(response);
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-drop"), 0);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-drop", "/geyser.Geyser/Subscribe"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -383,12 +420,21 @@ mod tests {
             .expect("expected first frame")
             .expect("frame");
         assert!(first_frame.is_data());
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-shared"), 3);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-shared", "/geyser.Geyser/Subscribe"),
+            3
+        );
 
         drop(response1);
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-shared"), 3);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-shared", "/geyser.Geyser/Subscribe"),
+            3
+        );
 
         drop(response2);
-        assert_eq!(outbound_bytes_for_subscriber_id("sub-shared"), 0);
+        assert_eq!(
+            outbound_bytes_for_subscriber_id_and_path("sub-shared", "/geyser.Geyser/Subscribe"),
+            0
+        );
     }
 }
