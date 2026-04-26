@@ -352,6 +352,11 @@ impl SlotMessages {
 
 type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
 
+/// Messages broadcast on the deshred channel. Deshred is a pre-execution
+/// stream and has no commitment level: each message is emitted exactly
+/// once, when first received from the geyser plugin.
+type DeshredBroadcastedMessage = Arc<Vec<(u64, Message)>>;
+
 enum ReplayedResponse {
     Messages(Vec<(u64, Message)>),
     Lagged(Slot),
@@ -573,6 +578,7 @@ pub struct GrpcService {
     subscribe_id: Arc<AtomicUsize>,
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -647,6 +653,8 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+        // Deshred subscribers receive their own commitment-free stream.
+        let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {
                 (None, None, None)
@@ -697,6 +705,7 @@ impl GrpcService {
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast_tx: broadcast_tx.clone(),
+            deshred_broadcast_tx: deshred_broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
@@ -728,6 +737,7 @@ impl GrpcService {
                 messages_rx,
                 blocks_meta_tx,
                 broadcast_tx,
+                deshred_broadcast_tx,
                 replay_stored_slots_rx,
                 replay_first_available_slot,
                 config.replay_stored_slots,
@@ -782,10 +792,12 @@ impl GrpcService {
         Ok((snapshot_tx, messages_tx))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+        deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
@@ -816,6 +828,26 @@ impl GrpcService {
                     };
                     metrics::message_queue_size_dec();
                     let msgid = msgid_gen.next();
+
+                    // DeshredTransaction is a pre-execution stream with no
+                    // commitment level. Route it straight to the deshred
+                    // broadcast channel as its own one-message batch, with
+                    // no buffering, so subscribers see it as soon as the
+                    // plugin emits it. Skip the slot-reconstruction and
+                    // commitment-replay machinery entirely.
+                    if matches!(&message, Message::DeshredTransaction(_)) {
+                        let _ = deshred_broadcast_tx.send(Arc::new(vec![(msgid, message)]));
+                        continue;
+                    }
+
+                    // Slot lifecycle messages are also relevant to deshred
+                    // subscribers; fan each one out to the deshred channel
+                    // once on receipt (no commitment-level replay, no
+                    // buffering) and continue with the main pipeline.
+                    if matches!(&message, Message::Slot(_)) {
+                        let _ = deshred_broadcast_tx
+                            .send(Arc::new(vec![(msgid, message.clone())]));
+                    }
 
                     // Update metrics
                     if let Message::Slot(slot_message) = &message {
@@ -1539,7 +1571,7 @@ impl GrpcService {
         subscriber_id: Option<String>,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
-        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
@@ -1592,8 +1624,8 @@ impl GrpcService {
                     }
                 }
                 message = messages_rx.recv() => {
-                    let (_commitment, messages) = match message {
-                        Ok((commitment, messages)) => (commitment, messages),
+                    let messages = match message {
+                        Ok(messages) => messages,
                         Err(broadcast::error::RecvError::Closed) => {
                             session.disconnect_reason = "broadcast_closed";
                             break 'outer;
@@ -1942,7 +1974,7 @@ impl Geyser for GrpcService {
             subscriber_id,
             stream_tx,
             client_rx,
-            self.broadcast_tx.subscribe(),
+            self.deshred_broadcast_tx.subscribe(),
             self.debug_clients_tx.clone(),
             client_cancellation_token,
             self.task_tracker.clone(),
@@ -2217,6 +2249,313 @@ mod tests {
             );
         }
         assert!(tracker.lock().unwrap().get("sub-1").is_none());
+    }
+
+    mod geyser_loop_routing {
+        use {
+            super::super::*,
+            crate::{
+                parallel::ParallelEncoder,
+                plugin::{
+                    convert_to,
+                    message::{
+                        MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
+                        MessageTransaction, MessageTransactionInfo, SlotStatus,
+                    },
+                },
+            },
+            prost_types::Timestamp,
+            solana_message::{legacy::Message as SolMessage, MessageHeader},
+            solana_pubkey::Pubkey,
+            solana_signature::Signature,
+            solana_transaction::{versioned::VersionedTransaction, Transaction},
+            solana_transaction_status::TransactionStatusMeta,
+            std::{collections::HashSet, sync::Arc, time::SystemTime},
+            tokio::sync::{broadcast, mpsc},
+        };
+
+        struct Harness {
+            messages_tx: mpsc::UnboundedSender<Message>,
+            broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
+            deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
+            handle: tokio::task::JoinHandle<()>,
+            _encoder_handle: std::thread::JoinHandle<()>,
+        }
+
+        fn spawn_loop() -> Harness {
+            let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+            let (broadcast_tx, broadcast_rx) = broadcast::channel(1024);
+            let (deshred_tx, deshred_rx) = broadcast::channel(1024);
+            let (encoder, encoder_handle) = ParallelEncoder::new(1);
+            let handle = tokio::spawn(GrpcService::geyser_loop(
+                messages_rx,
+                None,
+                broadcast_tx,
+                deshred_tx,
+                None,
+                None,
+                100,
+                encoder,
+            ));
+            Harness {
+                messages_tx,
+                broadcast_rx,
+                deshred_rx,
+                handle,
+                _encoder_handle: encoder_handle,
+            }
+        }
+
+        async fn drain_main(
+            rx: &mut broadcast::Receiver<BroadcastedMessage>,
+        ) -> Vec<(CommitmentLevel, Vec<Message>)> {
+            // The processed-messages flush is driven by a 10ms sleep timer;
+            // wait long enough that any pending batch has been emitted.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut out = Vec::new();
+            while let Ok((commitment, batch)) = rx.try_recv() {
+                let msgs = batch.iter().map(|(_, m)| m.clone()).collect();
+                out.push((commitment, msgs));
+            }
+            out
+        }
+
+        async fn drain_deshred(
+            rx: &mut broadcast::Receiver<DeshredBroadcastedMessage>,
+        ) -> Vec<Vec<Message>> {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut out = Vec::new();
+            while let Ok(batch) = rx.try_recv() {
+                out.push(batch.iter().map(|(_, m)| m.clone()).collect());
+            }
+            out
+        }
+
+        fn build_versioned_tx(sig_byte: u8) -> (VersionedTransaction, Signature) {
+            let signature = Signature::from([sig_byte; 64]);
+            let payer = Pubkey::new_unique();
+            let recipient = Pubkey::new_unique();
+            let mut tx = Transaction::new_unsigned(SolMessage::new(&[], Some(&payer)));
+            tx.message.account_keys = vec![payer, recipient];
+            tx.message.header = MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            };
+            tx.signatures = vec![signature];
+            (VersionedTransaction::from(tx), signature)
+        }
+
+        fn make_deshred(slot: u64, sig_byte: u8) -> Message {
+            let (versioned, signature) = build_versioned_tx(sig_byte);
+            Message::DeshredTransaction(MessageDeshredTransaction {
+                transaction: Arc::new(MessageDeshredTransactionInfo {
+                    signature,
+                    is_vote: false,
+                    transaction: convert_to::create_transaction(&versioned),
+                    static_account_keys: HashSet::new(),
+                    loaded_writable_addresses: vec![],
+                    loaded_readonly_addresses: vec![],
+                    completed_data_set_starting_shred_index: 0,
+                    completed_data_set_ending_shred_index_exclusive: 0,
+                }),
+                slot,
+                created_at: Timestamp::from(SystemTime::now()),
+            })
+        }
+
+        fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
+            Message::Slot(MessageSlot {
+                slot,
+                parent,
+                status,
+                dead_error: None,
+                created_at: Timestamp::from(SystemTime::now()),
+            })
+        }
+
+        fn make_transaction(slot: u64, sig_byte: u8) -> Message {
+            let (versioned, signature) = build_versioned_tx(sig_byte);
+            let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
+                status: Ok(()),
+                fee: 0,
+                pre_balances: vec![],
+                post_balances: vec![],
+                inner_instructions: None,
+                log_messages: None,
+                pre_token_balances: None,
+                post_token_balances: None,
+                rewards: None,
+                loaded_addresses: Default::default(),
+                return_data: None,
+                compute_units_consumed: None,
+                cost_units: None,
+            });
+            let account_keys = versioned
+                .message
+                .static_account_keys()
+                .iter()
+                .copied()
+                .collect();
+            Message::Transaction(MessageTransaction {
+                transaction: Arc::new(MessageTransactionInfo {
+                    signature,
+                    is_vote: false,
+                    transaction: convert_to::create_transaction(&versioned),
+                    meta,
+                    index: 0,
+                    account_keys,
+                    pre_encoded: Default::default(),
+                }),
+                slot,
+                created_at: Timestamp::from(SystemTime::now()),
+            })
+        }
+
+        fn count_deshred(messages: &[Message]) -> usize {
+            messages
+                .iter()
+                .filter(|m| matches!(m, Message::DeshredTransaction(_)))
+                .count()
+        }
+
+        fn count_transaction(messages: &[Message]) -> usize {
+            messages
+                .iter()
+                .filter(|m| matches!(m, Message::Transaction(_)))
+                .count()
+        }
+
+        fn count_slot(messages: &[Message]) -> usize {
+            messages
+                .iter()
+                .filter(|m| matches!(m, Message::Slot(_)))
+                .count()
+        }
+
+        #[tokio::test]
+        async fn deshred_emitted_once_on_deshred_channel() {
+            let mut harness = spawn_loop();
+            harness.messages_tx.send(make_deshred(100, 1)).unwrap();
+
+            let batches = drain_deshred(&mut harness.deshred_rx).await;
+            let total: usize = batches.iter().map(|b| count_deshred(b)).sum();
+            assert_eq!(total, 1, "deshred should be emitted exactly once");
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+        }
+
+        #[tokio::test]
+        async fn deshred_never_appears_on_main_channel() {
+            let mut harness = spawn_loop();
+            harness.messages_tx.send(make_deshred(100, 1)).unwrap();
+            // Drive Slot through Confirmed and Finalized so the main channel
+            // would historically replay any DeshredTransaction we'd stored.
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Processed, Some(99)))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Confirmed, None))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Finalized, None))
+                .unwrap();
+
+            let main_batches = drain_main(&mut harness.broadcast_rx).await;
+            for (commitment, batch) in &main_batches {
+                assert_eq!(
+                    count_deshred(batch),
+                    0,
+                    "main channel must never carry DeshredTransaction (commitment={commitment:?})"
+                );
+            }
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+        }
+
+        #[tokio::test]
+        async fn slot_emitted_once_on_deshred_channel() {
+            let mut harness = spawn_loop();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Processed, Some(99)))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Confirmed, None))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Finalized, None))
+                .unwrap();
+
+            let deshred_batches = drain_deshred(&mut harness.deshred_rx).await;
+            let total: usize = deshred_batches.iter().map(|b| count_slot(b)).sum();
+            assert_eq!(
+                total, 3,
+                "deshred channel should see each Slot status once (3 statuses sent => 3 emissions)"
+            );
+
+            // Sanity: main channel emits each Slot at all three commitment
+            // levels (existing behavior preserved). Three Slot inputs => nine
+            // total Slot copies on the main side.
+            let main_batches = drain_main(&mut harness.broadcast_rx).await;
+            let main_slot_count: usize = main_batches.iter().map(|(_, b)| count_slot(b)).sum();
+            assert_eq!(main_slot_count, 9);
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+        }
+
+        #[tokio::test]
+        async fn transaction_still_replayed_on_main_at_higher_commitments() {
+            // Regression: stripping DeshredTransaction from slot_messages must
+            // not break the existing Confirmed/Finalized replay for normal
+            // Transaction messages.
+            let mut harness = spawn_loop();
+            harness.messages_tx.send(make_transaction(100, 7)).unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Processed, Some(99)))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Confirmed, None))
+                .unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Finalized, None))
+                .unwrap();
+
+            let main_batches = drain_main(&mut harness.broadcast_rx).await;
+            let mut processed = 0usize;
+            let mut confirmed = 0usize;
+            let mut finalized = 0usize;
+            for (commitment, batch) in &main_batches {
+                let n = count_transaction(batch);
+                match commitment {
+                    CommitmentLevel::Processed => processed += n,
+                    CommitmentLevel::Confirmed => confirmed += n,
+                    CommitmentLevel::Finalized => finalized += n,
+                }
+            }
+            assert_eq!(processed, 1);
+            assert_eq!(confirmed, 1);
+            assert_eq!(finalized, 1);
+
+            // And the deshred channel must not see Transaction messages.
+            let deshred_batches = drain_deshred(&mut harness.deshred_rx).await;
+            let tx_on_deshred: usize = deshred_batches.iter().map(|b| count_transaction(b)).sum();
+            assert_eq!(tx_on_deshred, 0);
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+        }
     }
 
     #[tokio::test]
