@@ -260,6 +260,7 @@ export interface JsRewards {
 export interface JsSubscribeDeshredRequest {
   deshredTransactions: Record<string, JsSubscribeRequestFilterDeshredTransactions>
   ping?: JsSubscribeRequestPing
+  slots?: Record<string, JsSubscribeRequestFilterSlots>
 }
 
 export interface JsSubscribeReplayInfoRequest {
@@ -437,12 +438,15 @@ export interface JsSubscribeUpdateDeshredTransactionInfo {
   transaction?: JsTransaction
   loadedWritableAddresses: Array<Buffer>
   loadedReadonlyAddresses: Array<Buffer>
+  completedDataSetStartingShredIndex: number
+  completedDataSetEndingShredIndexExclusive: number
 }
 
 export interface JsSubscribeUpdateDeshredUpdateOneof {
   deshredTransaction?: JsSubscribeUpdateDeshredTransaction
   ping?: JsSubscribeUpdatePing
   pong?: JsSubscribeUpdatePong
+  slot?: JsSubscribeUpdateSlot
 }
 
 export interface JsSubscribeUpdateEntry {

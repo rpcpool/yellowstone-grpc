@@ -649,6 +649,7 @@ pub struct JsSubscribeUpdateDeshredUpdateOneof<'env> {
   pub deshred_transaction: ::core::option::Option<JsSubscribeUpdateDeshredTransaction<'env>>,
   pub ping: ::core::option::Option<JsSubscribeUpdatePing>,
   pub pong: ::core::option::Option<JsSubscribeUpdatePong>,
+  pub slot: ::core::option::Option<JsSubscribeUpdateSlot>,
 }
 impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
   pub fn from_protobuf_to_js_type(
@@ -662,6 +663,7 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
         ),
         ping: None,
         pong: None,
+        slot: None,
       }),
       subscribe_update_deshred::UpdateOneof::Ping(oneof_variant_value) => Ok(Self {
         ping: Some(JsSubscribeUpdatePing::from_protobuf_to_js_type(
@@ -670,6 +672,7 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
         )?),
         deshred_transaction: None,
         pong: None,
+        slot: None,
       }),
       subscribe_update_deshred::UpdateOneof::Pong(oneof_variant_value) => Ok(Self {
         pong: Some(JsSubscribeUpdatePong::from_protobuf_to_js_type(
@@ -678,6 +681,16 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
         )?),
         deshred_transaction: None,
         ping: None,
+        slot: None,
+      }),
+      subscribe_update_deshred::UpdateOneof::Slot(oneof_variant_value) => Ok(Self {
+        slot: Some(JsSubscribeUpdateSlot::from_protobuf_to_js_type(
+          env,
+          oneof_variant_value,
+        )?),
+        deshred_transaction: None,
+        ping: None,
+        pong: None,
       }),
     }
   }
@@ -686,6 +699,7 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
       deshred_transaction,
       ping,
       pong,
+      slot,
     } = self;
     let mut selected_oneof_variant: ::core::option::Option<subscribe_update_deshred::UpdateOneof> =
       None;
@@ -722,6 +736,18 @@ impl<'env> JsSubscribeUpdateDeshredUpdateOneof<'env> {
       }
       let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
       selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Pong(
+        converted_variant_value,
+      ));
+    }
+    if let Some(oneof_variant_value) = slot {
+      if selected_oneof_variant.is_some() {
+        return Err(__typegen_invalid_arg(format!(
+          "Multiple variants set for {}",
+          "subscribe_update_deshred::UpdateOneof"
+        )));
+      }
+      let converted_variant_value = oneof_variant_value.from_js_to_protobuf_type()?;
+      selected_oneof_variant = Some(subscribe_update_deshred::UpdateOneof::Slot(
         converted_variant_value,
       ));
     }
@@ -1426,6 +1452,9 @@ pub struct JsSubscribeDeshredRequest {
     JsSubscribeRequestFilterDeshredTransactions,
   >,
   pub ping: ::core::option::Option<JsSubscribeRequestPing>,
+  pub slots: ::core::option::Option<
+    ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterSlots>,
+  >,
 }
 impl JsSubscribeDeshredRequest {
   pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeDeshredRequest) -> napi::Result<Self> {
@@ -1448,6 +1477,17 @@ impl JsSubscribeDeshredRequest {
           JsSubscribeRequestPing::from_protobuf_to_js_type(env, option_inner_value)
         })
         .transpose()?,
+      slots: Some(
+        value
+          .slots
+          .into_iter()
+          .map(|(hash_map_entry_key, hash_map_entry_value)| {
+            let converted_hash_map_value =
+              JsSubscribeRequestFilterSlots::from_protobuf_to_js_type(env, hash_map_entry_value)?;
+            Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
+          })
+          .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
+      ),
     })
   }
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeDeshredRequest> {
@@ -1465,6 +1505,16 @@ impl JsSubscribeDeshredRequest {
         .ping
         .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
+      slots: self
+        .slots
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
+          let converted_hash_map_value = hash_map_entry_value.from_js_to_protobuf_type()?;
+          Ok::<_, napi::Error>((converted_hash_map_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
     })
   }
 }
@@ -2146,6 +2196,8 @@ pub struct JsSubscribeUpdateDeshredTransactionInfo<'env> {
   pub transaction: ::core::option::Option<JsTransaction<'env>>,
   pub loaded_writable_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
   pub loaded_readonly_addresses: ::prost::alloc::vec::Vec<BufferSlice<'env>>,
+  pub completed_data_set_starting_shred_index: u32,
+  pub completed_data_set_ending_shred_index_exclusive: u32,
 }
 impl<'env> JsSubscribeUpdateDeshredTransactionInfo<'env> {
   pub fn from_protobuf_to_js_type(
@@ -2169,6 +2221,12 @@ impl<'env> JsSubscribeUpdateDeshredTransactionInfo<'env> {
         .into_iter()
         .map(|vec_inner_value| BufferSlice::copy_from(env, &vec_inner_value))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      completed_data_set_starting_shred_index: Ok::<_, napi::Error>(
+        value.completed_data_set_starting_shred_index,
+      )?,
+      completed_data_set_ending_shred_index_exclusive: Ok::<_, napi::Error>(
+        value.completed_data_set_ending_shred_index_exclusive,
+      )?,
     })
   }
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeUpdateDeshredTransactionInfo> {
@@ -2189,6 +2247,12 @@ impl<'env> JsSubscribeUpdateDeshredTransactionInfo<'env> {
         .into_iter()
         .map(|vec_inner_value| Ok::<_, napi::Error>(vec_inner_value.as_ref().to_vec()))
         .collect::<napi::Result<::prost::alloc::vec::Vec<_>>>()?,
+      completed_data_set_starting_shred_index: Ok::<_, napi::Error>(
+        self.completed_data_set_starting_shred_index,
+      )?,
+      completed_data_set_ending_shred_index_exclusive: Ok::<_, napi::Error>(
+        self.completed_data_set_ending_shred_index_exclusive,
+      )?,
     })
   }
 }
