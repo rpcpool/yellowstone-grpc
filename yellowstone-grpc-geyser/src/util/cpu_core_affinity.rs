@@ -1,3 +1,5 @@
+#![allow(clippy::missing_const_for_fn)]
+
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn set_thread_affinity(cpus: &[usize]) -> Result<(), String> {
     affinity::set_thread_affinity(cpus).map_err(|e| e.to_string())
