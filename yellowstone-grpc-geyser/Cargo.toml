@@ -17,7 +17,6 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
-affinity = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
@@ -78,6 +77,10 @@ prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# wrapped in mod cpu_core_affinity
+affinity = { workspace = true }
 
 [[bench]]
 name = "encode"

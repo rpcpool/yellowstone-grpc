@@ -98,7 +98,8 @@ impl GeyserPlugin for Plugin {
         }
         if let Some(tokio_cpus) = config.tokio.affinity.clone() {
             builder.on_thread_start(move || {
-                affinity::set_thread_affinity(&tokio_cpus).expect("failed to set affinity")
+                crate::util::cpu_core_affinity::set_thread_affinity(&tokio_cpus)
+                    .expect("failed to set affinity")
             });
         }
         let plugin_cancellation_token = CancellationToken::new();
