@@ -260,7 +260,7 @@ export interface JsRewards {
 export interface JsSubscribeDeshredRequest {
   deshredTransactions: Record<string, JsSubscribeRequestFilterDeshredTransactions>
   ping?: JsSubscribeRequestPing
-  slots?: Record<string, JsSubscribeRequestFilterSlots>
+  slots: Record<string, JsSubscribeRequestFilterSlots>
 }
 
 export interface JsSubscribeReplayInfoRequest {

@@ -124,7 +124,14 @@ function fromJsSubscribeUpdateDeshred(
   } as SubscribeUpdateDeshred;
 }
 
-function parseOptionalBool(value: unknown, fieldName: string): boolean | undefined {
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStrictOptionalBool(
+  value: unknown,
+  fieldName: string,
+): boolean | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -133,40 +140,49 @@ function parseOptionalBool(value: unknown, fieldName: string): boolean | undefin
     return value;
   }
 
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-
   throw new Error(
-    `Invalid ${fieldName}: expected true/false, got ${JSON.stringify(value)}`,
+    `Invalid ${fieldName}: expected true/false boolean, got ${JSON.stringify(value)}`,
   );
 }
 
 function normalizeSubscribeDeshredRequest(
   request: SubscribeDeshredRequest,
 ): SubscribeDeshredRequest {
-  const normalizedEntries = Object.fromEntries(
-    Object.entries(request.deshredTransactions ?? {}).map(([name, filter]) => [
-      name,
-      {
-        ...filter,
-        vote: parseOptionalBool(
-          (filter as { vote?: unknown }).vote,
-          `deshredTransactions.${name}.vote`,
-        ),
-      },
-    ]),
-  );
+  if (!isRecordObject(request)) {
+    throw new Error("Invalid subscribeDeshred request: expected object");
+  }
+
+  const deshredTransactions = (
+    request as { deshredTransactions?: unknown }
+  ).deshredTransactions;
+  if (!isRecordObject(deshredTransactions)) {
+    throw new Error("Invalid deshredTransactions: expected object");
+  }
+
+  const slots = (request as { slots?: unknown }).slots;
+  if (!isRecordObject(slots)) {
+    throw new Error("Invalid slots: expected object");
+  }
+
+  const normalizedEntries: SubscribeDeshredRequest["deshredTransactions"] = {};
+  for (const [name, filter] of Object.entries(deshredTransactions)) {
+    if (!isRecordObject(filter)) {
+      throw new Error(`Invalid deshredTransactions.${name}: expected object`);
+    }
+
+    normalizedEntries[name] = {
+      ...(filter as unknown as SubscribeDeshredRequest["deshredTransactions"][string]),
+      vote: parseStrictOptionalBool(
+        (filter as { vote?: unknown }).vote,
+        `deshredTransactions.${name}.vote`,
+      ),
+    };
+  }
 
   return {
     ...request,
     deshredTransactions: normalizedEntries,
+    slots: slots as SubscribeDeshredRequest["slots"],
   };
 }
 

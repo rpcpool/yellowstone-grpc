@@ -341,6 +341,7 @@ async function subscribeDeshredCommand(client: Client, args) {
       },
     },
     ping: args.ping ? { id: args.ping } : undefined,
+    slots: {},
   };
 
   await new Promise<void>((resolve, reject) => {

@@ -1452,9 +1452,8 @@ pub struct JsSubscribeDeshredRequest {
     JsSubscribeRequestFilterDeshredTransactions,
   >,
   pub ping: ::core::option::Option<JsSubscribeRequestPing>,
-  pub slots: ::core::option::Option<
+  pub slots:
     ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterSlots>,
-  >,
 }
 impl JsSubscribeDeshredRequest {
   pub fn from_protobuf_to_js_type(env: &Env, value: SubscribeDeshredRequest) -> napi::Result<Self> {
@@ -1477,17 +1476,15 @@ impl JsSubscribeDeshredRequest {
           JsSubscribeRequestPing::from_protobuf_to_js_type(env, option_inner_value)
         })
         .transpose()?,
-      slots: Some(
-        value
-          .slots
-          .into_iter()
-          .map(|(hash_map_entry_key, hash_map_entry_value)| {
-            let converted_hash_map_value =
-              JsSubscribeRequestFilterSlots::from_protobuf_to_js_type(env, hash_map_entry_value)?;
-            Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
-          })
-          .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
-      ),
+      slots: value
+        .slots
+        .into_iter()
+        .map(|(hash_map_entry_key, hash_map_entry_value)| {
+          let converted_hash_map_value =
+            JsSubscribeRequestFilterSlots::from_protobuf_to_js_type(env, hash_map_entry_value)?;
+          Ok::<_, napi::Error>((hash_map_entry_key, converted_hash_map_value))
+        })
+        .collect::<napi::Result<::std::collections::HashMap<_, _>>>()?,
     })
   }
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeDeshredRequest> {
@@ -1507,7 +1504,6 @@ impl JsSubscribeDeshredRequest {
         .transpose()?,
       slots: self
         .slots
-        .unwrap_or_default()
         .into_iter()
         .map(|(hash_map_entry_key, hash_map_entry_value)| {
           let converted_hash_map_key = Ok::<_, napi::Error>(hash_map_entry_key)?;
