@@ -83,17 +83,17 @@ async fn main() -> anyhow::Result<()> {
                 count += 1;
                 match update.update_oneof.as_ref() {
                     Some(UpdateOneof::Slot(slot)) => {
-                        if count % 10 == 0 {
+                        if count.is_multiple_of(10) {
                             info!("slot={} count={count}", slot.slot);
                         }
                     }
                     Some(UpdateOneof::Account(acc)) => {
-                        if count % 100 == 0 {
+                        if count.is_multiple_of(100) {
                             info!("account update slot={} count={count}", acc.slot);
                         }
                     }
                     Some(UpdateOneof::Transaction(tx)) => {
-                        if count % 100 == 0 {
+                        if count.is_multiple_of(100) {
                             info!("transaction slot={} count={count}", tx.slot);
                         }
                     }

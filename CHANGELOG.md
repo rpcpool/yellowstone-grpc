@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
+
+## 2026-04-29
+
+- yellowstone-grpc-geyser-13.0.0
+- yellowstone-grpc-proto-12.3.0
+
+### Features
+- geyser: bump agave monorepo dependencies to 4.0.0-rc.0
+- geyser: bump Solana SDK dependencies to match agave 4.0.0-rc.0
+- proto: add `commission_bps` field to `Reward` message in `solana-storage.proto` (SIMD-0291)
+- geyser: track gRPC method in metered/bandwidth path metrics ([#735](https://github.com/rpcpool/yellowstone-grpc/pull/735))
+- geyser: fall back to a no-op core-affinity wrapper on macOS so the plugin builds and runs on darwin ([#733](https://github.com/rpcpool/yellowstone-grpc/pull/733))
+
+### Breaking
+- geyser: requires Rust 1.94.1 toolchain (agave 4.0.0-rc.0 minimum)
+
 ## 2026-04-01
 
 - yellowstone-grpc-client-13.1.0
