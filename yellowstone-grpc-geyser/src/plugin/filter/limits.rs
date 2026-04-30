@@ -76,6 +76,7 @@ pub struct FilterLimitsAccounts {
     #[serde(deserialize_with = "deserialize_pubkey_set")]
     pub owner_reject: HashSet<Pubkey>,
     pub data_slice_max: usize,
+    pub cuckoo_max_size: usize,
 }
 
 impl Default for FilterLimitsAccounts {
@@ -88,6 +89,7 @@ impl Default for FilterLimitsAccounts {
             owner_max: usize::MAX,
             owner_reject: HashSet::new(),
             data_slice_max: usize::MAX,
+            cuckoo_max_size: usize::MAX,
         }
     }
 }
@@ -147,6 +149,8 @@ pub struct FilterLimitsBlocks {
     pub include_transactions: bool,
     pub include_accounts: bool,
     pub include_entries: bool,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub cuckoo_max_size: usize,
 }
 
 impl Default for FilterLimitsBlocks {
@@ -159,6 +163,7 @@ impl Default for FilterLimitsBlocks {
             include_transactions: true,
             include_accounts: true,
             include_entries: true,
+            cuckoo_max_size: usize::MAX,
         }
     }
 }
