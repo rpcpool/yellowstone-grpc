@@ -1,5 +1,7 @@
 #![allow(clippy::large_enum_variant)]
 
+pub mod cuckoo;
+
 pub mod geyser {
     #![allow(clippy::clone_on_ref_ptr)]
     #![allow(clippy::missing_const_for_fn)]

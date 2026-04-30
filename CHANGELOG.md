@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Note:** Version 0 of Semantic Versioning is handled differently from version 1 and above.
 The minor version will be incremented upon a breaking change and the patch version will be incremented for features.
 
+## [Unreleased]
+
+### Features
+- proto: add `CompressedAccountFilterSet` for sending compact account filters over the wire which works on both account and block subscriptions, with a `CuckooHashAlgorithm` enum so we can swap algorithms later without breaking old clients
+- geyser: integrate cuckoo matching into account and block filter paths
+
 ## 2026-04-29
 
 - yellowstone-grpc-geyser-13.0.0

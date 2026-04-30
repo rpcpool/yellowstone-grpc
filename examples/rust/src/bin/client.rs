@@ -524,6 +524,7 @@ impl Action {
                             owner: args.accounts_owner.clone(),
                             filters,
                             nonempty_txn_signature: args.accounts_nonempty_txn_signature,
+                            cuckoo_accounts_filter: None,
                         },
                     );
                 }
@@ -583,6 +584,7 @@ impl Action {
                             include_transactions: args.blocks_include_transactions,
                             include_accounts: args.blocks_include_accounts,
                             include_entries: args.blocks_include_entries,
+                            cuckoo_account_include: None,
                         },
                     );
                 }
