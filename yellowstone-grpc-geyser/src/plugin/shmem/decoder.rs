@@ -8,7 +8,7 @@ use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use yellowstone_grpc_proto::prelude as proto;
 use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
-use yellowstone_shmem_common::{GeyserMessage, SlotStatus};
+use yellowstone_shmem_common::{GeyserMessage, SlotStatus, EventType};
 
 use crate::plugin::message::{
     Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
@@ -21,17 +21,15 @@ use crate::plugin::message::{
 pub struct ProstShmemDecoder;
 
 impl ShmemDecoder for ProstShmemDecoder {
-    fn decode(&self, event_type: u8, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
-        use yellowstone_shmem_common::EventType;
+    fn decode(&self, slot: u64, event_type: u8, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
         let et = EventType::try_from(event_type)
             .map_err(|_| DecodeError::DecodeError(format!("unknown event_type: {event_type}")))?;
-
         match et {
-            EventType::Slot => decode_slot(bytes),
-            EventType::Account => decode_account(bytes),
-            EventType::Transaction => decode_transaction(bytes),
-            EventType::Entry => decode_entry(bytes),
-            EventType::BlockMeta => decode_block_meta(bytes),
+            EventType::Slot        => decode_slot(bytes),
+            EventType::Account     => decode_account(bytes),
+            EventType::Transaction => decode_transaction(slot, bytes),
+            EventType::Entry       => decode_entry(bytes),
+            EventType::BlockMeta   => decode_block_meta(bytes),
         }
     }
 }
@@ -80,22 +78,20 @@ fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     ))
 }
 
-fn decode_transaction(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+fn decode_transaction(slot: u64, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     let p = proto::SubscribeUpdateTransactionInfo::decode(bytes)
         .map_err(|e| DecodeError::DecodeError(e.to_string()))?;
-    Ok(GeyserMessage::Transaction(
-        yellowstone_shmem_common::MessageTransaction {
-            transaction: yellowstone_shmem_common::MessageTransactionInfo {
-                signature: p.signature,
-                is_vote: p.is_vote,
-                transaction: p.transaction.map(|t| t.encode_to_vec()).unwrap_or_default(),
-                meta: p.meta.map(|m| m.encode_to_vec()).unwrap_or_default(),
-                index: p.index as usize,
-                account_keys: vec![],
-            },
-            slot: 0, // slot not in SubscribeUpdateTransactionInfo — carried in dcache entry
+    Ok(GeyserMessage::Transaction(yellowstone_shmem_common::MessageTransaction {
+        transaction: yellowstone_shmem_common::MessageTransactionInfo {
+            signature:    p.signature,
+            is_vote:      p.is_vote,
+            transaction:  p.transaction.map(|t| t.encode_to_vec()).unwrap_or_default(),
+            meta:         p.meta.map(|m| m.encode_to_vec()).unwrap_or_default(),
+            index:        p.index as usize,
+            account_keys: vec![],
         },
-    ))
+        slot,
+    }))
 }
 
 fn decode_entry(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
