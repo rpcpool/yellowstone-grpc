@@ -742,6 +742,23 @@ impl GrpcService {
             .await;
         });
 
+        // Spawn shmem reader to feed messages_tx from the shmem ring.
+        // The plugin writes events to shmem; this task reads them and forwards
+        // to geyser_loop via the same channel it already consumes.
+        if let Some(shmem_path) = config.shmem_path.clone() {
+            let shmem_tx = messages_tx.clone();
+            task_tracker.spawn(async move {
+                if let Err(e) = crate::plugin::shmem::run_shmem_reader(
+                    std::path::Path::new(&shmem_path),
+                    shmem_tx,
+                )
+                .await
+                {
+                    error!("shmem reader failed: {e}");
+                }
+            });
+        }
+
         // Health check service
         let (health_reporter, health_service) = health_reporter();
         health_reporter.set_serving::<GeyserServer<Self>>().await;
