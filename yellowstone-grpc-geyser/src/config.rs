@@ -260,6 +260,10 @@ impl<'de> Deserialize<'de> for GrpcAddresses {
 pub struct ConfigGrpc {
     /// Multiple addresses of Grpc service.
     pub address: GrpcAddresses,
+
+    #[serde(default)]
+    pub enable_snapshot_accounts: bool,
+
     /// TLS config
     pub tls_config: Option<ConfigGrpcServerTls>,
     /// Possible compression options
