@@ -362,6 +362,13 @@ pub struct ConfigGrpc {
     #[serde(default)]
     pub traffic_reporting_byte_threhsold: Option<ByteSize>,
 
+    /// Path to the yellowstone-shmem shared memory file.
+    /// When set, the grpc service reads geyser events from the shmem ring
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem`
+    #[serde(default)]
+    pub shmem_path: Option<String>,
+
     ///
     /// Optional directory to load TLS certificates for gRPC server. If set, the server will start in TLS mode and load certificates from the provided directory.
     ///

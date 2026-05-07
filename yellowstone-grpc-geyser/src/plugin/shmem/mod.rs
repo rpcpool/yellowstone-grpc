@@ -37,18 +37,16 @@ pub async fn run_shmem_reader(
             None => {
                 tokio::task::yield_now().await;
             }
-            Some(Ok(geyser_msg)) => {
-                match ProstShmemDecoder::to_dm_message(geyser_msg) {
-                    Ok(dm_msg) => {
-                        if messages_tx.send(dm_msg).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("shmem decoder: {e}");
+            Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg) {
+                Ok(dm_msg) => {
+                    if messages_tx.send(dm_msg).is_err() {
+                        break;
                     }
                 }
-            }
+                Err(e) => {
+                    log::warn!("shmem decoder: {e}");
+                }
+            },
             Some(Err(yellowstone_shmem_client::client::ClientError::Lagged(n))) => {
                 log::warn!("shmem reader lagged: lost {n} entries");
             }
