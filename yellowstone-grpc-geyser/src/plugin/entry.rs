@@ -346,7 +346,11 @@ impl GeyserPlugin for Plugin {
 ///
 /// This function returns the Plugin pointer as trait GeyserPlugin.
 pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin {
-    let plugin = Plugin::default();
-    let plugin: Box<dyn GeyserPlugin> = Box::new(plugin);
+    // STR-509: swapped from Plugin::default() to shmem::create_plugin().
+    // The shmem plugin writes geyser events to a shared memory ring instead
+    // of an in-process crossbeam channel. The grpc service reads from shmem
+    // via run_shmem_reader() which feeds the same messages_tx that geyser_loop
+    // already expects.
+    let plugin: Box<dyn GeyserPlugin> = Box::new(crate::plugin::shmem::create_plugin());
     Box::into_raw(plugin)
 }
