@@ -3,6 +3,7 @@ pub mod convert_to;
 pub mod entry;
 pub mod filter;
 pub mod message;
+pub mod shmem;
 
 pub mod proto {
     #![allow(clippy::clone_on_ref_ptr)]
