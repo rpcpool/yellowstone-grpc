@@ -5538,7 +5538,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-shmem-client"
 version = "0.1.0"
-source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#b48daa9bdd484e7a79d9ad34a2c2d4e14666a3a5"
+source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#d95ee3eb01e3213fb2fb9dc35327eca8df788b5a"
 dependencies = [
  "yellowstone-conduit 0.1.0 (git+https://github.com/rpcpool/yellowstone-conduit)",
  "yellowstone-shmem-common",
@@ -5547,7 +5547,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-shmem-common"
 version = "0.1.0"
-source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#b48daa9bdd484e7a79d9ad34a2c2d4e14666a3a5"
+source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#d95ee3eb01e3213fb2fb9dc35327eca8df788b5a"
 dependencies = [
  "serde",
 ]
@@ -5555,7 +5555,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-shmem-plugin"
 version = "0.1.0"
-source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#b48daa9bdd484e7a79d9ad34a2c2d4e14666a3a5"
+source = "git+https://github.com/rpcpool/yellowstone-shmem?branch=str-509#d95ee3eb01e3213fb2fb9dc35327eca8df788b5a"
 dependencies = [
  "agave-geyser-plugin-interface",
  "serde",
