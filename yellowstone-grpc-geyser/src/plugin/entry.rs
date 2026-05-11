@@ -2,7 +2,7 @@ use {
     crate::{
         config::Config,
         grpc::GrpcService,
-        metrics::{self, PrometheusService, incr_geyser_event_dropped},
+        metrics::{self, incr_geyser_event_dropped, PrometheusService},
         parallel::ParallelEncoder,
         plugin::{
             filter::limits::FilterLimits,
@@ -21,7 +21,8 @@ use {
     std::{
         concat, env,
         sync::{
-            Arc, Mutex, atomic::{AtomicBool, Ordering}
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
         },
         time::Duration,
     },
@@ -29,7 +30,8 @@ use {
         runtime::{Builder, Runtime},
         sync::mpsc,
     },
-    tokio_util::{sync::CancellationToken, task::TaskTracker}, yellowstone_shmem_plugin::YellowstonePlugin,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    yellowstone_shmem_plugin::YellowstonePlugin,
 };
 
 #[derive(Debug)]
@@ -163,9 +165,11 @@ impl GeyserPlugin for Plugin {
         if let Some(shmem_path) = shmem_path {
             let mut shmem = crate::plugin::shmem::create_plugin();
             shmem.set_config(yellowstone_shmem_plugin::plugin::ShmemConfig {
-                shmem_path:      shmem_path.clone(),
-                dcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity,
-                mcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default().mcache_capacity,
+                shmem_path: shmem_path.clone(),
+                dcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default()
+                    .dcache_capacity,
+                mcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default()
+                    .mcache_capacity,
             })?;
             self.shmem_plugin = Some(shmem);
         }
