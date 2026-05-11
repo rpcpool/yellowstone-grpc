@@ -86,15 +86,26 @@ fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 fn decode_transaction(slot: u64, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     let p = proto::SubscribeUpdateTransactionInfo::decode(bytes)
         .map_err(|e| DecodeError::DecodeError(e.to_string()))?;
+
+    let account_keys = p
+        .transaction
+        .as_ref()
+        .and_then(|tx| tx.message.as_ref())
+        .map(|msg| msg.account_keys.clone())
+        .unwrap_or_default();
+
+    let transaction_bytes = p.transaction.map(|t| t.encode_to_vec()).unwrap_or_default();
+    let meta_bytes = p.meta.map(|m| m.encode_to_vec()).unwrap_or_default();
+
     Ok(GeyserMessage::Transaction(
         yellowstone_shmem_common::MessageTransaction {
             transaction: yellowstone_shmem_common::MessageTransactionInfo {
                 signature: p.signature,
                 is_vote: p.is_vote,
-                transaction: p.transaction.map(|t| t.encode_to_vec()).unwrap_or_default(),
-                meta: p.meta.map(|m| m.encode_to_vec()).unwrap_or_default(),
+                transaction: transaction_bytes,
+                meta: meta_bytes,
                 index: p.index as usize,
-                account_keys: vec![],
+                account_keys,
             },
             slot,
         },
