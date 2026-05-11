@@ -9,10 +9,8 @@
   },
   "grpc": {
     "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
+    "shmem_path": "/dev/shm/yellowstone-shmem",
+    "tls_config": null,
     "compression": {
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]
@@ -44,7 +42,7 @@
         "data_slice_max": 2
       },
       "slots": {
-        "max": 1
+          "max": 10
       },
       "transactions": {
         "max": 1,
