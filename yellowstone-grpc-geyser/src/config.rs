@@ -359,6 +359,29 @@ pub struct ConfigGrpc {
     /// Example: `/dev/shm/yellowstone-shmem`
     #[serde(default)]
     pub shmem_path: Option<String>,
+
+    /// Poll interval for the shmem reader when the ring is empty.
+    /// Defaults to 100 microseconds. Lower values reduce latency but
+    /// increase CPU usage. Higher values save CPU but add latency.
+    #[serde(
+        default = "ConfigGrpc::default_shmem_poll_interval_us",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub shmem_poll_interval_us: u64,
+
+    /// Number of dcache slots for the shmem ring. Must be a power of two.
+    #[serde(
+        default = "ConfigGrpc::default_shmem_dcache_capacity",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub shmem_dcache_capacity: u64,
+
+    /// Byte capacity of the shmem mcache region.
+    #[serde(
+        default = "ConfigGrpc::default_shmem_mcache_capacity",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub shmem_mcache_capacity: u64,
 }
 
 impl ConfigGrpc {
@@ -400,6 +423,22 @@ impl ConfigGrpc {
 
     const fn default_replay_stored_slots() -> u64 {
         150
+    }
+
+    const fn encoder_threads_default() -> usize {
+        4
+    }
+
+    fn default_shmem_poll_interval_us() -> u64 {
+        100
+    }
+
+    fn default_shmem_dcache_capacity() -> u64 {
+        yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity
+    }
+
+    fn default_shmem_mcache_capacity() -> u64 {
+        yellowstone_shmem_plugin::plugin::ShmemConfig::default().mcache_capacity
     }
 }
 
