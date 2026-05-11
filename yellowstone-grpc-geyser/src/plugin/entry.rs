@@ -153,7 +153,7 @@ impl GeyserPlugin for Plugin {
             shmem.set_config(yellowstone_shmem_plugin::plugin::ShmemConfig {
                 shmem_path:      shmem_path.clone(),
                 dcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity,
-                mcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity,
+                mcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default().mcache_capacity,
             })?;
             self.shmem_plugin = Some(shmem);
         }
