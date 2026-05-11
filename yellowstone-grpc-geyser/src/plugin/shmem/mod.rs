@@ -29,13 +29,14 @@ pub fn create_plugin() -> YellowstonePlugin {
 pub async fn run_shmem_reader(
     shmem_path: &Path,
     messages_tx: mpsc::UnboundedSender<Message>,
+    poll_interval_us: u64,
 ) -> Result<(), yellowstone_shmem_client::client::ClientError> {
     let mut client = ShmemClient::open(shmem_path, Box::new(ProstShmemDecoder))?;
 
     loop {
         match client.try_recv() {
             None => {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_micros(poll_interval_us)).await;
             }
             Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg) {
                 Ok(dm_msg) => {

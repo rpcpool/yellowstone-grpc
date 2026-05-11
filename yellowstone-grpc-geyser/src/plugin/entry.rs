@@ -121,6 +121,9 @@ impl GeyserPlugin for Plugin {
 
         let shmem_path = config.grpc.shmem_path.clone();
 
+        let shmem_dcache_capacity = config.grpc.shmem_dcache_capacity;
+        let shmem_mcache_capacity = config.grpc.shmem_mcache_capacity;
+
         let result = runtime.block_on(async move {
             static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
@@ -165,11 +168,9 @@ impl GeyserPlugin for Plugin {
         if let Some(shmem_path) = shmem_path {
             let mut shmem = crate::plugin::shmem::create_plugin();
             shmem.set_config(yellowstone_shmem_plugin::plugin::ShmemConfig {
-                shmem_path: shmem_path.clone(),
-                dcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default()
-                    .dcache_capacity,
-                mcache_capacity: yellowstone_shmem_plugin::plugin::ShmemConfig::default()
-                    .mcache_capacity,
+                shmem_path:      shmem_path.clone(),
+                dcache_capacity: shmem_dcache_capacity,
+                mcache_capacity: shmem_mcache_capacity,
             })?;
             self.shmem_plugin = Some(shmem);
         }
