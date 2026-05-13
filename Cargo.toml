@@ -2,9 +2,9 @@
 resolver = "2"
 members = [
     "examples/rust", # 12.3.0
-    "yellowstone-grpc-client", # 13.2.0
-    "yellowstone-grpc-geyser", # 13.0.0
-    "yellowstone-grpc-proto", # 12.3.0
+    "yellowstone-grpc-client", # 13.1.0
+    "yellowstone-grpc-geyser", # 13.1.0
+    "yellowstone-grpc-proto", # 12.4.0
 ]
 exclude = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
@@ -101,8 +101,8 @@ spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.0.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.3.0", default-features = false }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.1.0" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.4.0", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
