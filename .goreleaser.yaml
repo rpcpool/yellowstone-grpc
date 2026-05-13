@@ -1,0 +1,88 @@
+# .goreleaser.yaml for rpcpool/yellowstone-grpc
+#
+# This file must be committed to the root of the yellowstone-grpc source repo.
+# GCS upload, cosign signing, Slack announcements, and release settings are
+# injected via ci/goreleaser-patch.yaml in Binaries-ci at build time.
+#
+# Breaking change: dual-OS matrix (-release22 / -release24 suffixed artifacts)
+# is dropped. A single ubuntu-22.04 build produces one artifact per binary.
+# Consumers pinned to *-release22 or *-release24 artifact names must update
+# their references before cutover.
+#
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+
+before:
+    hooks:
+        # Produce a release metadata file consumed by downstream tooling (nomad, terraform).
+        - >-
+            bash -c 'printf "channel: %s\ncommit: %s\ntarget: x86_64-unknown-linux-gnu\n" "$(git describe --tags --exact-match 2>/dev/null || echo "")" "$(git rev-parse HEAD)" > yellowstone-grpc-geyser-release-x86_64-unknown-linux-gnu.yml'
+
+builds:
+    - id: geyser
+      builder: rust
+      binary: libyellowstone_grpc_geyser.so
+      targets:
+          - x86_64-unknown-linux-gnu
+      flags:
+          - --release
+          - --package=yellowstone-grpc-geyser
+
+    - id: client
+      builder: rust
+      binary: client
+      targets:
+          - x86_64-unknown-linux-gnu
+      flags:
+          - --release
+          - --package=yellowstone-grpc-client-simple
+          - --bin=client
+      hooks:
+          post:
+              - cmd: strip {{ .Path }}
+
+    - id: config-check
+      builder: rust
+      binary: config-check
+      targets:
+          - x86_64-unknown-linux-gnu
+      flags:
+          - --release
+          - --package=yellowstone-grpc-geyser
+          - --bin=config-check
+      hooks:
+          post:
+              - cmd: strip {{ .Path }}
+
+archives:
+    - id: geyser
+      ids: [geyser]
+      formats: [binary]
+      name_template: libyellowstone_grpc_geyser.so
+
+    - id: client
+      formats: [binary]
+      ids: [client]
+      name_template: client-linux-amd64
+
+    - id: config-check
+      formats: [binary]
+      ids: [config-check]
+      name_template: config-check-linux-amd64
+
+release:
+    github:
+        owner: rpcpool
+        name: yellowstone-grpc
+    #disable: '{{ .Prerelease != "" }}'
+    draft: true # publish as draft release to begin with
+    header: |
+        rust {{ .Env.RUST_VERSION }}
+    extra_files:
+        - glob: yellowstone-grpc-geyser-release-x86_64-unknown-linux-gnu.yml
+        - glob: yellowstone-grpc-proto/proto/*.proto
+
+changelog:
+    sort: asc
+    use: github
