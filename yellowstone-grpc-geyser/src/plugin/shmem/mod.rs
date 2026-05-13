@@ -31,8 +31,8 @@ pub async fn run_shmem_reader(
     messages_tx: mpsc::UnboundedSender<Message>,
     poll_interval_us: u64,
 ) -> Result<(), yellowstone_shmem_client::client::ClientError> {
-    let mut client = ShmemClient::open(shmem_path, Box::new(ProstShmemDecoder))?;
-
+   let mut client = ShmemClient::open(shmem_path, ProstShmemDecoder)?;
+   
     loop {
         match client.try_recv() {
             None => {
