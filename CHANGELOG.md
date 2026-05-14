@@ -10,9 +10,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-05-13
+
+- yellowstone-grpc-geyser-13.1.0
+- yellowstone-grpc-client-13.1.0
+- yellowstone-grpc-proto-12.4.0
+
 ### Features
-- proto: add `CompressedAccountFilterSet` for sending compact account filters over the wire which works on both account and block subscriptions, with a `CuckooHashAlgorithm` enum so we can swap algorithms later without breaking old clients
-- geyser: integrate cuckoo matching into account and block filter paths
+- proto: add `CompressedAccountFilterSet` for sending compact account filters over the wire which works on both account and block subscriptions, with a `CuckooHashAlgorithm` enum so we can swap algorithms later without breaking old clients ([#732](https://github.com/rpcpool/yellowstone-grpc/pull/732))
+- geyser: integrate cuckoo matching into account and block filter paths ([#732](https://github.com/rpcpool/yellowstone-grpc/pull/732))
 
 ## 2026-04-29
 
