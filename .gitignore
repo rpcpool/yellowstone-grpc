@@ -39,4 +39,5 @@ yellowstone-grpc-geyser/config-test.json
 .editorconfig
 .env
 .env.local
+grpc-client
 scripts
