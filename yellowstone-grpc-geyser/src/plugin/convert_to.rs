@@ -11,8 +11,7 @@ use {
     solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
     solana_transaction_status_client_types::{
-        InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta,
-        TransactionTokenBalance,
+        InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
     },
     yellowstone_grpc_proto::prelude as proto,
 };
