@@ -701,7 +701,6 @@ impl GrpcService {
                 if let Err(e) = crate::plugin::shmem::run_shmem_reader(
                     std::path::Path::new(&shmem_path),
                     shmem_tx,
-                    config.shmem_poll_interval_us
                 )
                 .await
                 {

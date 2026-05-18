@@ -5390,14 +5390,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 name = "yellowstone-conduit"
 version = "0.1.0"
 dependencies = [
- "memmap2",
-]
-
-[[package]]
-name = "yellowstone-conduit"
-version = "0.1.0"
-source = "git+https://github.com/rpcpool/yellowstone-conduit#5f692c28ad20d2a5760f8720da456ae073e0d482"
-dependencies = [
+ "libc",
  "memmap2",
 ]
 
@@ -5539,7 +5532,7 @@ name = "yellowstone-shmem-client"
 version = "0.1.0"
 dependencies = [
  "futures",
- "yellowstone-conduit 0.1.0 (git+https://github.com/rpcpool/yellowstone-conduit)",
+ "yellowstone-conduit",
  "yellowstone-shmem-common",
 ]
 
@@ -5559,7 +5552,7 @@ dependencies = [
  "serde_json",
  "solana-transaction 4.0.0",
  "solana-transaction-status",
- "yellowstone-conduit 0.1.0",
+ "yellowstone-conduit",
  "yellowstone-shmem-common",
 ]
 
