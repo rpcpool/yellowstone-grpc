@@ -77,6 +77,9 @@ prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
+yellowstone-shmem-plugin = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-plugin" }
+yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
+yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity

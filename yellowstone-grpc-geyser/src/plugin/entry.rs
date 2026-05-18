@@ -31,6 +31,7 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
+    yellowstone_shmem_plugin::YellowstonePlugin,
 };
 
 #[derive(Debug)]
@@ -56,6 +57,7 @@ impl PluginInner {
 #[derive(Debug, Default)]
 pub struct Plugin {
     inner: Option<PluginInner>,
+    shmem_plugin: Option<YellowstonePlugin>,
 }
 
 impl Plugin {
@@ -118,6 +120,11 @@ impl GeyserPlugin for Plugin {
         let encoder_threads = config.grpc.encoder_threads;
         let (encoder, encoder_handle) = ParallelEncoder::new(encoder_threads);
 
+        let shmem_path = config.grpc.shmem_path.clone();
+
+        let shmem_dcache_capacity = config.grpc.shmem_dcache_capacity;
+        let shmem_mcache_capacity = config.grpc.shmem_mcache_capacity;
+
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
@@ -153,6 +160,17 @@ impl GeyserPlugin for Plugin {
                 return Err(GeyserPluginError::Custom(format!("{e:?}").into()));
             }
         };
+
+        // Initialize shmem plugin
+        if let Some(shmem_path) = shmem_path {
+            let mut shmem = crate::plugin::shmem::create_plugin();
+            shmem.set_config(yellowstone_shmem_plugin::plugin::ShmemConfig {
+                shmem_path:      shmem_path.clone(),
+                dcache_capacity: shmem_dcache_capacity,
+                mcache_capacity: shmem_mcache_capacity,
+            })?;
+            self.shmem_plugin = Some(shmem);
+        }
 
         self.inner = Some(PluginInner {
             runtime,
@@ -196,6 +214,9 @@ impl GeyserPlugin for Plugin {
         slot: u64,
         is_startup: bool,
     ) -> PluginResult<()> {
+        if let Some(shmem) = &self.shmem_plugin {
+            return shmem.update_account(account, slot, is_startup);
+        }
         self.with_inner(|inner| {
             let account = match account {
                 ReplicaAccountInfoVersions::V0_0_1(_info) => {
@@ -253,6 +274,9 @@ impl GeyserPlugin for Plugin {
         parent: Option<u64>,
         status: &SlotStatus,
     ) -> PluginResult<()> {
+        if let Some(shmem) = &self.shmem_plugin {
+            return shmem.update_slot_status(slot, parent, status);
+        }
         self.with_inner(|inner| {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
@@ -266,6 +290,9 @@ impl GeyserPlugin for Plugin {
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: u64,
     ) -> PluginResult<()> {
+        if let Some(shmem) = &self.shmem_plugin {
+            return shmem.notify_transaction(transaction, slot);
+        }
         self.with_inner(|inner| {
             let transaction = match transaction {
                 ReplicaTransactionInfoVersions::V0_0_1(_info) => {
@@ -285,6 +312,9 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_entry(&self, entry: ReplicaEntryInfoVersions) -> PluginResult<()> {
+        if let Some(shmem) = &self.shmem_plugin {
+            return shmem.notify_entry(entry);
+        }
         self.with_inner(|inner| {
             #[allow(clippy::infallible_destructuring_match)]
             let entry = match entry {
@@ -302,6 +332,9 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
+        if let Some(shmem) = &self.shmem_plugin {
+            return shmem.notify_block_metadata(blockinfo);
+        }
         self.with_inner(|inner| {
             let blockinfo = match blockinfo {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
@@ -346,7 +379,7 @@ impl GeyserPlugin for Plugin {
 ///
 /// This function returns the Plugin pointer as trait GeyserPlugin.
 pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin {
-    let plugin = Plugin::default();
+    let plugin = crate::plugin::shmem::create_plugin();
     let plugin: Box<dyn GeyserPlugin> = Box::new(plugin);
     Box::into_raw(plugin)
 }

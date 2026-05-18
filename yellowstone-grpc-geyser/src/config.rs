@@ -358,6 +358,27 @@ pub struct ConfigGrpc {
     ///
     #[serde(default)]
     pub traffic_reporting_byte_threhsold: Option<ByteSize>,
+
+    /// Path to the yellowstone-shmem shared memory file.
+    /// When set, the grpc service reads geyser events from the shmem ring
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem`
+    #[serde(default)]
+    pub shmem_path: Option<String>,
+
+    /// Number of dcache slots for the shmem ring. Must be a power of two.
+    #[serde(
+        default = "ConfigGrpc::default_shmem_dcache_capacity",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub shmem_dcache_capacity: u64,
+
+    /// Byte capacity of the shmem mcache region.
+    #[serde(
+        default = "ConfigGrpc::default_shmem_mcache_capacity",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub shmem_mcache_capacity: u64,
 }
 
 impl ConfigGrpc {
@@ -403,6 +424,14 @@ impl ConfigGrpc {
 
     const fn encoder_threads_default() -> usize {
         4
+    }
+
+    fn default_shmem_dcache_capacity() -> u64 {
+        yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity
+    }
+
+    fn default_shmem_mcache_capacity() -> u64 {
+        yellowstone_shmem_plugin::plugin::ShmemConfig::default().mcache_capacity
     }
 }
 
