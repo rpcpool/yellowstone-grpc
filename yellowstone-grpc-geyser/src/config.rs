@@ -480,10 +480,6 @@ impl ConfigGrpc {
         4
     }
 
-    fn default_shmem_poll_interval_us() -> u64 {
-        100
-    }
-
     fn default_shmem_dcache_capacity() -> u64 {
         yellowstone_shmem_plugin::plugin::ShmemConfig::default().dcache_capacity
     }

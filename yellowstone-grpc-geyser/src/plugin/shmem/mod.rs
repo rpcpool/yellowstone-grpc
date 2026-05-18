@@ -2,8 +2,10 @@ pub mod codec;
 pub mod decoder;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
+use yellowstone_shmem_client::ClientError;
 use yellowstone_shmem_client::client::ShmemClient;
 use yellowstone_shmem_plugin::plugin::YellowstonePlugin;
 
@@ -29,34 +31,42 @@ pub fn create_plugin() -> YellowstonePlugin {
 pub async fn run_shmem_reader(
     shmem_path: &Path,
     messages_tx: mpsc::UnboundedSender<Message>,
-    poll_interval_us: u64,
-) -> Result<(), yellowstone_shmem_client::client::ClientError> {
-   let mut client = ShmemClient::open(shmem_path, ProstShmemDecoder)?;
-   
+) -> Result<(), ClientError> {
+    let mut client = ShmemClient::open(shmem_path, ProstShmemDecoder)?;
+    let waiter = ShmemClient::open(shmem_path, ProstShmemDecoder)?;  // second reader, just for wait_for_data
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify_clone = Arc::clone(&notify);
+
+    // bridge thread: blocks on futex, wakes async side
+    std::thread::spawn(move || {
+        loop {
+            waiter.wait_for_data();
+            notify_clone.notify_one();
+        }
+    });
+
     loop {
-        match client.try_recv() {
-            None => {
-                tokio::time::sleep(std::time::Duration::from_micros(poll_interval_us)).await;
-            }
-            Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg) {
-                Ok(dm_msg) => {
-                    if messages_tx.send(dm_msg).is_err() {
-                        break;
+        notify.notified().await;
+        // drain everything available after wakeup
+        loop {
+            match client.try_recv() {
+                None => break,
+                Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg) {
+                    Ok(dm_msg) => {
+                        if messages_tx.send(dm_msg).is_err() {
+                            return Ok(());
+                        }
                     }
+                    Err(e) => log::warn!("shmem decoder: {e}"),
+                },
+                Some(Err(ClientError::Lagged(n))) => {
+                    log::warn!("shmem reader lagged: lost {n} entries");
                 }
-                Err(e) => {
-                    log::warn!("shmem decoder: {e}");
+                Some(Err(e)) => {
+                    log::error!("shmem reader error: {e}");
+                    return Err(e);
                 }
-            },
-            Some(Err(yellowstone_shmem_client::client::ClientError::Lagged(n))) => {
-                log::warn!("shmem reader lagged: lost {n} entries");
-            }
-            Some(Err(e)) => {
-                log::error!("shmem reader error: {e}");
-                break;
             }
         }
     }
-
-    Ok(())
 }

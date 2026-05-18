@@ -60,27 +60,63 @@ fn decode_slot(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 }
 
 fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
-    let p = proto::SubscribeUpdateAccount::decode(bytes)
-        .map_err(|e| DecodeError::DecodeError(e.to_string()))?;
-    let info = p
-        .account
-        .ok_or_else(|| DecodeError::DecodeError("missing account".into()))?;
-    Ok(GeyserMessage::Account(
-        yellowstone_shmem_common::MessageAccount {
-            account: yellowstone_shmem_common::MessageAccountInfo {
-                pubkey: info.pubkey,
-                lamports: info.lamports,
-                owner: info.owner,
-                executable: info.executable,
-                rent_epoch: info.rent_epoch,
-                data: info.data.to_vec(),
-                write_version: info.write_version,
-                txn_signature: info.txn_signature,
+    let mut o = 0usize;
+
+    unsafe fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
+        let v = bytes[*o];
+        *o += 1;
+        v
+    }
+
+    unsafe fn read_u64(bytes: &[u8], o: &mut usize) -> u64 {
+        let v = u64::from_le_bytes(bytes[*o..*o + 8].try_into().unwrap());
+        *o += 8;
+        v
+    }
+
+    unsafe fn read_bytes(bytes: &[u8], o: &mut usize, len: usize) -> Vec<u8> {
+        let v = bytes[*o..*o + len].to_vec();
+        *o += len;
+        v
+    }
+
+    unsafe {
+        let pubkey        = read_bytes(bytes, &mut o, 32);
+        let lamports      = read_u64(bytes, &mut o);
+        let owner         = read_bytes(bytes, &mut o, 32);
+        let executable    = read_u8(bytes, &mut o) != 0;
+        let rent_epoch    = read_u64(bytes, &mut o);
+        let write_version = read_u64(bytes, &mut o);
+
+        let txn_signature = if read_u8(bytes, &mut o) != 0 {
+            Some(read_bytes(bytes, &mut o, 64))
+        } else {
+            o += 64; // skip zeroed bytes
+            None
+        };
+
+        let data_len = read_u64(bytes, &mut o) as usize;
+        let data     = read_bytes(bytes, &mut o, data_len);
+        let slot     = read_u64(bytes, &mut o);
+        let is_startup = read_u8(bytes, &mut o) != 0;
+
+        Ok(GeyserMessage::Account(
+            yellowstone_shmem_common::MessageAccount {
+                account: yellowstone_shmem_common::MessageAccountInfo {
+                    pubkey,
+                    lamports,
+                    owner,
+                    executable,
+                    rent_epoch,
+                    data,
+                    write_version,
+                    txn_signature,
+                },
+                slot,
+                is_startup,
             },
-            slot: p.slot,
-            is_startup: p.is_startup,
-        },
-    ))
+        ))
+    }
 }
 
 fn decode_transaction(slot: u64, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
