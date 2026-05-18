@@ -5,12 +5,13 @@ use {
         VersionedMessage,
     },
     solana_pubkey::Pubkey,
+    solana_reward_info::RewardType,
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
-    solana_transaction_status::{
-        InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
+    solana_transaction_status_client_types::{
+        InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta,
         TransactionTokenBalance,
     },
     yellowstone_grpc_proto::prelude as proto,
@@ -44,6 +45,18 @@ pub fn create_message(message: &VersionedMessage) -> proto::Message {
             instructions: create_instructions(&message.instructions),
             versioned: true,
             address_table_lookups: create_lookups(&message.address_table_lookups),
+        },
+        VersionedMessage::V1(message) => proto::Message {
+            header: Some(create_header(&message.header)),
+            account_keys: message
+                .account_keys
+                .iter()
+                .map(|key| key.as_ref().to_vec())
+                .collect(),
+            recent_blockhash: message.lifetime_specifier.to_bytes().into(),
+            instructions: create_instructions(&message.instructions),
+            versioned: true,
+            address_table_lookups: vec![],
         },
     }
 }
@@ -232,6 +245,7 @@ pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::Rewar
         Some(RewardType::Rent) => proto::RewardType::Rent,
         Some(RewardType::Staking) => proto::RewardType::Staking,
         Some(RewardType::Voting) => proto::RewardType::Voting,
+        Some(RewardType::DeactivatedStake) => proto::RewardType::Staking,
     }
 }
 

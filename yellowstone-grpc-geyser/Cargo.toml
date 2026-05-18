@@ -61,11 +61,13 @@ solana-clock = { workspace = true }
 solana-hash = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-reward-info = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-context = { workspace = true }
 solana-transaction-error = { workspace = true }
 solana-transaction-status = { workspace = true }
+solana-transaction-status-client-types = { workspace = true }
 
 # Solana Misc
 smallvec = { workspace = true }
@@ -107,7 +109,7 @@ solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
-solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+solana-transaction = { workspace = true, features = ["blake3"] }
 
 [lints]
 workspace = true

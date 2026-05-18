@@ -8,14 +8,17 @@ use {
         Message, MessageHeader, VersionedMessage,
     },
     solana_pubkey::Pubkey,
+    solana_reward_info::RewardType,
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
     solana_transaction_status::{
-        ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
-        RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
-        TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
+        ConfirmedBlock, RewardsAndNumPartitions, TransactionWithStatusMeta,
+        VersionedTransactionWithStatusMeta,
+    },
+    solana_transaction_status_client_types::{
+        InnerInstruction, InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
     },
     yellowstone_grpc_proto::prelude as proto,
 };

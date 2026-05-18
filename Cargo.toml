@@ -77,24 +77,26 @@ vergen = "9.0.6"
 tikv-jemallocator = "0.6.1"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder = "~4.0.0-rc.0"
+agave-geyser-plugin-interface = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-account-decoder = "=4.1.0-alpha.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~4.0.0-rc.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "~4.0.0-rc.0"
-solana-transaction-status = "~4.0.0-rc.0"
+solana-storage-proto = { version = "=4.1.0-alpha.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "=4.1.0-alpha.0"
+solana-transaction-status = "=4.1.0-alpha.0"
 
 # Solana SDK
-solana-account = "3.4.0"
+solana-account = "4.3.0"
 solana-clock = "3.0.1"
-solana-hash = "4.2.0"
-solana-keypair = "3.1.0"
-solana-message = "3.1.0"
-solana-pubkey = "4.1.0"
-solana-signature = "3.3.0"
+solana-hash = "4.3.0"
+solana-keypair = "3.1.2"
+solana-message = "4.1.1"
+solana-pubkey = "4.2.0"
+solana-reward-info = "6.2.0"
+solana-signature = "3.4.0"
 solana-signer = "3.0.0"
-solana-transaction = "3.1.0"
-solana-transaction-error = "3.0.0"
+solana-transaction = "4.1.1"
+solana-transaction-status-client-types = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-transaction-error = "3.2.0"
 
 # Solana Misc
 spl-token-2022-interface = "2.1.0"
@@ -110,16 +112,16 @@ missing_const_for_fn = "deny"
 trivially_copy_pass_by_ref = "deny"
 
 [patch.crates-io]
-agave-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-storage-proto = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
+agave-feature-set = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+agave-reserved-account-keys = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+agave-geyser-plugin-interface = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-account-decoder = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-account-decoder-client-types = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-storage-proto = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-svm-feature-set = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-transaction-context = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-transaction-status = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
+solana-transaction-status-client-types = { git = "https://github.com/AshwinSekar/solana", branch = "alpenglow" }
 
 [profile.release]
 lto = true
