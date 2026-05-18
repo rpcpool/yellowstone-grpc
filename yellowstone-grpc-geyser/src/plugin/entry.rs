@@ -390,7 +390,7 @@ impl GeyserPlugin for Plugin {
 ///
 /// This function returns the Plugin pointer as trait GeyserPlugin.
 pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin {
-    let plugin = Plugin::default();
+    let plugin = crate::plugin::shmem::create_plugin();
     let plugin: Box<dyn GeyserPlugin> = Box::new(plugin);
     Box::into_raw(plugin)
 }
