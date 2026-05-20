@@ -100,6 +100,9 @@ name = "encode"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "codec"
+harness = false
 
 [build-dependencies]
 anyhow = { workspace = true }
