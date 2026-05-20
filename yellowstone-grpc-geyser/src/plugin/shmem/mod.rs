@@ -3,7 +3,9 @@ pub mod decoder;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
+use prost_types::Timestamp;
 use tokio::sync::mpsc;
 use yellowstone_shmem_client::ClientError;
 use yellowstone_shmem_client::client::ShmemClient;
@@ -47,11 +49,13 @@ pub async fn run_shmem_reader(
 
     loop {
         notify.notified().await;
+        let now = Timestamp::from(SystemTime::now()); // once per batch
+
         // drain everything available after wakeup
         loop {
             match client.try_recv() {
                 None => break,
-                Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg) {
+                Some(Ok(geyser_msg)) => match ProstShmemDecoder::to_dm_message(geyser_msg, now) {
                     Ok(dm_msg) => {
                         if messages_tx.send(dm_msg).is_err() {
                             return Ok(());

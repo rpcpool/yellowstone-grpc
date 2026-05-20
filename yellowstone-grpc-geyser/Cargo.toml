@@ -93,6 +93,10 @@ name = "encode"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "codec"
+harness = false
+
 [features]
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
 

@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
-use std::time::SystemTime;
 
 use prost::Message as ProstMessage;
 use prost_types::Timestamp;
@@ -59,7 +58,7 @@ fn decode_slot(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     }))
 }
 
-fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     let mut o = 0usize;
 
     unsafe fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
@@ -183,8 +182,8 @@ fn decode_block_meta(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 
 impl ProstShmemDecoder {
     /// Converts a decoded [`GeyserMessage`] into a dragons mouth [`Message`].
-    pub fn to_dm_message(msg: GeyserMessage) -> Result<Message, String> {
-        let now = Timestamp::from(SystemTime::now());
+    pub fn to_dm_message(msg: GeyserMessage, created_at: Timestamp) -> Result<Message, String> {
+        let now = created_at;
 
         match msg {
             GeyserMessage::Slot(s) => {
