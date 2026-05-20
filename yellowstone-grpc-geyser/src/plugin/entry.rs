@@ -9,6 +9,7 @@ use {
                 Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
                 MessageSlot, MessageTransaction,
             },
+            shmem::codec::ProstGeyserCodec,
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -55,7 +56,7 @@ impl PluginInner {
 #[derive(Debug, Default)]
 pub struct Plugin {
     inner: Option<PluginInner>,
-    shmem_plugin: Option<YellowstonePlugin>,
+    shmem_plugin: Option<YellowstonePlugin<ProstGeyserCodec>>,
 }
 
 impl Plugin {

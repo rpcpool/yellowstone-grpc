@@ -20,8 +20,8 @@ use self::decoder::ProstShmemDecoder;
 ///
 /// Called from `_create_plugin` — this is the only place in the
 /// codebase that couples the plugin to a concrete codec.
-pub fn create_plugin() -> YellowstonePlugin {
-    YellowstonePlugin::new(Box::new(ProstGeyserCodec))
+pub fn create_plugin() -> YellowstonePlugin<ProstGeyserCodec> {
+    YellowstonePlugin::new(ProstGeyserCodec)
 }
 
 /// Spawns a task that polls the shmem ring and forwards decoded
