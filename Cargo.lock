@@ -68,26 +68,26 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-keypair",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-sha256-hasher",
  "solana-svm-feature-set",
 ]
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "log",
  "solana-clock",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-message",
  "solana-signature",
  "solana-transaction",
@@ -97,11 +97,11 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "agave-feature-set",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-sdk-ids",
 ]
 
@@ -2957,15 +2957,15 @@ dependencies = [
  "solana-account-info",
  "solana-clock",
  "solana-instruction-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-sdk-ids",
  "solana-sysvar",
 ]
 
 [[package]]
 name = "solana-account-decoder"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "Inflector",
  "base64",
@@ -2986,7 +2986,7 @@ dependencies = [
  "solana-nonce",
  "solana-program-option",
  "solana-program-pack",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-rent 3.1.0",
  "solana-sdk-ids",
  "solana-slot-hashes",
@@ -3005,15 +3005,15 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "base64",
  "bs58",
  "serde",
  "serde_json",
  "solana-account",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "zstd",
 ]
 
@@ -3057,7 +3057,7 @@ dependencies = [
  "solana-program-error",
  "solana-sanitize",
  "solana-sha256-hasher",
- "wincode",
+ "wincode 0.5.3",
 ]
 
 [[package]]
@@ -3073,7 +3073,7 @@ dependencies = [
  "solana-clock",
  "solana-instruction",
  "solana-instruction-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-sdk-ids",
  "solana-slot-hashes",
 ]
@@ -3142,7 +3142,7 @@ dependencies = [
  "solana-define-syscall 4.0.1",
  "solana-instruction",
  "solana-program-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-stable-layout",
 ]
 
@@ -3233,14 +3233,14 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337c246447142f660f778cf6cb582beba8e28deb05b3b24bfb9ffd7c562e5f41"
 dependencies = [
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
 ]
 
 [[package]]
 name = "solana-hash"
-version = "4.3.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1b113239362cee7093bfb250467138f079a2a03673181dc15bff6ccd677912d"
+checksum = "8064ea1d591ec791be95245058ca40f4f5345d390c200069d0f79bbf55bfae55"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
@@ -3253,16 +3253,16 @@ dependencies = [
 
 [[package]]
 name = "solana-instruction"
-version = "3.4.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ebb0ffd19263051bc3f683fcc086134b8ff23af894dcb63f7563c7137b42f1"
+checksum = "a97881335fc698deb46c6571945969aae6d93a14e2fff792a368b4fac872f116"
 dependencies = [
  "bincode",
  "serde",
  "serde_derive",
  "solana-define-syscall 5.0.0",
  "solana-instruction-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
 ]
 
 [[package]]
@@ -3377,7 +3377,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-address 2.6.0",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-sanitize",
  "solana-sdk-ids",
@@ -3417,7 +3417,7 @@ dependencies = [
  "solana-account-info",
  "solana-define-syscall 4.0.1",
  "solana-program-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
 ]
 
 [[package]]
@@ -3464,9 +3464,9 @@ dependencies = [
 
 [[package]]
 name = "solana-pubkey"
-version = "4.2.0"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db719574990de7e8b0f55a8593ac92a5ccb42c8ce67b3e4bf05b139d5d9ee71"
+checksum = "1b06bd918d60111ee1f97de817113e2040ca0cedb740099ee8d646233f6b906c"
 dependencies = [
  "solana-address 2.6.0",
 ]
@@ -3601,7 +3601,7 @@ checksum = "db7dc3011ea4c0334aaaa7e7128cb390ecf546b28d412e9bf2064680f57f588f"
 dependencies = [
  "sha2",
  "solana-define-syscall 4.0.1",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
 ]
 
 [[package]]
@@ -3615,9 +3615,9 @@ dependencies = [
 
 [[package]]
 name = "solana-signature"
-version = "3.4.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7a73c6e97cc2108be0adf6a6ea326434f8398df9d7eed81da2a4548b69e971c"
+checksum = "132a93134f1262aa832f1849b83bec6c9945669b866da18661a427943b9e801e"
 dependencies = [
  "ed25519-dalek",
  "five8",
@@ -3625,7 +3625,7 @@ dependencies = [
  "serde-big-array",
  "serde_derive",
  "solana-sanitize",
- "wincode",
+ "wincode 0.4.9",
 ]
 
 [[package]]
@@ -3647,7 +3647,7 @@ checksum = "2585f70191623887329dfb5078da3a00e15e3980ea67f42c2e10b07028419f43"
 dependencies = [
  "serde",
  "serde_derive",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-sdk-ids",
  "solana-sysvar-id",
 ]
@@ -3696,8 +3696,8 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "bincode",
  "bs58",
@@ -3705,10 +3705,10 @@ dependencies = [
  "protobuf-src",
  "serde",
  "solana-account-decoder",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-message",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-serde",
  "solana-signature",
  "solana-transaction",
@@ -3720,8 +3720,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 
 [[package]]
 name = "solana-system-interface"
@@ -3740,9 +3740,9 @@ dependencies = [
 
 [[package]]
 name = "solana-system-interface"
-version = "3.2.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55b54965bf0b76fa8e2b35376583efddd4d916618cfe595bf48c7d7b55a9e628"
+checksum = "a95a6f2e23ed861d6444ad4a6d6896c418d7d101b960787e65a8e33157cee81b"
 dependencies = [
  "num-traits",
  "serde",
@@ -3770,13 +3770,13 @@ dependencies = [
  "solana-epoch-rewards",
  "solana-epoch-schedule",
  "solana-fee-calculator",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-last-restart-slot",
  "solana-program-entrypoint",
  "solana-program-error",
  "solana-program-memory",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-rent 3.1.0",
  "solana-sdk-ids",
  "solana-sdk-macro",
@@ -3805,7 +3805,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-address 2.6.0",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-instruction-error",
  "solana-message",
@@ -3819,15 +3819,15 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "bincode",
  "serde",
  "solana-account",
  "solana-instruction",
  "solana-instructions-sysvar",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-rent 3.1.0",
  "solana-sbpf",
  "solana-sdk-ids",
@@ -3847,8 +3847,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3862,18 +3862,18 @@ dependencies = [
  "solana-account-decoder",
  "solana-address-lookup-table-interface",
  "solana-clock",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-loader-v2-interface",
  "solana-loader-v3-interface",
  "solana-message",
  "solana-program-option",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-reward-info",
  "solana-sdk-ids",
  "solana-signature",
  "solana-stake-interface",
- "solana-system-interface 3.2.0",
+ "solana-system-interface 3.1.0",
  "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
@@ -3889,8 +3889,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "4.0.0-rc.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-rc.0-triton-public#8bdf915914b7adeda1812880c1fafee0031de003"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
 dependencies = [
  "base64",
  "bincode",
@@ -3901,7 +3901,7 @@ dependencies = [
  "solana-commitment-config",
  "solana-instruction",
  "solana-message",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-reward-info",
  "solana-signature",
  "solana-transaction",
@@ -3924,16 +3924,16 @@ dependencies = [
  "serde_derive",
  "serde_with",
  "solana-clock",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-instruction",
  "solana-instruction-error",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-rent 4.0.0",
  "solana-sdk-ids",
  "solana-serde-varint",
  "solana-serialize-utils",
  "solana-short-vec",
- "solana-system-interface 3.2.0",
+ "solana-system-interface 3.1.0",
 ]
 
 [[package]]
@@ -4995,6 +4995,19 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "wincode"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "657690780ce23e6f66576a782ffd88eb353512381817029cc1d7a99154bb6d1f"
+dependencies = [
+ "pastey",
+ "proc-macro2",
+ "quote",
+ "thiserror 2.0.18",
+ "wincode-derive",
+]
+
+[[package]]
+name = "wincode"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4c754f1fc41250f2f742a27ba0fcc9f73df1dec23f6878490770855d43c322d"
@@ -5353,7 +5366,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.1.0"
+version = "13.1.0+solana.4.0.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -5371,7 +5384,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "12.3.0"
+version = "12.3.0+solana.4.0.0"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5386,8 +5399,8 @@ dependencies = [
  "log",
  "maplit",
  "serde_json",
- "solana-hash 4.3.0",
- "solana-pubkey 4.2.0",
+ "solana-hash 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-signature",
  "solana-transaction-status",
  "tokio",
@@ -5399,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "13.0.0-triton-ext"
+version = "13.0.0-triton-ext+solana.4.0.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -5436,11 +5449,11 @@ dependencies = [
  "solana-account",
  "solana-account-decoder",
  "solana-clock",
- "solana-hash 4.3.0",
+ "solana-hash 4.2.0",
  "solana-keypair",
  "solana-logger",
  "solana-message",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "solana-signature",
  "solana-signer",
  "solana-storage-proto",
@@ -5465,7 +5478,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.4.0"
+version = "12.4.0+solana.4.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5474,7 +5487,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rand",
  "siphasher",
- "solana-pubkey 4.2.0",
+ "solana-pubkey 4.1.0",
  "thiserror 2.0.18",
  "tonic",
  "tonic-prost",
