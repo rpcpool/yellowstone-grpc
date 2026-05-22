@@ -77,17 +77,17 @@ vergen = "9.0.6"
 tikv-jemallocator = "0.6.1"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder = "~4.0.0-rc.0"
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-account-decoder = "~4.0.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~4.0.0-rc.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "~4.0.0-rc.0"
-solana-transaction-status = "~4.0.0-rc.0"
+solana-storage-proto = { version = "~4.0.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "~4.0.0"
+solana-transaction-status = "~4.0.0"
 
 # Solana SDK
 solana-account = "3.4.0"
 solana-clock = "3.0.1"
-solana-hash = "4.2.0"
+solana-hash = "~4.2.0"
 solana-keypair = "3.1.0"
 solana-message = "3.1.0"
 solana-pubkey = "4.1.0"
@@ -110,16 +110,16 @@ missing_const_for_fn = "deny"
 trivially_copy_pass_by_ref = "deny"
 
 [patch.crates-io]
-agave-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-storage-proto = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
-agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
+agave-feature-set = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+agave-reserved-account-keys = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-account-decoder-client-types = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-storage-proto = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-svm-feature-set = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-transaction-context = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+solana-transaction-status-client-types = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-private", branch = "v4.0-triton-acc-updates" }
 
 [profile.release]
 lto = true

@@ -1,7 +1,7 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
+        ReplicaAccountInfoV4, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
         ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
         ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
@@ -199,7 +199,7 @@ pub struct MessageAccountInfo {
 }
 
 impl MessageAccountInfo {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaAccountInfoV4<'_>) -> Self {
         let shared = info.data.to_vec();
         let data = Bytes::from(shared);
         Self {
@@ -210,7 +210,7 @@ impl MessageAccountInfo {
             rent_epoch: info.rent_epoch,
             data,
             write_version: info.write_version,
-            txn_signature: info.txn.map(|txn| *txn.signature()),
+            txn_signature: info.txn_signature.map(|txn_signature| *txn_signature),
             pre_encoded: OnceLock::new(),
         }
     }
@@ -248,7 +248,7 @@ pub struct MessageAccount {
 }
 
 impl MessageAccount {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool) -> Self {
+    pub fn from_geyser(info: &ReplicaAccountInfoV4<'_>, slot: Slot, is_startup: bool) -> Self {
         Self {
             account: Arc::new(MessageAccountInfo::from_geyser(info)),
             slot,
