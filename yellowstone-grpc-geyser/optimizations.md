@@ -174,3 +174,54 @@ bounding cardinality.
 Tests (`src/metrics.rs`): cached increments match the old free helpers,
 last-session drop removes the series, series survives until the last shared
 session drops.
+
+### Layer 3 — optimization 2: relay sharded fan-out (factors #1 + #2)
+
+The single `broadcast` channel is replaced with one channel per commitment
+(`BroadcastProducer` / `BroadcastSubscriber`). The hot `processed` commitment is
+further split: the producer sends once to a *source* channel that wakes only
+`processed_fanout_shards` relay tasks (O(shards) on the producer's critical
+path); each relay re-broadcasts to its slice of subscribers on its own task, so
+the O(N) wake-all is parallelized across cores instead of serialized on
+`geyser_loop`. `confirmed`/`finalized` stay single channels (sparse
+populations). Each client subscribes only to its commitment's channel and
+resubscribes if it switches commitment, so the old per-message
+`commitment == filter.commitment` discard (factor #2) is gone.
+
+Because ~90% of subscribers sit on `processed`, splitting by commitment alone
+would cut wakeups only ~10%; the relay shards are what actually parallelize the
+dominant `processed` fan-out and keep producer-side latency flat as concurrent
+subscribers grow.
+
+Config:
+
+```jsonc
+"grpc": {
+  "processed_fanout_shards": 4  // 1 = a single transparent relay
+}
+```
+
+Semantics notes:
+- A commitment switch resubscribes at the new channel's tail — identical to
+  before for a client that is keeping up; the only divergence is a client
+  simultaneously *lagging and switching commitment* (it skips that channel's
+  backlog), a bounded, rare edge.
+- Under extreme runtime starvation a relay could lag the source and skip a few
+  messages for its shard; this is surfaced by the
+  `yellowstone_grpc_fanout_relay_lagged_total{shard}` counter. In normal
+  operation relays only do an `Arc` bump + send and never fall behind.
+
+Tests (`src/grpc.rs`): fan-out delivers every commitment's batches to all of its
+subscribers in order with no cross-commitment leakage (3 shards), single-shard
+ordering, and the existing half-close cancellation regression test (ported to
+the fan-out API).
+
+### How to compare
+
+1. Build and run the **layer-1** commit (unoptimized + profiling); capture the
+   `yellowstone_latency` lines under representative subscriber load.
+2. Build and run the **layer-3** tip (both optimizations + profiling) under the
+   same load; capture again.
+3. Compare `end_to_end` and `producer_send` percentiles (and
+   `client_queue_depth`) between the two runs. Optionally check the **layer-2**
+   commit in isolation to attribute the gain between the two optimizations.

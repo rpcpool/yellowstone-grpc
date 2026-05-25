@@ -351,7 +351,119 @@ impl SlotMessages {
     }
 }
 
-type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
+/// A pre-encoded batch of messages fanned out to subscribers. Each broadcast
+/// channel is dedicated to a single commitment level, so the commitment is
+/// implied by the channel and no longer travels with the payload.
+type FanoutPayload = Arc<Vec<(u64, Message)>>;
+
+/// Producer-side handle to the fan-out. Owned by `geyser_loop`; dropping it
+/// closes the channels and lets the relay tasks exit.
+///
+/// `processed` is the *source* channel: a single send wakes only the relay
+/// tasks (O(shards)), each of which re-broadcasts to its slice of subscribers
+/// on a separate task. `confirmed`/`finalized` are sent directly to their
+/// subscribers (these populations are small, so wake-all there is cheap).
+struct BroadcastProducer {
+    processed: broadcast::Sender<FanoutPayload>,
+    confirmed: broadcast::Sender<FanoutPayload>,
+    finalized: broadcast::Sender<FanoutPayload>,
+    latency: Arc<LatencyMetrics>,
+}
+
+impl BroadcastProducer {
+    /// Send a pre-encoded batch to its commitment channel, recording the time
+    /// spent in the send (the producer-side wake cost) into latency metrics.
+    fn send(&self, commitment: CommitmentLevel, payload: FanoutPayload) {
+        let sender = match commitment {
+            CommitmentLevel::Processed => &self.processed,
+            CommitmentLevel::Confirmed => &self.confirmed,
+            CommitmentLevel::Finalized => &self.finalized,
+        };
+        let started = Instant::now();
+        let _ = sender.send(payload);
+        self.latency.record_producer_send(started.elapsed());
+    }
+}
+
+/// Subscriber-side handle to the fan-out. Cloned into `GrpcService`; each new
+/// client subscribes through it for exactly its commitment level.
+///
+/// `processed` subscribers are spread across the relay shards round-robin so
+/// the per-message wake-all is split across `processed_shards.len()` tasks.
+#[derive(Debug, Clone)]
+struct BroadcastSubscriber {
+    processed_shards: Arc<[broadcast::Sender<FanoutPayload>]>,
+    confirmed: broadcast::Sender<FanoutPayload>,
+    finalized: broadcast::Sender<FanoutPayload>,
+    next_shard: Arc<AtomicUsize>,
+}
+
+impl BroadcastSubscriber {
+    fn subscribe(&self, commitment: CommitmentLevel) -> broadcast::Receiver<FanoutPayload> {
+        match commitment {
+            CommitmentLevel::Processed => {
+                let idx =
+                    self.next_shard.fetch_add(1, Ordering::Relaxed) % self.processed_shards.len();
+                self.processed_shards[idx].subscribe()
+            }
+            CommitmentLevel::Confirmed => self.confirmed.subscribe(),
+            CommitmentLevel::Finalized => self.finalized.subscribe(),
+        }
+    }
+}
+
+/// Build the producer/subscriber pair and spawn the `shards` relay tasks that
+/// bridge the processed source channel to the per-shard subscriber channels.
+fn build_message_broadcast(
+    capacity: usize,
+    shards: usize,
+    latency: Arc<LatencyMetrics>,
+    task_tracker: &TaskTracker,
+) -> (BroadcastProducer, BroadcastSubscriber) {
+    let shards = shards.max(1);
+
+    let (processed_source, _) = broadcast::channel::<FanoutPayload>(capacity);
+    let (confirmed, _) = broadcast::channel::<FanoutPayload>(capacity);
+    let (finalized, _) = broadcast::channel::<FanoutPayload>(capacity);
+
+    let mut processed_shards = Vec::with_capacity(shards);
+    for shard_id in 0..shards {
+        let (shard_tx, _) = broadcast::channel::<FanoutPayload>(capacity);
+        let relay_tx = shard_tx.clone();
+        let mut source_rx = processed_source.subscribe();
+        task_tracker.spawn(async move {
+            loop {
+                match source_rx.recv().await {
+                    // Thin pass-through: cloning the payload is just an Arc bump.
+                    Ok(payload) => {
+                        let _ = relay_tx.send(payload);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        metrics::incr_relay_lagged(shard_id, skipped);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            info!("processed fan-out relay #{shard_id} exiting");
+        });
+        processed_shards.push(shard_tx);
+    }
+
+    let producer = BroadcastProducer {
+        processed: processed_source,
+        confirmed: confirmed.clone(),
+        finalized: finalized.clone(),
+        latency,
+    };
+    let subscriber = BroadcastSubscriber {
+        processed_shards: processed_shards.into(),
+        confirmed,
+        finalized,
+        next_shard: Arc::new(AtomicUsize::new(0)),
+    };
+    (producer, subscriber)
+}
 
 enum ReplayedResponse {
     Messages(Vec<(u64, Message)>),
@@ -534,7 +646,7 @@ pub struct GrpcService {
     blocks_meta: Option<Arc<BlockMetaStorage>>,
     subscribe_id: Arc<AtomicUsize>,
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
-    broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    broadcast: BroadcastSubscriber,
     latency: Arc<LatencyMetrics>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -608,14 +720,21 @@ impl GrpcService {
             (Some(blocks_meta), Some(blocks_meta_tx))
         };
 
-        // Messages to clients combined by commitment
-        let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
-
         // Hot-path latency instrumentation (logs percentile summaries).
         let latency = LatencyMetrics::new(config.latency_metrics_interval_seconds > 0);
         Arc::clone(&latency).spawn_reporter(
             Duration::from_secs(config.latency_metrics_interval_seconds.max(1)),
             service_cancellation_token.child_token(),
+            &task_tracker,
+        );
+
+        // Per-commitment fan-out. The processed commitment is sharded across
+        // relay tasks so the producer's per-message wake cost is O(shards) and
+        // the O(N) wake-all is parallelized off the producer's critical path.
+        let (broadcast_producer, broadcast_subscriber) = build_message_broadcast(
+            config.channel_capacity,
+            config.processed_fanout_shards,
+            Arc::clone(&latency),
             &task_tracker,
         );
 
@@ -668,7 +787,7 @@ impl GrpcService {
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
-            broadcast_tx: broadcast_tx.clone(),
+            broadcast: broadcast_subscriber,
             latency: Arc::clone(&latency),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
@@ -700,8 +819,7 @@ impl GrpcService {
             Self::geyser_loop(
                 messages_rx,
                 blocks_meta_tx,
-                broadcast_tx,
-                latency,
+                broadcast_producer,
                 replay_stored_slots_rx,
                 replay_first_available_slot,
                 config.replay_stored_slots,
@@ -760,8 +878,7 @@ impl GrpcService {
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
-        broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-        latency: Arc<LatencyMetrics>,
+        broadcast: BroadcastProducer,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
@@ -1017,10 +1134,7 @@ impl GrpcService {
                             processed_messages.push(message.clone());
                             GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                             let encoded = parallel_encoder.encode(processed_messages).await;
-                            let send_started = Instant::now();
-                            let _ =
-                                broadcast_tx.send((CommitmentLevel::Processed, encoded.into()));
-                            latency.record_producer_send(send_started.elapsed());
+                            broadcast.send(CommitmentLevel::Processed, encoded.into());
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                             processed_sleep
                                 .as_mut()
@@ -1028,17 +1142,11 @@ impl GrpcService {
 
                             // confirmed
                             confirmed_messages.push(message.clone());
-                            let send_started = Instant::now();
-                            let _ =
-                                broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
-                            latency.record_producer_send(send_started.elapsed());
+                            broadcast.send(CommitmentLevel::Confirmed, confirmed_messages.into());
 
                             // finalized
                             finalized_messages.push(message);
-                            let send_started = Instant::now();
-                            let _ =
-                                broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
-                            latency.record_producer_send(send_started.elapsed());
+                            broadcast.send(CommitmentLevel::Finalized, finalized_messages.into());
                         } else {
                             let mut confirmed_messages = vec![];
                             let mut finalized_messages = vec![];
@@ -1064,10 +1172,7 @@ impl GrpcService {
                             {
                                 GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                                 let encoded = parallel_encoder.encode(processed_messages).await;
-                                let send_started = Instant::now();
-                                let _ = broadcast_tx
-                                    .send((CommitmentLevel::Processed, encoded.into()));
-                                latency.record_producer_send(send_started.elapsed());
+                                broadcast.send(CommitmentLevel::Processed, encoded.into());
                                 processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                                 processed_sleep
                                     .as_mut()
@@ -1075,17 +1180,11 @@ impl GrpcService {
                             }
 
                             if !confirmed_messages.is_empty() {
-                                let send_started = Instant::now();
-                                let _ =
-                                    broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
-                                latency.record_producer_send(send_started.elapsed());
+                                broadcast.send(CommitmentLevel::Confirmed, confirmed_messages.into());
                             }
 
                             if !finalized_messages.is_empty() {
-                                let send_started = Instant::now();
-                                let _ =
-                                    broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
-                                latency.record_producer_send(send_started.elapsed());
+                                broadcast.send(CommitmentLevel::Finalized, finalized_messages.into());
                             }
                         }
                     }
@@ -1094,9 +1193,7 @@ impl GrpcService {
                     if !processed_messages.is_empty() {
                         GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                         let encoded = parallel_encoder.encode(processed_messages).await;
-                        let send_started = Instant::now();
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, encoded.into()));
-                        latency.record_producer_send(send_started.elapsed());
+                        broadcast.send(CommitmentLevel::Processed, encoded.into());
                         processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
                     processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
@@ -1138,7 +1235,7 @@ impl GrpcService {
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
-        mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        broadcast: BroadcastSubscriber,
         latency: Arc<LatencyMetrics>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -1158,6 +1255,14 @@ impl GrpcService {
         );
         let cancellation_token = session.cancellation_token.clone();
         let latency_enabled = latency.enabled();
+
+        // Subscribe to the fan-out for the session's current commitment. The
+        // session starts on the default (processed) commitment, matching where
+        // the single broadcast receiver used to be created, so the receiver
+        // buffers during snapshot exactly as before. The subscription is moved
+        // to another commitment's channel only if the client later selects one.
+        let mut current_commitment = session.filter.get_commitment_level();
+        let mut messages_rx = broadcast.subscribe(current_commitment);
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{id}: snapshot requested");
@@ -1192,6 +1297,13 @@ impl GrpcService {
             info!("client #{id}: no snapshot requested");
         }
 
+        // The snapshot path may have installed the client's real filter; align
+        // the fan-out subscription with its commitment before going live.
+        if session.filter.get_commitment_level() != current_commitment {
+            current_commitment = session.filter.get_commitment_level();
+            messages_rx = broadcast.subscribe(current_commitment);
+        }
+
         'outer: loop {
             let queue_depth = stream_tx.queue_size();
             session.metrics.set_queue_size(queue_depth);
@@ -1223,6 +1335,18 @@ impl GrpcService {
                         Some(Some((from_slot, filter_new))) => {
                             session.set_filter(filter_new);
                             info!("client #{id}: filter updated");
+
+                            // Re-point the fan-out subscription if the client
+                            // switched commitment. Resubscribing starts at the
+                            // new channel's tail; for a client that is keeping
+                            // up this is identical to before, and the only
+                            // divergence is a client simultaneously lagging and
+                            // switching commitment (it skips that channel's
+                            // backlog) — a bounded, rare edge.
+                            if session.filter.get_commitment_level() != current_commitment {
+                                current_commitment = session.filter.get_commitment_level();
+                                messages_rx = broadcast.subscribe(current_commitment);
+                            }
 
                             if let Some(from_slot) = from_slot {
                                 let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
@@ -1297,8 +1421,11 @@ impl GrpcService {
                     }
                 }
                 message = messages_rx.recv() => {
-                    let (commitment, messages) = match message {
-                        Ok((commitment, messages)) => (commitment, messages),
+                    // Each shard/channel carries a single commitment, so the
+                    // batch is already for `current_commitment`; no per-message
+                    // commitment check is needed.
+                    let messages = match message {
+                        Ok(messages) => messages,
                         Err(broadcast::error::RecvError::Closed) => {
                             session.disconnect_reason = "broadcast_closed";
                             break 'outer;
@@ -1313,41 +1440,39 @@ impl GrpcService {
                         }
                     };
 
-                    if commitment == session.filter.get_commitment_level() {
-                        for (_msgid, message) in messages.iter() {
-                            if latency_enabled {
-                                latency.record_end_to_end(message.created_at());
-                            }
-                            let fe_start = latency_enabled.then(Instant::now);
-                            let updates = session.filter.get_updates(message, Some(commitment));
-                            if let Some(started) = fe_start {
-                                latency.record_filter_encode(started.elapsed());
-                            }
-                            for message in updates {
-                                let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
-                                match stream_tx.try_send(Ok(message)) {
-                                    Ok(()) => {
-                                        session.metrics.record_sent(proto_size);
-                                    }
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        error!("client #{id}: lagged to send an update");
-                                        task_tracker.spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                        });
-                                        session.disconnect_reason = "client_channel_full";
-                                        break 'outer;
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("client #{id}: stream closed");
-                                        session.disconnect_reason = "client_closed";
-                                        break 'outer;
-                                    }
+                    for (_msgid, message) in messages.iter() {
+                        if latency_enabled {
+                            latency.record_end_to_end(message.created_at());
+                        }
+                        let fe_start = latency_enabled.then(Instant::now);
+                        let updates = session.filter.get_updates(message, Some(current_commitment));
+                        if let Some(started) = fe_start {
+                            latency.record_filter_encode(started.elapsed());
+                        }
+                        for update in updates {
+                            let proto_size = update.encoded_len().min(u32::MAX as usize) as u32;
+                            match stream_tx.try_send(Ok(update)) {
+                                Ok(()) => {
+                                    session.metrics.record_sent(proto_size);
+                                }
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    error!("client #{id}: lagged to send an update");
+                                    task_tracker.spawn(async move {
+                                        let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                    });
+                                    session.disconnect_reason = "client_channel_full";
+                                    break 'outer;
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    error!("client #{id}: stream closed");
+                                    session.disconnect_reason = "client_closed";
+                                    break 'outer;
                                 }
                             }
                         }
                     }
 
-                    if commitment == CommitmentLevel::Processed && session.debug_client_tx.is_some() {
+                    if current_commitment == CommitmentLevel::Processed && session.debug_client_tx.is_some() {
                         for message in messages.iter() {
                             if let Message::Slot(slot_message) = &message.1 {
                                 DebugClientMessage::maybe_send(&session.debug_client_tx, || DebugClientMessage::UpdateSlot { id, slot: slot_message.slot });
@@ -1717,7 +1842,7 @@ impl Geyser for GrpcService {
             stream_tx,
             client_rx,
             snapshot_rx,
-            self.broadcast_tx.subscribe(),
+            self.broadcast.clone(),
             Arc::clone(&self.latency),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
@@ -1905,7 +2030,8 @@ mod tests {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
         let st: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
-        let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
+        let (broadcast_producer, broadcast_subscriber) =
+            build_message_broadcast(16, 1, LatencyMetrics::new(false), &tt);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
         let (half_close_tx, half_close_rx) = oneshot::channel();
@@ -1926,7 +2052,7 @@ mod tests {
             stream_tx,
             client_rx,
             None,
-            broadcast_tx.subscribe(),
+            broadcast_subscriber,
             LatencyMetrics::new(false),
             None,
             None,
@@ -1955,7 +2081,7 @@ mod tests {
             dead_error: None,
             created_at: Timestamp::from(SystemTime::now()),
         });
-        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(vec![(1, msg)])));
+        broadcast_producer.send(CommitmentLevel::Processed, Arc::new(vec![(1, msg)]));
 
         tokio::time::timeout(Duration::from_secs(2), handle)
             .await
@@ -1963,6 +2089,86 @@ mod tests {
             .expect("client_loop panicked");
 
         assert!(ct.is_cancelled());
+    }
+
+    fn fanout_batch(seq: u64) -> FanoutPayload {
+        let msg = Message::Slot(MessageSlot {
+            slot: seq,
+            parent: None,
+            status: SlotStatus::Processed,
+            dead_error: None,
+            created_at: Timestamp::from(SystemTime::now()),
+        });
+        Arc::new(vec![(seq, msg)])
+    }
+
+    async fn recv_seq(rx: &mut broadcast::Receiver<FanoutPayload>) -> u64 {
+        let payload = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("fan-out recv timed out")
+            .expect("fan-out recv error");
+        payload[0].0
+    }
+
+    // Regression test for the relay sharded fan-out: every subscriber of a
+    // commitment must receive *every* batch emitted for that commitment, in
+    // emission order, and must never receive another commitment's batches.
+    // This is the invariant the old single-channel + `commitment ==` check
+    // enforced, now upheld by per-commitment channels and the relay shards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fanout_delivers_each_commitment_to_all_subscribers_in_order() {
+        let tt = TaskTracker::new();
+        let (producer, subscriber) =
+            build_message_broadcast(64, 3, LatencyMetrics::new(false), &tt);
+
+        // Four processed subscribers spread round-robin across the 3 shards.
+        let mut processed: Vec<_> = (0..4)
+            .map(|_| subscriber.subscribe(CommitmentLevel::Processed))
+            .collect();
+        let mut confirmed = subscriber.subscribe(CommitmentLevel::Confirmed);
+        let mut finalized = subscriber.subscribe(CommitmentLevel::Finalized);
+
+        for seq in 0..5u64 {
+            producer.send(CommitmentLevel::Processed, fanout_batch(seq));
+        }
+        producer.send(CommitmentLevel::Confirmed, fanout_batch(100));
+        producer.send(CommitmentLevel::Finalized, fanout_batch(200));
+
+        // Every processed subscriber, regardless of shard, sees all 5 batches
+        // in order.
+        for rx in processed.iter_mut() {
+            for expected in 0..5u64 {
+                assert_eq!(recv_seq(rx).await, expected);
+            }
+        }
+
+        // Confirmed/finalized subscribers see only their own commitment.
+        assert_eq!(recv_seq(&mut confirmed).await, 100);
+        assert_eq!(recv_seq(&mut finalized).await, 200);
+        assert!(
+            confirmed.try_recv().is_err(),
+            "confirmed channel leaked another commitment's batch"
+        );
+        assert!(
+            finalized.try_recv().is_err(),
+            "finalized channel leaked another commitment's batch"
+        );
+    }
+
+    // A single shard (processed_fanout_shards = 1) still delivers everything in
+    // order — the relay is a transparent pass-through.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fanout_single_shard_preserves_order() {
+        let tt = TaskTracker::new();
+        let (producer, subscriber) =
+            build_message_broadcast(64, 1, LatencyMetrics::new(false), &tt);
+        let mut rx = subscriber.subscribe(CommitmentLevel::Processed);
+        for seq in 0..10u64 {
+            producer.send(CommitmentLevel::Processed, fanout_batch(seq));
+        }
+        for expected in 0..10u64 {
+            assert_eq!(recv_seq(&mut rx).await, expected);
+        }
     }
 
     #[tokio::test]

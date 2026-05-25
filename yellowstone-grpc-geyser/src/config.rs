@@ -341,6 +341,15 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub encoder_threads: usize,
+    /// Number of parallel fan-out relay shards for the `processed` commitment.
+    /// The producer broadcasts once to the relays (O(shards)); each relay
+    /// re-broadcasts to its slice of subscribers on a separate task, keeping the
+    /// O(N) wake-all off the single producer thread. `1` keeps a single relay.
+    #[serde(
+        default = "ConfigGrpc::processed_fanout_shards_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub processed_fanout_shards: usize,
     /// Interval, in seconds, for emitting hot-path latency percentile logs to
     /// the `yellowstone_latency` log target. `0` disables latency instrumentation.
     #[serde(
@@ -409,6 +418,10 @@ impl ConfigGrpc {
     }
 
     const fn encoder_threads_default() -> usize {
+        4
+    }
+
+    const fn processed_fanout_shards_default() -> usize {
         4
     }
 

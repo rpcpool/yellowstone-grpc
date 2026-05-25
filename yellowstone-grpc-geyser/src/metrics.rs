@@ -182,6 +182,14 @@ lazy_static::lazy_static! {
         ),
         &["event"]
     ).unwrap();
+
+    static ref GRPC_FANOUT_RELAY_LAGGED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_fanout_relay_lagged_total",
+            "Messages skipped by a processed fan-out relay because it lagged the producer"
+        ),
+        &["shard"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -343,6 +351,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
+            register!(GRPC_FANOUT_RELAY_LAGGED);
 
             VERSION
                 .with_label_values(&[
@@ -567,6 +576,12 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
         .inc();
 }
 
+pub fn incr_relay_lagged(shard: usize, skipped: u64) {
+    GRPC_FANOUT_RELAY_LAGGED
+        .with_label_values(&[shard.to_string().as_str()])
+        .inc_by(skipped);
+}
+
 /// Live-session refcount per `subscriber_id`. A subscriber id can be shared
 /// across concurrent connections (via the `x-subscription-id` header), so the
 /// per-subscriber metric series is only removed when the *last* session for
@@ -741,6 +756,7 @@ pub fn reset_metrics() {
     PRE_ENCODED_CACHE_MISS.reset();
 
     GEYSER_EVENT_DROPPED.reset();
+    GRPC_FANOUT_RELAY_LAGGED.reset();
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
