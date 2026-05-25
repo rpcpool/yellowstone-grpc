@@ -1,5 +1,6 @@
 pub mod config;
 pub mod grpc;
+pub mod latency;
 pub mod metered;
 pub mod metrics;
 pub mod parallel;

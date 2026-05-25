@@ -1,6 +1,7 @@
 use {
     crate::{
         config::{ConfigGrpc, GrpcAddress},
+        latency::LatencyMetrics,
         metered::MeteredLayer,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
@@ -529,6 +530,7 @@ pub struct GrpcService {
     subscribe_id: Arc<AtomicUsize>,
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    latency: Arc<LatencyMetrics>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -603,6 +605,15 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
+        // Hot-path latency instrumentation (logs percentile summaries).
+        let latency = LatencyMetrics::new(config.latency_metrics_interval_seconds > 0);
+        Arc::clone(&latency).spawn_reporter(
+            Duration::from_secs(config.latency_metrics_interval_seconds.max(1)),
+            service_cancellation_token.child_token(),
+            &task_tracker,
+        );
+
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {
                 (None, None, None)
@@ -653,6 +664,7 @@ impl GrpcService {
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast_tx: broadcast_tx.clone(),
+            latency: Arc::clone(&latency),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
@@ -684,6 +696,7 @@ impl GrpcService {
                 messages_rx,
                 blocks_meta_tx,
                 broadcast_tx,
+                latency,
                 replay_stored_slots_rx,
                 replay_first_available_slot,
                 config.replay_stored_slots,
@@ -738,10 +751,12 @@ impl GrpcService {
         Ok((snapshot_tx, messages_tx))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+        latency: Arc<LatencyMetrics>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
@@ -997,8 +1012,10 @@ impl GrpcService {
                             processed_messages.push(message.clone());
                             GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                             let encoded = parallel_encoder.encode(processed_messages).await;
+                            let send_started = Instant::now();
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Processed, encoded.into()));
+                            latency.record_producer_send(send_started.elapsed());
                             processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                             processed_sleep
                                 .as_mut()
@@ -1006,13 +1023,17 @@ impl GrpcService {
 
                             // confirmed
                             confirmed_messages.push(message.clone());
+                            let send_started = Instant::now();
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
+                            latency.record_producer_send(send_started.elapsed());
 
                             // finalized
                             finalized_messages.push(message);
+                            let send_started = Instant::now();
                             let _ =
                                 broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
+                            latency.record_producer_send(send_started.elapsed());
                         } else {
                             let mut confirmed_messages = vec![];
                             let mut finalized_messages = vec![];
@@ -1038,8 +1059,10 @@ impl GrpcService {
                             {
                                 GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                                 let encoded = parallel_encoder.encode(processed_messages).await;
+                                let send_started = Instant::now();
                                 let _ = broadcast_tx
                                     .send((CommitmentLevel::Processed, encoded.into()));
+                                latency.record_producer_send(send_started.elapsed());
                                 processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                                 processed_sleep
                                     .as_mut()
@@ -1047,13 +1070,17 @@ impl GrpcService {
                             }
 
                             if !confirmed_messages.is_empty() {
+                                let send_started = Instant::now();
                                 let _ =
                                     broadcast_tx.send((CommitmentLevel::Confirmed, confirmed_messages.into()));
+                                latency.record_producer_send(send_started.elapsed());
                             }
 
                             if !finalized_messages.is_empty() {
+                                let send_started = Instant::now();
                                 let _ =
                                     broadcast_tx.send((CommitmentLevel::Finalized, finalized_messages.into()));
+                                latency.record_producer_send(send_started.elapsed());
                             }
                         }
                     }
@@ -1062,7 +1089,9 @@ impl GrpcService {
                     if !processed_messages.is_empty() {
                         GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
                         let encoded = parallel_encoder.encode(processed_messages).await;
+                        let send_started = Instant::now();
                         let _ = broadcast_tx.send((CommitmentLevel::Processed, encoded.into()));
+                        latency.record_producer_send(send_started.elapsed());
                         processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
                     processed_sleep.as_mut().reset(Instant::now() + PROCESSED_MESSAGES_SLEEP);
@@ -1105,6 +1134,7 @@ impl GrpcService {
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
+        latency: Arc<LatencyMetrics>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
@@ -1122,6 +1152,7 @@ impl GrpcService {
             subscription_tracker,
         );
         let cancellation_token = session.cancellation_token.clone();
+        let latency_enabled = latency.enabled();
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{id}: snapshot requested");
@@ -1157,7 +1188,9 @@ impl GrpcService {
         }
 
         'outer: loop {
-            set_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size());
+            let queue_depth = stream_tx.queue_size();
+            set_subscriber_queue_size(&session.subscriber_id, queue_depth);
+            latency.record_queue_depth(queue_depth);
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -1278,7 +1311,15 @@ impl GrpcService {
 
                     if commitment == session.filter.get_commitment_level() {
                         for (_msgid, message) in messages.iter() {
-                            for message in session.filter.get_updates(message, Some(commitment)) {
+                            if latency_enabled {
+                                latency.record_end_to_end(message.created_at());
+                            }
+                            let fe_start = latency_enabled.then(Instant::now);
+                            let updates = session.filter.get_updates(message, Some(commitment));
+                            if let Some(started) = fe_start {
+                                latency.record_filter_encode(started.elapsed());
+                            }
+                            for message in updates {
                                 let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                 match stream_tx.try_send(Ok(message)) {
                                     Ok(()) => {
@@ -1674,6 +1715,7 @@ impl Geyser for GrpcService {
             client_rx,
             snapshot_rx,
             self.broadcast_tx.subscribe(),
+            Arc::clone(&self.latency),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
             maybe_remote_peer_sk_addr,
@@ -1882,6 +1924,7 @@ mod tests {
             client_rx,
             None,
             broadcast_tx.subscribe(),
+            LatencyMetrics::new(false),
             None,
             None,
             None,

@@ -103,3 +103,54 @@ specifically.
   per-`subscriber_id` metrics in `ClientSession::drop` (factor #5).
 - **Reconsider the fixed thread pool** sizing relative to expected
   subscriber × message-rate load (factor #3).
+
+## Implementation
+
+The changes land in three layers so the optimizations can be A/B tested against
+a baseline: **(1) latency profiling**, **(2) optimization 1**, **(3)
+optimization 2**, each a separate commit. Layer 1 is wired into the *unoptimized*
+code so the current latencies can be recorded first; layers 2 and 3 are then
+measured the same way and compared.
+
+### Layer 1 — hot-path latency profiling (`src/latency.rs`)
+
+Lock-free atomic histograms record four hot-path measure points; a background
+reporter emits one JSON line per metric every `latency_metrics_interval_seconds`
+to the `yellowstone_latency` log target. Recording short-circuits on a single
+atomic load when disabled (`latency_metrics_interval_seconds = 0`), so it is safe
+to leave compiled into both the unoptimized and optimized builds.
+
+| metric | unit | where | meaning |
+|---|---|---|---|
+| `end_to_end` | microseconds | client loop | geyser `created_at` → just before client send |
+| `producer_send` | microseconds | geyser loop | time in one broadcast send (the wake-all cost, factor #1) |
+| `filter_encode` | microseconds | client loop | `Filter::get_updates` per message (factor #3) |
+| `client_queue_depth` | items | client loop | outbound queue depth (per-client backpressure) |
+
+Log line schema (NDJSON — one object per metric per window):
+
+```json
+{"ts_ms":1716480000000,"metric":"end_to_end","unit":"microseconds","window_secs":10.0,"count":12345,"p50":120,"p90":480,"p99":2000,"max":15000,"mean":210.50}
+```
+
+Capture for offline rendering:
+
+```sh
+grep yellowstone_latency plugin.log | sed 's/.*yellowstone_latency[^{]*//' > latency.ndjson
+```
+
+The renderer reads `ts_ms` as the x-axis and plots `p50`/`p90`/`p99`/`max` per
+`metric`. Run the **unoptimized** build first to capture the baseline, then the
+optimized build, and compare the same metrics.
+
+Config:
+
+```jsonc
+"grpc": {
+  "latency_metrics_interval_seconds": 10  // 0 disables latency logging
+}
+```
+
+Tests (`src/latency.rs`): histogram percentile correctness, max-capping,
+overflow, reset-between-windows, enabled/disabled gating, future-timestamp
+clamping, JSON shape.

@@ -586,6 +586,20 @@ impl Message {
         }
     }
 
+    /// Geyser ingestion timestamp of the underlying message, used to measure
+    /// end-to-end streaming latency.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn created_at(&self) -> &Timestamp {
+        match self {
+            Self::Slot(msg) => &msg.created_at,
+            Self::Account(msg) => &msg.created_at,
+            Self::Transaction(msg) => &msg.created_at,
+            Self::Entry(msg) => &msg.created_at,
+            Self::BlockMeta(msg) => &msg.created_at,
+            Self::Block(msg) => &msg.created_at,
+        }
+    }
+
     pub fn from_update_oneof(
         oneof: UpdateOneof,
         created_at: Timestamp,

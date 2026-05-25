@@ -341,6 +341,13 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub encoder_threads: usize,
+    /// Interval, in seconds, for emitting hot-path latency percentile logs to
+    /// the `yellowstone_latency` log target. `0` disables latency instrumentation.
+    #[serde(
+        default = "ConfigGrpc::latency_metrics_interval_seconds_default",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub latency_metrics_interval_seconds: u64,
     #[serde(default)]
     pub server_http2_adaptive_window: Option<bool>,
     #[serde(default, with = "humantime_serde")]
@@ -403,6 +410,10 @@ impl ConfigGrpc {
 
     const fn encoder_threads_default() -> usize {
         4
+    }
+
+    const fn latency_metrics_interval_seconds_default() -> u64 {
+        10
     }
 }
 
