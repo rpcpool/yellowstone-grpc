@@ -154,3 +154,23 @@ Config:
 Tests (`src/latency.rs`): histogram percentile correctness, max-capping,
 overflow, reset-between-windows, enabled/disabled gating, future-timestamp
 clamping, JSON shape.
+
+### Layer 2 — optimization 1: cached metric handles + bounded cardinality (factors #4 + #5)
+
+`metrics::SubscriberMetrics` resolves the `IntCounter`/`IntGauge` handles once
+per session instead of calling `with_label_values` (label hash + shared-map
+read-lock) on every message and on every loop iteration. On the last session for
+a `subscriber_id`, the per-subscriber series are removed via
+`remove_label_values`, bounding metric cardinality across subscriber churn (the
+"degrades over time" mechanism, factor #5). A refcount handles ids shared across
+concurrent connections; handles for identical labels point at the same
+underlying metric, so increments are byte-for-byte what the free helpers
+produced — pure win, no semantic change.
+
+Tradeoff: removing a counter series on last-disconnect resets it if the
+subscriber reconnects (`rate()` tolerates this); that is the accepted cost of
+bounding cardinality.
+
+Tests (`src/metrics.rs`): cached increments match the old free helpers,
+last-session drop removes the series, series survives until the last shared
+session drops.

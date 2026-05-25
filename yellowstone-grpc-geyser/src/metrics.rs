@@ -24,7 +24,7 @@ use {
     std::{
         collections::{hash_map::Entry as HashMapEntry, HashMap},
         convert::Infallible,
-        sync::{Arc, Once},
+        sync::{Arc, LazyLock, Mutex, Once},
     },
     tokio::{
         net::TcpListener,
@@ -567,6 +567,82 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
         .inc();
 }
 
+/// Live-session refcount per `subscriber_id`. A subscriber id can be shared
+/// across concurrent connections (via the `x-subscription-id` header), so the
+/// per-subscriber metric series is only removed when the *last* session for
+/// that id is dropped.
+static SUBSCRIBER_METRIC_REFCOUNT: LazyLock<Mutex<HashMap<String, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Per-subscriber metric handles resolved once per session.
+///
+/// Calling `with_label_values` per message does a label hash plus a read-lock
+/// on the shared metric map; resolving the `IntCounter`/`IntGauge` handles once
+/// and reusing them removes that cost from the hot path. On drop, the label
+/// series is removed once the last session for the subscriber id is gone, which
+/// bounds metric cardinality as subscribers churn over time.
+///
+/// Handles resolved for identical labels point at the same underlying metric,
+/// so two sessions sharing a `subscriber_id` aggregate into one series exactly
+/// as the free `with_label_values` helpers did.
+pub struct SubscriberMetrics {
+    subscriber_id: String,
+    messages_sent: IntCounter,
+    bytes_sent: IntCounter,
+    queue_size: IntGauge,
+}
+
+impl SubscriberMetrics {
+    pub fn new(subscriber_id: &str) -> Self {
+        *SUBSCRIBER_METRIC_REFCOUNT
+            .lock()
+            .expect("SUBSCRIBER_METRIC_REFCOUNT poisoned")
+            .entry(subscriber_id.to_owned())
+            .or_insert(0) += 1;
+
+        Self {
+            subscriber_id: subscriber_id.to_owned(),
+            messages_sent: GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id]),
+            bytes_sent: GRPC_BYTES_SENT.with_label_values(&[subscriber_id]),
+            queue_size: GRPC_SUBSCRIBER_QUEUE_SIZE.with_label_values(&[subscriber_id]),
+        }
+    }
+
+    #[inline]
+    pub fn record_sent(&self, proto_size: u32) {
+        self.messages_sent.inc();
+        self.bytes_sent.inc_by(proto_size as u64);
+    }
+
+    #[inline]
+    pub fn set_queue_size(&self, size: u64) {
+        self.queue_size.set(size as i64);
+    }
+}
+
+impl Drop for SubscriberMetrics {
+    fn drop(&mut self) {
+        let mut refcount = SUBSCRIBER_METRIC_REFCOUNT
+            .lock()
+            .expect("SUBSCRIBER_METRIC_REFCOUNT poisoned");
+        let last_session = match refcount.get_mut(&self.subscriber_id) {
+            Some(count) => {
+                *count = count.saturating_sub(1);
+                *count == 0
+            }
+            None => true,
+        };
+        if last_session {
+            refcount.remove(&self.subscriber_id);
+            drop(refcount); // release the lock before touching prometheus maps
+            let labels = [self.subscriber_id.as_str()];
+            let _ = GRPC_MESSAGE_SENT.remove_label_values(&labels);
+            let _ = GRPC_BYTES_SENT.remove_label_values(&labels);
+            let _ = GRPC_SUBSCRIBER_QUEUE_SIZE.remove_label_values(&labels);
+        }
+    }
+}
+
 pub fn pre_encoded_cache_hit(msg_type: &str) {
     PRE_ENCODED_CACHE_HIT.with_label_values(&[msg_type]).inc();
 }
@@ -669,4 +745,61 @@ pub fn reset_metrics() {
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()
+}
+
+#[cfg(test)]
+mod subscriber_metrics_tests {
+    use super::*;
+
+    // Cached handles must produce exactly the same series increments as the
+    // per-message `with_label_values` free helpers they replace.
+    #[test]
+    fn record_sent_and_queue_size_update_the_shared_series() {
+        let id = "subscriber-metrics-record";
+        let metrics = SubscriberMetrics::new(id);
+
+        metrics.record_sent(10);
+        metrics.record_sent(5);
+        metrics.set_queue_size(42);
+
+        assert_eq!(GRPC_MESSAGE_SENT.with_label_values(&[id]).get(), 2);
+        assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 15);
+        assert_eq!(GRPC_SUBSCRIBER_QUEUE_SIZE.with_label_values(&[id]).get(), 42);
+    }
+
+    // Dropping the last session for an id removes the per-subscriber series,
+    // bounding cardinality. A re-created handle therefore starts from zero.
+    #[test]
+    fn last_session_drop_removes_series() {
+        let id = "subscriber-metrics-cleanup";
+        {
+            let metrics = SubscriberMetrics::new(id);
+            metrics.record_sent(7);
+            assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 7);
+        }
+        // Series was removed on drop; recreating resolves a fresh zero series.
+        let _metrics = SubscriberMetrics::new(id);
+        assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 0);
+    }
+
+    // While more than one session shares a subscriber id, the series must
+    // survive until the *last* one drops.
+    #[test]
+    fn series_survives_until_last_shared_session_drops() {
+        let id = "subscriber-metrics-refcount";
+        let first = SubscriberMetrics::new(id);
+        first.record_sent(3);
+        let second = SubscriberMetrics::new(id);
+
+        drop(first);
+        // One session still alive: series retained.
+        assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 3);
+
+        second.record_sent(4);
+        assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 7);
+
+        drop(second);
+        // Last session gone: series removed, recreated at zero.
+        assert_eq!(GRPC_BYTES_SENT.with_label_values(&[id]).get(), 0);
+    }
 }
