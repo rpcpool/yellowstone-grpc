@@ -532,6 +532,7 @@ fn js_subscribe_deshred_request_conversion_preserves_vote_false_and_ping() {
   let js_subscribe_deshred_request_value = JsSubscribeDeshredRequest {
     deshred_transactions,
     ping: Some(JsSubscribeRequestPing { id: 17 }),
+    slots: None,
   };
 
   let protobuf_subscribe_deshred_request_value = js_subscribe_deshred_request_value
@@ -563,6 +564,7 @@ fn js_subscribe_update_deshred_update_oneof_accepts_deshred_transaction_variant(
       }),
       ping: None,
       pong: None,
+      slot: None,
     };
 
   let protobuf_update_oneof_value = js_update_oneof_value.from_js_to_protobuf_type().unwrap();
@@ -582,6 +584,7 @@ fn js_subscribe_update_deshred_update_oneof_rejects_multiple_variants() {
       }),
       ping: Some(JsSubscribeUpdatePing {}),
       pong: None,
+      slot: None,
     };
 
   let conversion_error = js_update_oneof_value
@@ -593,6 +596,28 @@ fn js_subscribe_update_deshred_update_oneof_rejects_multiple_variants() {
     conversion_error.cause.is_some(),
     "expected cause on oneof validation error"
   );
+}
+
+#[test]
+fn js_subscribe_update_deshred_update_oneof_accepts_slot_variant() {
+  let js_update_oneof_value: JsSubscribeUpdateDeshredUpdateOneof<'static> =
+    JsSubscribeUpdateDeshredUpdateOneof {
+      deshred_transaction: None,
+      ping: None,
+      pong: None,
+      slot: Some(JsSubscribeUpdateSlot {
+        slot: "42".to_string(),
+        parent: Some("41".to_string()),
+        status: 0,
+        dead_error: None,
+      }),
+    };
+
+  let protobuf_update_oneof_value = js_update_oneof_value.from_js_to_protobuf_type().unwrap();
+  assert!(matches!(
+    protobuf_update_oneof_value,
+    subscribe_update_deshred::UpdateOneof::Slot(value) if value.slot == 42
+  ));
 }
 
 #[test]

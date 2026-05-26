@@ -274,6 +274,8 @@ mod tests {
       transaction: None,
       loaded_writable_addresses: Vec::new(),
       loaded_readonly_addresses: Vec::new(),
+      completed_data_set_starting_shred_index: 0,
+      completed_data_set_ending_shred_index_exclusive: 0,
     }
     .encode_to_vec();
 

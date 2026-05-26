@@ -653,6 +653,7 @@ mod tests {
     JsSubscribeDeshredRequest {
       deshred_transactions: HashMap::new(),
       ping: None,
+      slots: None,
     }
   }
 
@@ -1259,6 +1260,7 @@ mod tests {
     let request = SubscribeDeshredRequest {
       deshred_transactions,
       ping: None,
+      slots: HashMap::new(),
     };
 
     stream
@@ -1291,6 +1293,7 @@ mod tests {
     let request = JsSubscribeDeshredRequest {
       deshred_transactions,
       ping: Some(JsSubscribeRequestPing { id: 99 }),
+      slots: None,
     };
 
     stream
@@ -1398,6 +1401,7 @@ mod tests {
         SubscribeDeshredRequest {
           deshred_transactions: HashMap::new(),
           ping: None,
+          slots: HashMap::new(),
         }
         .encode_to_vec(),
       ))

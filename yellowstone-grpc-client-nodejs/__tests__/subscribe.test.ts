@@ -265,6 +265,7 @@ function makeComprehensiveSubscribeRequest(): SubscribeRequest {
 function makeMinimalSubscribeDeshredRequest(): SubscribeDeshredRequest {
   return {
     deshredTransactions: {},
+    slots: {},
   };
 }
 
@@ -934,6 +935,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
         },
       },
       ping: { id: 11 },
+      slots: {},
     };
 
     const writeError = await writeAndCaptureError(stream, request);
@@ -958,7 +960,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     await closeStreamAndWait(stream);
   });
 
-  test("deshred write: normalizes vote='false' string without mutating request object", async () => {
+  test("deshred write: rejects vote='false' string without mutating request object", async () => {
     const nativeWriteRaw = jest.fn();
     const stream = new ClientDeshredDuplexStream(
       {
@@ -984,11 +986,11 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const requestBeforeWrite = JSON.parse(JSON.stringify(request));
 
     const writeError = await writeAndCaptureError(stream, request);
-    expect(writeError).toBeNull();
-
-    const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
-    const decoded = geyser.SubscribeDeshredRequest.decode(forwardedBytes);
-    expect(decoded.deshredTransactions.client.vote).toBe(false);
+    expect(writeError).not.toBeNull();
+    expect(String(writeError?.message ?? "")).toContain(
+      "Invalid deshredTransactions.client.vote",
+    );
+    expect(nativeWriteRaw).toHaveBeenCalledTimes(0);
 
     expect(request).toEqual(requestBeforeWrite);
 
@@ -1279,6 +1281,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
           accountRequired: [],
         },
       },
+      slots: {},
     };
 
     const writeError = await writeAndCaptureError(stream, request);
@@ -1488,6 +1491,7 @@ describe("Concurrent subscriptions with unary calls", () => {
             },
           },
           ping: { id: 101 },
+          slots: {},
         };
 
         expect(
@@ -1535,6 +1539,7 @@ describe("Concurrent subscriptions with unary calls", () => {
             },
           },
           ping: { id: 201 },
+          slots: {},
         };
 
         expect(
@@ -2520,6 +2525,7 @@ describe("subscribeDeshred response schema tests", () => {
   function baseSubscribeDeshredRequest(): SubscribeDeshredRequest {
     return {
       deshredTransactions: {},
+      slots: {},
     };
   }
 
@@ -2597,6 +2603,7 @@ describe("subscribeDeshred response schema tests", () => {
               accountRequired: [],
             },
           },
+          slots: {},
         };
 
         const writeError = await writeAndWaitCallback(stream, request);
@@ -2622,6 +2629,7 @@ describe("subscribeDeshred response schema tests", () => {
         ping: {
           id: 42,
         },
+        slots: {},
       };
 
       const waitForPingOrPong = waitForSubscribeUpdateMatchingPredicate(
