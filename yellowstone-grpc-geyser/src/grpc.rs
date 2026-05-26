@@ -3,16 +3,12 @@ use {
         config::{ConfigGrpc, GrpcAddress},
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
+            self, DebugClientMessage, GEYSER_BATCH_SIZE, incr_grpc_method_call_count, set_subscriber_queue_size, subscription_limit_exceeded_inc
         },
         parallel::ParallelEncoder,
         plugin::{
             filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
-                name::FilterNames,
-                DeshredFilter, Filter,
+                DeshredFilter, Filter, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof}, name::FilterNames
             },
             message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
@@ -20,46 +16,28 @@ use {
             },
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        transport::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, SpyIncoming, SpyIncomingConfig},
+        util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel},
         version::GrpcVersionInfo,
-    },
-    anyhow::Context,
-    bytesize::ByteSize,
-    log::{error, info},
-    prost_types::Timestamp,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
-    solana_pubkey::Pubkey,
-    std::{
+    }, anyhow::Context, bytesize::ByteSize, log::{error, info}, prost_types::Timestamp, smallvec::SmallVec, solana_clock::{MAX_RECENT_BLOCKHASHES, Slot}, solana_pubkey::Pubkey, std::{
         collections::{BTreeMap, HashMap},
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, LazyLock, Mutex as StdMutex,
+            Arc, LazyLock, Mutex as StdMutex, atomic::{AtomicU64, AtomicUsize, Ordering}
         },
         time::SystemTime,
-    },
-    tokio::{
+    }, tokio::{
         fs,
         net::UnixListener,
-        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration, Instant},
-    },
-    tokio_stream::wrappers::UnixListenerStream,
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
-    tonic::{
-        metadata::AsciiMetadataValue,
-        service::interceptor,
-        transport::{
-            server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
-            Identity, ServerTlsConfig,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
-    },
-    tonic_health::{pb::health_server::HealthServer, server::health_reporter},
-    yellowstone_grpc_proto::{
+        sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot},
+        time::{Duration, Instant, sleep},
+    }, tokio_stream::wrappers::UnixListenerStream, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
+        Request, Response, Result as TonicResult, Status, Streaming, metadata::AsciiMetadataValue, service::interceptor, transport::{
+            Identity, ServerTlsConfig, server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo}
+        }
+    }, tonic_health::{pb::health_server::HealthServer, server::health_reporter}, yellowstone_grpc_proto::{
         prelude::{
             CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
             GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
@@ -68,7 +46,7 @@ use {
             SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
         },
         prost::Message as ProstMessage,
-    },
+    }
 };
 
 #[derive(Debug)]
@@ -993,7 +971,7 @@ impl GrpcService {
                     }
 
                     // Send messages to filter (and to clients)
-                    let mut messages_vec = Vec::with_capacity(4);
+                    let mut messages_vec = SmallVec::<[(u64, Message); 4]>::new();
                     if let Some(sealed_block_msg) = sealed_block_msg {
                         messages_vec.push(sealed_block_msg);
                     }
@@ -1006,9 +984,9 @@ impl GrpcService {
 
                     // sometimes we do not receive all statuses
                     if let Some((slot, status)) = slot_status {
-                        let mut slots = vec![slot];
-                        while let Some((parent, Some(entry))) = slots
-                            .pop()
+                        let mut current_slot = Some(slot);
+                        while let Some((parent, Some(entry))) = current_slot
+                            .take()
                             .and_then(|slot| messages.get(&slot))
                             .and_then(|entry| entry.parent_slot)
                             .map(|parent| (parent, messages.get_mut(&parent)))
@@ -1022,7 +1000,7 @@ impl GrpcService {
                                     entry.finalized = true;
                                 }
 
-                                slots.push(parent);
+                                current_slot = Some(parent);
                                 let message_slot = Message::Slot(MessageSlot {
                                     slot: parent,
                                     parent: entry.parent_slot,
