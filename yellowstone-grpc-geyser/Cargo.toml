@@ -16,6 +16,9 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
+[[bin]]
+name = "yellowstone-grpc-geyser"
+
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 
@@ -44,7 +47,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "signal"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tower-layer = { workspace = true }
@@ -118,6 +121,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+yellowstone-conduit = { path = "../../yellowstone-conduit" }
 
 [lints]
 workspace = true
