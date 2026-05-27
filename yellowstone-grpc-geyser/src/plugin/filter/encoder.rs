@@ -1,9 +1,8 @@
 use {
     crate::plugin::{
-        filter::message::{prost_bytes_encode_raw, prost_bytes_encoded_len},
+        filter::message::{prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len},
         message::{MessageAccountInfo, MessageTransactionInfo},
-    },
-    bytes::Bytes,
+    }, solana_pubkey::Pubkey, solana_signature::Signature
 };
 
 pub struct TransactionEncoder;
@@ -13,7 +12,7 @@ impl TransactionEncoder {
         let len = Self::encoded_len(tx);
         let mut buf = Vec::with_capacity(len);
         Self::encode_raw(tx, &mut buf);
-        let _ = tx.pre_encoded.set(Bytes::from(buf));
+        let _ = tx.pre_encoded.set(buf);
     }
 
     fn encode_raw(tx: &MessageTransactionInfo, buf: &mut impl bytes::BufMut) {
@@ -38,14 +37,13 @@ impl TransactionEncoder {
     }
 
     pub fn encoded_len(tx: &MessageTransactionInfo) -> usize {
-        use prost::encoding::{encoded_len_varint, key_len, message};
+        use prost::encoding::{message};
+        const SIGNATURE_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(1u32, size_of::<Signature>());
 
         let index = tx.index as u64;
-        let sig_len = tx.signature.as_ref().len();
 
-        key_len(1u32)
-            + encoded_len_varint(sig_len as u64)
-            + sig_len
+        SIGNATURE_FIELD_ENCODED_LEN
+            + size_of::<Signature>()
             + if tx.is_vote {
                 prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
             } else {
@@ -89,17 +87,21 @@ impl AccountEncoder {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
 
-        let _ = account.pre_encoded.set(Bytes::from(buf));
+        let _ = account.pre_encoded.set(buf);
     }
 
     pub fn encoded_len(account: &MessageAccountInfo) -> usize {
-        prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
+        const PUBKEY_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(1u32, size_of::<Pubkey>());
+        const OWNER_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(3u32, size_of::<Pubkey>());
+        const SIGNATURE_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(8u32, size_of::<Signature>());
+
+        PUBKEY_FIELD_ENCODED_LEN
             + if account.lamports != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
             } else {
                 0
             }
-            + prost_bytes_encoded_len(3u32, account.owner.as_ref())
+            + OWNER_FIELD_ENCODED_LEN
             + if account.executable {
                 ::prost::encoding::bool::encoded_len(4u32, &account.executable)
             } else {
@@ -122,6 +124,6 @@ impl AccountEncoder {
             }
             + account
                 .txn_signature
-                .map_or(0, |sig| prost_bytes_encoded_len(8u32, sig.as_ref()))
+                .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
     }
 }

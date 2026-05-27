@@ -94,7 +94,7 @@ impl ParallelEncoder {
         rx.await.expect("encoder response failed")
     }
 
-    fn encode_sync(mut batch: Vec<(u64, Message)>) -> Vec<(u64, Message)> {
+    pub fn encode_sync(mut batch: Vec<(u64, Message)>) -> Vec<(u64, Message)> {
         for (_msgid, msg) in &mut batch {
             Self::encode_message(msg);
         }
@@ -157,6 +157,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parallel_encoder_transactions_bench() {
+        let (encoder, _handle) = ParallelEncoder::new(2);
+
+        for _ in 0..10 {
+            let batch: Vec<(u64, Message)> = (0..31).map(|i| (i, create_test_transaction())).collect();
+
+            let time = SystemTime::now();
+            let encoded = encoder.encode(batch).await;
+            println!("encoded 31 transactions in {:?}", time.elapsed().unwrap());
+
+            let batch: Vec<(u64, Message)> = (0..31).map(|i| (i, create_test_transaction())).collect();
+            let time = SystemTime::now();
+            let _encoded_sync = ParallelEncoder::encode_sync(batch);
+            println!("sync encoded 31 transactions in {:?}", time.elapsed().unwrap());
+
+            assert_eq!(encoded.len(), 31);
+            for (_msgid, msg) in encoded {
+                if let Message::Transaction(tx) = msg {
+                    assert!(
+                        tx.transaction.pre_encoded.get().is_some(),
+                        "transaction should be encoded"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_parallel_encoder_transactions() {
         let (encoder, _handle) = ParallelEncoder::new(2);
 
@@ -171,6 +199,35 @@ mod tests {
                     tx.transaction.pre_encoded.get().is_some(),
                     "transaction should be encoded"
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parallel_encoder_accounts_bench() {
+        let (encoder, _handle) = ParallelEncoder::new(2);
+
+        for _ in 0..10 {
+            let time = SystemTime::now();
+            let batch: Vec<(u64, Message)> = (0..31).map(|i| (i, create_test_account())).collect();
+
+            let encoded = encoder.encode(batch).await;
+
+            println!("encoded 31 accounts in {:?}", time.elapsed().unwrap());
+
+            let batch = (0..31).map(|i| (i, create_test_account())).collect();
+            let time = SystemTime::now();
+            let _encoded_sync = ParallelEncoder::encode_sync(batch);
+            println!("sync encoded 31 accounts in {:?}", time.elapsed().unwrap());
+
+            assert_eq!(encoded.len(), 31);
+            for (_msgid, msg) in encoded {
+                if let Message::Account(acc) = msg {
+                    assert!(
+                        acc.account.pre_encoded.get().is_some(),
+                        "account should be encoded"
+                    );
+                }
             }
         }
     }

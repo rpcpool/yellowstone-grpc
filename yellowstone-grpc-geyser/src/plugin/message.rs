@@ -195,7 +195,7 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
-    pub pre_encoded: OnceLock<Bytes>,
+    pub pre_encoded: OnceLock<Vec<u8>>,
 }
 
 impl MessageAccountInfo {
@@ -234,7 +234,7 @@ impl MessageAccountInfo {
         })
     }
 
-    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
         self.pre_encoded.get()
     }
 }
@@ -280,7 +280,7 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
-    pub pre_encoded: OnceLock<Bytes>,
+    pub pre_encoded: OnceLock<Vec<u8>>,
 }
 
 impl MessageTransactionInfo {
@@ -363,7 +363,7 @@ impl MessageTransactionInfo {
     }
 
     #[inline]
-    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
+    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
         self.pre_encoded.get()
     }
 }
