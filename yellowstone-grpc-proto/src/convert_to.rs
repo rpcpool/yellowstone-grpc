@@ -1,4 +1,5 @@
 use {
+    crate::prelude as proto,
     solana_clock::UnixTimestamp,
     solana_message::{
         compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup, MessageHeader,
@@ -13,7 +14,6 @@ use {
         InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
         TransactionTokenBalance,
     },
-    yellowstone_grpc_proto::prelude as proto,
 };
 
 pub fn create_transaction(tx: &VersionedTransaction) -> proto::Transaction {

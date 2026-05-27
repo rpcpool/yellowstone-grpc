@@ -76,7 +76,7 @@ spl-token-2022-interface = { workspace = true }
 prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
-yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
+yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes", "convert"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
