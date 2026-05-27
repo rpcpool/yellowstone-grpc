@@ -394,10 +394,6 @@ impl ConfigGrpc {
     const fn default_replay_stored_slots() -> u64 {
         150
     }
-
-    const fn encoder_threads_default() -> usize {
-        4
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
