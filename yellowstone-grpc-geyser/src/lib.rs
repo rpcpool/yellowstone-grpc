@@ -14,3 +14,8 @@ pub fn get_thread_name() -> String {
     let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
     format!("solGeyserGrpc{id:02}")
 }
+
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static ALLOC: Jemalloc = Jemalloc;

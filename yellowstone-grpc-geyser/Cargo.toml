@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
+tikv-jemallocator = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
