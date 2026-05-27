@@ -1,4 +1,5 @@
 use {
+    crate::prelude as proto,
     solana_account::Account,
     solana_account_decoder::parse_token::UiTokenAmount,
     solana_hash::{Hash, HASH_BYTES},
@@ -17,7 +18,6 @@ use {
         RewardsAndNumPartitions, TransactionStatusMeta, TransactionTokenBalance,
         TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
     },
-    yellowstone_grpc_proto::prelude as proto,
 };
 
 type CreateResult<T> = Result<T, &'static str>;
