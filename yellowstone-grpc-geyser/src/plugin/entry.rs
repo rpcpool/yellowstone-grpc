@@ -31,7 +31,7 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_shmem_plugin::YellowstonePlugin,
+    yellowstone_shmem_plugin::YellowstoneShmemPlugin,
 };
 
 #[derive(Debug)]
@@ -56,7 +56,7 @@ impl PluginInner {
 #[derive(Debug, Default)]
 pub struct Plugin {
     inner: Option<PluginInner>,
-    shmem_plugin: Option<YellowstonePlugin<ProstGeyserCodec>>,
+    shmem_plugin: Option<YellowstoneShmemPlugin<ProstGeyserCodec>>,
 }
 
 impl Plugin {
@@ -119,11 +119,6 @@ impl GeyserPlugin for Plugin {
         let encoder_threads = config.grpc.encoder_threads;
         let (encoder, encoder_handle) = ParallelEncoder::new(encoder_threads);
 
-        let shmem_path = config.grpc.shmem_path.clone();
-
-        let shmem_dcache_capacity = config.grpc.shmem_dcache_capacity;
-        let shmem_mcache_capacity = config.grpc.shmem_mcache_capacity;
-
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
@@ -157,17 +152,6 @@ impl GeyserPlugin for Plugin {
                 return Err(GeyserPluginError::Custom(format!("{e:?}").into()));
             }
         };
-
-        // Initialize shmem plugin
-        if let Some(shmem_path) = shmem_path {
-            let mut shmem = crate::plugin::shmem::create_plugin();
-            shmem.set_config(yellowstone_shmem_plugin::plugin::ShmemConfig {
-                shmem_path:      shmem_path.clone(),
-                dcache_capacity: shmem_dcache_capacity,
-                mcache_capacity: shmem_mcache_capacity,
-            })?;
-            self.shmem_plugin = Some(shmem);
-        }
 
         self.inner = Some(PluginInner {
             runtime,

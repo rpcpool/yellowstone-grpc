@@ -50,11 +50,10 @@ impl GeyserCodec for ProstGeyserCodec {
             ReplicaBlockInfoVersions::V0_0_3(b) => {
                 convert_to::create_rewards_obj(b.rewards, None).encode_to_vec()
             }
-            ReplicaBlockInfoVersions::V0_0_4(b) => convert_to::create_rewards_obj(
-                &b.rewards.rewards,
-                b.rewards.num_partitions,
-            )
-            .encode_to_vec(),
+            ReplicaBlockInfoVersions::V0_0_4(b) => {
+                convert_to::create_rewards_obj(&b.rewards.rewards, b.rewards.num_partitions)
+                    .encode_to_vec()
+            }
         }
     }
 
@@ -82,80 +81,87 @@ impl GeyserCodec for ProstGeyserCodec {
 
 impl ProstGeyserCodec {
     fn encode_message_inner(&self, message: &GeyserMessage) -> Vec<u8> {
-        use yellowstone_shmem_common::SlotStatus;
         use yellowstone_grpc_proto::prelude as proto;
-        
+        use yellowstone_shmem_common::SlotStatus;
+
         match message {
             GeyserMessage::Slot(s) => {
                 let status = match s.status {
-                    SlotStatus::Processed          => ProtoSlotStatus::SlotProcessed,
-                    SlotStatus::Confirmed          => ProtoSlotStatus::SlotConfirmed,
-                    SlotStatus::Rooted             => ProtoSlotStatus::SlotFinalized,
+                    SlotStatus::Processed => ProtoSlotStatus::SlotProcessed,
+                    SlotStatus::Confirmed => ProtoSlotStatus::SlotConfirmed,
+                    SlotStatus::Rooted => ProtoSlotStatus::SlotFinalized,
                     SlotStatus::FirstShredReceived => ProtoSlotStatus::SlotFirstShredReceived,
-                    SlotStatus::Completed          => ProtoSlotStatus::SlotCompleted,
-                    SlotStatus::CreatedBank        => ProtoSlotStatus::SlotCreatedBank,
-                    SlotStatus::Dead(_)            => ProtoSlotStatus::SlotDead,
+                    SlotStatus::Completed => ProtoSlotStatus::SlotCompleted,
+                    SlotStatus::CreatedBank => ProtoSlotStatus::SlotCreatedBank,
+                    SlotStatus::Dead(_) => ProtoSlotStatus::SlotDead,
                 };
                 proto::SubscribeUpdateSlot {
-                    slot:   s.slot,
+                    slot: s.slot,
                     parent: s.parent,
                     status: status as i32,
                     dead_error: match &s.status {
                         SlotStatus::Dead(e) => Some(e.clone()),
                         _ => None,
                     },
-                }.encode_to_vec()
+                }
+                .encode_to_vec()
             }
 
             GeyserMessage::Account(a) => proto::SubscribeUpdateAccount {
                 account: Some(proto::SubscribeUpdateAccountInfo {
-                    pubkey:        a.account.pubkey.clone(),
-                    lamports:      a.account.lamports,
-                    owner:         a.account.owner.clone(),
-                    executable:    a.account.executable,
-                    rent_epoch:    a.account.rent_epoch,
-                    data:          a.account.data.clone().into(),
+                    pubkey: a.account.pubkey.clone(),
+                    lamports: a.account.lamports,
+                    owner: a.account.owner.clone(),
+                    executable: a.account.executable,
+                    rent_epoch: a.account.rent_epoch,
+                    data: a.account.data.clone().into(),
                     write_version: a.account.write_version,
                     txn_signature: a.account.txn_signature.clone(),
                 }),
-                slot:       a.slot,
+                slot: a.slot,
                 is_startup: a.is_startup,
-            }.encode_to_vec(),
+            }
+            .encode_to_vec(),
 
             GeyserMessage::Transaction(t) => proto::SubscribeUpdateTransactionInfo {
-                signature:   t.transaction.signature.clone(),
-                is_vote:     t.transaction.is_vote,
-                transaction: Some(proto::Transaction::decode(
-                    t.transaction.transaction.as_slice()
-                ).unwrap_or_default()),
-                meta: Some(proto::TransactionStatusMeta::decode(
-                    t.transaction.meta.as_slice()
-                ).unwrap_or_default()),
+                signature: t.transaction.signature.clone(),
+                is_vote: t.transaction.is_vote,
+                transaction: Some(
+                    proto::Transaction::decode(t.transaction.transaction.as_slice())
+                        .unwrap_or_default(),
+                ),
+                meta: Some(
+                    proto::TransactionStatusMeta::decode(t.transaction.meta.as_slice())
+                        .unwrap_or_default(),
+                ),
                 index: t.transaction.index as u64,
-            }.encode_to_vec(),
+            }
+            .encode_to_vec(),
 
             GeyserMessage::Entry(e) => proto::SubscribeUpdateEntry {
-                slot:                       e.slot,
-                index:                      e.index as u64,
-                num_hashes:                 e.num_hashes,
-                hash:                       e.hash.clone(),
+                slot: e.slot,
+                index: e.index as u64,
+                num_hashes: e.num_hashes,
+                hash: e.hash.clone(),
                 executed_transaction_count: e.executed_transaction_count,
                 starting_transaction_index: e.starting_transaction_index,
-            }.encode_to_vec(),
+            }
+            .encode_to_vec(),
 
             GeyserMessage::BlockMeta(b) => proto::SubscribeUpdateBlockMeta {
-                parent_slot:                b.parent_slot,
-                parent_blockhash:           b.parent_blockhash.clone(),
-                slot:                       b.slot,
-                blockhash:                  b.blockhash.clone(),
-                rewards:                    Some(proto::Rewards::decode(
-                    b.rewards.as_slice()
-                ).unwrap_or_default()),
-                block_time:                 b.block_time.map(|t| proto::UnixTimestamp { timestamp: t }),
-                block_height:               b.block_height.map(|h| proto::BlockHeight { block_height: h }),
+                parent_slot: b.parent_slot,
+                parent_blockhash: b.parent_blockhash.clone(),
+                slot: b.slot,
+                blockhash: b.blockhash.clone(),
+                rewards: Some(proto::Rewards::decode(b.rewards.as_slice()).unwrap_or_default()),
+                block_time: b.block_time.map(|t| proto::UnixTimestamp { timestamp: t }),
+                block_height: b
+                    .block_height
+                    .map(|h| proto::BlockHeight { block_height: h }),
                 executed_transaction_count: b.executed_transaction_count,
-                entries_count:              b.entry_count,
-            }.encode_to_vec(),
+                entries_count: b.entry_count,
+            }
+            .encode_to_vec(),
         }
     }
 }
@@ -178,8 +184,9 @@ impl DirectCopyCodec {
     ///   data          [data_len]
     ///   slot          [8]   LE u64
     ///   is_startup    [1]
+    ///   created_at    [8]   LE i64  Unix timestamp nanos, written at encode time
     pub fn account_encoded_size(a: &MessageAccount) -> usize {
-        32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + a.account.data.len() + 8 + 1
+        32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + a.account.data.len() + 8 + 1 + 8
     }
 
     /// # Safety
@@ -193,6 +200,11 @@ impl DirectCopyCodec {
         }
 
         unsafe fn write_u64(dst: *mut u8, o: &mut usize, v: u64) {
+            std::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), dst.add(*o), 8);
+            *o += 8;
+        }
+
+        unsafe fn write_i64(dst: *mut u8, o: &mut usize, v: i64) {
             std::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), dst.add(*o), 8);
             *o += 8;
         }
@@ -225,5 +237,89 @@ impl DirectCopyCodec {
         write_bytes(dst, &mut o, &a.account.data);
         write_u64(dst, &mut o, a.slot);
         write_u8(dst, &mut o, a.is_startup as u8);
+
+        // Timestamp written at encode time in the validator process.
+        // The reader uses this to measure end-to-end handover latency
+        // across the process boundary.
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64;
+        write_i64(dst, &mut o, ts);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yellowstone_shmem_common::{MessageAccount, MessageAccountInfo};
+
+    fn make_account(data_len: usize) -> MessageAccount {
+        MessageAccount {
+            account: MessageAccountInfo {
+                pubkey: vec![1u8; 32],
+                lamports: 1_000_000,
+                owner: vec![2u8; 32],
+                executable: false,
+                rent_epoch: u64::MAX,
+                data: vec![0xABu8; data_len],
+                write_version: 42,
+                txn_signature: Some(vec![3u8; 64]),
+            },
+            slot: 300_000_000,
+            is_startup: false,
+            plugin_ts_ns: 0,
+        }
+    }
+
+    #[test]
+    fn test_encoded_size_matches_actual_bytes_written() {
+        for data_len in [0, 1, 64, 165, 256, 1024, 10 * 1024] {
+            let account = make_account(data_len);
+            let claimed_size = DirectCopyCodec::account_encoded_size(&account);
+            let mut buf = vec![0u8; claimed_size + 16]; // extra bytes to detect overwrite
+            let sentinel = 0xDEu8;
+            buf[claimed_size..].fill(sentinel);
+
+            unsafe { DirectCopyCodec::encode_account_into(&account, buf.as_mut_ptr()) };
+
+            // verify encode_into didn't write past claimed_size
+            assert!(
+                buf[claimed_size..].iter().all(|&b| b == sentinel),
+                "encode_account_into wrote past claimed size {} for data_len={}",
+                claimed_size,
+                data_len
+            );
+
+            // verify decoder reads back exactly claimed_size bytes
+            use crate::plugin::shmem::decoder::decode_account;
+            let result = decode_account(&buf[..claimed_size]);
+            assert!(
+                result.is_ok(),
+                "decode_account failed for data_len={}: {:?}",
+                data_len,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_encoded_size_without_signature() {
+        let mut account = make_account(165);
+        account.account.txn_signature = None;
+        let claimed_size = DirectCopyCodec::account_encoded_size(&account);
+        let mut buf = vec![0u8; claimed_size + 16];
+        buf[claimed_size..].fill(0xDE);
+
+        unsafe { DirectCopyCodec::encode_account_into(&account, buf.as_mut_ptr()) };
+
+        assert!(
+            buf[claimed_size..].iter().all(|&b| b == 0xDE),
+            "encode_account_into wrote past claimed size for None signature"
+        );
+
+        use crate::plugin::shmem::decoder::decode_account;
+        let result = decode_account(&buf[..claimed_size]);
+        assert!(result.is_ok(), "decode failed: {:?}", result);
     }
 }

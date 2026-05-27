@@ -5,7 +5,7 @@ pub mod metered;
 pub mod metrics;
 pub mod plugin;
 pub mod transport;
-pub(crate) mod util;
+pub mod util; // DEBT: for bin test
 pub mod version;
 
 pub fn get_thread_name() -> String {

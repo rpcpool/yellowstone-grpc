@@ -70,6 +70,7 @@ impl FakeGeyserAccount {
             },
             slot,
             is_startup: false,
+            plugin_ts_ns: 0,
         }
     }
 }
@@ -186,9 +187,7 @@ fn bench_shmem_roundtrip_256b(c: &mut Criterion) {
 
     c.bench_function("shmem_roundtrip_256b", |b| {
         b.iter(|| {
-            unsafe {
-                DirectCopyCodec::encode_account_into(black_box(&account), buf.as_mut_ptr())
-            };
+            unsafe { DirectCopyCodec::encode_account_into(black_box(&account), buf.as_mut_ptr()) };
             let msg = decode_account(&buf).unwrap();
             yellowstone_grpc_geyser::plugin::shmem::decoder::ProstShmemDecoder::to_dm_message(
                 msg,
@@ -216,9 +215,7 @@ fn bench_arc_alloc(c: &mut Criterion) {
                 rent_epoch: raw.rent_epoch,
                 data: Bytes::from(raw.data.clone()),
                 write_version: raw.write_version,
-                txn_signature: Some(
-                    Signature::try_from(raw.signature.as_slice()).unwrap(),
-                ),
+                txn_signature: Some(Signature::try_from(raw.signature.as_slice()).unwrap()),
                 pre_encoded: OnceLock::new(),
             }))
         })
