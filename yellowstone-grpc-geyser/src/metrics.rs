@@ -177,6 +177,19 @@ lazy_static::lazy_static! {
         ),
         &["event"]
     ).unwrap();
+
+    static ref SHMEM_HANDOVER_LATENCY_NS: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "yellowstone_shmem_handover_latency_ns",
+            "Latency in nanoseconds from geyser plugin callback to messages_tx send on shmem path"
+        )
+        .buckets(vec![
+            100.0, 200.0, 500.0,
+            1_000.0, 2_000.0, 5_000.0,
+            10_000.0, 20_000.0, 50_000.0,
+            100_000.0, 500_000.0, 1_000_000.0,
+        ])
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -337,6 +350,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
+            register!(SHMEM_HANDOVER_LATENCY_NS);
 
             VERSION
                 .with_label_values(&[
@@ -614,6 +628,10 @@ pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
     GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION
         .with_label_values(&[remote_peer_sk_addr.as_ref()])
         .set(size as i64);
+}
+
+pub fn observe_shmem_handover_latency_ns(ns: i64) {
+    SHMEM_HANDOVER_LATENCY_NS.observe(ns as f64);
 }
 
 pub fn remove_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(remote_peer_sk_addr: S) {
