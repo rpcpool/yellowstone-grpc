@@ -3,6 +3,7 @@ import Client, {
   ClientDuplexStream,
   txDeshredEncode,
 } from "../src";
+import * as net from "node:net";
 import {
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
@@ -69,6 +70,171 @@ function closeStreamAndWait(stream: any, timeoutMs = 2500): Promise<void> {
       stream.destroy();
     } catch {}
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type DisconnectableTcpProxy = {
+  endpoint: string;
+  connectionCount: () => number;
+  disconnectFor: (durationMs: number) => Promise<void>;
+  waitForConnectionCountGreaterThan: (
+    previousConnectionCount: number,
+    timeoutMs: number,
+  ) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+async function startDisconnectableTcpProxy(
+  targetEndpoint: string,
+): Promise<DisconnectableTcpProxy | null> {
+  const targetUrl = new URL(targetEndpoint);
+  if (targetUrl.protocol !== "http:") {
+    return null;
+  }
+
+  const activeSockets = new Set<net.Socket>();
+  const connectionWaiters: Array<() => void> = [];
+  const targetHost = targetUrl.hostname;
+  const targetPort = Number(targetUrl.port || "80");
+  let acceptingConnections = true;
+  let proxiedConnectionCount = 0;
+
+  const destroySocket = (socket: net.Socket) => {
+    activeSockets.delete(socket);
+    socket.destroy();
+  };
+
+  const destroyAllSockets = () => {
+    for (const socket of Array.from(activeSockets)) {
+      destroySocket(socket);
+    }
+  };
+
+  const server = net.createServer((clientSocket) => {
+    if (!acceptingConnections) {
+      clientSocket.destroy();
+      return;
+    }
+
+    const upstreamSocket = net.connect({
+      host: targetHost,
+      port: targetPort,
+    });
+
+    activeSockets.add(clientSocket);
+    activeSockets.add(upstreamSocket);
+    proxiedConnectionCount += 1;
+
+    for (const notifyConnection of [...connectionWaiters]) {
+      notifyConnection();
+    }
+
+    const cleanup = () => {
+      destroySocket(clientSocket);
+      destroySocket(upstreamSocket);
+    };
+
+    clientSocket.once("error", cleanup);
+    upstreamSocket.once("error", cleanup);
+    clientSocket.once("close", cleanup);
+    upstreamSocket.once("close", cleanup);
+
+    clientSocket.pipe(upstreamSocket);
+    upstreamSocket.pipe(clientSocket);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(0, "127.0.0.1");
+  });
+
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("TCP proxy did not bind to an IP address");
+  }
+
+  const proxyUrl = new URL(targetEndpoint);
+  proxyUrl.hostname = "127.0.0.1";
+  proxyUrl.port = String(address.port);
+
+  return {
+    endpoint: proxyUrl.toString(),
+    connectionCount: () => proxiedConnectionCount,
+    disconnectFor: async (durationMs: number) => {
+      acceptingConnections = false;
+      destroyAllSockets();
+      await delay(durationMs);
+      acceptingConnections = true;
+    },
+    waitForConnectionCountGreaterThan: (
+      previousConnectionCount: number,
+      timeoutMs: number,
+    ) =>
+      new Promise<void>((resolve, reject) => {
+        if (proxiedConnectionCount > previousConnectionCount) {
+          resolve();
+          return;
+        }
+
+        let settled = false;
+        const settleOnce = (handler: () => void) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeoutId);
+          const waiterIndex = connectionWaiters.indexOf(onConnection);
+          if (waiterIndex !== -1) {
+            connectionWaiters.splice(waiterIndex, 1);
+          }
+          handler();
+        };
+        const onConnection = () => {
+          if (proxiedConnectionCount > previousConnectionCount) {
+            settleOnce(resolve);
+          }
+        };
+        const timeoutId = setTimeout(
+          () =>
+            settleOnce(() =>
+              reject(
+                new Error(
+                  `Timed out waiting for reconnect after ${timeoutMs}ms`,
+                ),
+              ),
+            ),
+          timeoutMs,
+        );
+
+        connectionWaiters.push(onConnection);
+      }),
+    close: async () => {
+      acceptingConnections = false;
+      destroyAllSockets();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    },
+  };
 }
 
 function waitForSubscribeUpdateMatchingPredicate(
@@ -142,6 +308,74 @@ function waitForSubscribeUpdateMatchingPredicate(
           `Timed out waiting for expected subscribe update after ${timeoutMs}ms`,
         );
         void closeStreamAndWait(stream).finally(() => reject(error));
+      });
+    }, timeoutMs);
+
+    stream.on("data", onData);
+    stream.on("error", onError);
+    stream.on("end", onEndOrClose);
+    stream.on("close", onEndOrClose);
+  });
+}
+
+function waitForNextSubscribeUpdateMatchingPredicate(
+  stream: any,
+  predicate: (data: any) => boolean,
+  timeoutMs: number,
+  maxUnmatchedUpdates = 500,
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let unmatchedUpdates = 0;
+
+    const settleOnce = (handler: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      handler();
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      stream.off("data", onData);
+      stream.off("error", onError);
+      stream.off("end", onEndOrClose);
+      stream.off("close", onEndOrClose);
+    };
+
+    const onData = (data: any) => {
+      if (!predicate(data)) {
+        unmatchedUpdates += 1;
+        if (unmatchedUpdates >= maxUnmatchedUpdates) {
+          settleOnce(() => {
+            reject(
+              new Error(
+                `No matching subscribe update after ${unmatchedUpdates} updates (timeout ${timeoutMs}ms)`,
+              ),
+            );
+          });
+        }
+        return;
+      }
+
+      settleOnce(() => resolve(data));
+    };
+
+    const onError = (error: Error) => settleOnce(() => reject(error));
+    const onEndOrClose = () =>
+      settleOnce(() =>
+        reject(new Error("Stream ended before receiving expected update")),
+      );
+
+    const timeoutId = setTimeout(() => {
+      settleOnce(() => {
+        reject(
+          new Error(
+            `Timed out waiting for expected subscribe update after ${timeoutMs}ms`,
+          ),
+        );
       });
     }, timeoutMs);
 
@@ -1499,6 +1733,107 @@ describe("Client subscription independence behavior", () => {
     expect(nativeStreamA.close).toHaveBeenCalledTimes(1);
     expect(nativeStreamB.close).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("Client auto-reconnect integration", () => {
+  const TEST_TIMEOUT = 100000;
+
+  // .env
+  const { TEST_ENDPOINT: endpoint, TEST_TOKEN: xToken } = process.env;
+
+  test(
+    "slot stream resumes after a transient disconnect",
+    async () => {
+      if (!endpoint) {
+        throw new Error("TEST_ENDPOINT is required");
+      }
+
+      const proxy = await startDisconnectableTcpProxy(endpoint);
+      if (proxy === null) {
+        console.warn(
+          "Skipping auto-reconnect disconnect test: TEST_ENDPOINT must use plaintext http so the test can cut the TCP connection without terminating TLS.",
+        );
+        return;
+      }
+
+      const client = new Client(
+        proxy.endpoint,
+        xToken,
+        {},
+        {
+          enabled: true,
+          backoff: {
+            initialIntervalMs: 10,
+            multiplier: 1,
+            maxRetries: 20,
+          },
+          slotRetention: 250,
+        },
+      );
+      let stream: any | undefined;
+
+      try {
+        await client.connect();
+
+        const request: SubscribeRequest = {
+          ...makeMinimalSubscribeRequest(),
+          slots: {
+            client: {
+              filterByCommitment: true,
+              interslotUpdates: false,
+            },
+          },
+        };
+        stream = await client.subscribe(request);
+        const seenSlotUpdates = new Set<string>();
+        let latestSlotBeforeDisconnect = BigInt(0);
+
+        const slotUpdateKey = (update: any) =>
+          `${update.slot.slot}:${update.slot.status}`;
+
+        for (let i = 0; i < 3; i += 1) {
+          const update = await waitForNextSubscribeUpdateMatchingPredicate(
+            stream,
+            (data) => Boolean(data?.slot),
+            TEST_TIMEOUT,
+          );
+
+          expect(update.filters).toEqual(["client"]);
+          seenSlotUpdates.add(slotUpdateKey(update));
+          const slot = BigInt(update.slot.slot);
+          if (slot > latestSlotBeforeDisconnect) {
+            latestSlotBeforeDisconnect = slot;
+          }
+        }
+
+        const connectionsBeforeDisconnect = proxy.connectionCount();
+        await proxy.disconnectFor(50);
+        await proxy.waitForConnectionCountGreaterThan(
+          connectionsBeforeDisconnect,
+          TEST_TIMEOUT,
+        );
+
+        const updateAfterReconnect =
+          await waitForNextSubscribeUpdateMatchingPredicate(
+            stream,
+            (data) => Boolean(data?.slot),
+            TEST_TIMEOUT,
+          );
+        const updateAfterReconnectKey = slotUpdateKey(updateAfterReconnect);
+        const slotAfterReconnect = BigInt(updateAfterReconnect.slot.slot);
+
+        expect(updateAfterReconnect.filters).toEqual(["client"]);
+        expect(seenSlotUpdates.has(updateAfterReconnectKey)).toBe(false);
+        expect(slotAfterReconnect >= latestSlotBeforeDisconnect).toBe(true);
+      } finally {
+        if (stream !== undefined) {
+          await closeStreamAndWait(stream);
+        }
+        await proxy.close();
+      }
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 // subscribe to both subscribe & subscribeDeshred, do all unary calls, modify subscribe request for both, do unary calls again
