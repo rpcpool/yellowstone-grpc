@@ -43,6 +43,68 @@ npm start -- --endpoint http://sg131.rpcpool.wg:10000 \
   --slots
 ```
 
+### subscribe with auto-reconnect
+
+Auto-reconnect is opt-in and applies to standard `subscribe` streams. It reconnects after recoverable stream failures, replays from the last completed slot checkpoint, and deduplicates replayed updates before they reach the TypeScript stream.
+
+```shell
+npm start -- --endpoint https://api.rpcpool.com \
+  --x-token "<token>" \
+  --autoreconnect \
+  subscribe \
+  --slots
+```
+
+Backoff and slot retention can be configured from the example CLI:
+
+```shell
+npm start -- --endpoint https://api.rpcpool.com \
+  --x-token "<token>" \
+  --autoreconnect \
+  --autoreconnect-initial-interval-ms 100 \
+  --autoreconnect-multiplier 2 \
+  --autoreconnect-max-retries 10 \
+  --autoreconnect-slot-retention 250 \
+  subscribe \
+  --slots
+```
+
+The same setup in application code passes reconnect options as the fourth `Client` constructor argument. Passing the request to `subscribe(request)` sends the initial subscription when the stream opens.
+
+```ts
+const client = new Client(
+  "https://api.rpcpool.com",
+  "<token>",
+  { grpcMaxDecodingMessageSize: 64 * 1024 * 1024 },
+  {
+    enabled: true,
+    backoff: {
+      initialIntervalMs: 100,
+      multiplier: 2,
+      maxRetries: 10,
+    },
+    slotRetention: 250,
+  },
+);
+
+await client.connect();
+
+const stream = await client.subscribe({
+  accounts: {},
+  slots: { client: { filterByCommitment: false } },
+  transactions: {},
+  transactionsStatus: {},
+  entry: {},
+  blocks: {},
+  blocksMeta: {},
+  accountsDataSlice: [],
+  commitment: undefined,
+  ping: undefined,
+});
+```
+
+If reconnect options are omitted, the client keeps the original non-reconnecting behavior. `subscribeDeshred` is not covered by auto-reconnect.
+
 ### subscribe to slot updates, commitment processed
 
 ```shell
