@@ -60,7 +60,7 @@ export declare class GrpcClient {
    *
    * The connection is persistent and will be reused for all subsequent operations.
    */
-  static new(endpoint: string, xToken?: string | undefined | null, channelOptions?: JsChannelOptions | undefined | null): Promise<GrpcClient>
+  static new(endpoint: string, xToken?: string | undefined | null, channelOptions?: JsChannelOptions | undefined | null, reconnectConfig?: JsReconnectConfig | undefined | null): Promise<GrpcClient>
   getLatestBlockhash(request: JsGetLatestBlockhashRequest): Promise<JsGetLatestBlockhashResponse>
   ping(request: JsPingRequest): Promise<JsPongResponse>
   getBlockHeight(request: JsGetBlockHeightRequest): Promise<JsGetBlockHeightResponse>
@@ -74,7 +74,7 @@ export declare class GrpcClient {
    * The returned value is consumed by the JS SDK `ClientDuplexStream` wrapper,
    * which handles Node stream lifecycle and protobuf-shape normalization.
    */
-  subscribe(): Promise<DuplexStream>
+  subscribe(initialRequestBytes?: Buffer | undefined | null): Promise<DuplexStream>
   /**
    * Creates a deshred subscription stream bound to this client connection.
    *
@@ -84,6 +84,8 @@ export declare class GrpcClient {
    */
   subscribeDeshred(): Promise<DuplexStreamDeshred>
 }
+
+export const AUTORECONNECT_FILTER_KEY: string
 
 export declare function decodeTxError(err: Array<number>): string
 
@@ -237,6 +239,22 @@ export interface JsPingRequest {
 
 export interface JsPongResponse {
   count: number
+}
+
+export interface JsReconnectBackoff {
+  initialIntervalMs?: number
+  multiplier?: number
+  maxRetries?: number
+}
+
+export interface JsReconnectConfig {
+  /**
+   * Omitted or true enables reconnect when this object is provided.
+   * False keeps legacy no-reconnect behavior.
+   */
+  enabled?: boolean
+  backoff?: JsReconnectBackoff
+  slotRetention?: number
 }
 
 export interface JsReturnData {

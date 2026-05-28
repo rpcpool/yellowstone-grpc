@@ -1,13 +1,13 @@
 // GrpcClient: A persistent, reusable gRPC client
 
-use napi::bindgen_prelude::PromiseRaw;
+use napi::bindgen_prelude::{Buffer, PromiseRaw};
 use napi::Env;
 use napi_derive::napi;
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
 use crate::{
-  bindings::JsChannelOptions,
+  bindings::{JsChannelOptions, JsReconnectConfig},
   init_crypto_provider,
   js_types::{
     JsGetBlockHeightRequest, JsGetBlockHeightResponse, JsGetLatestBlockhashRequest,
@@ -68,11 +68,13 @@ impl GrpcClient {
     endpoint: String,
     x_token: Option<String>,
     channel_options: Option<JsChannelOptions>,
+    reconnect_config: Option<JsReconnectConfig>,
   ) -> napi::Result<Self> {
     init_crypto_provider();
 
     // Build the client with the provided configuration
-    let builder = utils::get_client_builder(endpoint, x_token, channel_options).await?;
+    let builder =
+      utils::get_client_builder(endpoint, x_token, channel_options, reconnect_config).await?;
 
     // Connect and get the client (returns GeyserGrpcClient<impl Interceptor>)
     let client = builder.connect().await.map_err(|error| {
@@ -316,8 +318,9 @@ impl GrpcClient {
   pub fn subscribe<'env>(
     &self,
     env: &'env napi::Env,
+    initial_request_bytes: Option<Buffer>,
   ) -> napi::Result<PromiseRaw<'env, crate::DuplexStream>> {
-    crate::DuplexStream::subscribe(env, self)
+    crate::DuplexStream::subscribe(env, self, initial_request_bytes)
   }
 
   /// Creates a deshred subscription stream bound to this client connection.

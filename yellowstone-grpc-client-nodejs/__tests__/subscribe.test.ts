@@ -581,6 +581,25 @@ describe("ClientDuplexStream shutdown behavior", () => {
 });
 
 describe("Client connection guard behavior", () => {
+  test("constructor stores reconnect options for native connect", () => {
+    const reconnectOptions = {
+      backoff: {
+        initialIntervalMs: 100,
+        multiplier: 2,
+        maxRetries: 10,
+      },
+      slotRetention: 250,
+    };
+    const client = new Client(
+      "http://localhost:10000",
+      undefined,
+      {},
+      reconnectOptions,
+    );
+
+    expect((client as any)._reconnectOptions).toBe(reconnectOptions);
+  });
+
   test("all public client methods fail before connect", async () => {
     const client = new Client("http://localhost:10000", undefined, {});
 
@@ -625,6 +644,39 @@ describe("Client connection guard behavior", () => {
     await expect(client.subscribe()).rejects.toThrow(
       "subscribe stream open failed",
     );
+  });
+
+  test("subscribe accepts an optional initial request without mutating it", async () => {
+    const nativeStream = {
+      close: jest.fn(),
+      writeRaw: jest.fn(),
+      read: jest.fn(() => new Promise(() => {})),
+    };
+    const nativeSubscribe = jest.fn().mockResolvedValue(nativeStream);
+    const client = new Client("http://localhost:10000", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: nativeSubscribe,
+    };
+
+    const request = makeComprehensiveSubscribeRequest();
+    const requestBeforeSubscribe = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+
+    const stream = await client.subscribe(request);
+
+    expect(nativeSubscribe).toHaveBeenCalledTimes(1);
+    const forwardedBytes = nativeSubscribe.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
+    expect(decoded.fromSlot).toBe("777");
+    expect(decoded.transactions.txClient.signature).toBe("txSig1");
+
+    const requestAfterSubscribe = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+    expect(requestAfterSubscribe).toEqual(requestBeforeSubscribe);
+
+    await closeStreamAndWait(stream);
   });
 
   test("subscribeDeshred bubbles native stream-open errors", async () => {

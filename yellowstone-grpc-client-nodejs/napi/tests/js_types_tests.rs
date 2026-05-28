@@ -532,7 +532,7 @@ fn js_subscribe_deshred_request_conversion_preserves_vote_false_and_ping() {
   let js_subscribe_deshred_request_value = JsSubscribeDeshredRequest {
     deshred_transactions,
     ping: Some(JsSubscribeRequestPing { id: 17 }),
-    slots: None,
+    slots: HashMap::new(),
   };
 
   let protobuf_subscribe_deshred_request_value = js_subscribe_deshred_request_value
