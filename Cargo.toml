@@ -74,7 +74,7 @@ tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "9.0.6"
 
-tikv-jemallocator = "0.6.1"
+tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", tag = "v4.0.0-rc.0-triton-public" }
