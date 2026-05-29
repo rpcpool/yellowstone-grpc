@@ -669,13 +669,19 @@ mod tests {
         use io::ErrorKind;
         // No error observed -> clean close (FIN/EOF or graceful GOAWAY).
         assert_eq!(close_reason(None), "clean");
-        assert_eq!(close_reason(Some(ErrorKind::ConnectionReset)), "connection_reset");
+        assert_eq!(
+            close_reason(Some(ErrorKind::ConnectionReset)),
+            "connection_reset"
+        );
         assert_eq!(close_reason(Some(ErrorKind::BrokenPipe)), "broken_pipe");
         assert_eq!(
             close_reason(Some(ErrorKind::ConnectionAborted)),
             "connection_aborted"
         );
-        assert_eq!(close_reason(Some(ErrorKind::UnexpectedEof)), "unexpected_eof");
+        assert_eq!(
+            close_reason(Some(ErrorKind::UnexpectedEof)),
+            "unexpected_eof"
+        );
         assert_eq!(close_reason(Some(ErrorKind::TimedOut)), "timed_out");
         assert_eq!(close_reason(Some(ErrorKind::NotConnected)), "not_connected");
         // Any other (non-exhaustive) kind falls into the catch-all bucket.
