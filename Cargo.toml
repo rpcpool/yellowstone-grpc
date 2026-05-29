@@ -99,7 +99,7 @@ spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.1.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.1.1" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.4.0", default-features = false }
 
 [workspace.lints.clippy]
