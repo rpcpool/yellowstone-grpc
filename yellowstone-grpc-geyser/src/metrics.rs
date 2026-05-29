@@ -83,11 +83,6 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
-    static ref GRPC_BYTES_SENT: IntCounterVec = IntCounterVec::new(
-        Opts::new("grpc_bytes_sent", "Number of bytes sent over grpc to downstream client"),
-        &["subscriber_id"]
-    ).unwrap();
-
     static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "grpc_subscriber_send_bandwidth_load",
@@ -328,7 +323,6 @@ impl PrometheusService {
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
-            register!(GRPC_BYTES_SENT);
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
@@ -468,12 +462,6 @@ pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
     GEYSER_EVENT_DROPPED
         .with_label_values(&[event.as_ref()])
         .inc();
-}
-
-pub fn incr_grpc_bytes_sent<S: AsRef<str>>(remote_id: S, byte_sent: u32) {
-    GRPC_BYTES_SENT
-        .with_label_values(&[remote_id.as_ref()])
-        .inc_by(byte_sent as u64);
 }
 
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
@@ -651,7 +639,6 @@ pub fn reset_metrics() {
     // Reset counter vectors (clears all label combinations)
     MISSED_STATUS_MESSAGE.reset();
     GRPC_MESSAGE_SENT.reset();
-    GRPC_BYTES_SENT.reset();
     GRPC_CLIENT_DISCONNECTS.reset();
     GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
     TOTAL_TRAFFIC_SENT.reset();

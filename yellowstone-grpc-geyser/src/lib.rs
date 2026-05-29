@@ -2,7 +2,6 @@ pub mod config;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;
-pub mod parallel;
 pub mod plugin;
 pub mod transport;
 pub(crate) mod util;
@@ -15,3 +14,8 @@ pub fn get_thread_name() -> String {
     let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
     format!("solGeyserGrpc{id:02}")
 }
+
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static ALLOC: Jemalloc = Jemalloc;

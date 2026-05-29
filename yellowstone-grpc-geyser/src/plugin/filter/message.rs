@@ -22,6 +22,7 @@ use {
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
+    solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
         collections::HashSet,
@@ -532,6 +533,11 @@ impl FilteredUpdateAccount {
         account: &MessageAccountInfo,
         data_slice: &FilterAccountsDataSlice,
     ) -> usize {
+        const PUBKEY_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(1u32, size_of::<Pubkey>());
+        const OWNER_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(3u32, size_of::<Pubkey>());
+        const SIGNATURE_FIELD_ENCODED_LEN: usize =
+            prost_field_encoded_len(8u32, size_of::<Signature>());
+
         // use pre-encoded length if: no slicing and pre-encoded exists
         if data_slice.as_ref().is_empty() {
             if let Some(pre_encoded) = account.get_pre_encoded() {
@@ -542,13 +548,13 @@ impl FilteredUpdateAccount {
         // fallback: calculate with slicing
         let data_len = data_slice.get_slice_len(&account.data);
 
-        prost_bytes_encoded_len(1u32, account.pubkey.as_ref())
+        PUBKEY_FIELD_ENCODED_LEN
             + if account.lamports != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
             } else {
                 0
             }
-            + prost_bytes_encoded_len(3u32, account.owner.as_ref())
+            + OWNER_FIELD_ENCODED_LEN
             + if account.executable {
                 ::prost::encoding::bool::encoded_len(4u32, &account.executable)
             } else {
@@ -571,7 +577,7 @@ impl FilteredUpdateAccount {
             }
             + account
                 .txn_signature
-                .map_or(0, |sig| prost_bytes_encoded_len(8u32, sig.as_ref()))
+                .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
     }
 }
 
