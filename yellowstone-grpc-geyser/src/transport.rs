@@ -134,6 +134,36 @@ pub struct SpyIO<IO> {
     remote_peer_ip_str: Option<String>,
     unreported_traffic_sent: u64,
     traffic_reporting_threshold: u64,
+    /// Last socket error kind observed on read/write, used to attribute the
+    /// close reason on Drop. `None` means a clean close (see [`close_reason`]).
+    last_close_error: Option<std::io::ErrorKind>,
+}
+
+/// Maps the last observed socket error into a bounded, low-cardinality label
+/// for the `connections_closed_total` metric (one count per TCP connection, not
+/// per gRPC subscription; the per-subscription view is `grpc_client_disconnects_total`).
+///
+/// `None` means no read/write error was seen before the socket dropped: a clean
+/// peer FIN surfaces as `Ok(0)` (EOF), and a graceful HTTP/2 GOAWAY (including a
+/// hyper keepalive-ping timeout, which is sent as `GOAWAY(NO_ERROR)`) is
+/// indistinguishable from a normal close here. All of these report `"clean"`.
+/// Neither hyper nor tonic exposes a keepalive-timeout callback, so it cannot
+/// get its own bucket; the application ping (`client_unresponsive`) is the
+/// substitute for catching a silently-gone peer.
+///
+/// `std::io::ErrorKind` is `#[non_exhaustive]`, so the wildcard arm is required.
+const fn close_reason(kind: Option<std::io::ErrorKind>) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        None => "clean",
+        Some(ErrorKind::ConnectionReset) => "connection_reset",
+        Some(ErrorKind::BrokenPipe) => "broken_pipe",
+        Some(ErrorKind::ConnectionAborted) => "connection_aborted",
+        Some(ErrorKind::UnexpectedEof) => "unexpected_eof",
+        Some(ErrorKind::TimedOut) => "timed_out",
+        Some(ErrorKind::NotConnected) => "not_connected",
+        Some(_) => "other",
+    }
 }
 
 impl<IO> Drop for SpyIO<IO> {
@@ -144,6 +174,7 @@ impl<IO> Drop for SpyIO<IO> {
                 log::debug!("Last connection from remote ip {remote_peer_ip_str} closed, resetting its traffic metrics");
             }
         }
+        metrics::incr_connection_closed(close_reason(self.last_close_error));
         metrics::connections_total_dec();
     }
 }
@@ -171,6 +202,7 @@ where
             remote_peer_ip_str: maybe_remote_peer_ip_string,
             unreported_traffic_sent: 0,
             traffic_reporting_threshold,
+            last_close_error: None,
         }
     }
 }
@@ -197,7 +229,12 @@ where
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().wrappee).poll_read(cx, buf)
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.wrappee).poll_read(cx, buf);
+        if let std::task::Poll::Ready(Err(e)) = &result {
+            this.last_close_error = Some(e.kind());
+        }
+        result
     }
 }
 
@@ -227,10 +264,15 @@ where
     ) -> std::task::Poll<std::io::Result<usize>> {
         let this = self.get_mut();
         let result = ready!(Pin::new(&mut this.wrappee).poll_write(cx, buf));
-        if let Ok(bytes_written) = &result {
-            this.unreported_traffic_sent += *bytes_written as u64;
-            if this.unreported_traffic_sent >= this.traffic_reporting_threshold {
-                this.flush_metrics();
+        match &result {
+            Ok(bytes_written) => {
+                this.unreported_traffic_sent += *bytes_written as u64;
+                if this.unreported_traffic_sent >= this.traffic_reporting_threshold {
+                    this.flush_metrics();
+                }
+            }
+            Err(e) => {
+                this.last_close_error = Some(e.kind());
             }
         }
         result.into()
@@ -241,7 +283,12 @@ where
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().wrappee).poll_flush(cx)
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.wrappee).poll_flush(cx);
+        if let std::task::Poll::Ready(Err(e)) = &result {
+            this.last_close_error = Some(e.kind());
+        }
+        result
     }
 
     /// Shuts down the wrapped IO.
@@ -249,7 +296,12 @@ where
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().wrappee).poll_shutdown(cx)
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.wrappee).poll_shutdown(cx);
+        if let std::task::Poll::Ready(Err(e)) = &result {
+            this.last_close_error = Some(e.kind());
+        }
+        result
     }
 }
 
@@ -515,6 +567,7 @@ mod tests {
             remote_peer_ip_str: None,
             unreported_traffic_sent: 0,
             traffic_reporting_threshold: u64::MAX,
+            last_close_error: None,
         };
 
         let mut dst = [0u8; 5];
@@ -539,6 +592,7 @@ mod tests {
             remote_peer_ip_str: None,
             unreported_traffic_sent: 0,
             traffic_reporting_threshold: u64::MAX,
+            last_close_error: None,
         };
 
         let mut cx = noop_context();
@@ -554,5 +608,107 @@ mod tests {
         assert_eq!(spy.wrappee.written_data, b"abc");
         assert_eq!(spy.wrappee.flush_calls, 1);
         assert_eq!(spy.wrappee.shutdown_calls, 1);
+    }
+
+    /// IO whose read/write fail with a fixed error kind, to exercise close-reason capture.
+    struct MockIoErr {
+        kind: io::ErrorKind,
+    }
+
+    impl Connected for MockIoErr {
+        type ConnectInfo = TcpConnectInfo;
+
+        fn connect_info(&self) -> Self::ConnectInfo {
+            TcpConnectInfo {
+                local_addr: None,
+                remote_addr: None,
+            }
+        }
+    }
+
+    impl AsyncRead for MockIoErr {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::from(self.kind)))
+        }
+    }
+
+    impl AsyncWrite for MockIoErr {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Err(io::Error::from(self.kind)))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::from(self.kind)))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::from(self.kind)))
+        }
+    }
+
+    fn spyio_with(wrappee: MockIoErr) -> SpyIO<MockIoErr> {
+        SpyIO {
+            wrappee,
+            remote_peer_ip_str: None,
+            unreported_traffic_sent: 0,
+            traffic_reporting_threshold: u64::MAX,
+            last_close_error: None,
+        }
+    }
+
+    #[test]
+    fn close_reason_maps_error_kinds_to_bounded_labels() {
+        use io::ErrorKind;
+        // No error observed -> clean close (FIN/EOF or graceful GOAWAY).
+        assert_eq!(close_reason(None), "clean");
+        assert_eq!(close_reason(Some(ErrorKind::ConnectionReset)), "connection_reset");
+        assert_eq!(close_reason(Some(ErrorKind::BrokenPipe)), "broken_pipe");
+        assert_eq!(
+            close_reason(Some(ErrorKind::ConnectionAborted)),
+            "connection_aborted"
+        );
+        assert_eq!(close_reason(Some(ErrorKind::UnexpectedEof)), "unexpected_eof");
+        assert_eq!(close_reason(Some(ErrorKind::TimedOut)), "timed_out");
+        assert_eq!(close_reason(Some(ErrorKind::NotConnected)), "not_connected");
+        // Any other (non-exhaustive) kind falls into the catch-all bucket.
+        assert_eq!(close_reason(Some(ErrorKind::OutOfMemory)), "other");
+    }
+
+    #[test]
+    fn spyio_captures_last_close_error_on_read_error() {
+        let mut spy = spyio_with(MockIoErr {
+            kind: io::ErrorKind::ConnectionReset,
+        });
+        let mut dst = [0u8; 4];
+        let mut read_buf = tokio::io::ReadBuf::new(&mut dst);
+        let mut cx = noop_context();
+
+        let poll = Pin::new(&mut spy).poll_read(&mut cx, &mut read_buf);
+
+        assert!(matches!(poll, Poll::Ready(Err(_))));
+        assert_eq!(spy.last_close_error, Some(io::ErrorKind::ConnectionReset));
+        assert_eq!(close_reason(spy.last_close_error), "connection_reset");
+    }
+
+    #[test]
+    fn spyio_captures_last_close_error_on_write_error() {
+        let mut spy = spyio_with(MockIoErr {
+            kind: io::ErrorKind::BrokenPipe,
+        });
+        let mut cx = noop_context();
+
+        let poll = Pin::new(&mut spy).poll_write(&mut cx, b"abc");
+
+        assert!(matches!(poll, Poll::Ready(Err(_))));
+        assert_eq!(spy.last_close_error, Some(io::ErrorKind::BrokenPipe));
+        assert_eq!(close_reason(spy.last_close_error), "broken_pipe");
     }
 }

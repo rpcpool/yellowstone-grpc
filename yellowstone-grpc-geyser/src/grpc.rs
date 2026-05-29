@@ -37,7 +37,7 @@ use {
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc, LazyLock, Mutex as StdMutex,
         },
         time::SystemTime,
@@ -1107,6 +1107,7 @@ impl GrpcService {
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         maybe_remote_peer_sk_addr: Option<SocketAddr>,
         cancellation_token: CancellationToken,
+        client_unresponsive: Arc<AtomicBool>,
         task_tracker: TaskTracker,
         subscription_tracker: SubscriptionTracker,
     ) {
@@ -1141,7 +1142,11 @@ impl GrpcService {
                     let _ = stream_tx.try_send(Err(Status::internal(
                         "server is shutting down try again later",
                     )));
-                    session.disconnect_reason = "server_shutdown";
+                    session.disconnect_reason = if client_unresponsive.load(Ordering::Acquire) {
+                        "client_unresponsive"
+                    } else {
+                        "server_shutdown"
+                    };
                     return;
                 }
                 Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
@@ -1161,7 +1166,11 @@ impl GrpcService {
                 _ = cancellation_token.cancelled() => {
                     info!("client #{id}: cancelled");
                     let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
-                    session.disconnect_reason = "server_shutdown";
+                    session.disconnect_reason = if client_unresponsive.load(Ordering::Acquire) {
+                        "client_unresponsive"
+                    } else {
+                        "server_shutdown"
+                    };
                     break 'outer;
                 }
                 mut message = client_rx.recv() => {
@@ -1562,6 +1571,10 @@ impl Geyser for GrpcService {
         });
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
+        // Set by the ping task before it cancels, so client_loop can attribute the
+        // disconnect to "client_unresponsive" instead of the generic "server_shutdown".
+        let client_unresponsive = Arc::new(AtomicBool::new(false));
+        let ping_unresponsive = Arc::clone(&client_unresponsive);
         let ping_stream_tx = stream_tx.clone();
         let ping_cancellation_token = client_cancellation_token.clone();
         let ping_client_cancel = client_cancellation_token.clone();
@@ -1585,6 +1598,7 @@ impl Geyser for GrpcService {
                             // does reject every geyser event thus we never write to the HTTP/2 stream and we never detect that the client TCP connection is closed.
                             // By sending a ping every 10 seconds, we can detect if the client is still alive and if it's not,
                             // we can cancel the client loop.
+                            ping_unresponsive.store(true, Ordering::Release);
                             ping_client_cancel.cancel();
                             info!("detected dead client #{id}");
                             break;
@@ -1672,6 +1686,7 @@ impl Geyser for GrpcService {
             self.debug_clients_tx.clone(),
             maybe_remote_peer_sk_addr,
             client_cancellation_token,
+            client_unresponsive,
             self.task_tracker.clone(),
             Arc::clone(&self.subscription_tracker),
         ));
@@ -1880,6 +1895,7 @@ mod tests {
             None,
             None,
             ct.clone(),
+            Arc::new(AtomicBool::new(false)),
             tt.clone(),
             Arc::clone(&st),
         ));

@@ -65,6 +65,14 @@ lazy_static::lazy_static! {
         "connections_total", "Total number of connections to gRPC service"
     ).unwrap();
 
+    static ref CONNECTIONS_CLOSED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "connections_closed_total",
+            "Total TCP connections closed, by socket-level close reason (connection_reset, broken_pipe, clean, etc). One count per TCP connection, not per gRPC subscription."
+        ),
+        &["reason"]
+    ).unwrap();
+
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
@@ -320,6 +328,7 @@ impl PrometheusService {
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
             register!(CONNECTIONS_TOTAL);
+            register!(CONNECTIONS_CLOSED);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
@@ -505,6 +514,10 @@ pub fn connections_total_dec() {
     CONNECTIONS_TOTAL.dec()
 }
 
+pub fn incr_connection_closed(reason: &str) {
+    CONNECTIONS_CLOSED.with_label_values(&[reason]).inc();
+}
+
 pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
     GRPC_SUBSCRIPTION_LIMIT_EXCEEDED
         .with_label_values(&[subscriber_id.as_ref()])
@@ -640,6 +653,7 @@ pub fn reset_metrics() {
     MISSED_STATUS_MESSAGE.reset();
     GRPC_MESSAGE_SENT.reset();
     GRPC_CLIENT_DISCONNECTS.reset();
+    CONNECTIONS_CLOSED.reset();
     GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
     TOTAL_TRAFFIC_SENT.reset();
     TRAFFIC_SENT_PER_REMOTE_IP.reset();
