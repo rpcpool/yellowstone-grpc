@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+
+## 2026-05-29
+
+- yellowstone-grpc-geyser 13.1.1
+
+### misc
+
+- geyser: enabled Jemalloc, optimize geyser event delivery timing and implemented eager flushing 
+Referenced PR(s) :[747](https://github.com/rpcpool/yellowstone-grpc/pull/747)
+
+### breaking
+
+- geyser: Removed parallel encoding. It performs 2x worse on transaction encoding and 10x worse on account encoding. The sync encoding function is still exposed in src/plugin/filter/encoder.rs.
+
 ## 2026-05-13
 
 - yellowstone-grpc-geyser-13.1.0

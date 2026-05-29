@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.1.0"
+version = "13.1.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -17,6 +17,8 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
+tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
+
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }

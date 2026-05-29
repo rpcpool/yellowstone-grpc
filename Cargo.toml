@@ -74,8 +74,6 @@ tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 vergen = "9.0.6"
 
-tikv-jemallocator = "0.6.1"
-
 # Agave Monorepo
 agave-geyser-plugin-interface = "~4.0.0-rc.0"
 solana-account-decoder = "~4.0.0-rc.0"
