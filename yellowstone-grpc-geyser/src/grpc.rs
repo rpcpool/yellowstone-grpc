@@ -68,7 +68,6 @@ use {
             IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest,
             SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
         },
-        prost::Message as ProstMessage,
     },
 };
 
@@ -1232,11 +1231,9 @@ impl GrpcService {
                                 messages.sort_by_key(|msg| msg.0);
                                 for (_msgid, message) in messages.iter() {
                                     for message in session.filter.get_updates(message, Some(commitment)) {
-                                        let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                         match stream_tx.send(Ok(message)).await {
                                             Ok(()) => {
                                                 metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                                metrics::incr_grpc_bytes_sent(&session.subscriber_id, proto_size);
                                             }
                                             Err(mpsc::error::SendError(_)) => {
                                                 error!("client #{id}: stream closed");
@@ -1278,11 +1275,9 @@ impl GrpcService {
                     if commitment == session.filter.get_commitment_level() {
                         for (_msgid, message) in messages.iter() {
                             for message in session.filter.get_updates(message, Some(commitment)) {
-                                let proto_size = message.encoded_len().min(u32::MAX as usize) as u32;
                                 match stream_tx.try_send(Ok(message)) {
                                     Ok(()) => {
                                         metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                        metrics::incr_grpc_bytes_sent(&session.subscriber_id, proto_size);
                                     }
                                     Err(mpsc::error::TrySendError::Full(_)) => {
                                         error!("client #{id}: lagged to send an update");
