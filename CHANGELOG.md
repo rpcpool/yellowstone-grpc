@@ -10,6 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 13.1.2
+
+### Features
+
+- geyser: add `connections_closed_total{reason}` metric that breaks down the TCP-level close cause (connection_reset, broken_pipe, unexpected_eof, clean, etc) behind an ungraceful `client_closed`, plus a `client_unresponsive` reason on `grpc_client_disconnects_total` for heartbeat-detected dead clients (previously mislabeled `server_shutdown`) ([#748](https://github.com/rpcpool/yellowstone-grpc/pull/748))
+
 
 ## 2026-05-29
 
