@@ -7,7 +7,7 @@ use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use yellowstone_grpc_proto::prelude as proto;
 use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
-use yellowstone_shmem_common::{EventType, GeyserMessage, SlotStatus};
+use yellowstone_shmem_common::{EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION};
 
 use crate::plugin::message::{
     Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
@@ -20,20 +20,30 @@ use crate::plugin::message::{
 pub struct ProstShmemDecoder;
 
 impl ShmemDecoder for ProstShmemDecoder {
-    fn decode(
-        &self,
-        slot: u64,
-        event_type: u8,
-        bytes: &[u8],
-    ) -> Result<GeyserMessage, DecodeError> {
+    fn decode(&self, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+        if bytes.len() < HEADER_SIZE {
+            return Err(DecodeError::DecodeError(format!(
+                "payload too short: {} < {HEADER_SIZE}", bytes.len()
+            )));
+        }
+        if bytes[0] != PAYLOAD_VERSION {
+            return Err(DecodeError::DecodeError(format!(
+                "version mismatch: got {}, expected {PAYLOAD_VERSION}", bytes[0]
+            )));
+        }
+        let slot = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
+        let event_type = bytes[9];
+        let body = &bytes[HEADER_SIZE..];
+
         let et = EventType::try_from(event_type)
             .map_err(|_| DecodeError::DecodeError(format!("unknown event_type: {event_type}")))?;
+
         match et {
-            EventType::Slot => decode_slot(bytes),
-            EventType::Account => decode_account(bytes),
-            EventType::Transaction => decode_transaction(slot, bytes),
-            EventType::Entry => decode_entry(bytes),
-            EventType::BlockMeta => decode_block_meta(bytes),
+            EventType::Slot => decode_slot(body),
+            EventType::Account => decode_account(body),
+            EventType::Transaction => decode_transaction(slot, body),
+            EventType::Entry => decode_entry(body),
+            EventType::BlockMeta => decode_block_meta(body),
         }
     }
 }
