@@ -75,12 +75,24 @@ import type {
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
 
+export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
+
 /**
  * Public channel options accepted by the SDK constructor.
  * This is sourced from the native N-API constructor signature to avoid
  * duplicating option fields in this file.
  */
 export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
+
+export interface ReconnectOptions {
+  enabled?: boolean;
+  backoff?: {
+    initialIntervalMs?: number;
+    multiplier?: number;
+    maxRetries?: number;
+  };
+  slotRetention?: number;
+}
 
 /**
  * Convert N-API `JsSubscribeUpdate` shape (with `updateOneof`) into the
@@ -190,16 +202,19 @@ export default class Client {
   private _insecureEndpoint: string;
   private _insecureXToken: string | undefined;
   private _channelOptions: ChannelOptions | undefined;
+  private _reconnectOptions: ReconnectOptions | undefined;
   private _grpcClient: unknown | null = null;
 
   constructor(
     endpoint: string,
     xToken: string | undefined,
     channel_options: ChannelOptions | undefined,
+    reconnect_options?: ReconnectOptions,
   ) {
     this._insecureEndpoint = endpoint;
     this._insecureXToken = xToken;
     this._channelOptions = channel_options;
+    this._reconnectOptions = reconnect_options;
   }
 
   private _connectedGrpcClient(): napi.GrpcClient {
@@ -215,6 +230,7 @@ export default class Client {
       this._insecureEndpoint,
       this._insecureXToken,
       this._channelOptions,
+      this._reconnectOptions,
     );
   }
 
@@ -314,7 +330,7 @@ export default class Client {
     });
   }
 
-  async subscribe(): Promise<ClientDuplexStream> {
+  async subscribe(request?: SubscribeRequest): Promise<ClientDuplexStream> {
     const grpcClient = this._connectedGrpcClient();
 
     // Inner stream.Duplex config passed to both stream.Readable and Writable.
@@ -330,7 +346,12 @@ export default class Client {
 
     // Native stream produces N-API generated JS objects; wrapper below adapts
     // to public protobuf-generated SDK shapes and Node stream semantics.
-    const stream = await grpcClient.subscribe();
+    const stream =
+      request === undefined
+        ? await grpcClient.subscribe()
+        : await grpcClient.subscribe(
+            Buffer.from(SubscribeRequestMessage.encode(request).finish()),
+          );
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
       try {

@@ -6,8 +6,11 @@ use yellowstone_grpc_proto::geyser::{
 };
 use yellowstone_grpc_proto::prelude::SubscribeRequest;
 
+use crate::AUTORECONNECT_FILTER_KEY;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscribeRequestValidationError {
+  ReservedFilterName,
   MissingFilter { path: String },
   MissingMemcmpData { path: String },
   MissingLamportsComparator { path: String },
@@ -16,6 +19,12 @@ pub enum SubscribeRequestValidationError {
 impl fmt::Display for SubscribeRequestValidationError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
+      Self::ReservedFilterName => {
+        write!(
+          f,
+          "invalid subscribe request: filter name {AUTORECONNECT_FILTER_KEY} is reserved"
+        )
+      }
       Self::MissingFilter { path } => {
         write!(
           f,
@@ -43,6 +52,10 @@ impl std::error::Error for SubscribeRequestValidationError {}
 pub fn validate_subscribe_request(
   request: &SubscribeRequest,
 ) -> Result<(), SubscribeRequestValidationError> {
+  if contains_reserved_autoreconnect_filter(request) {
+    return Err(SubscribeRequestValidationError::ReservedFilterName);
+  }
+
   for (account_key, account_filter) in &request.accounts {
     for (index, filter) in account_filter.filters.iter().enumerate() {
       let filter_path = format!("accounts[\"{account_key}\"].filters[{index}]");
@@ -69,6 +82,20 @@ pub fn validate_subscribe_request(
   }
 
   Ok(())
+}
+
+fn contains_reserved_filter_name<T>(filters: &std::collections::HashMap<String, T>) -> bool {
+  filters.contains_key(AUTORECONNECT_FILTER_KEY)
+}
+
+fn contains_reserved_autoreconnect_filter(request: &SubscribeRequest) -> bool {
+  contains_reserved_filter_name(&request.accounts)
+    || contains_reserved_filter_name(&request.slots)
+    || contains_reserved_filter_name(&request.transactions)
+    || contains_reserved_filter_name(&request.transactions_status)
+    || contains_reserved_filter_name(&request.blocks)
+    || contains_reserved_filter_name(&request.blocks_meta)
+    || contains_reserved_filter_name(&request.entry)
 }
 
 fn validate_memcmp_filter(
@@ -388,6 +415,19 @@ mod tests {
     request.accounts.get_mut("full").unwrap().filters = Vec::new();
 
     validate_subscribe_request(&request).expect("empty filters array should be valid");
+  }
+
+  #[test]
+  fn rejects_reserved_autoreconnect_filter_name() {
+    let mut request = fully_populated_request();
+    let full_filter = request.accounts.remove("full").unwrap();
+    request
+      .accounts
+      .insert(crate::AUTORECONNECT_FILTER_KEY.to_string(), full_filter);
+
+    let error = validate_subscribe_request(&request).expect_err("reserved filter name must fail");
+
+    assert_eq!(error, SubscribeRequestValidationError::ReservedFilterName);
   }
 
   #[test]

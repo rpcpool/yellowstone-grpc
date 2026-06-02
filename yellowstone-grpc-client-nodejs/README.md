@@ -25,6 +25,29 @@ npm run build
 
 Please refer to [examples/typescript](../examples/typescript/README.md) for some usage examples.
 
+### Auto reconnect
+
+Standard `subscribe` streams can opt into the native Rust client's reconnect,
+backfill, and deduplication layer by passing reconnect options as the fourth
+constructor argument:
+
+```ts
+const client = new Client(endpoint, xToken, channelOptions, {
+  backoff: {
+    initialIntervalMs: 100,
+    multiplier: 2,
+    maxRetries: 10,
+  },
+  slotRetention: 250,
+});
+
+await client.connect();
+const stream = await client.subscribe(request);
+```
+
+Omit the fourth argument, or pass `{ enabled: false }`, to keep the previous
+no-reconnect behavior. Deshred subscriptions are unchanged.
+
 ## Troubleshooting
 
 ### For macOS:

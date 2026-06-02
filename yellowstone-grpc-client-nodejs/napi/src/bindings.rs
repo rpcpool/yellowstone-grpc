@@ -47,6 +47,24 @@ pub struct JsChannelOptions {
   pub grpc_tcp_nodelay: Option<bool>,
 }
 
+#[napi(object)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct JsReconnectBackoff {
+  pub initial_interval_ms: Option<u32>,
+  pub multiplier: Option<f64>,
+  pub max_retries: Option<u32>,
+}
+
+#[napi(object)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct JsReconnectConfig {
+  /// Omitted or true enables reconnect when this object is provided.
+  /// False keeps legacy no-reconnect behavior.
+  pub enabled: Option<bool>,
+  pub backoff: Option<JsReconnectBackoff>,
+  pub slot_retention: Option<u32>,
+}
+
 impl Default for JsChannelOptions {
   /// Sets the following configuration to
   /// sensible defaults.

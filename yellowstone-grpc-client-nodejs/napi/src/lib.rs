@@ -41,6 +41,9 @@ pub mod js_types;
 
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
+#[napi(js_name = "AUTORECONNECT_FILTER_KEY")]
+pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
+
 /// Initialize crypto provider once.
 fn init_crypto_provider() {
   INITIALIZE_CRYPTO_PROVIDER.call_once(|| {
@@ -95,6 +98,14 @@ fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
   error
 }
 
+fn strip_autoreconnect_filter(update: &mut SubscribeUpdate) -> bool {
+  let before = update.filters.len();
+  update
+    .filters
+    .retain(|filter| filter != AUTORECONNECT_FILTER_KEY);
+  before != update.filters.len()
+}
+
 /// DuplexStream Engine
 ///
 /// The inner engine for a custom implementation of stream.Duplex
@@ -130,7 +141,24 @@ impl DuplexStream {
   pub fn subscribe<'env>(
     env: &'env Env,
     grpc_client: &GrpcClient,
+    initial_request_bytes: Option<Buffer>,
   ) -> Result<PromiseRaw<'env, Self>> {
+    let initial_request = match initial_request_bytes {
+      Some(request_bytes) => {
+        let request = SubscribeRequest::decode(request_bytes.as_ref()).map_err(|error| {
+          napi_error_with_cause(
+            napi::Status::InvalidArg,
+            "invalid SubscribeRequest payload",
+            &error,
+          )
+        })?;
+        validate_subscribe_request(&request).map_err(|error| {
+          napi_error_with_cause(napi::Status::InvalidArg, error.to_string(), &error)
+        })?;
+        Some(request)
+      }
+      None => None,
+    };
     let mut client = grpc_client.client.clone();
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
@@ -139,13 +167,16 @@ impl DuplexStream {
       async move {
         // Acquire lock, call subscribe, and immediately release the lock.
         let (mut stream_tx, mut stream_rx) = {
-          client.subscribe().await.map_err(|error| {
-            napi_error_with_cause(
-              napi::Status::GenericFailure,
-              "failed to open subscribe stream",
-              &error,
-            )
-          })?
+          client
+            .subscribe_with_request(initial_request)
+            .await
+            .map_err(|error| {
+              napi_error_with_cause(
+                napi::Status::GenericFailure,
+                "failed to open subscribe stream",
+                &error,
+              )
+            })?
         };
 
         // TODO : Fine tune unbounded channels.
@@ -196,7 +227,12 @@ impl DuplexStream {
               // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
               maybe_update_result = stream_rx.next() => {
                 match maybe_update_result {
-                  Some(Ok(update)) => {
+                  Some(Ok(mut update)) => {
+                    let stripped = strip_autoreconnect_filter(&mut update);
+                    if stripped && update.filters.is_empty() {
+                      continue;
+                    }
+
                     // JS reader side disappeared; no point continuing the worker.
                     if readable_tx.send(update).is_err() {
                       break;
@@ -653,7 +689,7 @@ mod tests {
     JsSubscribeDeshredRequest {
       deshred_transactions: HashMap::new(),
       ping: None,
-      slots: None,
+      slots: HashMap::new(),
     }
   }
 
@@ -777,6 +813,44 @@ mod tests {
       cause_message.to_string(),
     ));
     error
+  }
+
+  fn subscribe_update_with_filters(filters: &[&str]) -> SubscribeUpdate {
+    SubscribeUpdate {
+      filters: filters.iter().map(|filter| (*filter).to_string()).collect(),
+      update_oneof: None,
+      created_at: None,
+    }
+  }
+
+  #[test]
+  fn strip_autoreconnect_filter_removes_internal_filter_from_mixed_update() {
+    let mut update = subscribe_update_with_filters(&[crate::AUTORECONNECT_FILTER_KEY, "client"]);
+
+    let stripped = super::strip_autoreconnect_filter(&mut update);
+
+    assert!(stripped);
+    assert_eq!(update.filters, vec!["client".to_string()]);
+  }
+
+  #[test]
+  fn strip_autoreconnect_filter_leaves_internal_only_update_empty() {
+    let mut update = subscribe_update_with_filters(&[crate::AUTORECONNECT_FILTER_KEY]);
+
+    let stripped = super::strip_autoreconnect_filter(&mut update);
+
+    assert!(stripped);
+    assert!(update.filters.is_empty());
+  }
+
+  #[test]
+  fn strip_autoreconnect_filter_does_not_mark_naturally_empty_update_internal() {
+    let mut update = subscribe_update_with_filters(&[]);
+
+    let stripped = super::strip_autoreconnect_filter(&mut update);
+
+    assert!(!stripped);
+    assert!(update.filters.is_empty());
   }
 
   #[tokio::test]
@@ -1293,7 +1367,7 @@ mod tests {
     let request = JsSubscribeDeshredRequest {
       deshred_transactions,
       ping: Some(JsSubscribeRequestPing { id: 99 }),
-      slots: None,
+      slots: HashMap::new(),
     };
 
     stream
