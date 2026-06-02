@@ -776,8 +776,10 @@ pub struct JsSubscribeRequest<'env> {
     ::prost::alloc::string::String,
     JsSubscribeRequestFilterTransactions,
   >,
-  pub blocks:
-    ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterBlocks>,
+  pub blocks: ::std::collections::HashMap<
+    ::prost::alloc::string::String,
+    JsSubscribeRequestFilterBlocks<'env>,
+  >,
   pub blocks_meta:
     ::std::collections::HashMap<::prost::alloc::string::String, JsSubscribeRequestFilterBlocksMeta>,
   pub entry:
@@ -978,11 +980,48 @@ impl<'env> JsSubscribeRequest<'env> {
   }
 }
 #[napi(object)]
+pub struct JsCuckooFilter<'env> {
+  pub data: BufferSlice<'env>,
+  pub bucket_count: u32,
+  pub entries_per_bucket: u32,
+  pub fingerprint_bits: u32,
+  pub hash_seed: String,
+  pub hash_algorithm: i32,
+}
+impl<'env> JsCuckooFilter<'env> {
+  pub fn from_protobuf_to_js_type(env: &'env Env, value: CuckooFilter) -> napi::Result<Self> {
+    Ok(Self {
+      data: BufferSlice::copy_from(env, &value.data)?,
+      bucket_count: Ok::<_, napi::Error>(value.bucket_count)?,
+      entries_per_bucket: Ok::<_, napi::Error>(value.entries_per_bucket)?,
+      fingerprint_bits: Ok::<_, napi::Error>(value.fingerprint_bits)?,
+      hash_seed: Ok::<_, napi::Error>(value.hash_seed.to_string())?,
+      hash_algorithm: Ok::<_, napi::Error>(value.hash_algorithm)?,
+    })
+  }
+  pub fn from_js_to_protobuf_type(self) -> napi::Result<CuckooFilter> {
+    Ok(CuckooFilter {
+      data: Ok::<_, napi::Error>(self.data.as_ref().to_vec())?,
+      bucket_count: Ok::<_, napi::Error>(self.bucket_count)?,
+      entries_per_bucket: Ok::<_, napi::Error>(self.entries_per_bucket)?,
+      fingerprint_bits: Ok::<_, napi::Error>(self.fingerprint_bits)?,
+      hash_seed: self.hash_seed.parse::<u64>().map_err(|parse_error| {
+        __typegen_invalid_arg_with_cause(
+          format!("Invalid u64 value: {}", parse_error),
+          &parse_error,
+        )
+      })?,
+      hash_algorithm: Ok::<_, napi::Error>(self.hash_algorithm)?,
+    })
+  }
+}
+#[napi(object)]
 pub struct JsSubscribeRequestFilterAccounts<'env> {
   pub account: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
   pub owner: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
   pub filters: ::prost::alloc::vec::Vec<JsSubscribeRequestFilterAccountsFilter<'env>>,
   pub nonempty_txn_signature: ::core::option::Option<bool>,
+  pub cuckoo_accounts_filter: ::core::option::Option<JsCuckooFilter<'env>>,
 }
 impl<'env> JsSubscribeRequestFilterAccounts<'env> {
   pub fn from_protobuf_to_js_type(
@@ -1011,6 +1050,10 @@ impl<'env> JsSubscribeRequestFilterAccounts<'env> {
         .nonempty_txn_signature
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
         .transpose()?,
+      cuckoo_accounts_filter: value
+        .cuckoo_accounts_filter
+        .map(|option_inner_value| JsCuckooFilter::from_protobuf_to_js_type(env, option_inner_value))
+        .transpose()?,
     })
   }
   pub fn from_js_to_protobuf_type(self) -> napi::Result<SubscribeRequestFilterAccounts> {
@@ -1033,6 +1076,10 @@ impl<'env> JsSubscribeRequestFilterAccounts<'env> {
       nonempty_txn_signature: self
         .nonempty_txn_signature
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      cuckoo_accounts_filter: self
+        .cuckoo_accounts_filter
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
     })
   }
@@ -1253,16 +1300,16 @@ impl JsSubscribeRequestFilterTransactions {
   }
 }
 #[napi(object)]
-#[derive(Debug, Clone)]
-pub struct JsSubscribeRequestFilterBlocks {
+pub struct JsSubscribeRequestFilterBlocks<'env> {
   pub account_include: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
   pub include_transactions: ::core::option::Option<bool>,
   pub include_accounts: ::core::option::Option<bool>,
   pub include_entries: ::core::option::Option<bool>,
+  pub cuckoo_account_include: ::core::option::Option<JsCuckooFilter<'env>>,
 }
-impl JsSubscribeRequestFilterBlocks {
+impl<'env> JsSubscribeRequestFilterBlocks<'env> {
   pub fn from_protobuf_to_js_type(
-    env: &Env,
+    env: &'env Env,
     value: SubscribeRequestFilterBlocks,
   ) -> napi::Result<Self> {
     Ok(Self {
@@ -1282,6 +1329,10 @@ impl JsSubscribeRequestFilterBlocks {
       include_entries: value
         .include_entries
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      cuckoo_account_include: value
+        .cuckoo_account_include
+        .map(|option_inner_value| JsCuckooFilter::from_protobuf_to_js_type(env, option_inner_value))
         .transpose()?,
     })
   }
@@ -1303,6 +1354,10 @@ impl JsSubscribeRequestFilterBlocks {
       include_entries: self
         .include_entries
         .map(|option_inner_value| Ok::<_, napi::Error>(option_inner_value))
+        .transpose()?,
+      cuckoo_account_include: self
+        .cuckoo_account_include
+        .map(|option_inner_value| option_inner_value.from_js_to_protobuf_type())
         .transpose()?,
     })
   }
@@ -3314,6 +3369,7 @@ pub struct JsReward {
   pub post_balance: String,
   pub reward_type: i32,
   pub commission: ::prost::alloc::string::String,
+  pub commission_bps: ::prost::alloc::string::String,
 }
 impl JsReward {
   pub fn from_protobuf_to_js_type(env: &Env, value: Reward) -> napi::Result<Self> {
@@ -3323,6 +3379,7 @@ impl JsReward {
       post_balance: Ok::<_, napi::Error>(value.post_balance.to_string())?,
       reward_type: Ok::<_, napi::Error>(value.reward_type)?,
       commission: Ok::<_, napi::Error>(value.commission)?,
+      commission_bps: Ok::<_, napi::Error>(value.commission_bps)?,
     })
   }
   pub fn from_js_to_protobuf_type(self) -> napi::Result<Reward> {
@@ -3342,6 +3399,7 @@ impl JsReward {
       })?,
       reward_type: Ok::<_, napi::Error>(self.reward_type)?,
       commission: Ok::<_, napi::Error>(self.commission)?,
+      commission_bps: Ok::<_, napi::Error>(self.commission_bps)?,
     })
   }
 }

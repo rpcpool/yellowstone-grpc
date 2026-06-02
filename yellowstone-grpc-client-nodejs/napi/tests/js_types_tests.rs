@@ -73,6 +73,11 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
     JsSubscribeRequestFilterAccountsFilterMemcmp,
     SubscribeRequestFilterAccountsFilterMemcmp
   );
+  assert_conversion_signatures_for_env_type!(JsCuckooFilter, CuckooFilter);
+  assert_conversion_signatures_for_env_type!(
+    JsSubscribeRequestFilterBlocks,
+    SubscribeRequestFilterBlocks
+  );
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdate, SubscribeUpdate);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateDeshred, SubscribeUpdateDeshred);
   assert_conversion_signatures_for_env_type!(JsSubscribeUpdateAccount, SubscribeUpdateAccount);
@@ -126,10 +131,6 @@ fn generated_js_types_expose_expected_conversion_method_signatures() {
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeRequestFilterTransactions,
     SubscribeRequestFilterTransactions
-  );
-  assert_conversion_signatures_for_non_env_type!(
-    JsSubscribeRequestFilterBlocks,
-    SubscribeRequestFilterBlocks
   );
   assert_conversion_signatures_for_non_env_type!(
     JsSubscribeDeshredRequest,
@@ -264,6 +265,7 @@ fn js_reward_parses_i64_string_fields() {
     post_balance: "55".to_string(),
     reward_type: 2,
     commission: "0".to_string(),
+    commission_bps: "0".to_string(),
   };
   let protobuf_reward_value = js_reward_value.from_js_to_protobuf_type().unwrap();
   assert_eq!(protobuf_reward_value.lamports, 44);
@@ -428,6 +430,7 @@ fn js_subscribe_request_hash_map_conversion_preserves_account_filter_keys() {
       owner: vec![],
       filters: vec![],
       nonempty_txn_signature: None,
+      cuckoo_accounts_filter: None,
     },
   );
 

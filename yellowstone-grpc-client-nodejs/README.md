@@ -48,6 +48,56 @@ const stream = await client.subscribe(request);
 Omit the fourth argument, or pass `{ enabled: false }`, to keep the previous
 no-reconnect behavior. Deshred subscriptions are unchanged.
 
+### Compressed account filters
+
+For large account sets, use `CompressedAccountFilterSet` to send a compact
+cuckoo filter instead of a full explicit account list. The local set keeps exact
+membership for false-positive filtering.
+
+```ts
+import Client, {
+  CompressedAccountFilterSet,
+  SubscribeRequest,
+} from "@triton-one/yellowstone-grpc";
+
+const accounts = new CompressedAccountFilterSet(2_000_000);
+for (const pubkey of trackedPubkeys) {
+  accounts.insert(pubkey); // base58 string, Buffer, or Uint8Array
+}
+
+const request: SubscribeRequest = {
+  accounts: {},
+  slots: {},
+  transactions: {},
+  transactionsStatus: {},
+  blocks: {},
+  blocksMeta: {},
+  entry: {},
+  accountsDataSlice: [],
+};
+
+accounts.insertIntoSubscribeRequest(request, "tracked");
+const stream = await client.subscribe(request);
+
+stream.on("data", (update) => {
+  const pubkey = update.account?.account?.pubkey;
+  if (pubkey && accounts.contains(pubkey)) {
+    // exact local match
+  }
+});
+
+accounts.insert(newPubkey);
+accounts.remove(oldPubkey);
+
+if (accounts.isDirty()) {
+  accounts.insertIntoSubscribeRequest(request, "tracked");
+  stream.write(request);
+}
+```
+
+Use `insertIntoBlockSubscribeRequest(request, name)` when filtering account
+includes inside block subscriptions.
+
 ## Troubleshooting
 
 ### For macOS:

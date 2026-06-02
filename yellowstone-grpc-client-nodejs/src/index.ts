@@ -2,6 +2,7 @@
 
 // Import generated gRPC client and types.
 import {
+  CuckooHashAlgorithm,
   GetBlockHeightResponse as GetBlockHeightResponseMessage,
   GetLatestBlockhashResponse as GetLatestBlockhashResponseMessage,
   GetSlotResponse as GetSlotResponseMessage,
@@ -16,6 +17,7 @@ import {
 } from "./grpc/geyser";
 import type {
   CommitmentLevel,
+  CuckooFilter,
   GetBlockHeightResponse,
   GetLatestBlockhashResponse,
   GetSlotResponse,
@@ -25,6 +27,8 @@ import type {
   SubscribeDeshredRequest,
   SubscribeReplayInfoResponse,
   SubscribeRequest,
+  SubscribeRequestFilterAccounts,
+  SubscribeRequestFilterBlocks,
   SubscribeUpdateDeshred,
   SubscribeUpdate,
 } from "./grpc/geyser";
@@ -32,6 +36,8 @@ import type {
 // Reexport automatically generated types
 export {
   CommitmentLevel,
+  CuckooFilter,
+  CuckooHashAlgorithm,
   SubscribeDeshredRequest,
   SubscribeDeshredRequest_DeshredTransactionsEntry,
   SubscribeRequest,
@@ -196,6 +202,95 @@ function normalizeSubscribeDeshredRequest(
     deshredTransactions: normalizedEntries,
     slots: slots as SubscribeDeshredRequest["slots"],
   };
+}
+
+export type PubkeyInput = string | Uint8Array;
+
+function pubkeyInputToBuffer(pubkey: Uint8Array): Buffer {
+  return Buffer.from(pubkey);
+}
+
+function validateCuckooCapacity(maxCapacity: number): void {
+  if (
+    !Number.isSafeInteger(maxCapacity) ||
+    maxCapacity < 0 ||
+    maxCapacity > 0xffffffff
+  ) {
+    throw new Error(
+      "Invalid maxCapacity: expected an integer between 0 and 4294967295",
+    );
+  }
+}
+
+export class CompressedAccountFilterSet {
+  private _native: napi.CompressedAccountFilterSet;
+
+  constructor(maxCapacity: number) {
+    validateCuckooCapacity(maxCapacity);
+    this._native = new napi.CompressedAccountFilterSet(maxCapacity);
+  }
+
+  insert(pubkey: PubkeyInput): boolean {
+    return typeof pubkey === "string"
+      ? this._native.insert(pubkey)
+      : this._native.insertBytes(pubkeyInputToBuffer(pubkey));
+  }
+
+  remove(pubkey: PubkeyInput): boolean {
+    return typeof pubkey === "string"
+      ? this._native.remove(pubkey)
+      : this._native.removeBytes(pubkeyInputToBuffer(pubkey));
+  }
+
+  contains(pubkey: PubkeyInput): boolean {
+    return typeof pubkey === "string"
+      ? this._native.contains(pubkey)
+      : this._native.containsBytes(pubkeyInputToBuffer(pubkey));
+  }
+
+  len(): number {
+    return this._native.len();
+  }
+
+  capacity(): number {
+    return this._native.capacity();
+  }
+
+  isEmpty(): boolean {
+    return this._native.isEmpty();
+  }
+
+  isDirty(): boolean {
+    return this._native.isDirty();
+  }
+
+  takeDirty(): boolean {
+    return this._native.takeDirty();
+  }
+
+  toProto(): CuckooFilter {
+    return this._native.toProto() as CuckooFilter;
+  }
+
+  toAccountFilter(): SubscribeRequestFilterAccounts {
+    return this._native.toAccountFilter() as SubscribeRequestFilterAccounts;
+  }
+
+  toBlockFilter(): SubscribeRequestFilterBlocks {
+    return this._native.toBlockFilter() as SubscribeRequestFilterBlocks;
+  }
+
+  insertIntoSubscribeRequest(request: SubscribeRequest, name: string): void {
+    request.accounts ??= {};
+    request.accounts[name] = this.toAccountFilter();
+    this._native.takeDirty();
+  }
+
+  insertIntoBlockSubscribeRequest(request: SubscribeRequest, name: string): void {
+    request.blocks ??= {};
+    request.blocks[name] = this.toBlockFilter();
+    this._native.takeDirty();
+  }
 }
 
 export default class Client {

@@ -29,7 +29,7 @@ futures-channel = "0.3"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 yellowstone-grpc-client = "13.1.0"
-yellowstone-grpc-proto = "12.2.0"
+yellowstone-grpc-proto = "12.4.0"
 prost = "0.14"
 prost011 = { package = "prost", version = "0.11" }
 bs58 = { version = "0.5.0", features = ["alloc"] }
@@ -39,6 +39,7 @@ prost-types = "0.14"
 solana-storage-proto = "3.1.6"
 solana-transaction = "3.1.0"
 solana-transaction-error = { version = "3.1.0", features = ["wincode"] }
+solana-pubkey = "4.2.0"
 home = "0.5.11"
 
 [build-dependencies]
@@ -49,7 +50,7 @@ quote = "1"
 proc-macro2 = "1"
 walkdir = "2.5.0"
 napi-derive = "3.3.0"
-yellowstone-grpc-proto = "12.2.0"
+yellowstone-grpc-proto = "12.4.0"
 
 [dev-dependencies]
 syn = { version = "2", features = ["full"] }

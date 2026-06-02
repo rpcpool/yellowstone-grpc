@@ -1,6 +1,8 @@
 import Client, {
   ClientDeshredDuplexStream,
   ClientDuplexStream,
+  CompressedAccountFilterSet,
+  CuckooHashAlgorithm,
   txDeshredEncode,
 } from "../src";
 import * as net from "node:net";
@@ -765,6 +767,288 @@ function getAllGeyserMessageFns(): Array<[string, any]> {
     })
     .sort(([left], [right]) => left.localeCompare(right));
 }
+
+describe("CompressedAccountFilterSet", () => {
+  function pubkey(seed: number): Buffer {
+    return Buffer.alloc(32, seed);
+  }
+
+  test("tracks byte pubkeys exactly and exposes dirty state", () => {
+    const filter = new CompressedAccountFilterSet(100);
+
+    expect(filter.isEmpty()).toBe(true);
+    expect(filter.isDirty()).toBe(false);
+    expect(filter.takeDirty()).toBe(false);
+
+    expect(filter.insert(pubkey(1))).toBe(true);
+    expect(filter.insert(pubkey(1))).toBe(false);
+    expect(filter.contains(pubkey(1))).toBe(true);
+    expect(filter.contains(pubkey(2))).toBe(false);
+    expect(filter.len()).toBe(1);
+    expect(filter.isDirty()).toBe(true);
+    expect(filter.takeDirty()).toBe(true);
+    expect(filter.isDirty()).toBe(false);
+
+    expect(filter.remove(pubkey(2))).toBe(false);
+    expect(filter.contains(pubkey(1))).toBe(true);
+    expect(filter.remove(pubkey(1))).toBe(true);
+    expect(filter.contains(pubkey(1))).toBe(false);
+  });
+
+  test("builds proto, account filter, and block filter payloads", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    expect(filter.insert(pubkey(7))).toBe(true);
+
+    const proto = filter.toProto();
+    expect(proto.data.length).toBeGreaterThan(0);
+    expect(proto.bucketCount).toBeGreaterThan(0);
+    expect(proto.entriesPerBucket).toBe(4);
+    expect(proto.fingerprintBits).toBe(16);
+    expect(proto.hashAlgorithm).toBe(CuckooHashAlgorithm.SIP_HASH);
+
+    const accountFilter = filter.toAccountFilter();
+    expect(accountFilter.account).toEqual([]);
+    expect(accountFilter.owner).toEqual([]);
+    expect(accountFilter.filters).toEqual([]);
+    expect(accountFilter.cuckooAccountsFilter?.fingerprintBits).toBe(16);
+
+    const blockFilter = filter.toBlockFilter();
+    expect(blockFilter.accountInclude).toEqual([]);
+    expect(blockFilter.cuckooAccountInclude?.fingerprintBits).toBe(16);
+  });
+
+  test("inserts account cuckoo filter into SubscribeRequest and clears dirty flag", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    const request = makeMinimalSubscribeRequest();
+    filter.insert(pubkey(9));
+
+    filter.insertIntoSubscribeRequest(request, "tracked");
+
+    expect(filter.isDirty()).toBe(false);
+    expect(request.accounts.tracked.account).toEqual([]);
+    expect(
+      request.accounts.tracked.cuckooAccountsFilter?.data.length,
+    ).toBeGreaterThan(0);
+
+    const decoded = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+    expect(decoded.accounts.tracked.cuckooAccountsFilter?.fingerprintBits).toBe(
+      16,
+    );
+  });
+
+  test("inserts block cuckoo filter into SubscribeRequest and clears dirty flag", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    const request = makeMinimalSubscribeRequest();
+    filter.insert(pubkey(10));
+
+    filter.insertIntoBlockSubscribeRequest(request, "trackedBlocks");
+
+    expect(filter.isDirty()).toBe(false);
+    expect(request.blocks.trackedBlocks.accountInclude).toEqual([]);
+    expect(
+      request.blocks.trackedBlocks.cuckooAccountInclude?.data.length,
+    ).toBeGreaterThan(0);
+
+    const decoded = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+    expect(
+      decoded.blocks.trackedBlocks.cuckooAccountInclude?.fingerprintBits,
+    ).toBe(16);
+  });
+
+  test("rejects invalid capacity before entering native code", () => {
+    expect(() => new CompressedAccountFilterSet(-1)).toThrow(
+      "Invalid maxCapacity",
+    );
+    expect(() => new CompressedAccountFilterSet(1.5)).toThrow(
+      "Invalid maxCapacity",
+    );
+  });
+});
+
+describe("CompressedAccountFilterSet public SDK subscription behavior", () => {
+  function pubkey(seed: number): Buffer {
+    return Buffer.alloc(32, seed);
+  }
+
+  function makeNativeAccountUpdate(pubkeyBytes: Buffer): any {
+    return {
+      filters: ["tracked"],
+      createdAt: new Date(),
+      updateOneof: {
+        account: {
+          slot: "1",
+          isStartup: false,
+          account: {
+            pubkey: pubkeyBytes,
+            lamports: "1",
+            owner: Buffer.alloc(32, 3),
+            executable: false,
+            rentEpoch: "0",
+            data: Buffer.alloc(0),
+            writeVersion: "1",
+          },
+        },
+      },
+    };
+  }
+
+  test("subscribe initial request carries account cuckoo filter through public Client", async () => {
+    const nativeStream = {
+      close: jest.fn(),
+      writeRaw: jest.fn(),
+      read: jest.fn(() => new Promise(() => {})),
+    };
+    const nativeSubscribe = jest.fn().mockResolvedValue(nativeStream);
+    const client = new Client("http://localhost:10000", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: nativeSubscribe,
+    };
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(pubkey(1));
+    filter.insert(pubkey(2));
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoSubscribeRequest(request, "tracked");
+
+    const stream = await client.subscribe(request);
+
+    expect(nativeSubscribe).toHaveBeenCalledTimes(1);
+    expect(filter.isDirty()).toBe(false);
+
+    const forwardedBytes = nativeSubscribe.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
+    const accountFilter = decoded.accounts.tracked;
+
+    expect(accountFilter.account).toEqual([]);
+    expect(accountFilter.owner).toEqual([]);
+    expect(accountFilter.filters).toEqual([]);
+    expect(accountFilter.cuckooAccountsFilter?.data.length).toBeGreaterThan(0);
+    expect(accountFilter.cuckooAccountsFilter?.entriesPerBucket).toBe(4);
+    expect(accountFilter.cuckooAccountsFilter?.fingerprintBits).toBe(16);
+    expect(accountFilter.cuckooAccountsFilter?.hashAlgorithm).toBe(
+      CuckooHashAlgorithm.SIP_HASH,
+    );
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("stream write resends mutated cuckoo filter and exact local contains handles false positives", async () => {
+    const trackedPubkey = pubkey(1);
+    const addedPubkey = pubkey(2);
+    const falsePositivePubkey = pubkey(99);
+    const nativeUpdates = [
+      makeNativeAccountUpdate(addedPubkey),
+      makeNativeAccountUpdate(falsePositivePubkey),
+      undefined,
+    ];
+    const nativeStream = {
+      close: jest.fn(),
+      writeRaw: jest.fn(),
+      read: jest.fn(() => Promise.resolve(nativeUpdates.shift())),
+    };
+    const client = new Client("http://localhost:10000", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: jest.fn().mockResolvedValue(nativeStream),
+    };
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(trackedPubkey);
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoSubscribeRequest(request, "tracked");
+    const initialData = Buffer.from(
+      request.accounts.tracked.cuckooAccountsFilter?.data ?? [],
+    );
+
+    const stream = await client.subscribe(request);
+    stream.on("error", () => {});
+
+    filter.remove(trackedPubkey);
+    filter.insert(addedPubkey);
+    expect(filter.contains(trackedPubkey)).toBe(false);
+    expect(filter.contains(addedPubkey)).toBe(true);
+    expect(filter.isDirty()).toBe(true);
+
+    filter.insertIntoSubscribeRequest(request, "tracked");
+    expect(filter.isDirty()).toBe(false);
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+    expect(nativeStream.writeRaw).toHaveBeenCalledTimes(1);
+
+    const resentBytes = nativeStream.writeRaw.mock.calls[0][0] as Uint8Array;
+    const resentRequest = geyser.SubscribeRequest.decode(resentBytes);
+    const resentData = Buffer.from(
+      resentRequest.accounts.tracked.cuckooAccountsFilter?.data ?? [],
+    );
+
+    expect(resentData.length).toBeGreaterThan(0);
+    expect(Buffer.compare(resentData, initialData)).not.toBe(0);
+
+    const locallyAccepted: any[] = [];
+    stream.on("data", (update) => {
+      const pubkeyBytes = update.account?.account?.pubkey;
+      if (pubkeyBytes && filter.contains(pubkeyBytes)) {
+        locallyAccepted.push(update);
+      }
+    });
+
+    const terminalEvent = await waitForTerminalEvent(stream, 1000);
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(locallyAccepted).toHaveLength(1);
+    expect(locallyAccepted[0].account.account.pubkey).toEqual(addedPubkey);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("block cuckoo filter is sent through public stream writes", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(pubkey(5));
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoBlockSubscribeRequest(request, "trackedBlocks");
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+
+    const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
+    const blockFilter = decoded.blocks.trackedBlocks;
+
+    expect(blockFilter.accountInclude).toEqual([]);
+    expect(blockFilter.cuckooAccountInclude?.data.length).toBeGreaterThan(0);
+    expect(blockFilter.cuckooAccountInclude?.fingerprintBits).toBe(16);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("base58 user flow matches byte user flow", () => {
+    const zeroPubkey = "11111111111111111111111111111111";
+    const filter = new CompressedAccountFilterSet(100);
+
+    expect(filter.insert(zeroPubkey)).toBe(true);
+    expect(filter.contains(Buffer.alloc(32, 0))).toBe(true);
+    expect(filter.remove(Buffer.alloc(32, 0))).toBe(true);
+    expect(filter.contains(zeroPubkey)).toBe(false);
+  });
+});
 
 describe("ClientDuplexStream shutdown behavior", () => {
   test("shutdown: destroy emits terminal event and calls native close", async () => {
@@ -2054,6 +2338,32 @@ describe("subscribe response schema tests", () => {
     });
 
     await assertRequestsAcceptedOnSingleStream(requests);
+  }, 180000);
+
+  test("cuckoo account and block filters are accepted", async () => {
+    const accountFilter = new CompressedAccountFilterSet(100);
+    accountFilter.insert(Buffer.alloc(32, 1));
+    accountFilter.insert(Buffer.alloc(32, 2));
+    const accountRequest = baseSubscribeRequest();
+    accountFilter.insertIntoSubscribeRequest(accountRequest, "cuckoo_accounts");
+
+    const blockFilter = new CompressedAccountFilterSet(100);
+    blockFilter.insert(Buffer.alloc(32, 3));
+    blockFilter.insert(Buffer.alloc(32, 4));
+    const blockRequest = baseSubscribeRequest();
+    blockFilter.insertIntoBlockSubscribeRequest(blockRequest, "cuckoo_blocks");
+
+    expect(
+      accountRequest.accounts.cuckoo_accounts.cuckooAccountsFilter,
+    ).toBeDefined();
+    expect(
+      blockRequest.blocks.cuckoo_blocks.cuckooAccountInclude,
+    ).toBeDefined();
+
+    await assertRequestsAcceptedOnSingleStream([
+      { label: "cuckoo_accounts", request: accountRequest },
+      { label: "cuckoo_blocks", request: blockRequest },
+    ]);
   }, 180000);
 
   test("slots filter combinations are accepted", async () => {

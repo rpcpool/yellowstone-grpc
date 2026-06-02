@@ -11,6 +11,7 @@
 //! - Stop worker tasks deterministically when JS drops stream handles
 mod bindings;
 mod client;
+mod cuckoo;
 mod encoding;
 mod subscribe_request_validation;
 mod utils;
@@ -711,6 +712,7 @@ mod tests {
           )),
         }],
         nonempty_txn_signature: None,
+        cuckoo_accounts_filter: None,
       },
     );
 
