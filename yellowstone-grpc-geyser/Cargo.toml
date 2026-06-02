@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.1.1"
+version = "13.2.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -60,6 +60,7 @@ solana-logger = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-clock = { workspace = true }
+solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
@@ -79,6 +80,7 @@ prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
+yellowstone-block-machine = { workspace = true, default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
