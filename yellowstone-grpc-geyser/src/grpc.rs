@@ -16,8 +16,8 @@ use {
                 Filter,
             },
             message::{
-                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransactionInfo, SlotStatus,
+                CommitmentLevel, Message, MessageBlockMeta,
+                MessageSlot, SlotStatus,
             },
             proto::geyser_server::{Geyser, GeyserServer},
         },
@@ -29,11 +29,9 @@ use {
     bytesize::ByteSize,
     log::{error, info},
     prost_types::Timestamp,
-    smallvec::SmallVec,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
-    solana_pubkey::Pubkey,
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::HashMap,
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
