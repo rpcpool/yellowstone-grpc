@@ -579,6 +579,7 @@ module.exports = nativeBinding
 module.exports.DuplexStream = nativeBinding.DuplexStream
 module.exports.DuplexStreamDeshred = nativeBinding.DuplexStreamDeshred
 module.exports.GrpcClient = nativeBinding.GrpcClient
+module.exports.AUTORECONNECT_FILTER_KEY = nativeBinding.AUTORECONNECT_FILTER_KEY
 module.exports.decodeTxError = nativeBinding.decodeTxError
 module.exports.encodeDeshredTx = nativeBinding.encodeDeshredTx
 module.exports.encodeTx = nativeBinding.encodeTx

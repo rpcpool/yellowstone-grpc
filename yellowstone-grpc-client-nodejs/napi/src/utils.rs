@@ -1,7 +1,7 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm};
+use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcBuilder};
+use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -18,10 +18,65 @@ fn invalid_arg_with_cause(reason: impl Into<String>, cause: &dyn std::error::Err
   error
 }
 
+fn invalid_arg(reason: impl Into<String>) -> napi::Error {
+  let reason = reason.into();
+  let mut error = napi::Error::new(Status::InvalidArg, reason.clone());
+  error.set_cause(napi::Error::new(Status::InvalidArg, reason));
+  error
+}
+
+fn reconnect_config_from_js(
+  reconnect_config: Option<JsReconnectConfig>,
+) -> Result<Option<ReconnectConfig>> {
+  let Some(reconnect_config) = reconnect_config else {
+    return Ok(None);
+  };
+
+  if reconnect_config.enabled == Some(false) {
+    return Ok(None);
+  }
+
+  let mut native_config = ReconnectConfig::default();
+
+  if let Some(slot_retention) = reconnect_config.slot_retention {
+    if slot_retention == 0 {
+      return Err(invalid_arg(
+        "invalid reconnect.slotRetention: expected a positive integer",
+      ));
+    }
+    native_config = native_config.with_slot_retention(slot_retention as usize);
+  }
+
+  if let Some(backoff) = reconnect_config.backoff {
+    let initial_interval = backoff
+      .initial_interval_ms
+      .map(|ms| Duration::from_millis(ms as u64))
+      .unwrap_or(native_config.backoff.initial_interval);
+    let multiplier = backoff
+      .multiplier
+      .unwrap_or(native_config.backoff.multiplier);
+    let max_retries = backoff
+      .max_retries
+      .unwrap_or(native_config.backoff.max_retries);
+
+    if !multiplier.is_finite() || multiplier < 1.0 {
+      return Err(invalid_arg(
+        "invalid reconnect.backoff.multiplier: expected a finite number >= 1",
+      ));
+    }
+
+    native_config =
+      native_config.with_backoff(Backoff::new(initial_interval, multiplier, max_retries));
+  }
+
+  Ok(Some(native_config))
+}
+
 pub async fn get_client_builder(
   endpoint: String,
   x_token: Option<String>,
   channel_options: Option<JsChannelOptions>,
+  reconnect_config: Option<JsReconnectConfig>,
 ) -> Result<GeyserGrpcBuilder> {
   let use_tls = endpoint.starts_with("https://");
 
@@ -56,6 +111,10 @@ pub async fn get_client_builder(
           ))
         }
       };
+  }
+
+  if let Some(reconnect_config) = reconnect_config_from_js(reconnect_config)? {
+    grpc_client_builder = grpc_client_builder.set_reconnect_config(reconnect_config);
   }
 
   const DEFAULT_GRPC_CONNECT_TIMEOUT_MS: u32 = 10_000;
@@ -191,7 +250,7 @@ mod tests {
 
   #[tokio::test]
   async fn get_client_builder_invalid_endpoint_includes_cause() {
-    let error = get_client_builder("http://127.0.0.1:10000\n".to_string(), None, None)
+    let error = get_client_builder("http://127.0.0.1:10000\n".to_string(), None, None, None)
       .await
       .expect_err("invalid endpoint should fail");
     assert!(
@@ -212,6 +271,7 @@ mod tests {
       "http://127.0.0.1:10000".to_string(),
       Some("bad\nheader".to_string()),
       None,
+      None,
     )
     .await
     .expect_err("invalid x-token should fail");
@@ -222,6 +282,66 @@ mod tests {
     assert!(
       error.cause.is_some(),
       "expected native cause on invalid x-token"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_applies_reconnect_config() {
+    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
+    use std::time::Duration;
+
+    let builder = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        enabled: Some(true),
+        backoff: Some(JsReconnectBackoff {
+          initial_interval_ms: Some(125),
+          multiplier: Some(1.5),
+          max_retries: Some(8),
+        }),
+        slot_retention: Some(300),
+      }),
+    )
+    .await
+    .expect("valid reconnect config should build");
+
+    assert_eq!(
+      builder.reconnect_config.backoff.initial_interval,
+      Duration::from_millis(125)
+    );
+    assert_eq!(builder.reconnect_config.backoff.multiplier, 1.5);
+    assert_eq!(builder.reconnect_config.backoff.max_retries, 8);
+    assert_eq!(builder.reconnect_config.slot_retention, 300);
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_invalid_reconnect_config() {
+    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
+
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        enabled: Some(true),
+        backoff: Some(JsReconnectBackoff {
+          initial_interval_ms: None,
+          multiplier: Some(0.5),
+          max_retries: None,
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect_err("invalid multiplier should fail");
+
+    assert!(
+      error
+        .to_string()
+        .contains("invalid reconnect.backoff.multiplier"),
+      "unexpected error message: {error}"
     );
   }
 }

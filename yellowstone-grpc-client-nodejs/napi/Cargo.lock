@@ -108,6 +108,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4249,13 +4258,16 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.0.0"
+version = "13.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c3e9328306945410423b40714b0fe9bfe361e5eba1da3e0a63288228313bfb"
+checksum = "a66894f04139a5c4a2c1108fed68fc3e7efdf4120464ad86e14013c7e2cbeec5"
 dependencies = [
+ "arc-swap",
  "bytes",
  "futures",
  "hyper-util",
+ "log",
+ "pin-project",
  "thiserror 2.0.18",
  "tokio",
  "tonic",

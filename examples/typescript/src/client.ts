@@ -10,17 +10,24 @@ import Client, {
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
+import type { ReconnectOptions } from "@triton-one/yellowstone-grpc";
 
 async function main() {
   const args = parseCommandLineArgs();
+  const reconnectOptions = buildReconnectOptions(args);
 
   // Open connection.
-  const client = new Client(args.endpoint, args.xToken, {
-    // "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
-    grpcMaxDecodingMessageSize: 64 * 1024 * 1024
-  });
+  const client = new Client(
+    args.endpoint,
+    args.xToken,
+    {
+      // "grpc.max_receive_message_length": 64 * 1024 * 1024, // 64MiB
+      grpcMaxDecodingMessageSize: 64 * 1024 * 1024,
+    },
+    reconnectOptions,
+  );
 
-  await client.connect()
+  await client.connect();
 
   const commitment = parseCommitmentLevel(args.commitment);
 
@@ -64,7 +71,7 @@ async function main() {
 
     default:
       console.error(
-        `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`
+        `Unknown command: ${args["_"]}. Use "--help" for a list of supported commands.`,
       );
       break;
   }
@@ -79,52 +86,23 @@ function parseCommitmentLevel(commitment: string | undefined) {
   return CommitmentLevel[typedCommitment];
 }
 
-async function subscribeCommand(client: Client, args) {
+function buildReconnectOptions(args): ReconnectOptions | undefined {
+  if (!args.autoreconnect) {
+    return undefined;
+  }
 
-  // Subscribe for events
-  const stream = await client.subscribe();
+  return {
+    enabled: true,
+    backoff: {
+      initialIntervalMs: args.autoreconnectInitialIntervalMs,
+      multiplier: args.autoreconnectMultiplier,
+      maxRetries: args.autoreconnectMaxRetries,
+    },
+    slotRetention: args.autoreconnectSlotRetention,
+  };
+}
 
-  // Create `error` / `end` handler
-  const streamClosed = new Promise<void>((resolve, reject) => {
-    stream.on("error", (error) => {
-      reject(error);
-      stream.end();
-    });
-    stream.on("end", () => {
-      resolve();
-    });
-    stream.on("close", () => {
-      resolve();
-    });
-  });
-
-  // Handle updates
-  stream.on("data", (data) => {
-    if (
-      data.transaction &&
-      (args.transactionsParsed || args.transactionsDecodeErr)
-    ) {
-      const slot = data.transaction.slot;
-      const message = data.transaction.transaction;
-      if (args.transactionsParsed) {
-        const tx = txEncode.encode(message, txEncode.encoding.Json, 255, true);
-        console.log(
-          `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`
-        );
-      }
-      if (message.meta.err && args.transactionsDecodeErr) {
-        const err = txErrDecode.decode(message.meta.err.err);
-        console.log(
-          `TX filters: ${data.filters}, slot#${slot}, err: ${inspect(err)}}`
-        );
-      }
-      return;
-    }
-
-    console.log("data", data);
-  });
-
-  // Create subscribe request based on provided arguments.
+function buildSubscribeRequest(args): SubscribeRequest {
   const request: SubscribeRequest = {
     accounts: {},
     slots: {},
@@ -269,19 +247,74 @@ async function subscribeCommand(client: Client, args) {
     request.ping = { id: args.ping };
   }
 
-  // Send subscribe request
-  await new Promise<void>((resolve, reject) => {
-    stream.write(request, (err) => {
-      if (err === null || err === undefined) {
-        resolve();
-      } else {
-        reject(err);
-      }
+  return request;
+}
+
+async function subscribeCommand(client: Client, args) {
+  // Create subscribe request based on provided arguments.
+  const request = buildSubscribeRequest(args);
+
+  // Subscribe for events. When auto-reconnect is enabled, pass the initial
+  // request at stream creation so reconnects can resume that subscription.
+  const stream = args.autoreconnect
+    ? await client.subscribe(request)
+    : await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on("error", (error) => {
+      reject(error);
+      stream.end();
     });
-  }).catch((reason) => {
-    console.error(reason);
-    throw reason;
+    stream.on("end", () => {
+      resolve();
+    });
+    stream.on("close", () => {
+      resolve();
+    });
   });
+
+  // Handle updates
+  stream.on("data", (data) => {
+    if (
+      data.transaction &&
+      (args.transactionsParsed || args.transactionsDecodeErr)
+    ) {
+      const slot = data.transaction.slot;
+      const message = data.transaction.transaction;
+      if (args.transactionsParsed) {
+        const tx = txEncode.encode(message, txEncode.encoding.Json, 255, true);
+        console.log(
+          `TX filters: ${data.filters}, slot#${slot}, tx: ${JSON.stringify(tx)}`,
+        );
+      }
+      if (message.meta.err && args.transactionsDecodeErr) {
+        const err = txErrDecode.decode(message.meta.err.err);
+        console.log(
+          `TX filters: ${data.filters}, slot#${slot}, err: ${inspect(err)}}`,
+        );
+      }
+      return;
+    }
+
+    console.log("data", data);
+  });
+
+  // Send subscribe request
+  if (!args.autoreconnect) {
+    await new Promise<void>((resolve, reject) => {
+      stream.write(request, (err) => {
+        if (err === null || err === undefined) {
+          resolve();
+        } else {
+          reject(err);
+        }
+      });
+    }).catch((reason) => {
+      console.error(reason);
+      throw reason;
+    });
+  }
 
   await streamClosed;
 }
@@ -317,12 +350,12 @@ async function subscribeDeshredCommand(client: Client, args) {
           txDeshredEncode.encoding.JsonParsed,
         );
         console.log(
-          `DESHRED filters: ${data.filters}, slot#${data.deshredTransaction.slot}, tx: ${JSON.stringify(tx)}`
+          `DESHRED filters: ${data.filters}, slot#${data.deshredTransaction.slot}, tx: ${JSON.stringify(tx)}`,
         );
       } catch (error) {
         console.error(
           `failed to parse deshred tx (slot#${data.deshredTransaction.slot})`,
-          error
+          error,
         );
       }
       return;
@@ -330,7 +363,7 @@ async function subscribeDeshredCommand(client: Client, args) {
 
     console.log("data", data);
   });
-  
+
   const request: SubscribeDeshredRequest = {
     deshredTransactions: {
       client: {
@@ -377,6 +410,31 @@ function parseCommandLineArgs() {
         describe: "commitment level",
         choices: ["processed", "confirmed", "finalized"],
       },
+      autoreconnect: {
+        default: false,
+        describe: "enable auto-reconnect for standard subscribe streams",
+        type: "boolean",
+      },
+      "autoreconnect-initial-interval-ms": {
+        default: 10,
+        describe: "auto-reconnect first retry delay in milliseconds",
+        type: "number",
+      },
+      "autoreconnect-multiplier": {
+        default: 2,
+        describe: "auto-reconnect exponential backoff multiplier",
+        type: "number",
+      },
+      "autoreconnect-max-retries": {
+        default: 3,
+        describe: "auto-reconnect retry count per reconnect attempt",
+        type: "number",
+      },
+      "autoreconnect-slot-retention": {
+        default: 250,
+        describe: "slots retained for auto-reconnect deduplication",
+        type: "number",
+      },
     })
     .command("subscribe-replay-info", "get subscribe replay info")
     .command("ping", "single ping of the RPC server")
@@ -394,7 +452,7 @@ function parseCommandLineArgs() {
             demandOption: true,
           },
         });
-      }
+      },
     )
     .command("subscribe", "subscribe to events", (yargs) => {
       return yargs.options({
@@ -571,42 +629,46 @@ function parseCommandLineArgs() {
         },
       });
     })
-    .command("subscribeDeshred", "subscribe to deshred transactions", (yargs) => {
-      return yargs.options({
-        "deshred-parsed": {
-          default: false,
-          describe: "parse deshred transactions using txDeshredEncode",
-          type: "boolean",
-        },
-        "deshred-vote": {
-          description: "filter vote transactions",
-          type: "boolean",
-        },
-        "deshred-account-include": {
-          default: [],
-          description:
-            "filter included accounts in deshred transactions (static + ALT)",
-          type: "array",
-        },
-        "deshred-account-exclude": {
-          default: [],
-          description:
-            "filter excluded accounts in deshred transactions (static + ALT)",
-          type: "array",
-        },
-        "deshred-account-required": {
-          default: [],
-          description:
-            "filter required accounts in deshred transactions (static + ALT)",
-          type: "array",
-        },
-        ping: {
-          default: undefined,
-          description: "send ping request in subscribeDeshred",
-          type: "number",
-        },
-      });
-    })
+    .command(
+      "subscribeDeshred",
+      "subscribe to deshred transactions",
+      (yargs) => {
+        return yargs.options({
+          "deshred-parsed": {
+            default: false,
+            describe: "parse deshred transactions using txDeshredEncode",
+            type: "boolean",
+          },
+          "deshred-vote": {
+            description: "filter vote transactions",
+            type: "boolean",
+          },
+          "deshred-account-include": {
+            default: [],
+            description:
+              "filter included accounts in deshred transactions (static + ALT)",
+            type: "array",
+          },
+          "deshred-account-exclude": {
+            default: [],
+            description:
+              "filter excluded accounts in deshred transactions (static + ALT)",
+            type: "array",
+          },
+          "deshred-account-required": {
+            default: [],
+            description:
+              "filter required accounts in deshred transactions (static + ALT)",
+            type: "array",
+          },
+          ping: {
+            default: undefined,
+            description: "send ping request in subscribeDeshred",
+            type: "number",
+          },
+        });
+      },
+    )
     .demandCommand(1)
     .help().argv;
 }
