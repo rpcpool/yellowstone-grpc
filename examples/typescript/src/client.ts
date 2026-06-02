@@ -2,6 +2,7 @@ import yargs from "yargs";
 import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
+  CompressedAccountFilterSet,
   SubscribeDeshredRequest,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
@@ -102,7 +103,36 @@ function buildReconnectOptions(args): ReconnectOptions | undefined {
   };
 }
 
-function buildSubscribeRequest(args): SubscribeRequest {
+function stringArray(values: unknown[] | undefined): string[] {
+  return (values ?? []).map((value) => String(value));
+}
+
+function buildCompressedAccountSet(
+  pubkeys: unknown[] | undefined,
+  maxCapacity: number | undefined,
+  optionName: string,
+): CompressedAccountFilterSet {
+  const trackedPubkeys = stringArray(pubkeys);
+  if (trackedPubkeys.length === 0) {
+    throw new Error(`${optionName} requires at least one pubkey`);
+  }
+
+  const accounts = new CompressedAccountFilterSet(
+    maxCapacity ?? trackedPubkeys.length,
+  );
+  for (const pubkey of trackedPubkeys) {
+    accounts.insert(pubkey);
+  }
+
+  return accounts;
+}
+
+type BuiltSubscribeRequest = {
+  request: SubscribeRequest;
+  accountCompressedFilter?: CompressedAccountFilterSet;
+};
+
+function buildSubscribeRequest(args): BuiltSubscribeRequest {
   const request: SubscribeRequest = {
     accounts: {},
     slots: {},
@@ -115,6 +145,32 @@ function buildSubscribeRequest(args): SubscribeRequest {
     accountsDataSlice: [],
     ping: undefined,
   };
+  let accountCompressedFilter: CompressedAccountFilterSet | undefined;
+
+  if (args.accountsCompressed && !args.accounts) {
+    throw new Error("--accounts-compressed requires --accounts");
+  }
+
+  if (args.blocksCompressed && !args.blocks) {
+    throw new Error("--blocks-compressed requires --blocks");
+  }
+
+  if (args.accountsCompressed) {
+    accountCompressedFilter = buildCompressedAccountSet(
+      args.accountsAccount,
+      args.accountsCompressedCapacity,
+      "--accounts-compressed",
+    );
+  }
+
+  const blockCompressedFilter = args.blocksCompressed
+    ? buildCompressedAccountSet(
+        args.blocksAccountInclude,
+        args.blocksCompressedCapacity,
+        "--blocks-compressed",
+      )
+    : undefined;
+
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
 
@@ -174,11 +230,14 @@ function buildSubscribeRequest(args): SubscribeRequest {
     }
 
     request.accounts.client = {
-      account: args.accountsAccount,
-      owner: args.accountsOwner,
+      ...(accountCompressedFilter?.toAccountFilter() ?? {}),
+      account: accountCompressedFilter ? [] : stringArray(args.accountsAccount),
+      owner: stringArray(args.accountsOwner),
       filters,
       nonemptyTxnSignature: args.accountsNonemptytxnsignature,
     };
+
+    accountCompressedFilter?.takeDirty();
   }
 
   if (args.slots) {
@@ -215,11 +274,16 @@ function buildSubscribeRequest(args): SubscribeRequest {
 
   if (args.blocks) {
     request.blocks.client = {
-      accountInclude: args.blocksAccountInclude,
+      ...(blockCompressedFilter?.toBlockFilter() ?? {}),
+      accountInclude: blockCompressedFilter
+        ? []
+        : stringArray(args.blocksAccountInclude),
       includeTransactions: args.blocksIncludeTransactions,
       includeAccounts: args.blocksIncludeAccounts,
       includeEntries: args.blocksIncludeEntries,
     };
+
+    blockCompressedFilter?.takeDirty();
   }
 
   if (args.blocksMeta) {
@@ -247,12 +311,12 @@ function buildSubscribeRequest(args): SubscribeRequest {
     request.ping = { id: args.ping };
   }
 
-  return request;
+  return { request, accountCompressedFilter };
 }
 
 async function subscribeCommand(client: Client, args) {
   // Create subscribe request based on provided arguments.
-  const request = buildSubscribeRequest(args);
+  const { request, accountCompressedFilter } = buildSubscribeRequest(args);
 
   // Subscribe for events. When auto-reconnect is enabled, pass the initial
   // request at stream creation so reconnects can resume that subscription.
@@ -295,6 +359,13 @@ async function subscribeCommand(client: Client, args) {
         );
       }
       return;
+    }
+
+    if (accountCompressedFilter && data.account) {
+      const pubkey = data.account.account?.pubkey;
+      if (!pubkey || !accountCompressedFilter.contains(pubkey)) {
+        return;
+      }
     }
 
     console.log("data", data);
@@ -466,6 +537,17 @@ function parseCommandLineArgs() {
           describe: "filter by account pubkey",
           type: "array",
         },
+        "accounts-compressed": {
+          default: false,
+          describe:
+            "send --accounts-account pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "accounts-compressed-capacity": {
+          describe:
+            "max capacity for --accounts-compressed; defaults to number of --accounts-account values",
+          type: "number",
+        },
         "accounts-owner": {
           default: [],
           describe: "filter by owner pubkey",
@@ -601,6 +683,17 @@ function parseCommandLineArgs() {
           default: [],
           description: "filter included account in transactions",
           type: "array",
+        },
+        "blocks-compressed": {
+          default: false,
+          description:
+            "send --blocks-account-include pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "blocks-compressed-capacity": {
+          description:
+            "max capacity for --blocks-compressed; defaults to number of --blocks-account-include values",
+          type: "number",
         },
         "blocks-include-transactions": {
           default: false,
