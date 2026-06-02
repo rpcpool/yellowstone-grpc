@@ -207,7 +207,7 @@ function normalizeSubscribeDeshredRequest(
 export type PubkeyInput = string | Uint8Array;
 
 function pubkeyInputToBuffer(pubkey: Uint8Array): Buffer {
-  return Buffer.from(pubkey);
+  return Buffer.isBuffer(pubkey) ? pubkey : Buffer.from(pubkey);
 }
 
 function validateCuckooCapacity(maxCapacity: number): void {
