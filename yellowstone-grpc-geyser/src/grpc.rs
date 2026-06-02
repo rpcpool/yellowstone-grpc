@@ -737,6 +737,8 @@ impl GrpcService {
         const PROCESSED_MESSAGES_MAX: usize = 31;
 
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        let mut confirmed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        let mut finalized_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
@@ -763,18 +765,21 @@ impl GrpcService {
                         metrics::message_queue_size_dec();
 
                         buffered_messages.push(message);
-
                         if buffered_messages.len() >= PROCESSED_MESSAGES_MAX {
                             break;
                         }
                     }
-                    let mut confirmed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    let mut finalized_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
                     for message in buffered_messages.drain(..) {
                         block_machine.add(message.clone());
 
-                        match &message {
+                        if let Some(blocks_meta_tx) = &blocks_meta_tx {
+                            if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
+                                let _ = blocks_meta_tx.send(message.clone());
+                            }
+                        }
+
+                        match message {
                             Message::Slot(slot_message) => {
                                 metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                                 // Only match on slot lifecycle update not commitment update, as
@@ -787,35 +792,33 @@ impl GrpcService {
                                 ) {
                                     processed_messages.push(Message::Slot(slot_message.clone()));
                                     confirmed_messages.push(Message::Slot(slot_message.clone()));
-                                    finalized_messages.push(Message::Slot(slot_message.clone()));
+                                    finalized_messages.push(Message::Slot(slot_message));
                                 }
                             }
                             Message::Account(_) | Message::BlockMeta(_) | Message::Transaction(_) | Message::Entry(_) => {
-                                processed_messages.push(message.clone());
+                                processed_messages.push(message);
                             }
                             Message::Block(_) => {
                                unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
                             }
                         }
-                        if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                            if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
-                                let _ = blocks_meta_tx.send(message.clone());
-                            }
-                        }
                     }
-
-                    encode_messages(&processed_messages);
-
 
                     if !processed_messages.is_empty() {
+                        encode_messages(&processed_messages);
                         GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(std::mem::take(&mut processed_messages))));
+                        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
+                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
-                    for message in confirmed_messages {
-                        let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(vec![message])));
+
+                    if !confirmed_messages.is_empty() {
+                        let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(confirmed_messages)));
+                        confirmed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
-                    for message in finalized_messages {
-                        let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(vec![message])));
+
+                    if !finalized_messages.is_empty() {
+                        let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(finalized_messages)));
+                        finalized_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                     }
 
                     while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
