@@ -76,7 +76,7 @@ release:
         owner: rpcpool
         name: yellowstone-grpc
     #disable: '{{ .Prerelease != "" }}'
-    draft: true # publish as draft release to begin with
+    #draft: true # publish as draft release to begin with
     header: |
         rust {{ .Env.RUST_VERSION }}
     extra_files:
