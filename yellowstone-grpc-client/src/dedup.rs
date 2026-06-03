@@ -9,7 +9,8 @@ use {
         geyser::SubscribeUpdateDeshred,
         prelude::{
             subscribe_update::UpdateOneof,
-            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, SubscribeUpdate, SlotStatus
+            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, SlotStatus,
+            SubscribeUpdate,
         },
     },
 };
@@ -18,18 +19,6 @@ pub(crate) const DEFAULT_SLOT_RETENTION: usize = 250;
 
 // SLOT_CREATED_BANK = 5
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;
-
-pub(crate) struct EntryIdentity {
-    pub slot: u64,
-    pub index: u64,
-    pub hash: [u8; 32],
-}
-
-/// An entry whose hash conflicts with the one already recorded for its (slot, index).
-pub(crate) struct EntryDivergence {
-    pub entry: EntryIdentity, // `entry.hash` is the value we just received
-    pub expected: [u8; 32],
-}
 
 /// Wrapper stream that filters out duplicate subscribe updates.
 pub struct DedupStream<S> {
@@ -57,23 +46,16 @@ where
         let this = self.get_mut();
         loop {
             match this.inner.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(msg))) => {
-                    if let Some(EntryDivergence { entry, expected }) = this.state.entry_divergence(&msg) {
-                        // different block for the same partial slot on the node we reconnected to.
-                        // FailedPrecondition is NOT in is_recoverable_status_code, so AutoReconnect
-                        // terminates instead of reconnecting.
-                        return Poll::Ready(Some(Err(Status::failed_precondition(format!(
-                            "equivocation: slot {} entry {} hash mismatch across nodes: expected {expected:?}, got {:?}",
-                            entry.slot, entry.index, entry.hash,
-                        )))));
-                    }
-                    if this.state.is_duplicate(&msg) {
-                        continue;
-                    }
-
-                    this.state.record(&msg);
-                    return Poll::Ready(Some(Ok(msg)));
-                }
+                Poll::Ready(Some(Ok(msg))) => match msg.extract_key() {
+                    None => return Poll::Ready(Some(Ok(msg))),
+                    Some((slot, key)) => match this.state.observe(slot, key) {
+                        Ok(true) => continue,                           // duplicate: skip
+                        Ok(false) => return Poll::Ready(Some(Ok(msg))), // new: forward
+                        // divergence: FailedPrecondition is not in is_recoverable_status_code,
+                        // so AutoReconnect terminates instead of reconnecting.
+                        Err(status) => return Poll::Ready(Some(Err(status))),
+                    },
+                },
                 other => return other,
             }
         }
@@ -86,48 +68,40 @@ pub(crate) enum DedupKey {
     Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
     Transaction(u64),                    // index
     TransactionStatus(u64),              // index
-    Entry(u64),                          // index
+    Entry(u64, [u8; 32]),                // index, hash
     BlockMeta,
     Block(u64),
     DeshredTransaction([u8; 64]), // signature
 }
 
+#[derive(Debug, Default, Clone)]
+struct SlotState {
+    keys: HashSet<DedupKey>,         // inflight_slots[slot]
+    statuses: HashSet<i32>,          // inflight_slot_statuses[slot] + slot_processed[slot]
+    entries: HashMap<u64, [u8; 32]>, // entry_hashes[slot]; index -> hash
+    sealed: bool,                    // "is this slot a key in slot_processed?"
+}
+
 #[derive(Debug, Clone)]
 /// Tracks seen messages per slot so we can filter duplicates during replay after reconnect.
 pub struct DedupState {
-    // slot being processed -> set of message keys seen for that slot
-    inflight_slots: HashMap<u64, HashSet<DedupKey>>, // slot -> message_key
-    // slot being processed -> set of visited slot statuses
-    inflight_slot_statuses: HashMap<u64, HashSet<i32>>, // slot -> slot status
-    /// slot already finalized by BlockMeta -> set of slot statuses seen for that slot
-    slot_processed: HashMap<u64, HashSet<i32>>, // slot -> slot status
+    slots: HashMap<u64, SlotState>,
     slot_order: VecDeque<u64>,
     slot_retention: usize,
-    // partial slots only: slot -> (entry index -> entry hash). dropped on BlockMeta/prune.
-    entry_hashes: HashMap<u64, HashMap<u64, [u8; 32]>>,
 }
 
 impl Default for DedupState {
     fn default() -> Self {
         Self {
-            inflight_slots: Default::default(),
-            inflight_slot_statuses: Default::default(),
-            slot_processed: Default::default(),
+            slots: Default::default(),
             slot_order: Default::default(),
             slot_retention: DEFAULT_SLOT_RETENTION,
-            entry_hashes: Default::default(),
         }
     }
 }
 
 pub(crate) trait Dedupable {
     fn extract_key(&self) -> Option<(u64, DedupKey)>;
-
-    /// Identifies an Entry update for partial-slot divergence detection.
-    /// None for non-entry updates.
-    fn entry_identity(&self) -> Option<EntryIdentity> {
-        None
-    }
 }
 
 impl Dedupable for SubscribeUpdate {
@@ -153,19 +127,13 @@ impl Dedupable for SubscribeUpdate {
             UpdateOneof::TransactionStatus(m) => {
                 Some((m.slot, DedupKey::TransactionStatus(m.index)))
             }
-            UpdateOneof::Entry(m) => Some((m.slot, DedupKey::Entry(m.index))),
+            UpdateOneof::Entry(m) => {
+                let hash = <[u8; 32]>::try_from(m.hash.as_slice()).ok()?;
+                Some((m.slot, DedupKey::Entry(m.index, hash)))
+            }
             UpdateOneof::BlockMeta(m) => Some((m.slot, DedupKey::BlockMeta)),
             UpdateOneof::Block(m) => Some((m.slot, DedupKey::Block(m.slot))),
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
-        }
-    }
-
-    fn entry_identity(&self) -> Option<EntryIdentity> {
-        if let Some(UpdateOneof::Entry(m)) = self.update_oneof.as_ref() {
-            let hash = <[u8; 32]>::try_from(m.hash.as_slice()).ok()?;
-            Some(EntryIdentity { slot: m.slot, index: m.index, hash })
-        } else {
-            None
         }
     }
 }
@@ -195,165 +163,102 @@ impl DedupState {
         }
     }
 
-    /// Returns true if this update was previously recorded for its slot.
-    pub(crate) fn is_duplicate(&self, msg: &impl Dedupable) -> bool {
-        if let Some((slot, key)) = msg.extract_key() {
-            match key {
-                DedupKey::Slot(status) => {
-                    // Rollback invalidation depends on receiving CreatedBank. The server only emits
-                    // interslot statuses (CreatedBank etc.) to filters with interslot_updates=true
-                    // (see FilterSlots::get_updates). So this guard is dormant unless the user's slot filter sets interslot_updates.
-
-                    // repeated CreatedBank = rollback signal; never dedup it, record() acts on it
-                    if status == CREATED_BANK_STATUS && self.has_created_bank(slot) {
-                        return false;
-                    }
-                    if self
-                        .slot_processed
-                        .get(&slot)
-                        .is_some_and(|statuses| statuses.contains(&status))
-                    {
-                        true
-                    } else {
-                        self.inflight_slot_statuses
-                            .get(&slot)
-                            .is_some_and(|statuses| statuses.contains(&status))
-                    }
-                }
-                _ => {
-                    let is_inflight = self
-                        .inflight_slots
-                        .get(&slot)
-                        .is_some_and(|keys| keys.contains(&key));
-
-                    if is_inflight {
-                        true
-                    } else {
-                        self.slot_processed.contains_key(&slot)
-                    }
-                }
-            }
-        } else {
-            false
+    fn slot_mut(&mut self, slot: u64) -> &mut SlotState {
+        if !self.slots.contains_key(&slot) {
+            self.slot_order.push_back(slot);
         }
+        self.slots.entry(slot).or_default()
     }
 
-    /// Records an update key and prunes old slots when retention is exceeded.
-    pub(crate) fn record(&mut self, msg: &impl Dedupable) {
-        // track entry hash for partial-slot divergence detection
-        if let Some(e) = msg.entry_identity() {
-            self.entry_hashes.entry(e.slot).or_default().insert(e.index, e.hash);
-        }
+    fn has_created_bank(&self, slot: u64) -> bool {
+        self.slots
+            .get(&slot)
+            .is_some_and(|s| s.statuses.contains(&CREATED_BANK_STATUS))
+    }
 
-        if let Some((slot, key)) = msg.extract_key() {
-            // second CreatedBank => rollback: drop accumulated state for this slot
-            if let DedupKey::Slot(status) = key {
+    /// Ok(true) = duplicate (skip), Ok(false) = new (forward), Err = divergence (terminate).
+    pub(crate) fn observe(&mut self, slot: u64, key: DedupKey) -> Result<bool, Status> {
+        match key {
+            DedupKey::Slot(status) => {
+                // Rollback invalidation depends on receiving CreatedBank. The server only emits
+                // interslot statuses (CreatedBank etc.) to filters with interslot_updates=true
+                // (see FilterSlots::get_updates). So this guard is dormant unless the user's slot filter sets interslot_updates.
+
+                // second CreatedBank => rollback: wipe the whole slot, then record fresh
                 if status == CREATED_BANK_STATUS && self.has_created_bank(slot) {
                     self.clear_slot(slot);
+                } else if self
+                    .slots
+                    .get(&slot)
+                    .is_some_and(|s| s.statuses.contains(&status))
+                {
+                    return Ok(true);
                 }
+                self.slot_mut(slot).statuses.insert(status);
             }
-
-            self.enqueue_slot(slot);
-
-            match key {
-                DedupKey::Slot(status) => {
-                    
-                    if let Some(processed) = self.slot_processed.get_mut(&slot) {
-                        processed.insert(status);
-                    } else {
-                        self.inflight_slot_statuses
-                            .entry(slot)
-                            .or_default()
-                            .insert(status);
+            DedupKey::Entry(index, hash) => {
+                let state = self.slot_mut(slot);
+                if state.sealed {
+                    return Ok(true); // sealed slot: not tracked (partial slots only)
+                }
+                match state.entries.get(&index) {
+                    Some(&seen) if seen == hash => return Ok(true),
+                    Some(&seen) => {
+                        return Err(Status::failed_precondition(format!(
+                            "equivocation: slot {slot} entry {index} hash mismatch: \
+                            expected {seen:?}, got {hash:?}"
+                        )));
+                    }
+                    None => {
+                        state.entries.insert(index, hash);
                     }
                 }
-                DedupKey::BlockMeta => {
-                    self.mark_slot_as_processed(slot);
-                }
-                key => {
-                    self.inflight_slots.entry(slot).or_default().insert(key);
-                }
             }
-
-            self.prune();
+            DedupKey::BlockMeta => {
+                let state = self.slot_mut(slot);
+                if state.sealed {
+                    return Ok(true); // replayed BlockMeta
+                }
+                // seal: drop per-slot detail, keep statuses + marker
+                state.keys.clear();
+                state.entries.clear();
+                state.sealed = true;
+            }
+            payload => {
+                let state = self.slot_mut(slot);
+                if state.sealed || state.keys.contains(&payload) {
+                    return Ok(true);
+                }
+                state.keys.insert(payload);
+            }
         }
+        self.prune();
+        Ok(false)
     }
 
-    /// Enqueues new slots in ordered (slot_order) queue for pruning
-    fn enqueue_slot(&mut self, slot: u64) {
-        if self.inflight_slots.contains_key(&slot)
-            || self.inflight_slot_statuses.contains_key(&slot)
-            || self.slot_processed.contains_key(&slot)
-        {
-            return;
-        }
-        self.slot_order.push_back(slot);
-    }
-
-    /// Marks a slot as processed and move into `slot_processed`
-    fn mark_slot_as_processed(&mut self, slot: u64) {
-        self.inflight_slots.remove(&slot);
-        self.entry_hashes.remove(&slot); // sealed: no longer partial,
-        let statuses = self
-            .inflight_slot_statuses
-            .remove(&slot)
-            .unwrap_or_default();
-
-        if !statuses.is_empty() {
-            self.slot_processed
-                .entry(slot)
-                .or_default()
-                .extend(statuses);
-        }
-    }
-
-    /// Keeps seen_messages bounded to slot_retention window.
+    /// Keeps tracked slots bounded to the retention window.
     pub fn prune(&mut self) {
         while self.slot_order.len() > self.slot_retention {
-            if let Some(slot) = self.slot_order.pop_front() {
-                self.inflight_slots.remove(&slot);
-                self.inflight_slot_statuses.remove(&slot);
-                self.slot_processed.remove(&slot);
-                self.entry_hashes.remove(&slot);
-            } else {
-                break;
+            match self.slot_order.pop_front() {
+                Some(slot) => {
+                    self.slots.remove(&slot);
+                }
+                None => break,
             }
         }
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.inflight_slots.clear();
-        self.inflight_slot_statuses.clear();
-        self.slot_processed.clear();
+        self.slots.clear();
         self.slot_order.clear();
-        self.entry_hashes.clear();
     }
 }
 
 impl DedupState {
-    pub(crate) fn entry_divergence(&self, msg: &impl Dedupable) -> Option<EntryDivergence> {
-        let entry = msg.entry_identity()?;
-        let &expected = self.entry_hashes.get(&entry.slot)?.get(&entry.index)?;
-        (expected != entry.hash).then_some(EntryDivergence { entry, expected })
-    }
-
-    fn has_created_bank(&self, slot: u64) -> bool {
-        self.inflight_slot_statuses
-            .get(&slot)
-            .is_some_and(|s| s.contains(&CREATED_BANK_STATUS))
-            || self
-                .slot_processed
-                .get(&slot)
-                .is_some_and(|s| s.contains(&CREATED_BANK_STATUS))
-    }
-
     /// Drop all dedup + entry state for a single slot (rollback recovery).
     pub(crate) fn clear_slot(&mut self, slot: u64) {
-        self.inflight_slots.remove(&slot);
-        self.inflight_slot_statuses.remove(&slot);
-        self.slot_processed.remove(&slot);
-        self.entry_hashes.remove(&slot);
+        self.slots.remove(&slot);
         self.slot_order.retain(|s| *s != slot);
     }
 }

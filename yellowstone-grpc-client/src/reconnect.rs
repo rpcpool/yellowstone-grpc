@@ -428,12 +428,14 @@ where
                         // The internal __autoreconnect filter is injected into slots/blocks_meta/entry
                         // to guarantee the messages our invariants need (checkpointing, equivocation guard)
 
-                        if msg.filters.iter().all(|f| f == AUTORECONNECT_FILTER_KEY) {
+                        if !msg.filters.is_empty()
+                            && msg.filters.iter().all(|f| f == AUTORECONNECT_FILTER_KEY)
+                        {
                             // matched only our internal key (incl. empty) -> user never asked for this
                             me.inner_stream = Some(stream);
                             continue;
                         }
-                        
+
                         // matched a user filter too -> strip the internal key, forward the rest
                         msg.filters.retain(|f| f != AUTORECONNECT_FILTER_KEY);
 
@@ -553,6 +555,7 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
 mod tests {
     use {
         super::*,
+        crate::dedup::Dedupable,
         futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
@@ -856,37 +859,37 @@ mod tests {
         }
     }
 
+    fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Result<bool, Status> {
+        let (slot, key) = msg.extract_key().expect("test msg has a key");
+        dedup.observe(slot, key)
+    }
+
     #[test]
     fn test_dedup_record_and_detect() {
         let mut dedup = DedupState::default();
         let msg = make_slot_msg(100, 0);
 
-        assert!(!dedup.is_duplicate(&msg));
-        dedup.record(&msg);
-        assert!(dedup.is_duplicate(&msg));
+        assert!(!observe(&mut dedup, &msg).unwrap()); // first time: new (false)
+        assert!(observe(&mut dedup, &msg).unwrap()); // second time: duplicate (true)
     }
 
     #[test]
     fn test_dedup_different_slots_not_duplicate() {
         let mut dedup = DedupState::default();
-        let msg1 = make_slot_msg(100, 0);
-        let msg2 = make_slot_msg(101, 0);
 
-        dedup.record(&msg1);
-        assert!(!dedup.is_duplicate(&msg2));
+        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // new
+        assert!(!observe(&mut dedup, &make_slot_msg(101, 0)).unwrap()); // different slot: new
     }
 
     #[test]
     fn test_dedup_ping_ignored() {
-        let mut dedup = DedupState::default();
-        let msg = SubscribeUpdate {
+        let ping = SubscribeUpdate {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
             created_at: None,
         };
-
-        dedup.record(&msg);
-        assert!(!dedup.is_duplicate(&msg));
+        // ping has no key, so it never reaches observe
+        assert!(ping.extract_key().is_none());
     }
 
     #[test]
@@ -894,45 +897,44 @@ mod tests {
         let mut dedup = DedupState::default();
         let msg = make_slot_msg(100, 0);
 
-        dedup.record(&msg);
-        assert!(dedup.is_duplicate(&msg));
+        assert!(!observe(&mut dedup, &msg).unwrap()); // new
+        assert!(observe(&mut dedup, &msg).unwrap()); // duplicate
         dedup.clear();
-        assert!(!dedup.is_duplicate(&msg));
+        assert!(!observe(&mut dedup, &msg).unwrap());
     }
 
     #[test]
     fn test_dedup_same_slot_different_status() {
         let mut dedup = DedupState::default();
-        let msg1 = make_slot_msg(100, 0);
-        let msg2 = make_slot_msg(100, 1);
 
-        dedup.record(&msg1);
-        assert!(!dedup.is_duplicate(&msg2));
+        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // new
+        assert!(!observe(&mut dedup, &make_slot_msg(100, 1)).unwrap()); // new status: new
     }
 
     #[test]
     fn test_dedup_prune() {
         let mut dedup = DedupState::with_slot_retention(3);
 
-        dedup.record(&make_slot_msg(100, 0));
-        dedup.record(&make_slot_msg(101, 0));
-        dedup.record(&make_slot_msg(102, 0));
-        assert!(dedup.is_duplicate(&make_slot_msg(100, 0)));
+        observe(&mut dedup, &make_slot_msg(100, 0)).unwrap();
+        observe(&mut dedup, &make_slot_msg(101, 0)).unwrap();
+        observe(&mut dedup, &make_slot_msg(102, 0)).unwrap();
+        observe(&mut dedup, &make_slot_msg(103, 0)).unwrap(); // evicts 100
 
-        dedup.record(&make_slot_msg(103, 0));
-        assert!(!dedup.is_duplicate(&make_slot_msg(100, 0)));
-        assert!(dedup.is_duplicate(&make_slot_msg(101, 0)));
+        // check survivors first before re-inserting checks
+        assert!(observe(&mut dedup, &make_slot_msg(101, 0)).unwrap()); // still tracked
+                                                                       // then the evicted one (this re-inserts 100, but we're done checking survivors)
+        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // evicted: new
     }
 
     #[test]
-    fn test_dedup_slot_status_moves_to_processed_on_blockmeta() {
+    fn test_dedup_slot_sealed_on_blockmeta() {
         let mut dedup = DedupState::default();
 
-        dedup.record(&make_slot_msg(200, 0));
-        dedup.record(&make_block_meta_msg(200));
+        observe(&mut dedup, &make_slot_msg(200, 0)).unwrap();
+        observe(&mut dedup, &make_block_meta_msg(200)).unwrap(); // seals slot 200
 
-        assert!(dedup.is_duplicate(&make_slot_msg(200, 0)));
-        assert!(!dedup.is_duplicate(&make_slot_msg(200, 1)));
+        assert!(observe(&mut dedup, &make_slot_msg(200, 0)).unwrap());
+        assert!(!observe(&mut dedup, &make_slot_msg(200, 1)).unwrap());
     }
 
     #[tokio::test]
@@ -1146,22 +1148,23 @@ mod tests {
 
         // Record slots 1-10
         for slot in 1..=10 {
-            dedup.record(&make_slot_msg(slot, 0));
+            observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap();
         }
 
-        // Slots 1-5 should be pruned, 6-10 should remain
-        for slot in 1..=5 {
-            assert!(
-                !dedup.is_duplicate(&make_slot_msg(slot, 0)),
-                "slot {} should be pruned",
-                slot
-            );
-        }
+        // Slots 6-10 should remain (check these FIRST, before the pruned checks
+        // re-insert anything and push them out of the window)
         for slot in 6..=10 {
             assert!(
-                dedup.is_duplicate(&make_slot_msg(slot, 0)),
-                "slot {} should remain",
-                slot
+                observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap(),
+                "slot {slot} should remain"
+            );
+        }
+
+        // Slots 1-5 were pruned -> seen as new
+        for slot in 1..=5 {
+            assert!(
+                !observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap(),
+                "slot {slot} should be pruned"
             );
         }
     }
