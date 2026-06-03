@@ -15,10 +15,7 @@ use {
                 name::FilterNames,
                 Filter,
             },
-            message::{
-                CommitmentLevel, Message, MessageBlockMeta,
-                MessageSlot, SlotStatus,
-            },
+            message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
         transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
@@ -110,87 +107,98 @@ impl BlockMetaStorage {
     ) -> (Self, mpsc::UnboundedSender<Message>) {
         let inner = Arc::new(RwLock::new(BlockMetaStorageInner::default()));
         let (tx, mut rx) = mpsc::unbounded_channel();
-
         let storage = Arc::clone(&inner);
-        task_tracker.spawn(async move {
-            const KEEP_SLOTS: u64 = 3;
+        let completion_token = task_tracker.token();
+        let _ = std::thread::Builder::new()
+            .name("solGrpcBlockMetaStorage".to_string())
+            .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime for BlockMetaStorage");   
 
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        info!("BlockMetaStorage task cancelled");
-                        break;
-                    },
-                    maybe = rx.recv() => {
-                        let Some(message) = maybe else {
-                            info!("BlockMetaStorage channel closed");
+            runtime.block_on(async move {
+                const KEEP_SLOTS: u64 = 3;
+
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            info!("BlockMetaStorage task cancelled");
                             break;
-                        };
-                        let mut storage = storage.write().await;
-                        match message {
-                            Message::Slot(msg) => {
-                                match msg.status {
-                                    SlotStatus::Processed => {
-                                        storage.processed.replace(msg.slot);
-                                    }
-                                    SlotStatus::Confirmed => {
-                                        storage.confirmed.replace(msg.slot);
-                                    }
-                                    SlotStatus::Finalized => {
-                                        storage.finalized.replace(msg.slot);
-                                    }
-                                    _ => {}
-                                }
-
-                                if let Some(blockhash) = storage
-                                    .blocks
-                                    .get(&msg.slot)
-                                    .map(|block| block.blockhash.clone())
-                                {
-                                    let entry = storage
-                                        .blockhashes
-                                        .entry(blockhash)
-                                        .or_insert_with(|| BlockhashStatus::new(msg.slot));
-
+                        },
+                        maybe = rx.recv() => {
+                            let Some(message) = maybe else {
+                                info!("BlockMetaStorage channel closed");
+                                break;
+                            };
+                            let mut storage = storage.write().await;
+                            match message {
+                                Message::Slot(msg) => {
                                     match msg.status {
                                         SlotStatus::Processed => {
-                                            entry.processed = true;
+                                            storage.processed.replace(msg.slot);
                                         }
                                         SlotStatus::Confirmed => {
-                                            entry.confirmed = true;
+                                            storage.confirmed.replace(msg.slot);
                                         }
                                         SlotStatus::Finalized => {
-                                            entry.finalized = true;
+                                            storage.finalized.replace(msg.slot);
                                         }
                                         _ => {}
                                     }
-                                }
 
-                                if msg.status == SlotStatus::Finalized {
-                                    if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
-                                        storage.blocks.retain(|slot, _block| *slot >= keep_slot);
-                                    }
-
-                                    if let Some(keep_slot) =
-                                        msg.slot.checked_sub(MAX_RECENT_BLOCKHASHES as u64 + 32)
+                                    if let Some(blockhash) = storage
+                                        .blocks
+                                        .get(&msg.slot)
+                                        .map(|block| block.blockhash.clone())
                                     {
-                                        storage
+                                        let entry = storage
                                             .blockhashes
-                                            .retain(|_blockhash, status| status.slot >= keep_slot);
+                                            .entry(blockhash)
+                                            .or_insert_with(|| BlockhashStatus::new(msg.slot));
+
+                                        match msg.status {
+                                            SlotStatus::Processed => {
+                                                entry.processed = true;
+                                            }
+                                            SlotStatus::Confirmed => {
+                                                entry.confirmed = true;
+                                            }
+                                            SlotStatus::Finalized => {
+                                                entry.finalized = true;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    if msg.status == SlotStatus::Finalized {
+                                        if let Some(keep_slot) = msg.slot.checked_sub(KEEP_SLOTS) {
+                                            storage.blocks.retain(|slot, _block| *slot >= keep_slot);
+                                        }
+
+                                        if let Some(keep_slot) =
+                                            msg.slot.checked_sub(MAX_RECENT_BLOCKHASHES as u64 + 32)
+                                        {
+                                            storage
+                                                .blockhashes
+                                                .retain(|_blockhash, status| status.slot >= keep_slot);
+                                        }
                                     }
                                 }
-                            }
-                            Message::BlockMeta(msg) => {
-                                storage.blocks.insert(msg.slot, msg);
-                            }
-                            msg => {
-                                error!("invalid message in BlockMetaStorage: {msg:?}");
+                                Message::BlockMeta(msg) => {
+                                    storage.blocks.insert(msg.slot, msg);
+                                }
+                                msg => {
+                                    error!("invalid message in BlockMetaStorage: {msg:?}");
+                                }
                             }
                         }
                     }
                 }
-            }
-            info!("BlockMetaStorage task exiting");
+                info!("BlockMetaStorage task exiting");
+            });
+
+            drop(completion_token);
         });
 
         (
@@ -592,6 +600,7 @@ impl GrpcService {
 
         // Run geyser message loop
         let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+        let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
 
         // Warn if replay buffer is too small for auto-reconnect
         if config.replay_stored_slots < 150 {
@@ -601,16 +610,35 @@ impl GrpcService {
             );
         }
 
+        {
+            let broadcast_tx = broadcast_tx.clone();
+            let completion_token = task_tracker.token();
+            let _ = std::thread::Builder::new()
+                .name("solGrpcBlockReconstruction".to_string())
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create Tokio runtime for BlockReconstruction");
+
+                    runtime.block_on(async move {
+                        Self::block_reconstruction_loop(
+                            block_reconstruction_rx,
+                            blocks_meta_tx,
+                            broadcast_tx,
+                            replay_stored_slots_rx,
+                            replay_first_available_slot,
+                            config.replay_stored_slots,
+                        )
+                        .await;
+                    });
+
+                    drop(completion_token);
+                });
+        }
+
         task_tracker.spawn(async move {
-            Self::geyser_loop(
-                messages_rx,
-                blocks_meta_tx,
-                broadcast_tx,
-                replay_stored_slots_rx,
-                replay_first_available_slot,
-                config.replay_stored_slots,
-            )
-            .await;
+            Self::geyser_loop(messages_rx, broadcast_tx, block_reconstruction_tx).await;
         });
 
         // Health check service
@@ -728,28 +756,16 @@ impl GrpcService {
     ///   still available in the replay buffer, and is exposed via `subscribe_first_available_slot`.
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
-        blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-        replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
-        replay_first_available_slot: Option<Arc<AtomicU64>>,
-        replay_stored_slots: u64,
+        block_reconstruction_tx: mpsc::UnboundedSender<Message>,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
+        const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
 
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-        let mut confirmed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-        let mut finalized_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+        let mut confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
+        let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
 
-        let (_tx, rx) = mpsc::channel(1);
-        let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
-        let mut buffered_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-
-        let mut block_machine = BlockMachineStorage::new(replay_stored_slots as usize);
-        const ALL_COMMITMENT_LEVELS: [CommitmentLevel; 3] = [
-            CommitmentLevel::Processed,
-            CommitmentLevel::Confirmed,
-            CommitmentLevel::Finalized,
-        ];
         loop {
             tokio::select! {
                 maybe = messages_rx.recv() => {
@@ -759,25 +775,19 @@ impl GrpcService {
                     };
                     metrics::message_queue_size_dec();
 
-                    buffered_messages.push(message);
+                    processed_messages.push(message);
 
                     while let Ok(message) = messages_rx.try_recv() {
                         metrics::message_queue_size_dec();
 
-                        buffered_messages.push(message);
-                        if buffered_messages.len() >= PROCESSED_MESSAGES_MAX {
+                        processed_messages.push(message);
+                        if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
                             break;
                         }
                     }
 
-                    for message in buffered_messages.drain(..) {
-                        block_machine.add(message.clone());
-
-                        if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                            if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
-                                let _ = blocks_meta_tx.send(message.clone());
-                            }
-                        }
+                    for message in processed_messages.iter() {
+                        let _ = block_reconstruction_tx.send(message.clone());
 
                         match message {
                             Message::Slot(slot_message) => {
@@ -790,36 +800,72 @@ impl GrpcService {
                                     SlotStatus::CreatedBank |
                                     SlotStatus::Dead
                                 ) {
-                                    processed_messages.push(Message::Slot(slot_message.clone()));
                                     confirmed_messages.push(Message::Slot(slot_message.clone()));
-                                    finalized_messages.push(Message::Slot(slot_message));
+                                    finalized_messages.push(Message::Slot(slot_message.clone()));
                                 }
-                            }
-                            Message::Account(_) | Message::BlockMeta(_) | Message::Transaction(_) | Message::Entry(_) => {
-                                processed_messages.push(message);
                             }
                             Message::Block(_) => {
                                unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
                             }
+                            _ => {
+                                /* We don't need to process anything here.  */
+                            }
                         }
                     }
 
-                    if !processed_messages.is_empty() {
-                        encode_messages(&processed_messages);
-                        GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
+                    encode_messages(&processed_messages);
+                    GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
+                    let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
+                    processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
                     if !confirmed_messages.is_empty() {
                         let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(confirmed_messages)));
-                        confirmed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                        confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
                     }
 
                     if !finalized_messages.is_empty() {
                         let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(finalized_messages)));
-                        finalized_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                        finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
                     }
+                }
+            }
+        }
+    }
+
+    async fn block_reconstruction_loop(
+        mut messages_rx: mpsc::UnboundedReceiver<Message>,
+        blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
+        broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+        replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        replay_first_available_slot: Option<Arc<AtomicU64>>,
+        replay_stored_slots: u64,
+    ) {
+        let (_tx, rx) = mpsc::channel(1);
+        let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
+
+        let mut block_machine = BlockMachineStorage::new(replay_stored_slots as usize);
+        const ALL_COMMITMENT_LEVELS: [CommitmentLevel; 3] = [
+            CommitmentLevel::Processed,
+            CommitmentLevel::Confirmed,
+            CommitmentLevel::Finalized,
+        ];
+
+        loop {
+            tokio::select! {
+                maybe = messages_rx.recv() => {
+                    let Some(message) = maybe else {
+                        info!("Geyser loop: messages channel closed");
+                        break;
+                    };
+
+
+                    if let Some(blocks_meta_tx) = &blocks_meta_tx {
+                        if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
+                            let _ = blocks_meta_tx.send(message.clone());
+                        }
+                    }
+
+                    block_machine.add(message);
 
                     while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
                         let commitment_level = match slot_update.commitment {
@@ -897,7 +943,7 @@ impl GrpcService {
                 }
                 else => {
                     // No new messages and replay request channel closed, can only happen on shutdown
-                    info!("Geyser loop: replay_stored_slots channel closed");
+                    info!("Block reconstruction loop: replay_stored_slots channel closed");
                     break;
                 }
             }

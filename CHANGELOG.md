@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-06-03
+
+- yellowstone-grpc-geyser 13.2.1
+
+### misc
+
+- refactor finalized/confirmed delivery to stay outside the processed message loop in geyser_loop
+
 ## 2026-06-02
 
 - yellowstone-grpc-geyser 13.2.0
