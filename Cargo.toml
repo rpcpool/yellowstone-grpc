@@ -75,12 +75,12 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "~4.1.0-beta.2"
-solana-account-decoder = "~4.1.0-beta.2"
+agave-geyser-plugin-interface = "=4.1.0-beta.2"
+solana-account-decoder = "=4.1.0-beta.2"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "~4.1.0-beta.2", features = ["agave-unstable-api"] }
-solana-transaction-context = "~4.1.0-beta.2"
-solana-transaction-status = "~4.1.0-beta.2"
+solana-storage-proto = { version = "=4.1.0-beta.2", features = ["agave-unstable-api"] }
+solana-transaction-context = "=4.1.0-beta.2"
+solana-transaction-status = "=4.1.0-beta.2"
 
 # Solana SDK
 solana-account = "4.3.0"

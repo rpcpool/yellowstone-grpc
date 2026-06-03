@@ -837,21 +837,29 @@ impl GrpcService {
                     };
                     metrics::message_queue_size_dec();
 
-                    processed_messages.push(message);
+                    if !matches!(message, Message::DeshredTransaction(_)) {
+                        processed_messages.push(message);
+                    }
+                    else {
+                        deshred_messages.push(message);
+                    }
 
                     while let Ok(message) = messages_rx.try_recv() {
                         metrics::message_queue_size_dec();
 
-                        processed_messages.push(message);
+                        if !matches!(message, Message::DeshredTransaction(_)) {
+                            processed_messages.push(message);
+                        }
+                        else {
+                            deshred_messages.push(message);
+                        }
                         if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
                             break;
                         }
                     }
 
                     for message in processed_messages.iter() {
-                        if !matches!(message, Message::DeshredTransaction(_)) {
-                            let _ = block_reconstruction_tx.send(message.clone());
-                        }
+                        let _ = block_reconstruction_tx.send(message.clone());
 
                         match message {
                             Message::Slot(slot_message) => {
@@ -874,9 +882,6 @@ impl GrpcService {
                             }
                             Message::Block(_) => {
                                unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
-                            }
-                            Message::DeshredTransaction(_) => {
-                                deshred_messages.push(message.clone());
                             }
                             _ => {
                                 /* We don't need to process anything here.  */
@@ -2128,17 +2133,24 @@ mod tests {
             broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
             deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
             handle: tokio::task::JoinHandle<()>,
+            handle_reconstruction: tokio::task::JoinHandle<()>,
         }
 
         fn spawn_loop() -> Harness {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+            let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_tx, broadcast_rx) = broadcast::channel(1024);
             let (deshred_tx, deshred_rx) = broadcast::channel(1024);
             let handle = tokio::spawn(GrpcService::geyser_loop(
                 messages_rx,
+                broadcast_tx.clone(),
+                block_reconstruction_tx,
+                deshred_tx,
+            ));
+            let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
+                block_reconstruction_rx,
                 None,
                 broadcast_tx,
-                deshred_tx,
                 None,
                 None,
                 100,
@@ -2148,6 +2160,7 @@ mod tests {
                 broadcast_rx,
                 deshred_rx,
                 handle,
+                handle_reconstruction,
             }
         }
 
@@ -2289,6 +2302,28 @@ mod tests {
 
             drop(harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
+        }
+
+        #[tokio::test]
+        async fn deshred_channel_should_see_slot_update() {
+            let mut harness = spawn_loop();
+            harness.messages_tx.send(make_deshred(100, 1)).unwrap();
+            harness.messages_tx.send(make_slot(100, SlotStatus::Processed, Some(99))).unwrap();
+            let batches = drain_deshred(&mut harness.deshred_rx).await;
+            let total_deshed_txn: usize = batches.iter().map(|b| count_deshred(b)).sum();
+            let actual_total_msg: usize = batches.iter().map(|b| b.len()).sum();
+            assert_eq!(total_deshed_txn, 1, "deshred should be emitted exactly once");
+            assert_eq!(
+                actual_total_msg, 2,
+                "deshred channel should see both the deshred transaction and the slot update"
+            );
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
 
         #[tokio::test]
@@ -2321,6 +2356,8 @@ mod tests {
 
             drop(harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
 
         #[tokio::test]
@@ -2348,6 +2385,8 @@ mod tests {
 
             drop(harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
 
         #[tokio::test]
@@ -2387,6 +2426,8 @@ mod tests {
 
             drop(harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
     }
 
