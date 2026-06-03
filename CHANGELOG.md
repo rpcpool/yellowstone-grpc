@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 13.3.0
+- yellowstone-grpc-proto 12.5.0
+
+### Features
+- geyser: upgrade agave monorepo dependencies to 4.1.0-beta.2
+- geyser: upgrade Solana SDK dependencies to match agave 4.1.0-beta.2
+- proto: add `DeactivatedStake` reward type
+- geyser: handle V1 transaction messages (best-effort mapping; transaction config not represented)
+- geyser: build with Rust 1.95.0 to match agave 4.1 (toolchain requirement, not an API change)
+
 ## 2026-06-02
 
 - yellowstone-grpc-geyser 13.2.0

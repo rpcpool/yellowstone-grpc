@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.2.0"
+version = "13.3.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -111,7 +111,7 @@ solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
-solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+solana-transaction = { workspace = true, features = ["serde", "blake3"] }
 
 [lints]
 workspace = true
