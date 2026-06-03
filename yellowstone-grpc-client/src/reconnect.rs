@@ -412,7 +412,7 @@ where
         while !me.stop {
             if let Some(mut stream) = me.inner_stream.take() {
                 match Pin::new(&mut stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(msg))) => {
+                    Poll::Ready(Some(Ok(mut msg))) => {
                         if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
                             if let Some(slot) = extract_slot(&msg) {
                                 // checkpoint a few slots behind the last fully built slot.
@@ -425,10 +425,17 @@ where
                             }
                         }
 
-                        if msg.filters.len() == 1 && msg.filters[0] == AUTORECONNECT_FILTER_KEY {
+                        // The internal __autoreconnect filter is injected into slots/blocks_meta/entry
+                        // to guarantee the messages our invariants need (checkpointing, equivocation guard)
+
+                        if msg.filters.iter().all(|f| f == AUTORECONNECT_FILTER_KEY) {
+                            // matched only our internal key (incl. empty) -> user never asked for this
                             me.inner_stream = Some(stream);
                             continue;
                         }
+                        
+                        // matched a user filter too -> strip the internal key, forward the rest
+                        msg.filters.retain(|f| f != AUTORECONNECT_FILTER_KEY);
 
                         me.inner_stream = Some(stream);
                         return Poll::Ready(Some(Ok(msg)));

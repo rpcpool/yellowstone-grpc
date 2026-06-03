@@ -283,6 +283,12 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
                 .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
         }
 
+        // equivocation guard needs entry hashes to compare on replay
+        if item.entry.is_empty() {
+            item.entry
+                .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
+        }
+
         inner
             .start_send_unpin(item.clone())
             .map_err(SubscribeRequestSinkError::from)?;

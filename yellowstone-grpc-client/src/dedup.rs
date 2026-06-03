@@ -200,6 +200,10 @@ impl DedupState {
         if let Some((slot, key)) = msg.extract_key() {
             match key {
                 DedupKey::Slot(status) => {
+                    // Rollback invalidation depends on receiving CreatedBank. The server only emits
+                    // interslot statuses (CreatedBank etc.) to filters with interslot_updates=true
+                    // (see FilterSlots::get_updates). So this guard is dormant unless the user's slot filter sets interslot_updates.
+
                     // repeated CreatedBank = rollback signal; never dedup it, record() acts on it
                     if status == CREATED_BANK_STATUS && self.has_created_bank(slot) {
                         return false;
