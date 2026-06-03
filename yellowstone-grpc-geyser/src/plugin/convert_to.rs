@@ -27,6 +27,26 @@ pub fn create_transaction(tx: &VersionedTransaction) -> proto::Transaction {
     }
 }
 
+/// Converts a Solana `VersionedMessage` into its proto representation.
+///
+/// Three message versions are handled:
+/// - `Legacy`: pre-versioned transactions, no address lookup tables.
+/// - `V0`: versioned transactions that reference accounts via address lookup
+///   tables (ALT), reported in `address_table_lookups`.
+/// - `V1`: a new format that removes ALTs and inlines the budget config
+///   (priority fee, compute unit limit, loaded accounts data size, heap size)
+///   that previously needed ComputeBudget instructions. Accounts are carried
+///   directly thanks to a larger size limit (up to 4096 bytes), and
+///   `lifetime_specifier` is the recent blockhash. Because V1 has no ALTs, its
+///   `address_table_lookups` is always empty and deshred reports no loaded
+///   addresses for it.
+///
+/// V1 is feature gated and not yet active on any production cluster, so the
+/// validator does not emit V1 transactions today. We map the variant to stay
+/// forward and wire compatible for when the feature activates.
+///
+/// - SIMD-0385 (Transaction V1): <https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0385-transaction-v1.md>
+/// - SIMD-0296 (Larger transactions): <https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0296-larger-transactions.md>
 pub fn create_message(message: &VersionedMessage) -> proto::Message {
     match message {
         VersionedMessage::Legacy(message) => proto::Message {
@@ -36,6 +56,7 @@ pub fn create_message(message: &VersionedMessage) -> proto::Message {
             instructions: create_instructions(&message.instructions),
             versioned: false,
             address_table_lookups: vec![],
+            config: None,
         },
         VersionedMessage::V0(message) => proto::Message {
             header: Some(create_header(&message.header)),
@@ -44,6 +65,23 @@ pub fn create_message(message: &VersionedMessage) -> proto::Message {
             instructions: create_instructions(&message.instructions),
             versioned: true,
             address_table_lookups: create_lookups(&message.address_table_lookups),
+            config: None,
+        },
+        // V1 has no address lookup tables; its priority fee and compute budget
+        // live in `config` instead of dedicated instructions.
+        VersionedMessage::V1(message) => proto::Message {
+            header: Some(create_header(&message.header)),
+            account_keys: create_pubkeys(&message.account_keys),
+            recent_blockhash: message.lifetime_specifier.to_bytes().into(),
+            instructions: create_instructions(&message.instructions),
+            versioned: true,
+            address_table_lookups: vec![],
+            config: Some(proto::TransactionConfig {
+                priority_fee: message.config.priority_fee,
+                compute_unit_limit: message.config.compute_unit_limit,
+                loaded_accounts_data_size_limit: message.config.loaded_accounts_data_size_limit,
+                heap_size: message.config.heap_size,
+            }),
         },
     }
 }
@@ -232,6 +270,7 @@ pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::Rewar
         Some(RewardType::Rent) => proto::RewardType::Rent,
         Some(RewardType::Staking) => proto::RewardType::Staking,
         Some(RewardType::Voting) => proto::RewardType::Voting,
+        Some(RewardType::DeactivatedStake) => proto::RewardType::DeactivatedStake,
     }
 }
 
