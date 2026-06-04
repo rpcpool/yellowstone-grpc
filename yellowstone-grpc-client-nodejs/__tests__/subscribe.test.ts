@@ -78,6 +78,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function encodeNativeSubscribeUpdate(
+  update: Parameters<typeof geyser.SubscribeUpdate.fromPartial>[0],
+): Uint8Array {
+  return geyser.SubscribeUpdate.encode(
+    geyser.SubscribeUpdate.fromPartial(update),
+  ).finish();
+}
+
+function encodeNativeSubscribeUpdateDeshred(
+  update: Parameters<typeof geyser.SubscribeUpdateDeshred.fromPartial>[0],
+): Uint8Array {
+  return geyser.SubscribeUpdateDeshred.encode(
+    geyser.SubscribeUpdateDeshred.fromPartial(update),
+  ).finish();
+}
+
 type DisconnectableTcpProxy = {
   endpoint: string;
   connectionCount: () => number;
@@ -874,26 +890,24 @@ describe("CompressedAccountFilterSet public SDK subscription behavior", () => {
     return Buffer.alloc(32, seed);
   }
 
-  function makeNativeAccountUpdate(pubkeyBytes: Buffer): any {
-    return {
+  function makeNativeAccountUpdate(pubkeyBytes: Buffer): Uint8Array {
+    return encodeNativeSubscribeUpdate({
       filters: ["tracked"],
       createdAt: new Date(),
-      updateOneof: {
+      account: {
+        slot: "1",
+        isStartup: false,
         account: {
-          slot: "1",
-          isStartup: false,
-          account: {
-            pubkey: pubkeyBytes,
-            lamports: "1",
-            owner: Buffer.alloc(32, 3),
-            executable: false,
-            rentEpoch: "0",
-            data: Buffer.alloc(0),
-            writeVersion: "1",
-          },
+          pubkey: pubkeyBytes,
+          lamports: "1",
+          owner: Buffer.alloc(32, 3),
+          executable: false,
+          rentEpoch: "0",
+          data: Buffer.alloc(0),
+          writeVersion: "1",
         },
       },
-    };
+    });
   }
 
   test("subscribe initial request carries account cuckoo filter through public Client", async () => {
@@ -1214,14 +1228,12 @@ describe("Client connection guard behavior", () => {
 });
 
 describe("ClientDuplexStream read and lifecycle behavior", () => {
-  function makeNativeUpdate(): any {
-    return {
+  function makeNativeUpdate(): Uint8Array {
+    return encodeNativeSubscribeUpdate({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: {
-        ping: {},
-      },
-    };
+      ping: {},
+    });
   }
 
   test("read: prevents overlapping native read calls while one read is in flight", async () => {
@@ -1668,15 +1680,15 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       },
     ],
   ])(
-    "read: maps updateOneof.%s to top-level SDK field",
+    "read: decodes native SubscribeUpdate buffer field %s",
     async (variant, payload) => {
-      const nativeRead = jest.fn().mockResolvedValue({
+      const nativeUpdate = encodeNativeSubscribeUpdate({
         filters: ["client"],
         createdAt: new Date(),
-        updateOneof: {
-          [variant]: payload,
-        },
-      });
+        [variant]: payload,
+      } as any);
+      const expectedUpdate = geyser.SubscribeUpdate.decode(nativeUpdate);
+      const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
       const stream = new ClientDuplexStream(
         {
           close: jest.fn(),
@@ -1691,7 +1703,9 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       const mappedUpdate = await dataPromise;
 
       expect((mappedUpdate as any).updateOneof).toBeUndefined();
-      expect((mappedUpdate as any)[variant]).toEqual(payload);
+      expect((mappedUpdate as any)[variant]).toEqual(
+        (expectedUpdate as any)[variant],
+      );
       expect(mappedUpdate.filters).toEqual(["client"]);
       expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
         "[object Date]",
@@ -1701,7 +1715,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     },
   );
 
-  test("deshred read: maps updateOneof.deshredTransaction to top-level SDK field", async () => {
+  test("deshred read: decodes native SubscribeUpdateDeshred transaction buffer", async () => {
     const deshredPayload = {
       slot: "8",
       transaction: {
@@ -1713,13 +1727,13 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       },
     };
 
-    const nativeRead = jest.fn().mockResolvedValue({
+    const nativeUpdate = encodeNativeSubscribeUpdateDeshred({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: {
-        deshredTransaction: deshredPayload,
-      },
+      deshredTransaction: deshredPayload,
     });
+    const expectedUpdate = geyser.SubscribeUpdateDeshred.decode(nativeUpdate);
+    const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
     const stream = new ClientDeshredDuplexStream(
       {
         close: jest.fn(),
@@ -1734,7 +1748,9 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const mappedUpdate = await dataPromise;
 
     expect((mappedUpdate as any).updateOneof).toBeUndefined();
-    expect(mappedUpdate.deshredTransaction).toEqual(deshredPayload);
+    expect(mappedUpdate.deshredTransaction).toEqual(
+      expectedUpdate.deshredTransaction,
+    );
     expect(mappedUpdate.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
       "[object Date]",
@@ -1743,13 +1759,14 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     await closeStreamAndWait(stream);
   });
 
-  test("deshred read: maps ping and pong variants to top-level SDK fields", async () => {
+  test("deshred read: decodes ping and pong fields from native buffers", async () => {
     for (const variantPayload of [{ ping: {} }, { pong: { id: 3 } }]) {
-      const nativeRead = jest.fn().mockResolvedValue({
+      const nativeUpdate = encodeNativeSubscribeUpdateDeshred({
         filters: ["client"],
         createdAt: new Date(),
-        updateOneof: variantPayload,
+        ...variantPayload,
       });
+      const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
       const stream = new ClientDeshredDuplexStream(
         {
           close: jest.fn(),
@@ -1968,11 +1985,11 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
 
     (stream as any)._read(0);
     stream.destroy();
-    resolveRead?.({
+    resolveRead?.(encodeNativeSubscribeUpdate({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: { ping: {} },
-    });
+      ping: {},
+    }));
     await flushMicrotasks();
 
     expect(onData).not.toHaveBeenCalled();

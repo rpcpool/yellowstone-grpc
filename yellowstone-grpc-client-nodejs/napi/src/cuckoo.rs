@@ -1,9 +1,7 @@
 use {
-  crate::js_types::{
-    JsCuckooFilter, JsSubscribeRequestFilterAccounts, JsSubscribeRequestFilterBlocks,
-  },
-  napi::bindgen_prelude::{Buffer, Env, Result},
+  napi::bindgen_prelude::{Buffer, Result},
   napi_derive::napi,
+  prost::Message,
   solana_pubkey::Pubkey,
   std::sync::Mutex,
   yellowstone_grpc_proto::{
@@ -159,26 +157,20 @@ impl CompressedAccountFilterSet {
   }
 
   #[napi]
-  pub fn to_proto<'env>(&self, env: &'env Env) -> Result<JsCuckooFilter<'env>> {
-    JsCuckooFilter::from_protobuf_to_js_type(env, self.to_proto_message()?)
+  pub fn to_proto(&self) -> Result<Buffer> {
+    Ok(Buffer::from(self.to_proto_message()?.encode_to_vec()))
   }
 
   #[napi]
-  pub fn to_account_filter<'env>(
-    &self,
-    env: &'env Env,
-  ) -> Result<JsSubscribeRequestFilterAccounts<'env>> {
+  pub fn to_account_filter(&self) -> Result<Buffer> {
     let filter = self.lock_filter()?;
-    JsSubscribeRequestFilterAccounts::from_protobuf_to_js_type(env, filter.to_account_filter())
+    Ok(Buffer::from(filter.to_account_filter().encode_to_vec()))
   }
 
   #[napi]
-  pub fn to_block_filter<'env>(
-    &self,
-    env: &'env Env,
-  ) -> Result<JsSubscribeRequestFilterBlocks<'env>> {
+  pub fn to_block_filter(&self) -> Result<Buffer> {
     let filter = self.lock_filter()?;
-    JsSubscribeRequestFilterBlocks::from_protobuf_to_js_type(env, filter.to_block_filter())
+    Ok(Buffer::from(filter.to_block_filter().encode_to_vec()))
   }
 }
 

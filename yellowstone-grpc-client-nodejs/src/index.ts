@@ -2,16 +2,28 @@
 
 // Import generated gRPC client and types.
 import {
+  CuckooFilter as CuckooFilterMessage,
   CuckooHashAlgorithm,
+  GetBlockHeightRequest as GetBlockHeightRequestMessage,
   GetBlockHeightResponse as GetBlockHeightResponseMessage,
+  GetLatestBlockhashRequest as GetLatestBlockhashRequestMessage,
   GetLatestBlockhashResponse as GetLatestBlockhashResponseMessage,
+  GetSlotRequest as GetSlotRequestMessage,
   GetSlotResponse as GetSlotResponseMessage,
+  GetVersionRequest as GetVersionRequestMessage,
   GetVersionResponse as GetVersionResponseMessage,
+  IsBlockhashValidRequest as IsBlockhashValidRequestMessage,
   IsBlockhashValidResponse as IsBlockhashValidResponseMessage,
+  PingRequest as PingRequestMessage,
   PongResponse as PongResponseMessage,
   SubscribeDeshredRequest as SubscribeDeshredRequestMessage,
   SubscribeRequest as SubscribeRequestMessage,
+  SubscribeRequestFilterAccounts as SubscribeRequestFilterAccountsMessage,
+  SubscribeRequestFilterBlocks as SubscribeRequestFilterBlocksMessage,
+  SubscribeReplayInfoRequest as SubscribeReplayInfoRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
+  SubscribeUpdate as SubscribeUpdateMessage,
+  SubscribeUpdateDeshred as SubscribeUpdateDeshredMessage,
   SubscribeUpdateDeshredTransactionInfo,
   SubscribeUpdateTransactionInfo,
 } from "./grpc/geyser";
@@ -98,48 +110,6 @@ export interface ReconnectOptions {
     maxRetries?: number;
   };
   slotRetention?: number;
-}
-
-/**
- * Convert N-API `JsSubscribeUpdate` shape (with `updateOneof`) into the
- * generated protobuf-friendly SDK shape (`SubscribeUpdate`) where the oneof
- * variants are top-level optional fields.
- */
-function fromJsSubscribeUpdate(update: napi.JsSubscribeUpdate): SubscribeUpdate {
-  const oneof = update.updateOneof ?? {};
-
-  return {
-    filters: update.filters ?? [],
-    createdAt: update.createdAt,
-    account: oneof.account as any,
-    slot: oneof.slot as any,
-    transaction: oneof.transaction as any,
-    transactionStatus: oneof.transactionStatus as any,
-    block: oneof.block as any,
-    ping: oneof.ping as any,
-    pong: oneof.pong as any,
-    blockMeta: oneof.blockMeta as any,
-    entry: oneof.entry as any,
-  } as SubscribeUpdate;
-}
-
-/**
- * Convert N-API `JsSubscribeUpdateDeshred` shape (with `updateOneof`) into the
- * generated protobuf-friendly SDK shape (`SubscribeUpdateDeshred`).
- */
-function fromJsSubscribeUpdateDeshred(
-  update: napi.JsSubscribeUpdateDeshred,
-): SubscribeUpdateDeshred {
-  const oneof = update.updateOneof ?? {};
-
-  return {
-    filters: update.filters ?? [],
-    createdAt: update.createdAt,
-    deshredTransaction: oneof.deshredTransaction as any,
-    ping: oneof.ping as any,
-    pong: oneof.pong as any,
-    slot: oneof.slot as any,
-  } as SubscribeUpdateDeshred;
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -269,15 +239,21 @@ export class CompressedAccountFilterSet {
   }
 
   toProto(): CuckooFilter {
-    return this._native.toProto() as CuckooFilter;
+    return CuckooFilterMessage.decode(
+      this._native.toProto() as unknown as Uint8Array,
+    );
   }
 
   toAccountFilter(): SubscribeRequestFilterAccounts {
-    return this._native.toAccountFilter() as SubscribeRequestFilterAccounts;
+    return SubscribeRequestFilterAccountsMessage.decode(
+      this._native.toAccountFilter() as unknown as Uint8Array,
+    );
   }
 
   toBlockFilter(): SubscribeRequestFilterBlocks {
-    return this._native.toBlockFilter() as SubscribeRequestFilterBlocks;
+    return SubscribeRequestFilterBlocksMessage.decode(
+      this._native.toBlockFilter() as unknown as Uint8Array,
+    );
   }
 
   insertIntoSubscribeRequest(request: SubscribeRequest, name: string): void {
@@ -334,55 +310,41 @@ export default class Client {
   ): Promise<GetLatestBlockhashResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsGetLatestBlockhashRequest = {
-      commitment: commitment ?? null,
-    };
-
-    const response = await grpcClient.getLatestBlockhash(request);
-    return GetLatestBlockhashResponseMessage.fromPartial({
-      slot: response.slot,
-      blockhash: response.blockhash,
-      lastValidBlockHeight: response.lastValidBlockHeight,
-    });
+    const request = GetLatestBlockhashRequestMessage.fromPartial({ commitment });
+    const response = await grpcClient.getLatestBlockhash(
+      Buffer.from(GetLatestBlockhashRequestMessage.encode(request).finish()),
+    );
+    return GetLatestBlockhashResponseMessage.decode(response);
   }
 
   async ping(count: number): Promise<PongResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsPingRequest = {
-      count,
-    };
-
-    const response = await grpcClient.ping(request);
-    return PongResponseMessage.fromPartial({
-      count: response.count,
-    });
+    const request = PingRequestMessage.fromPartial({ count });
+    const response = await grpcClient.ping(
+      Buffer.from(PingRequestMessage.encode(request).finish()),
+    );
+    return PongResponseMessage.decode(response);
   }
 
   async getBlockHeight(commitment?: CommitmentLevel): Promise<GetBlockHeightResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsGetBlockHeightRequest = {
-      commitment,
-    };
-
-    const response = await grpcClient.getBlockHeight(request);
-    return GetBlockHeightResponseMessage.fromPartial({
-      blockHeight: response.blockHeight,
-    });
+    const request = GetBlockHeightRequestMessage.fromPartial({ commitment });
+    const response = await grpcClient.getBlockHeight(
+      Buffer.from(GetBlockHeightRequestMessage.encode(request).finish()),
+    );
+    return GetBlockHeightResponseMessage.decode(response);
   }
 
   async getSlot(commitment?: CommitmentLevel): Promise<GetSlotResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsGetSlotRequest = {
-      commitment,
-    };
-
-    const response = await grpcClient.getSlot(request);
-    return GetSlotResponseMessage.fromPartial({
-      slot: response.slot,
-    });
+    const request = GetSlotRequestMessage.fromPartial({ commitment });
+    const response = await grpcClient.getSlot(
+      Buffer.from(GetSlotRequestMessage.encode(request).finish()),
+    );
+    return GetSlotResponseMessage.decode(response);
   }
 
   async isBlockhashValid(
@@ -391,38 +353,35 @@ export default class Client {
   ): Promise<IsBlockhashValidResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsIsBlockhashValidRequest = {
+    const request = IsBlockhashValidRequestMessage.fromPartial({
       blockhash,
       commitment,
-    };
-
-    const response = await grpcClient.isBlockhashValid(request);
-    return IsBlockhashValidResponseMessage.fromPartial({
-      slot: response.slot,
-      valid: response.valid,
     });
+
+    const response = await grpcClient.isBlockhashValid(
+      Buffer.from(IsBlockhashValidRequestMessage.encode(request).finish()),
+    );
+    return IsBlockhashValidResponseMessage.decode(response);
   }
 
   async getVersion(): Promise<GetVersionResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsGetVersionRequest = {};
-
-    const response = await grpcClient.getVersion(request);
-    return GetVersionResponseMessage.fromPartial({
-      version: response.version,
-    });
+    const request = GetVersionRequestMessage.fromPartial({});
+    const response = await grpcClient.getVersion(
+      Buffer.from(GetVersionRequestMessage.encode(request).finish()),
+    );
+    return GetVersionResponseMessage.decode(response);
   }
 
   async subscribeReplayInfo(): Promise<SubscribeReplayInfoResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request: napi.JsSubscribeReplayInfoRequest = {};
-
-    const response = await grpcClient.subscribeReplayInfo(request);
-    return SubscribeReplayInfoResponseMessage.fromPartial({
-      firstAvailable: response.firstAvailable,
-    });
+    const request = SubscribeReplayInfoRequestMessage.fromPartial({});
+    const response = await grpcClient.subscribeReplayInfo(
+      Buffer.from(SubscribeReplayInfoRequestMessage.encode(request).finish()),
+    );
+    return SubscribeReplayInfoResponseMessage.decode(response);
   }
 
   async subscribe(request?: SubscribeRequest): Promise<ClientDuplexStream> {
@@ -439,7 +398,7 @@ export default class Client {
       // highWaterMark: 16
     };
 
-    // Native stream produces N-API generated JS objects; wrapper below adapts
+    // Native stream produces protobuf payload bytes; wrapper below decodes them
     // to public protobuf-generated SDK shapes and Node stream semantics.
     const stream =
       request === undefined
@@ -511,7 +470,9 @@ export class ClientDuplexStream extends Duplex {
 
     this._readInFlight = true;
 
-    (this._napiDuplexStream as napi.DuplexStream)
+    (this._napiDuplexStream as {
+      read: () => Promise<Uint8Array | undefined | null>;
+    })
       .read()
       .then((update) => {
         this._readInFlight = false;
@@ -527,7 +488,7 @@ export class ClientDuplexStream extends Duplex {
           return;
         }
 
-        const grpcUpdate = fromJsSubscribeUpdate(update);
+        const grpcUpdate = SubscribeUpdateMessage.decode(update);
 
         // Respect backpressure: only pull again if consumer accepted push.
         const canContinue = this.push(grpcUpdate);
@@ -643,7 +604,7 @@ export class ClientDeshredDuplexStream extends Duplex {
     this._readInFlight = true;
 
     (this._napiDuplexStream as {
-      read: () => Promise<napi.JsSubscribeUpdateDeshred | undefined | null>;
+      read: () => Promise<Uint8Array | undefined | null>;
     })
       .read()
       .then((update) => {
@@ -659,7 +620,7 @@ export class ClientDeshredDuplexStream extends Duplex {
           return;
         }
 
-        const grpcUpdate = fromJsSubscribeUpdateDeshred(update);
+        const grpcUpdate = SubscribeUpdateDeshredMessage.decode(update);
 
         const canContinue = this.push(grpcUpdate);
         if (canContinue) {

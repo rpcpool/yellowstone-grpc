@@ -45,17 +45,6 @@ home = "0.5.11"
 [build-dependencies]
 napi-build = "2.2.4"
 napi-sys = "3.0.1"
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
-walkdir = "2.5.0"
-napi-derive = "3.3.0"
-yellowstone-grpc-proto = "12.4.0"
-
-[dev-dependencies]
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
 
 
 [profile.release]
