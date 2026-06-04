@@ -458,7 +458,8 @@ where
                             return Poll::Ready(Some(Err(status)));
                         }
 
-                        let dedup_state = stream.state;
+                        let mut dedup_state = stream.state;
+                        dedup_state.prepare_for_replay();
                         me.pending_connecting_task = Some(me.make_connection_future(dedup_state));
                     }
                     Poll::Ready(Some(Err(e))) => {
@@ -555,7 +556,7 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
 mod tests {
     use {
         super::*,
-        crate::dedup::Dedupable,
+        crate::dedup::{Dedupable, Observation},
         futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
@@ -859,7 +860,7 @@ mod tests {
         }
     }
 
-    fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Result<bool, Status> {
+    fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Observation {
         let (slot, key) = msg.extract_key().expect("test msg has a key");
         dedup.observe(slot, key)
     }
@@ -869,16 +870,22 @@ mod tests {
         let mut dedup = DedupState::default();
         let msg = make_slot_msg(100, 0);
 
-        assert!(!observe(&mut dedup, &msg).unwrap()); // first time: new (false)
-        assert!(observe(&mut dedup, &msg).unwrap()); // second time: duplicate (true)
+        assert!(matches!(observe(&mut dedup, &msg), Observation::New));
+        assert!(matches!(observe(&mut dedup, &msg), Observation::Duplicate));
     }
 
     #[test]
     fn test_dedup_different_slots_not_duplicate() {
         let mut dedup = DedupState::default();
 
-        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // new
-        assert!(!observe(&mut dedup, &make_slot_msg(101, 0)).unwrap()); // different slot: new
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(101, 0)),
+            Observation::New
+        ));
     }
 
     #[test]
@@ -893,48 +900,55 @@ mod tests {
     }
 
     #[test]
-    fn test_dedup_clear() {
-        let mut dedup = DedupState::default();
-        let msg = make_slot_msg(100, 0);
-
-        assert!(!observe(&mut dedup, &msg).unwrap()); // new
-        assert!(observe(&mut dedup, &msg).unwrap()); // duplicate
-        dedup.clear();
-        assert!(!observe(&mut dedup, &msg).unwrap());
-    }
-
-    #[test]
     fn test_dedup_same_slot_different_status() {
         let mut dedup = DedupState::default();
 
-        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // new
-        assert!(!observe(&mut dedup, &make_slot_msg(100, 1)).unwrap()); // new status: new
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 1)),
+            Observation::New
+        ));
     }
 
     #[test]
     fn test_dedup_prune() {
         let mut dedup = DedupState::with_slot_retention(3);
 
-        observe(&mut dedup, &make_slot_msg(100, 0)).unwrap();
-        observe(&mut dedup, &make_slot_msg(101, 0)).unwrap();
-        observe(&mut dedup, &make_slot_msg(102, 0)).unwrap();
-        observe(&mut dedup, &make_slot_msg(103, 0)).unwrap(); // evicts 100
+        observe(&mut dedup, &make_slot_msg(100, 0));
+        observe(&mut dedup, &make_slot_msg(101, 0));
+        observe(&mut dedup, &make_slot_msg(102, 0));
+        observe(&mut dedup, &make_slot_msg(103, 0)); // evicts 100
 
-        // check survivors first before re-inserting checks
-        assert!(observe(&mut dedup, &make_slot_msg(101, 0)).unwrap()); // still tracked
-                                                                       // then the evicted one (this re-inserts 100, but we're done checking survivors)
-        assert!(!observe(&mut dedup, &make_slot_msg(100, 0)).unwrap()); // evicted: new
+        // check survivors first
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(101, 0)),
+            Observation::Duplicate
+        ));
+        // then the evicted one
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
     }
 
     #[test]
     fn test_dedup_slot_sealed_on_blockmeta() {
         let mut dedup = DedupState::default();
 
-        observe(&mut dedup, &make_slot_msg(200, 0)).unwrap();
-        observe(&mut dedup, &make_block_meta_msg(200)).unwrap(); // seals slot 200
+        observe(&mut dedup, &make_slot_msg(200, 0));
+        observe(&mut dedup, &make_block_meta_msg(200));
 
-        assert!(observe(&mut dedup, &make_slot_msg(200, 0)).unwrap());
-        assert!(!observe(&mut dedup, &make_slot_msg(200, 1)).unwrap());
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(200, 0)),
+            Observation::Duplicate
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(200, 1)),
+            Observation::New
+        ));
     }
 
     #[tokio::test]
@@ -1146,24 +1160,28 @@ mod tests {
     fn test_custom_slot_retention_honored() {
         let mut dedup = DedupState::with_slot_retention(5);
 
-        // Record slots 1-10
         for slot in 1..=10 {
-            observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap();
+            observe(&mut dedup, &make_slot_msg(slot, 0));
         }
 
-        // Slots 6-10 should remain (check these FIRST, before the pruned checks
-        // re-insert anything and push them out of the window)
+        // check survivors first
         for slot in 6..=10 {
             assert!(
-                observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap(),
+                matches!(
+                    observe(&mut dedup, &make_slot_msg(slot, 0)),
+                    Observation::Duplicate
+                ),
                 "slot {slot} should remain"
             );
         }
 
-        // Slots 1-5 were pruned -> seen as new
+        // then the evicted ones
         for slot in 1..=5 {
             assert!(
-                !observe(&mut dedup, &make_slot_msg(slot, 0)).unwrap(),
+                matches!(
+                    observe(&mut dedup, &make_slot_msg(slot, 0)),
+                    Observation::New
+                ),
                 "slot {slot} should be pruned"
             );
         }
