@@ -39,27 +39,27 @@ async function main() {
       break;
 
     case "ping":
-      console.log("response: " + (await client.ping(1)));
+      console.log("response: " + inspect(await client.ping(1)));
       break;
 
     case "get-version":
-      console.log("response: " + (await client.getVersion()));
+      console.log("response: " + inspect(await client.getVersion()));
       break;
 
     case "get-slot":
-      console.log("response: " + (await client.getSlot(commitment)));
+      console.log("response: " + inspect(await client.getSlot(commitment)));
       break;
 
     case "get-block-height":
-      console.log("response: " + (await client.getBlockHeight(commitment)));
+      console.log("response: " + inspect(await client.getBlockHeight(commitment)));
       break;
 
     case "get-latest-blockhash":
-      console.log("response: ", await client.getLatestBlockhash(commitment));
+      console.log("response: " + inspect(await client.getLatestBlockhash(commitment)));
       break;
 
     case "is-blockhash-valid":
-      console.log("response: ", await client.isBlockhashValid(args.blockhash));
+      console.log("response: " + inspect(await client.isBlockhashValid(args.blockhash)));
       break;
 
     case "subscribe":
@@ -103,8 +103,26 @@ function buildReconnectOptions(args): ReconnectOptions | undefined {
   };
 }
 
-function stringArray(values: unknown[] | undefined): string[] {
-  return (values ?? []).map((value) => String(value));
+function stringArray(values: unknown[] | unknown | undefined): string[] {
+  if (values === undefined) {
+    return [];
+  }
+  return (Array.isArray(values) ? values : [values]).map((value) =>
+    String(value),
+  );
+}
+
+function parsePair(value: unknown, separator: string, optionName: string) {
+  const spec = String(value);
+  const separatorIndex = spec.indexOf(separator);
+  if (separatorIndex <= 0 || separatorIndex === spec.length - 1) {
+    throw new Error(`invalid ${optionName}`);
+  }
+
+  return [
+    spec.slice(0, separatorIndex),
+    spec.slice(separatorIndex + separator.length),
+  ] as const;
 }
 
 function buildCompressedAccountSet(
@@ -174,51 +192,45 @@ function buildSubscribeRequest(args): BuiltSubscribeRequest {
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
 
-    if (args.accounts.memcmp) {
-      for (let filter in args.accounts.memcmp) {
-        const filterSpec = filter.split(",", 1);
-        if (filterSpec.length != 2) {
-          throw new Error("invalid memcmp");
-        }
-
-        const [offset, data] = filterSpec;
+    if (args.accountsMemcmp) {
+      for (const filter of stringArray(args.accountsMemcmp)) {
+        const [offset, data] = parsePair(filter, ",", "memcmp");
         filters.push({
           memcmp: { offset, base58: data.trim() },
         });
       }
     }
 
-    if (args.accounts.tokenaccountstate) {
+    if (args.accountsTokenaccountstate) {
       filters.push({
-        tokenAccountState: args.accounts.tokenaccountstate,
+        tokenAccountState: args.accountsTokenaccountstate,
       });
     }
 
-    if (args.accounts.datasize) {
-      filters.push({ datasize: args.accounts.datasize });
+    if (args.accountsDatasize) {
+      filters.push({ datasize: String(args.accountsDatasize) });
     }
 
-    if (args.accounts.lamports) {
-      for (let filter in args.accounts.lamports) {
-        const filterSpec = filter.split(":", 1);
-        if (filterSpec.length != 2) {
-          throw new Error("invalid lamports");
-        }
-
-        const [cmp, value] = filterSpec;
+    if (args.accountsLamports) {
+      for (const filter of stringArray(args.accountsLamports)) {
+        const [cmp, value] = parsePair(filter, ":", "lamports");
         let lamports: SubscribeRequestFilterAccountsFilterLamports = {};
         switch (cmp) {
           case "eq": {
             lamports.eq = value;
+            break;
           }
           case "ne": {
             lamports.ne = value;
+            break;
           }
           case "lt": {
             lamports.lt = value;
+            break;
           }
           case "gt": {
             lamports.gt = value;
+            break;
           }
           default:
             throw new Error("invalid lamports cmp");
@@ -287,19 +299,12 @@ function buildSubscribeRequest(args): BuiltSubscribeRequest {
   }
 
   if (args.blocksMeta) {
-    request.blocksMeta.client = {
-      account_include: args.blocksAccountInclude,
-    };
+    request.blocksMeta.client = {};
   }
 
-  if (args.accounts.dataslice) {
-    for (let filter in args.accounts.dataslice) {
-      const filterSpec = filter.split(",", 1);
-      if (filterSpec.length != 2) {
-        throw new Error("invalid data slice");
-      }
-
-      const [offset, length] = filterSpec;
+  if (args.accountsDataslice) {
+    for (const filter of stringArray(args.accountsDataslice)) {
+      const [offset, length] = parsePair(filter, ",", "data slice");
       request.accountsDataSlice.push({
         offset,
         length,
@@ -583,7 +588,7 @@ function parseCommandLineArgs() {
           default: [],
           describe:
             "receive only part of updated data account, format: `offset,size`",
-          type: "string",
+          type: "array",
         },
         slots: {
           default: false,
