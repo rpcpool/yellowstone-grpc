@@ -449,14 +449,16 @@ where
                         if status.code() == Code::OutOfRange {
                             me.last_checkpoint = None;
                         }
-                        log::warn!(
-                            "stream error: {status}. starting reconnect from slot {:?}",
-                            me.last_checkpoint
-                        );
+                    
                         if me.backoff.max_retries == 0 {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
+
+                        log::warn!(
+                            "stream error: {status}. starting reconnect from slot {:?}",
+                            me.last_checkpoint
+                        );
 
                         let mut dedup_state = stream.state;
                         dedup_state.prepare_for_replay();
@@ -556,7 +558,6 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
 mod tests {
     use {
         super::*,
-        crate::dedup::{Dedupable, Observation},
         futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
@@ -860,97 +861,6 @@ mod tests {
         }
     }
 
-    fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Observation {
-        let (slot, key) = msg.extract_key().expect("test msg has a key");
-        dedup.observe(slot, key)
-    }
-
-    #[test]
-    fn test_dedup_record_and_detect() {
-        let mut dedup = DedupState::default();
-        let msg = make_slot_msg(100, 0);
-
-        assert!(matches!(observe(&mut dedup, &msg), Observation::New));
-        assert!(matches!(observe(&mut dedup, &msg), Observation::Duplicate));
-    }
-
-    #[test]
-    fn test_dedup_different_slots_not_duplicate() {
-        let mut dedup = DedupState::default();
-
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(100, 0)),
-            Observation::New
-        ));
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(101, 0)),
-            Observation::New
-        ));
-    }
-
-    #[test]
-    fn test_dedup_ping_ignored() {
-        let ping = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-            created_at: None,
-        };
-        // ping has no key, so it never reaches observe
-        assert!(ping.extract_key().is_none());
-    }
-
-    #[test]
-    fn test_dedup_same_slot_different_status() {
-        let mut dedup = DedupState::default();
-
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(100, 0)),
-            Observation::New
-        ));
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(100, 1)),
-            Observation::New
-        ));
-    }
-
-    #[test]
-    fn test_dedup_prune() {
-        let mut dedup = DedupState::with_slot_retention(3);
-
-        observe(&mut dedup, &make_slot_msg(100, 0));
-        observe(&mut dedup, &make_slot_msg(101, 0));
-        observe(&mut dedup, &make_slot_msg(102, 0));
-        observe(&mut dedup, &make_slot_msg(103, 0)); // evicts 100
-
-        // check survivors first
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(101, 0)),
-            Observation::Duplicate
-        ));
-        // then the evicted one
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(100, 0)),
-            Observation::New
-        ));
-    }
-
-    #[test]
-    fn test_dedup_slot_sealed_on_blockmeta() {
-        let mut dedup = DedupState::default();
-
-        observe(&mut dedup, &make_slot_msg(200, 0));
-        observe(&mut dedup, &make_block_meta_msg(200));
-
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(200, 0)),
-            Observation::Duplicate
-        ));
-        assert!(matches!(
-            observe(&mut dedup, &make_slot_msg(200, 1)),
-            Observation::New
-        ));
-    }
-
     #[tokio::test]
     async fn test_autoreconnect_recovers_from_recoverable_stream_error() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
@@ -1156,37 +1066,6 @@ mod tests {
         assert_eq!(connector.calls().len(), 0);
     }
 
-    #[test]
-    fn test_custom_slot_retention_honored() {
-        let mut dedup = DedupState::with_slot_retention(5);
-
-        for slot in 1..=10 {
-            observe(&mut dedup, &make_slot_msg(slot, 0));
-        }
-
-        // check survivors first
-        for slot in 6..=10 {
-            assert!(
-                matches!(
-                    observe(&mut dedup, &make_slot_msg(slot, 0)),
-                    Observation::Duplicate
-                ),
-                "slot {slot} should remain"
-            );
-        }
-
-        // then the evicted ones
-        for slot in 1..=5 {
-            assert!(
-                matches!(
-                    observe(&mut dedup, &make_slot_msg(slot, 0)),
-                    Observation::New
-                ),
-                "slot {slot} should be pruned"
-            );
-        }
-    }
-
     #[tokio::test]
     async fn test_no_checkpoint_when_no_block_meta() {
         // Stream emits only account updates, no block_meta
@@ -1280,38 +1159,6 @@ mod tests {
             vec![Some(98)],
             "from_slot should be checkpoint - buffer"
         );
-    }
-
-    #[tokio::test]
-    async fn test_dedup_stream_standalone() {
-        // DedupStream works without AutoReconnect wrapper
-        let messages = vec![
-            Ok(make_slot_msg(100, 0)),
-            Ok(make_slot_msg(100, 0)), // duplicate
-            Ok(make_slot_msg(101, 0)),
-        ];
-
-        let inner = stream::iter(messages).boxed();
-        let mut dedup = DedupStream::new(inner, DedupState::default());
-
-        // First message passes
-        let msg1 = dedup
-            .next()
-            .await
-            .expect("expected item")
-            .expect("expected ok");
-        assert_eq!(extract_slot(&msg1), Some(100));
-
-        // Duplicate filtered, get next unique
-        let msg2 = dedup
-            .next()
-            .await
-            .expect("expected item")
-            .expect("expected ok");
-        assert_eq!(extract_slot(&msg2), Some(101));
-
-        // Stream ends
-        assert!(dedup.next().await.is_none());
     }
 
     #[tokio::test]

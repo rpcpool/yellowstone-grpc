@@ -342,3 +342,335 @@ impl DedupState {
         self.slot_order.retain(|s| *s != slot);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        futures::{stream, StreamExt},
+        yellowstone_grpc_proto::prelude::{
+            subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot,
+        },
+    };
+
+    fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot,
+                parent: None,
+                status,
+                dead_error: None,
+            })),
+            created_at: None,
+        }
+    }
+
+    fn make_block_meta_msg(slot: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::BlockMeta(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta {
+                    slot,
+                    blockhash: "test_hash".to_string(),
+                    rewards: None,
+                    block_time: None,
+                    block_height: None,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_blockhash: String::new(),
+                    executed_transaction_count: 0,
+                    entries_count: 0,
+                },
+            )),
+            created_at: None,
+        }
+    }
+
+    fn make_block_meta_msg_with_hash(slot: u64, hash: &str) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::BlockMeta(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta {
+                    slot,
+                    blockhash: hash.to_string(),
+                    rewards: None,
+                    block_time: None,
+                    block_height: None,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_blockhash: String::new(),
+                    executed_transaction_count: 0,
+                    entries_count: 0,
+                },
+            )),
+            created_at: None,
+        }
+    }
+
+    fn make_account_msg(slot: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Account(
+                yellowstone_grpc_proto::geyser::SubscribeUpdateAccount {
+                    account: Some(yellowstone_grpc_proto::geyser::SubscribeUpdateAccountInfo {
+                        pubkey: vec![1; 32],
+                        lamports: 100,
+                        owner: vec![0; 32],
+                        executable: false,
+                        rent_epoch: 0,
+                        data: vec![].into(),
+                        write_version: 1,
+                        txn_signature: Some(vec![0; 64]),
+                    }),
+                    slot,
+                    is_startup: false,
+                },
+            )),
+            created_at: None,
+        }
+    }
+
+    fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Observation {
+        let (slot, key) = msg.extract_key().expect("test msg has a key");
+        dedup.observe(slot, key)
+    }
+
+    #[test]
+    fn test_dedup_record_and_detect() {
+        let mut dedup = DedupState::default();
+        let msg = make_slot_msg(100, 0);
+
+        assert!(matches!(observe(&mut dedup, &msg), Observation::New));
+        assert!(matches!(observe(&mut dedup, &msg), Observation::Duplicate));
+    }
+
+    #[test]
+    fn test_dedup_different_slots_not_duplicate() {
+        let mut dedup = DedupState::default();
+
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(101, 0)),
+            Observation::New
+        ));
+    }
+
+    #[test]
+    fn test_dedup_ping_ignored() {
+        let ping = SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
+            created_at: None,
+        };
+        assert!(ping.extract_key().is_none());
+    }
+
+    #[test]
+    fn test_dedup_same_slot_different_status() {
+        let mut dedup = DedupState::default();
+
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 1)),
+            Observation::New
+        ));
+    }
+
+    #[test]
+    fn test_dedup_prune() {
+        let mut dedup = DedupState::with_slot_retention(3);
+
+        observe(&mut dedup, &make_slot_msg(100, 0));
+        observe(&mut dedup, &make_slot_msg(101, 0));
+        observe(&mut dedup, &make_slot_msg(102, 0));
+        observe(&mut dedup, &make_slot_msg(103, 0));
+
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(101, 0)),
+            Observation::Duplicate
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(100, 0)),
+            Observation::New
+        ));
+    }
+
+    #[test]
+    fn test_dedup_slot_sealed_on_blockmeta() {
+        let mut dedup = DedupState::default();
+
+        observe(&mut dedup, &make_slot_msg(200, 0));
+        observe(&mut dedup, &make_block_meta_msg(200));
+
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(200, 0)),
+            Observation::Duplicate
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(200, 1)),
+            Observation::New
+        ));
+    }
+
+    #[test]
+    fn test_custom_slot_retention_honored() {
+        let mut dedup = DedupState::with_slot_retention(5);
+
+        for slot in 1..=10 {
+            observe(&mut dedup, &make_slot_msg(slot, 0));
+        }
+
+        for slot in 6..=10 {
+            assert!(
+                matches!(
+                    observe(&mut dedup, &make_slot_msg(slot, 0)),
+                    Observation::Duplicate
+                ),
+                "slot {slot} should remain"
+            );
+        }
+
+        for slot in 1..=5 {
+            assert!(
+                matches!(
+                    observe(&mut dedup, &make_slot_msg(slot, 0)),
+                    Observation::New
+                ),
+                "slot {slot} should be pruned"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dedup_stream_standalone() {
+        let messages = vec![
+            Ok(make_slot_msg(100, 0)),
+            Ok(make_slot_msg(100, 0)),
+            Ok(make_slot_msg(101, 0)),
+        ];
+
+        let inner = stream::iter(messages).boxed();
+        let mut dedup = DedupStream::new(inner, DedupState::default());
+
+        let msg1 = dedup
+            .next()
+            .await
+            .expect("expected item")
+            .expect("expected ok");
+        assert_eq!(crate::reconnect::extract_slot(&msg1), Some(100));
+
+        let msg2 = dedup
+            .next()
+            .await
+            .expect("expected item")
+            .expect("expected ok");
+        assert_eq!(crate::reconnect::extract_slot(&msg2), Some(101));
+
+        assert!(dedup.next().await.is_none());
+    }
+
+    #[test]
+    fn test_sealed_slot_payload_returns_replay() {
+        let mut dedup = DedupState::default();
+
+        // build and seal slot 300
+        observe(&mut dedup, &make_slot_msg(300, 0));
+        observe(&mut dedup, &make_block_meta_msg(300));
+
+        // a replayed account for a sealed slot should be quarantined
+        let account_msg = make_account_msg(300);
+        assert!(matches!(
+            observe(&mut dedup, &account_msg),
+            Observation::Replay
+        ));
+    }
+
+    #[test]
+    fn test_replay_complete_same_blockhash_drops_buffer() {
+        let mut dedup = DedupState::default();
+
+        // seal slot 400 with blockhash "abc"
+        observe(&mut dedup, &make_slot_msg(400, 0));
+        observe(&mut dedup, &make_block_meta_msg_with_hash(400, "abc"));
+
+        // replayed BlockMeta with same hash: same block, discard
+        assert!(matches!(
+            observe(&mut dedup, &make_block_meta_msg_with_hash(400, "abc")),
+            Observation::ReplayComplete { same: true }
+        ));
+    }
+
+    #[test]
+    fn test_replay_complete_different_blockhash_flushes() {
+        let mut dedup = DedupState::default();
+
+        // seal slot 500 with blockhash "block_a"
+        observe(&mut dedup, &make_slot_msg(500, 0));
+        observe(&mut dedup, &make_block_meta_msg_with_hash(500, "block_a"));
+
+        // replayed BlockMeta with different hash: block changed, flush
+        assert!(matches!(
+            observe(&mut dedup, &make_block_meta_msg_with_hash(500, "block_b")),
+            Observation::ReplayComplete { same: false }
+        ));
+    }
+
+    #[test]
+    fn test_prepare_for_replay_promotes_partial_to_sealed() {
+        let mut dedup = DedupState::default();
+
+        // slot 600 is inflight (no BlockMeta yet)
+        observe(&mut dedup, &make_slot_msg(600, 0));
+
+        // simulate reconnect: promote all inflight to sealed-without-blockhash
+        dedup.prepare_for_replay();
+
+        // replayed payload for the now-sealed slot should be quarantined
+        let account_msg = make_account_msg(600);
+        assert!(matches!(
+            observe(&mut dedup, &account_msg),
+            Observation::Replay
+        ));
+    }
+
+    #[test]
+    fn test_partial_slot_always_flushes_on_replay_complete() {
+        let mut dedup = DedupState::default();
+
+        // slot 700 is inflight
+        observe(&mut dedup, &make_slot_msg(700, 0));
+
+        // promote to sealed without blockhash
+        dedup.prepare_for_replay();
+
+        // replayed BlockMeta: no stored hash to compare, always flush
+        assert!(matches!(
+            observe(&mut dedup, &make_block_meta_msg_with_hash(700, "any_hash")),
+            Observation::ReplayComplete { same: false }
+        ));
+    }
+
+    #[test]
+    fn test_created_bank_clears_sealed_slot() {
+        let mut dedup = DedupState::default();
+
+        // seal slot 800
+        observe(&mut dedup, &make_slot_msg(800, 0));
+        observe(&mut dedup, &make_block_meta_msg(800));
+
+        // CreatedBank wipes the slot (rollback)
+        let created_bank_status = SlotStatus::SlotCreatedBank as i32;
+        observe(&mut dedup, &make_slot_msg(800, created_bank_status));
+
+        // slot is fresh now: a new status is New, not Duplicate
+        assert!(matches!(
+            observe(&mut dedup, &make_slot_msg(800, 0)),
+            Observation::New
+        ));
+    }
+}
