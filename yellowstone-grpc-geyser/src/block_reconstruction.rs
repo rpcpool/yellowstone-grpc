@@ -75,7 +75,7 @@ impl ProcessingSlot {
             })
             .collect::<Vec<_>>();
         // Yet another clone of all the messages, but that prevents from doing this later on anyway, while making iterator code easier to implement.
-        let dedup_messages = self
+        let mut dedup_messages = self
             .original_messages
             .into_iter()
             .filter_map(|message| {
@@ -93,6 +93,11 @@ impl ProcessingSlot {
                 }
             })
             .collect::<Vec<_>>();
+
+        // We absolutely need to add blockmeta add the add of the message list, so when we replay from the beginning to the end
+        // we get: all the accounts/transactions/entries + the blockmeta at the end.
+        dedup_messages.push(Message::BlockMeta(Arc::clone(&block_meta)));
+
         let pre_computed_message_block = MessageBlock::new(
             Arc::clone(&block_meta),
             self.transactions,
@@ -807,11 +812,61 @@ mod tests {
         storage.add(make_slot_msg(1, None, SlotStatus::Processed));
 
         let (_, frozen) = storage.pop_ready_block().expect("ready block");
-        let entry_count = frozen
-            .messages()
+        let messages = frozen.messages();
+
+        let entry_count = messages
             .iter()
             .filter(|m| matches!(m, Message::Entry(_)))
             .count();
+
+        let last_message = messages.last().unwrap();
+        assert!(
+            matches!(last_message, Message::BlockMeta(_)),
+            "last message should be BlockMeta"
+        );
         assert_eq!(entry_count, 2);
+    }
+
+    #[test]
+    fn block_machine_storage_reemit_same_block_every_commitment_progression() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_entry_msg(1, 1));
+        storage.add(make_block_meta_msg(1, 0));
+
+        const ALL_COMMITMENT: [CommitmentLevel; 3] = [
+            CommitmentLevel::Processed,
+            CommitmentLevel::Confirmed,
+            CommitmentLevel::Finalized,
+        ];
+
+        for commitment_level in ALL_COMMITMENT {
+            let status = match commitment_level {
+                CommitmentLevel::Processed => SlotStatus::Processed,
+                CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                CommitmentLevel::Finalized => SlotStatus::Finalized,
+            };
+            storage.add(make_slot_msg(1, None, status));
+            let (actual_commitment, frozen) = storage.pop_ready_block().expect("ready block");
+            assert!(
+                actual_commitment.commitment == commitment_level,
+                "expected commitment {commitment_level:?} but got {:?}",
+                actual_commitment.commitment
+            );
+            let messages = frozen.messages();
+            let entry_count = messages
+                .iter()
+                .filter(|m| matches!(m, Message::Entry(_)))
+                .count();
+            let last_message = messages.last().unwrap();
+            assert!(
+                matches!(last_message, Message::BlockMeta(_)),
+                "last message should be BlockMeta"
+            );
+            assert_eq!(entry_count, 2);
+        }
     }
 }
