@@ -145,18 +145,6 @@ impl CompressedAccountFilterSet {
   }
 
   #[napi]
-  pub fn is_dirty(&self) -> Result<bool> {
-    let filter = self.lock_filter()?;
-    Ok(filter.is_dirty())
-  }
-
-  #[napi]
-  pub fn take_dirty(&self) -> Result<bool> {
-    let mut filter = self.lock_filter()?;
-    Ok(filter.take_dirty())
-  }
-
-  #[napi]
   pub fn to_proto(&self) -> Result<Buffer> {
     Ok(Buffer::from(self.to_proto_message()?.encode_to_vec()))
   }
@@ -243,25 +231,6 @@ mod tests {
 
     assert!(!filter.remove_bytes(Buffer::from(key(2))).unwrap());
     assert!(filter.contains_bytes(Buffer::from(key(1))).unwrap());
-  }
-
-  #[test]
-  fn dirty_flag_tracks_successful_mutations() {
-    let filter = CompressedAccountFilterSet::new(10).unwrap();
-
-    assert!(!filter.is_dirty().unwrap());
-    assert!(!filter.take_dirty().unwrap());
-
-    filter.insert_bytes(Buffer::from(key(1))).unwrap();
-    assert!(filter.is_dirty().unwrap());
-    assert!(filter.take_dirty().unwrap());
-    assert!(!filter.is_dirty().unwrap());
-
-    assert!(!filter.insert_bytes(Buffer::from(key(1))).unwrap());
-    assert!(!filter.is_dirty().unwrap());
-
-    assert!(filter.remove_bytes(Buffer::from(key(1))).unwrap());
-    assert!(filter.take_dirty().unwrap());
   }
 
   #[test]

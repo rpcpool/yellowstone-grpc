@@ -789,21 +789,16 @@ describe("CompressedAccountFilterSet", () => {
     return Buffer.alloc(32, seed);
   }
 
-  test("tracks byte pubkeys exactly and exposes dirty state", () => {
+  test("tracks byte pubkeys exactly", () => {
     const filter = new CompressedAccountFilterSet(100);
 
     expect(filter.isEmpty()).toBe(true);
-    expect(filter.isDirty()).toBe(false);
-    expect(filter.takeDirty()).toBe(false);
 
     expect(filter.insert(pubkey(1))).toBe(true);
     expect(filter.insert(pubkey(1))).toBe(false);
     expect(filter.contains(pubkey(1))).toBe(true);
     expect(filter.contains(pubkey(2))).toBe(false);
     expect(filter.len()).toBe(1);
-    expect(filter.isDirty()).toBe(true);
-    expect(filter.takeDirty()).toBe(true);
-    expect(filter.isDirty()).toBe(false);
 
     expect(filter.remove(pubkey(2))).toBe(false);
     expect(filter.contains(pubkey(1))).toBe(true);
@@ -833,14 +828,13 @@ describe("CompressedAccountFilterSet", () => {
     expect(blockFilter.cuckooAccountInclude?.fingerprintBits).toBe(16);
   });
 
-  test("inserts account cuckoo filter into SubscribeRequest and clears dirty flag", () => {
+  test("inserts account cuckoo filter into SubscribeRequest", () => {
     const filter = new CompressedAccountFilterSet(100);
     const request = makeMinimalSubscribeRequest();
     filter.insert(pubkey(9));
 
     filter.insertIntoSubscribeRequest(request, "tracked");
 
-    expect(filter.isDirty()).toBe(false);
     expect(request.accounts.tracked.account).toEqual([]);
     expect(
       request.accounts.tracked.cuckooAccountsFilter?.data.length,
@@ -854,14 +848,13 @@ describe("CompressedAccountFilterSet", () => {
     );
   });
 
-  test("inserts block cuckoo filter into SubscribeRequest and clears dirty flag", () => {
+  test("inserts block cuckoo filter into SubscribeRequest", () => {
     const filter = new CompressedAccountFilterSet(100);
     const request = makeMinimalSubscribeRequest();
     filter.insert(pubkey(10));
 
     filter.insertIntoBlockSubscribeRequest(request, "trackedBlocks");
 
-    expect(filter.isDirty()).toBe(false);
     expect(request.blocks.trackedBlocks.accountInclude).toEqual([]);
     expect(
       request.blocks.trackedBlocks.cuckooAccountInclude?.data.length,
@@ -932,7 +925,6 @@ describe("CompressedAccountFilterSet public SDK subscription behavior", () => {
     const stream = await client.subscribe(request);
 
     expect(nativeSubscribe).toHaveBeenCalledTimes(1);
-    expect(filter.isDirty()).toBe(false);
 
     const forwardedBytes = nativeSubscribe.mock.calls[0][0] as Uint8Array;
     const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
@@ -986,10 +978,8 @@ describe("CompressedAccountFilterSet public SDK subscription behavior", () => {
     filter.insert(addedPubkey);
     expect(filter.contains(trackedPubkey)).toBe(false);
     expect(filter.contains(addedPubkey)).toBe(true);
-    expect(filter.isDirty()).toBe(true);
 
     filter.insertIntoSubscribeRequest(request, "tracked");
-    expect(filter.isDirty()).toBe(false);
 
     const writeError = await writeAndCaptureError(stream, request);
     expect(writeError).toBeNull();
@@ -2965,11 +2955,14 @@ describe("subscribe response schema tests", () => {
         blocks: {},
         entry: {},
         commitment: 2,
+        ping: {
+          id: 42,
+        },
       };
 
-      const waitForBlockMeta = waitForSubscribeUpdateMatchingPredicate(
+      const waitForBlockMetaOrPong = waitForSubscribeUpdateMatchingPredicate(
         subscribe_duplex_stream,
-        (data) => Boolean(data?.blockMeta),
+        (data) => Boolean(data?.blockMeta || data?.pong?.id === 42),
         TEST_TIMEOUT,
       );
 
@@ -2980,13 +2973,26 @@ describe("subscribe response schema tests", () => {
       });
 
       try {
-        subscribe_update_response = await waitForBlockMeta;
+        subscribe_update_response = await waitForBlockMetaOrPong;
       } catch (error) {
         if (isChannelClosedError(error)) {
           expect(isChannelClosedError(error)).toBe(true);
           return;
         }
         throw error;
+      }
+
+      if (!subscribe_update_response.blockMeta) {
+        const pong = subscribe_update_response.pong;
+        expect(typeof pong).toBe("object");
+        expect(pong.id).toBe(42);
+
+        const decodedEnvelope = expectEncodeDecodeRoundTrip(
+          SubscribeUpdate,
+          subscribe_update_response,
+        );
+        expect(decodedEnvelope.pong).toBeDefined();
+        return;
       }
 
       expect(subscribe_update_response.filters).toEqual(["client"]);

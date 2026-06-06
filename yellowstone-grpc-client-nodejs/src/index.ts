@@ -230,14 +230,6 @@ export class CompressedAccountFilterSet {
     return this._native.isEmpty();
   }
 
-  isDirty(): boolean {
-    return this._native.isDirty();
-  }
-
-  takeDirty(): boolean {
-    return this._native.takeDirty();
-  }
-
   toProto(): CuckooFilter {
     return CuckooFilterMessage.decode(
       this._native.toProto() as unknown as Uint8Array,
@@ -259,13 +251,11 @@ export class CompressedAccountFilterSet {
   insertIntoSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.accounts ??= {};
     request.accounts[name] = this.toAccountFilter();
-    this._native.takeDirty();
   }
 
   insertIntoBlockSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.blocks ??= {};
     request.blocks[name] = this.toBlockFilter();
-    this._native.takeDirty();
   }
 }
 

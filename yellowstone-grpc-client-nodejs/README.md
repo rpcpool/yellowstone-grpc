@@ -88,11 +88,8 @@ stream.on("data", (update) => {
 
 accounts.insert(newPubkey);
 accounts.remove(oldPubkey);
-
-if (accounts.isDirty()) {
-  accounts.insertIntoSubscribeRequest(request, "tracked");
-  stream.write(request);
-}
+accounts.insertIntoSubscribeRequest(request, "tracked");
+stream.write(request);
 ```
 
 Use `insertIntoBlockSubscribeRequest(request, name)` when filtering account

@@ -11,8 +11,6 @@ export declare class CompressedAccountFilterSet {
   len(): number
   capacity(): number
   isEmpty(): boolean
-  isDirty(): boolean
-  takeDirty(): boolean
   toProto(): Buffer
   toAccountFilter(): Buffer
   toBlockFilter(): Buffer

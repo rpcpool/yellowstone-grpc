@@ -59,7 +59,9 @@ async function main() {
       break;
 
     case "is-blockhash-valid":
-      console.log("response: " + inspect(await client.isBlockhashValid(args.blockhash)));
+      console.log(
+        "response: " + inspect(await client.isBlockhashValid(String(args.blockhash))),
+      );
       break;
 
     case "subscribe":
@@ -249,7 +251,6 @@ function buildSubscribeRequest(args): BuiltSubscribeRequest {
       nonemptyTxnSignature: args.accountsNonemptytxnsignature,
     };
 
-    accountCompressedFilter?.takeDirty();
   }
 
   if (args.slots) {
@@ -295,7 +296,6 @@ function buildSubscribeRequest(args): BuiltSubscribeRequest {
       includeEntries: args.blocksIncludeEntries,
     };
 
-    blockCompressedFilter?.takeDirty();
   }
 
   if (args.blocksMeta) {
@@ -768,7 +768,8 @@ function parseCommandLineArgs() {
       },
     )
     .demandCommand(1)
-    .help().argv;
+    .help()
+    .parseSync();
 }
 
 main();
