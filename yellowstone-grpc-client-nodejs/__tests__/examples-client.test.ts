@@ -1,5 +1,4 @@
 import { execFile, spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 
 type CliResult = {
@@ -22,9 +21,6 @@ const NODEJS_DIR = process.cwd();
 const REPO_ROOT = path.resolve(NODEJS_DIR, "..");
 const EXAMPLE_DIR = path.join(REPO_ROOT, "examples", "typescript");
 const EXAMPLE_CLI = path.join(EXAMPLE_DIR, "dist", "client.js");
-const NODEJS_NODE_MODULES = path.join(NODEJS_DIR, "node_modules");
-const EXAMPLE_NODE_MODULES = path.join(EXAMPLE_DIR, "node_modules");
-
 const CLOCK_PUBKEY = "SysvarC1ock11111111111111111111111111111111";
 const TOKEN_PROGRAM_PUBKEY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ZERO_PUBKEY = "11111111111111111111111111111111";
@@ -63,76 +59,8 @@ function baseArgs() {
   ];
 }
 
-async function exists(filePath: string) {
-  try {
-    await fs.lstat(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function ensureSymlink(
-  targetPath: string,
-  linkPath: string,
-  type: "dir" | "file",
-) {
-  if (await exists(linkPath)) {
-    return;
-  }
-
-  await fs.mkdir(path.dirname(linkPath), { recursive: true });
-  await fs.symlink(targetPath, linkPath, type);
-}
-
-function nodeModulePath(packageName: string) {
-  return path.join(NODEJS_NODE_MODULES, ...packageName.split("/"));
-}
-
-async function ensureExampleDependencies() {
-  await ensureSymlink(
-    NODEJS_DIR,
-    path.join(EXAMPLE_NODE_MODULES, "@triton-one", "yellowstone-grpc"),
-    "dir",
-  );
-
-  for (const packageName of ["typescript", "undici-types", "yargs"]) {
-    await ensureSymlink(
-      nodeModulePath(packageName),
-      path.join(EXAMPLE_NODE_MODULES, packageName),
-      "dir",
-    );
-  }
-
-  for (const packageName of ["node", "yargs", "yargs-parser"]) {
-    await ensureSymlink(
-      nodeModulePath(`@types/${packageName}`),
-      path.join(EXAMPLE_NODE_MODULES, "@types", packageName),
-      "dir",
-    );
-  }
-
-  await ensureSymlink(
-    path.join(NODEJS_NODE_MODULES, "typescript", "bin", "tsc"),
-    path.join(EXAMPLE_NODE_MODULES, ".bin", "tsc"),
-    "file",
-  );
-}
-
 function exampleEnv() {
-  return {
-    ...process.env,
-    NODE_PATH: [
-      EXAMPLE_NODE_MODULES,
-      NODEJS_NODE_MODULES,
-      process.env.NODE_PATH,
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join(path.delimiter),
-  };
+  return process.env;
 }
 
 function execFilePromise(
@@ -357,12 +285,15 @@ function subscribeDeshredArgs(...args: string[]) {
 
 describeLive("examples/typescript/src/client.ts user-facing CLI contract", () => {
   beforeAll(async () => {
-    await ensureExampleDependencies();
+    await execFilePromise("npm", ["install"], {
+      cwd: EXAMPLE_DIR,
+      timeoutMs: 120_000,
+    });
     await execFilePromise("npm", ["run", "build"], {
       cwd: EXAMPLE_DIR,
       timeoutMs: 60_000,
     });
-  }, 70_000);
+  }, 190_000);
 
   describe("unary commands", () => {
     test(
