@@ -971,7 +971,7 @@ impl FilterBlocks {
                     .accounts
                     .iter()
                     .filter_map(|account| {
-                        if inner.matches_account(&account.pubkey) {
+                        if inner.matches_account(&account.pubkey) || inner.matches_account(&account.owner) {
                             Some(Arc::clone(account))
                         } else {
                             None
