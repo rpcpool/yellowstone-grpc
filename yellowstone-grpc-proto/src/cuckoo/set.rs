@@ -66,6 +66,7 @@ use {
 pub struct CompressedAccountFilterSet {
     items: HashSet<[u8; 32]>,
     filter: CuckooFilter<[u8; 32]>,
+    dirty: bool,
 }
 
 impl CompressedAccountFilterSet {
@@ -98,7 +99,11 @@ impl CompressedAccountFilterSet {
             .try_reserve(max_capacity)
             .map_err(|_| CuckooBuildError::CapacityOverflow)?;
 
-        Ok(Self { items, filter })
+        Ok(Self {
+            items,
+            filter,
+            dirty: false,
+        })
     }
 
     /// Inserts an item into the map.
@@ -124,6 +129,7 @@ impl CompressedAccountFilterSet {
         }
         self.filter.insert(&bytes)?;
         self.items.insert(bytes);
+        self.dirty = true;
         Ok(true)
     }
 
@@ -146,6 +152,7 @@ impl CompressedAccountFilterSet {
 
         if self.items.remove(&bytes) {
             self.filter.remove(&bytes);
+            self.dirty = true;
             true
         } else {
             false
@@ -217,6 +224,40 @@ impl CompressedAccountFilterSet {
     /// Returns `true` if the map contains no items.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Returns `true` if the map has been mutated since the last call to
+    /// [`take_dirty`] (or since construction).
+    ///
+    /// Use this to check whether the filter needs to be re-sent without
+    /// clearing the flag.
+    pub const fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Returns the dirty flag and clears it.
+    ///
+    /// Call this when transmitting the filter: if it returns `true`, rebuild
+    /// and send; if `false`, skip the send. Clearing means subsequent
+    /// mutations will flip the flag back to `true` for the next cycle.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use {
+    ///     solana_pubkey::Pubkey,
+    ///     yellowstone_grpc_proto::cuckoo::CompressedAccountFilterSet,
+    /// };
+    ///
+    /// let mut map = CompressedAccountFilterSet::with_capacity(100).unwrap();
+    /// assert!(!map.take_dirty());    // fresh map is clean
+    ///
+    /// map.insert(Pubkey::new_from_array([42u8; 32])).unwrap();
+    /// assert!(map.take_dirty());     // mutation flipped it
+    /// assert!(!map.take_dirty());    // and clearing it takes effect
+    /// ```
+    pub const fn take_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
     }
 
     /// Serializes the underlying cuckoo filter to its proto wire format.
@@ -291,6 +332,9 @@ impl CompressedAccountFilterSet {
     /// exists under `name`, it is replaced. Other fields of `req` (transactions,
     /// blocks, slots, etc.) are untouched.
     ///
+    /// Marks the map as clean — subsequent mutations will flip the dirty flag
+    /// back to `true` for the next transmission cycle.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -306,15 +350,19 @@ impl CompressedAccountFilterSet {
     /// map.insert_into_subscribe_request(&mut req, "tracked_accounts");
     /// // req.accounts["tracked_accounts"] now carries the cuckoo filter
     /// ```
-    pub fn insert_into_subscribe_request(&self, req: &mut SubscribeRequest, name: &str) {
+    pub fn insert_into_subscribe_request(&mut self, req: &mut SubscribeRequest, name: &str) {
         req.accounts
             .insert(name.to_string(), self.to_account_filter());
+        self.dirty = false;
     }
 
     /// Inserts this cuckoo filter into `req.blocks` under the given name.
     ///
     /// Existing entries in `req.blocks` are preserved. If an entry already
     /// exists under `name`, it is replaced. Other fields of `req` are untouched.
+    ///
+    /// Marks the map as clean, subsequent mutations will flip the dirty flag
+    /// back to `true` for the next transmission cycle.
     ///
     /// # Example
     ///
@@ -330,8 +378,9 @@ impl CompressedAccountFilterSet {
     /// let mut req = SubscribeRequest::default();
     /// map.insert_into_block_subscribe_request(&mut req, "tracked_blocks");
     /// ```
-    pub fn insert_into_block_subscribe_request(&self, req: &mut SubscribeRequest, name: &str) {
+    pub fn insert_into_block_subscribe_request(&mut self, req: &mut SubscribeRequest, name: &str) {
         req.blocks.insert(name.to_string(), self.to_block_filter());
+        self.dirty = false;
     }
 }
 
@@ -476,6 +525,18 @@ mod tests {
             .unwrap()
             .cuckoo_account_include
             .is_some());
+    }
+
+    #[test]
+    fn insert_into_block_subscribe_request_clears_dirty_flag() {
+        let mut filter = CompressedAccountFilterSet::with_capacity(100).unwrap();
+        filter.insert(key(1)).unwrap();
+        assert!(filter.is_dirty());
+
+        let mut req = SubscribeRequest::default();
+        filter.insert_into_block_subscribe_request(&mut req, "blocks");
+
+        assert!(!filter.is_dirty());
     }
 
     #[test]

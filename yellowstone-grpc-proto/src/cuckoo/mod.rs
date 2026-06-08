@@ -61,8 +61,11 @@
 //! accounts.insert(Pubkey::new_from_array([7u8; 32])).unwrap();
 //! accounts.remove(Pubkey::new_from_array([3u8; 32]));
 //!
-//! // 4. Rebuild the request entry and re-send `req` on the existing stream sink
-//! accounts.insert_into_subscribe_request(&mut req, "tracked_accounts");
+//! // 4. Only re-send when something changed
+//! if accounts.take_dirty() {
+//!     accounts.insert_into_subscribe_request(&mut req, "tracked_accounts");
+//!     // re-send `req` on the existing stream sink
+//! }
 //!
 //! # fn my_tracked_pubkeys() -> Vec<Pubkey> { vec![] }
 //! ```
