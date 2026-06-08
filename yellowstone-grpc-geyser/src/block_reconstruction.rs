@@ -1,0 +1,872 @@
+use {
+    crate::plugin::message::{
+        Message, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
+        MessageTransactionInfo, SlotStatus,
+    },
+    solana_commitment_config::CommitmentLevel,
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    std::{
+        borrow::Borrow,
+        collections::{btree_map::Range, BTreeMap, HashMap, VecDeque},
+        str::FromStr,
+        sync::Arc,
+    },
+    yellowstone_block_machine::state_machine::{
+        BlockReplayEvent, BlockStateMachineOutput, BlockSummary, BlocksStateMachine,
+        SlotCommitmentStatusUpdate, SlotLifecycle, SlotLifecycleUpdate, UntrackedSlot,
+    },
+};
+
+#[derive(Default)]
+pub struct ProcessingSlot {
+    original_messages: Vec<Message>,
+    account_write_version_map: HashMap<Pubkey, u64>,
+    transactions: Vec<Arc<MessageTransactionInfo>>,
+    accounts: Vec<Arc<MessageAccountInfo>>,
+    entries: Vec<Arc<MessageEntry>>,
+}
+
+impl ProcessingSlot {
+    pub fn add_event(&mut self, event: Message) {
+        match event.borrow() {
+            Message::Account(message_account) => {
+                let write_version = message_account.account.write_version;
+                self.account_write_version_map
+                    .entry(message_account.account.pubkey)
+                    .and_modify(|entry| {
+                        if *entry < write_version {
+                            *entry = write_version;
+                        }
+                    })
+                    .or_insert(write_version);
+                self.accounts.push(Arc::clone(&message_account.account));
+                // Handle account event
+            }
+            Message::Transaction(message_transaction) => {
+                self.transactions
+                    .push(Arc::clone(&message_transaction.transaction));
+                // Handle transaction event
+            }
+            Message::Entry(message_entry) => {
+                self.entries.push(Arc::clone(message_entry));
+                // Handle entry event
+            }
+            _ => {
+                // Handle other events if necessary
+                return;
+            }
+        }
+
+        self.original_messages.push(event);
+    }
+
+    pub fn into_block(self, block_meta: Arc<MessageBlockMeta>) -> FrozenBlock {
+        let account_info_vec = self
+            .accounts
+            .into_iter()
+            .filter_map(|account| {
+                let write_version = self.account_write_version_map.get(&account.pubkey)?;
+                if *write_version == account.write_version {
+                    Some(account)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        // Yet another clone of all the messages, but that prevents from doing this later on anyway, while making iterator code easier to implement.
+        let mut dedup_messages = self
+            .original_messages
+            .into_iter()
+            .filter_map(|message| {
+                if let Message::Account(account) = &message {
+                    let write_version = self
+                        .account_write_version_map
+                        .get(&account.account.pubkey)?;
+                    if *write_version == account.account.write_version {
+                        Some(message)
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(message)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // We absolutely need to add blockmeta add the add of the message list, so when we replay from the beginning to the end
+        // we get: all the accounts/transactions/entries + the blockmeta at the end.
+        dedup_messages.push(Message::BlockMeta(Arc::clone(&block_meta)));
+
+        let pre_computed_message_block = MessageBlock::new(
+            Arc::clone(&block_meta),
+            self.transactions,
+            account_info_vec,
+            self.entries,
+        );
+        FrozenBlock {
+            original_messages: Arc::new(dedup_messages),
+            block_meta,
+            pre_computed_message_block,
+        }
+    }
+}
+
+pub struct FrozenBlock {
+    original_messages: Arc<Vec<Message>>,
+    block_meta: Arc<MessageBlockMeta>,
+    pre_computed_message_block: MessageBlock,
+}
+
+impl FrozenBlock {
+    pub fn get_message_block(&self) -> MessageBlock {
+        self.pre_computed_message_block.clone()
+    }
+
+    pub fn messages(&self) -> Arc<Vec<Message>> {
+        Arc::clone(&self.original_messages)
+    }
+}
+
+pub struct SlotProgression {
+    commitment: Vec<SlotCommitmentStatusUpdate>,
+    max_commitment: CommitmentLevel,
+}
+
+pub struct BlockMachineStorage {
+    processing_slots: HashMap<u64, ProcessingSlot>,
+    pending_blockmeta: HashMap<u64, Arc<MessageBlockMeta>>,
+    replayed_slot: BTreeMap<u64, Arc<FrozenBlock>>,
+    slot_commitment_progression_map: HashMap<u64, SlotProgression>,
+    replayed_capacity: usize,
+    ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBlock>)>,
+    state: BlocksStateMachine,
+    min_slot: Option<u64>,
+}
+
+pub struct ReplayIter<'storage> {
+    storage: &'storage BlockMachineStorage,
+    iter: Range<'storage, u64, Arc<FrozenBlock>>,
+    min_commitment: CommitmentLevel,
+}
+
+const fn cmp_commitment_level(a: CommitmentLevel, b: CommitmentLevel) -> std::cmp::Ordering {
+    use CommitmentLevel::*;
+    match (a, b) {
+        (Processed, Processed) | (Confirmed, Confirmed) | (Finalized, Finalized) => {
+            std::cmp::Ordering::Equal
+        }
+        (Processed, _) => std::cmp::Ordering::Less,
+        (_, Processed) => std::cmp::Ordering::Greater,
+        (Confirmed, Finalized) => std::cmp::Ordering::Less,
+        (Finalized, Confirmed) => std::cmp::Ordering::Greater,
+    }
+}
+
+pub struct ReplayedSlot<'frozen_block> {
+    pub frozen_block: &'frozen_block FrozenBlock,
+    pub slot_status_messages: Vec<SlotCommitmentStatusUpdate>,
+}
+
+impl<'storage> Iterator for ReplayIter<'storage> {
+    type Item = ReplayedSlot<'storage>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (slot, block) = self.iter.next()?;
+            let progression = self.storage.slot_commitment_progression_map.get(slot)?;
+            let commitment_level = progression.max_commitment;
+            if cmp_commitment_level(commitment_level, self.min_commitment)
+                == std::cmp::Ordering::Less
+            {
+                continue;
+            }
+            return Some(ReplayedSlot {
+                frozen_block: block.as_ref(),
+                slot_status_messages: progression.commitment.clone(),
+            });
+        }
+    }
+}
+
+impl BlockMachineStorage {
+    pub fn new(replayed_capacity: usize) -> Self {
+        Self {
+            processing_slots: HashMap::new(),
+            replayed_slot: BTreeMap::new(),
+            replayed_capacity,
+            pending_blockmeta: HashMap::new(),
+            slot_commitment_progression_map: HashMap::new(),
+            ready_queue: VecDeque::new(),
+            state: BlocksStateMachine::default(),
+            min_slot: None,
+        }
+    }
+
+    fn prune_slot(&mut self, slot: u64) {
+        self.processing_slots.remove(&slot);
+        self.pending_blockmeta.remove(&slot);
+        self.replayed_slot.remove(&slot);
+        self.slot_commitment_progression_map.remove(&slot);
+    }
+
+    fn slot_reset(&mut self, slot: u64) {
+        self.prune_slot(slot);
+        self.ready_queue
+            .retain(|(_, block)| block.block_meta.slot != slot);
+    }
+
+    fn on_message_slot(&mut self, slot_update: MessageSlot) -> Result<(), UntrackedSlot> {
+        let slot_status = slot_update.status;
+        const LIFE_CYCLE_STATUS: [SlotStatus; 4] = [
+            SlotStatus::FirstShredReceived,
+            SlotStatus::Completed,
+            SlotStatus::CreatedBank,
+            SlotStatus::Dead,
+        ];
+
+        if LIFE_CYCLE_STATUS.contains(&slot_status) {
+            let lifecycle_update = SlotLifecycleUpdate {
+                slot: slot_update.slot,
+                parent_slot: slot_update.parent,
+                stage: match slot_status {
+                    SlotStatus::FirstShredReceived => SlotLifecycle::FirstShredReceived,
+                    SlotStatus::Completed => SlotLifecycle::Completed,
+                    SlotStatus::CreatedBank => SlotLifecycle::CreatedBank,
+                    SlotStatus::Dead => SlotLifecycle::Dead,
+                    _ => unreachable!(),
+                },
+            };
+            self.state.process_replay_event(lifecycle_update.into())?;
+        } else if slot_update.dead_error.is_some() {
+            // Downgrade to lifecycle update
+            let lifecycle_update = SlotLifecycleUpdate {
+                slot: slot_update.slot,
+                parent_slot: slot_update.parent,
+                stage: SlotLifecycle::Dead,
+            };
+            self.state.process_replay_event(lifecycle_update.into())?;
+        } else {
+            let commitment_level_update = SlotCommitmentStatusUpdate {
+                parent_slot: slot_update.parent,
+                slot: slot_update.slot,
+                commitment: match slot_status {
+                    SlotStatus::Processed => CommitmentLevel::Processed,
+                    SlotStatus::Confirmed => CommitmentLevel::Confirmed,
+                    SlotStatus::Finalized => CommitmentLevel::Finalized,
+                    _ => unreachable!(),
+                },
+            };
+
+            self.state
+                .process_consensus_event(commitment_level_update.into());
+        }
+        Ok(())
+    }
+
+    fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {
+        let blockhash = Hash::from_str(&block_meta.blockhash).expect("blockhash format");
+        let block_summary = BlockReplayEvent::BlockSummary(BlockSummary {
+            slot: block_meta.slot,
+            parent_slot: block_meta.parent_slot,
+            blockhash,
+            entry_count: block_meta.entries_count,
+            executed_transaction_count: block_meta.executed_transaction_count,
+        });
+        if self.state.process_replay_event(block_summary).is_ok() {
+            self.pending_blockmeta.insert(block_meta.slot, block_meta);
+        }
+    }
+
+    fn handle_block_data(&mut self, block_data: Message) {
+        let slot = block_data.get_slot();
+        if !self.state.is_slot_tracked(slot) {
+            return;
+        }
+        let slot_buf = self.processing_slots.entry(slot).or_default();
+        slot_buf.add_event(block_data);
+    }
+
+    fn gc(&mut self) {
+        while self.replayed_slot.len() > self.replayed_capacity {
+            if let Some((&oldest_slot, _)) = self.replayed_slot.iter().next() {
+                self.prune_slot(oldest_slot);
+            }
+        }
+        self.min_slot = self.replayed_slot.keys().min().copied();
+        self.state.gc(None);
+    }
+
+    fn on_blockmachine_output(&mut self, output: BlockStateMachineOutput) {
+        match output {
+            BlockStateMachineOutput::FrozenBlock(frozen_block) => {
+                let Some(replayed_slot) = self.processing_slots.remove(&frozen_block.slot) else {
+                    return;
+                };
+                let block_meta = self
+                    .pending_blockmeta
+                    .remove(&frozen_block.slot)
+                    .expect("block meta should be present when frozen block is emitted");
+
+                let slot = frozen_block.slot;
+                self.min_slot = Some(self.min_slot.map_or(slot, |min| min.min(slot)));
+                let frozen_slot = replayed_slot.into_block(block_meta);
+                self.replayed_slot
+                    .insert(frozen_block.slot, Arc::new(frozen_slot));
+            }
+            BlockStateMachineOutput::SlotStatus(slot_commitment_status_update) => {
+                let slot = slot_commitment_status_update.slot;
+
+                self.slot_commitment_progression_map
+                    .entry(slot)
+                    .and_modify(|progression| {
+                        progression
+                            .commitment
+                            .push(slot_commitment_status_update.clone());
+                        if cmp_commitment_level(
+                            slot_commitment_status_update.commitment,
+                            progression.max_commitment,
+                        ) == std::cmp::Ordering::Greater
+                        {
+                            progression.max_commitment = slot_commitment_status_update.commitment;
+                        }
+                    })
+                    .or_insert_with(|| SlotProgression {
+                        commitment: vec![slot_commitment_status_update.clone()],
+                        max_commitment: slot_commitment_status_update.commitment,
+                    });
+
+                let commitment_level = slot_commitment_status_update.commitment;
+                if matches!(commitment_level, CommitmentLevel::Finalized) {
+                    // Only gc on finalized, that should be enough.
+                    self.gc();
+                }
+
+                if let Some(frozen_block) = self.replayed_slot.get(&slot) {
+                    self.ready_queue
+                        .push_back((slot_commitment_status_update, Arc::clone(frozen_block)));
+                }
+            }
+            BlockStateMachineOutput::ForksDetected(fork_detected) => {
+                self.prune_slot(fork_detected.slot);
+            }
+            BlockStateMachineOutput::DeadSlotDetected(dead_block_detected) => {
+                self.prune_slot(dead_block_detected.slot);
+            }
+            BlockStateMachineOutput::BankCreated(_) => {}
+            BlockStateMachineOutput::BankReset(slot) => {
+                self.slot_reset(slot);
+            }
+        }
+    }
+
+    pub fn add(&mut self, message: Message) {
+        match message {
+            Message::Slot(message_slot) => {
+                let _ = self.on_message_slot(message_slot);
+            }
+            Message::Account(message_account) => {
+                self.handle_block_data(Message::Account(message_account));
+            }
+            Message::Transaction(message_transaction) => {
+                self.handle_block_data(Message::Transaction(message_transaction));
+            }
+            Message::Entry(message_entry) => {
+                self.handle_block_data(Message::Entry(message_entry));
+            }
+            Message::BlockMeta(message_block_meta) => self.handle_block_meta(message_block_meta),
+            _ => {
+                // Handle other message types if necessary
+            }
+        }
+        while let Some(output) = self.state.pop_next_unprocess_blockstore_update() {
+            self.on_blockmachine_output(output);
+        }
+
+        while self.state.pop_next_dlq().is_some() {
+            // For now we just log the dlq events, but we may want to handle them in the future if necessary
+        }
+    }
+
+    pub fn pop_ready_block(&mut self) -> Option<(SlotCommitmentStatusUpdate, Arc<FrozenBlock>)> {
+        self.ready_queue.pop_front()
+    }
+
+    pub fn replay_from_slot(&self, slot: u64, min_commitment: CommitmentLevel) -> ReplayIter<'_> {
+        let iter = self.replayed_slot.range(slot..);
+        ReplayIter {
+            storage: self,
+            iter,
+            min_commitment,
+        }
+    }
+
+    pub const fn min_replayable_slot(&self) -> Option<u64> {
+        self.min_slot
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::plugin::message::{
+            MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, MessageTransaction,
+            MessageTransactionInfo, SlotStatus,
+        },
+        bytes::Bytes,
+        prost_types::Timestamp,
+        solana_hash::Hash,
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        std::{collections::HashSet, sync::OnceLock, time::SystemTime},
+        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
+    };
+
+    fn ts() -> Timestamp {
+        Timestamp::from(SystemTime::now())
+    }
+
+    fn make_account_msg(slot: u64, pubkey: Pubkey, write_version: u64) -> Message {
+        Message::Account(MessageAccount {
+            account: Arc::new(MessageAccountInfo {
+                pubkey,
+                lamports: 100,
+                owner: Pubkey::default(),
+                executable: false,
+                rent_epoch: 0,
+                data: Bytes::new(),
+                write_version,
+                txn_signature: None,
+                pre_encoded: OnceLock::new(),
+            }),
+            slot,
+            is_startup: false,
+            created_at: ts(),
+        })
+    }
+
+    fn make_transaction_msg(slot: u64) -> Message {
+        Message::Transaction(MessageTransaction {
+            transaction: Arc::new(MessageTransactionInfo {
+                signature: Signature::default(),
+                is_vote: false,
+                transaction: Default::default(),
+                meta: Default::default(),
+                index: 0,
+                account_keys: HashSet::new(),
+                pre_encoded: OnceLock::new(),
+            }),
+            slot,
+            created_at: ts(),
+        })
+    }
+
+    fn make_entry_msg(slot: u64, index: usize) -> Message {
+        Message::Entry(Arc::new(MessageEntry {
+            slot,
+            index,
+            num_hashes: 1,
+            hash: Hash::default(),
+            executed_transaction_count: 0,
+            starting_transaction_index: 0,
+            created_at: ts(),
+        }))
+    }
+
+    fn make_slot_msg(slot: u64, parent: Option<u64>, status: SlotStatus) -> Message {
+        Message::Slot(MessageSlot {
+            slot,
+            parent,
+            status,
+            dead_error: None,
+            created_at: ts(),
+        })
+    }
+
+    fn make_block_meta_msg(slot: u64, parent_slot: u64) -> Message {
+        Message::BlockMeta(Arc::new(MessageBlockMeta::from_update_oneof(
+            SubscribeUpdateBlockMeta {
+                slot,
+                parent_slot,
+                blockhash: Hash::new_unique().to_string(),
+                parent_blockhash: String::new(),
+                rewards: None,
+                block_time: None,
+                block_height: None,
+                executed_transaction_count: 0,
+                entries_count: 0,
+            },
+            ts(),
+        )))
+    }
+
+    fn make_block_meta_arc(slot: u64, parent_slot: u64) -> Arc<MessageBlockMeta> {
+        Arc::new(MessageBlockMeta::from_update_oneof(
+            SubscribeUpdateBlockMeta {
+                slot,
+                parent_slot,
+                blockhash: Hash::new_unique().to_string(),
+                parent_blockhash: String::new(),
+                rewards: None,
+                block_time: None,
+                block_height: None,
+                executed_transaction_count: 0,
+                entries_count: 0,
+            },
+            ts(),
+        ))
+    }
+
+    /// Drives a slot through the full FirstShredReceived → Completed → BlockMeta → Processed
+    /// pipeline. Adds a dummy entry so the slot appears in `processing_slots` and thus
+    /// survives into `replayed_slot` after the block is frozen.
+    fn drive_slot_to_processed(storage: &mut BlockMachineStorage, slot: u64, parent: Option<u64>) {
+        storage.add(make_slot_msg(slot, parent, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(slot, parent, SlotStatus::Completed));
+        storage.add(make_entry_msg(slot, 0));
+        storage.add(make_block_meta_msg(slot, parent.unwrap_or(0)));
+        storage.add(make_slot_msg(slot, parent, SlotStatus::Processed));
+    }
+
+    // ─── ProcessingSlot ──────────────────────────────────────────────────────
+
+    #[test]
+    fn processing_slot_tracks_max_write_version_per_pubkey() {
+        let pubkey = Pubkey::new_unique();
+        let mut slot = ProcessingSlot::default();
+
+        slot.add_event(make_account_msg(1, pubkey, 3));
+        slot.add_event(make_account_msg(1, pubkey, 7)); // new max
+        slot.add_event(make_account_msg(1, pubkey, 2)); // below current max, ignored
+
+        assert_eq!(slot.account_write_version_map[&pubkey], 7);
+        // All three messages still buffered (dedup happens in into_block, not here)
+        assert_eq!(slot.original_messages.len(), 3);
+    }
+
+    #[test]
+    fn processing_slot_into_block_keeps_only_highest_write_version() {
+        let pubkey = Pubkey::new_unique();
+        let mut slot = ProcessingSlot::default();
+        slot.add_event(make_account_msg(1, pubkey, 1));
+        slot.add_event(make_account_msg(1, pubkey, 5)); // winner
+
+        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let msgs = frozen.messages();
+        let accounts: Vec<_> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let Message::Account(a) = m {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(accounts.len(), 1, "only one account should survive dedup");
+        assert_eq!(accounts[0].account.write_version, 5);
+    }
+
+    #[test]
+    fn processing_slot_into_block_deduplicates_independently_per_pubkey() {
+        let pk1 = Pubkey::new_unique();
+        let pk2 = Pubkey::new_unique();
+        let mut slot = ProcessingSlot::default();
+
+        slot.add_event(make_account_msg(1, pk1, 1));
+        slot.add_event(make_account_msg(1, pk1, 4)); // pk1 winner
+        slot.add_event(make_account_msg(1, pk2, 9)); // pk2 only entry
+
+        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let msgs = frozen.messages();
+        let accounts: Vec<_> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let Message::Account(a) = m {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(accounts.len(), 2);
+        let mut versions: Vec<u64> = accounts.iter().map(|a| a.account.write_version).collect();
+        versions.sort_unstable();
+        assert_eq!(versions, [4, 9]);
+    }
+
+    #[test]
+    fn processing_slot_into_block_keeps_all_transactions() {
+        let mut slot = ProcessingSlot::default();
+        slot.add_event(make_transaction_msg(1));
+        slot.add_event(make_transaction_msg(1));
+
+        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let tx_count = frozen
+            .messages()
+            .iter()
+            .filter(|m| matches!(m, Message::Transaction(_)))
+            .count();
+        assert_eq!(tx_count, 2);
+    }
+
+    #[test]
+    fn processing_slot_into_block_keeps_all_entries() {
+        let mut slot = ProcessingSlot::default();
+        slot.add_event(make_entry_msg(1, 0));
+        slot.add_event(make_entry_msg(1, 1));
+        slot.add_event(make_entry_msg(1, 2));
+
+        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let entry_count = frozen
+            .messages()
+            .iter()
+            .filter(|m| matches!(m, Message::Entry(_)))
+            .count();
+        assert_eq!(entry_count, 3);
+    }
+
+    #[test]
+    fn processing_slot_add_event_ignores_non_block_data() {
+        let mut slot = ProcessingSlot::default();
+        // Slot and Block messages are not block data — add_event should ignore them
+        slot.add_event(make_slot_msg(1, None, SlotStatus::Processed));
+        assert_eq!(slot.original_messages.len(), 0);
+    }
+
+    #[test]
+    fn frozen_block_message_block_reflects_deduplication() {
+        let pubkey = Pubkey::new_unique();
+        let mut slot = ProcessingSlot::default();
+        slot.add_event(make_account_msg(1, pubkey, 2));
+        slot.add_event(make_account_msg(1, pubkey, 8)); // winner
+
+        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let mb = frozen.get_message_block();
+        assert_eq!(mb.accounts.len(), 1);
+        assert_eq!(mb.updated_account_count, 1);
+        assert_eq!(mb.accounts[0].write_version, 8);
+    }
+
+    // ─── cmp_commitment_level ────────────────────────────────────────────────
+
+    #[test]
+    fn cmp_commitment_level_total_ordering() {
+        use {solana_commitment_config::CommitmentLevel as CL, std::cmp::Ordering::*};
+
+        assert_eq!(cmp_commitment_level(CL::Processed, CL::Processed), Equal);
+        assert_eq!(cmp_commitment_level(CL::Confirmed, CL::Confirmed), Equal);
+        assert_eq!(cmp_commitment_level(CL::Finalized, CL::Finalized), Equal);
+
+        assert_eq!(cmp_commitment_level(CL::Processed, CL::Confirmed), Less);
+        assert_eq!(cmp_commitment_level(CL::Processed, CL::Finalized), Less);
+        assert_eq!(cmp_commitment_level(CL::Confirmed, CL::Finalized), Less);
+
+        assert_eq!(cmp_commitment_level(CL::Confirmed, CL::Processed), Greater);
+        assert_eq!(cmp_commitment_level(CL::Finalized, CL::Processed), Greater);
+        assert_eq!(cmp_commitment_level(CL::Finalized, CL::Confirmed), Greater);
+    }
+
+    // ─── BlockMachineStorage ─────────────────────────────────────────────────
+
+    #[test]
+    fn block_machine_storage_starts_with_no_min_slot_and_empty_queue() {
+        let mut storage = BlockMachineStorage::new(10);
+        assert!(storage.min_replayable_slot().is_none());
+        assert!(storage.pop_ready_block().is_none());
+    }
+
+    #[test]
+    fn block_machine_storage_full_lifecycle_to_processed() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_slot_to_processed(&mut storage, 1, None);
+
+        let (status, _frozen) = storage.pop_ready_block().expect("block should be ready");
+        assert_eq!(status.slot, 1);
+        assert_eq!(status.commitment, CommitmentLevel::Processed);
+        assert!(storage.pop_ready_block().is_none(), "no more ready blocks");
+        assert_eq!(storage.min_replayable_slot(), Some(1));
+    }
+
+    #[test]
+    fn block_machine_storage_account_deduplication_end_to_end() {
+        let pubkey = Pubkey::new_unique();
+        let mut storage = BlockMachineStorage::new(10);
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_account_msg(1, pubkey, 2));
+        storage.add(make_account_msg(1, pubkey, 9)); // winner
+        storage.add(make_block_meta_msg(1, 0));
+        storage.add(make_slot_msg(1, None, SlotStatus::Processed));
+
+        let (_, frozen) = storage.pop_ready_block().expect("ready block");
+        let msgs = frozen.messages();
+        let accounts: Vec<_> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let Message::Account(a) = m {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].account.write_version, 9);
+    }
+
+    #[test]
+    fn block_machine_storage_fills_missing_commitment_levels() {
+        // Jump straight to Finalized without prior Processed/Confirmed.
+        // BlocksStateMachine must synthesize Processed → Confirmed → Finalized.
+        let mut storage = BlockMachineStorage::new(10);
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_block_meta_msg(1, 0));
+        storage.add(make_slot_msg(1, None, SlotStatus::Finalized));
+
+        let expected = [
+            CommitmentLevel::Processed,
+            CommitmentLevel::Confirmed,
+            CommitmentLevel::Finalized,
+        ];
+        for expected_cl in expected {
+            let (status, _) = storage.pop_ready_block().expect("ready block");
+            assert_eq!(
+                status.commitment, expected_cl,
+                "expected {expected_cl:?} but got {:?}",
+                status.commitment
+            );
+        }
+        assert!(storage.pop_ready_block().is_none());
+    }
+
+    #[test]
+    fn block_machine_storage_replay_excludes_slots_below_min_commitment() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_slot_to_processed(&mut storage, 1, None);
+        // Drain the ready queue
+        storage.pop_ready_block();
+
+        // Slot 1 only reached Processed; min_commitment=Confirmed should exclude it
+        let replayed: Vec<_> = storage
+            .replay_from_slot(1, CommitmentLevel::Confirmed)
+            .collect();
+        assert!(
+            replayed.is_empty(),
+            "Processed-only slot must not appear when replaying at Confirmed"
+        );
+    }
+
+    #[test]
+    fn block_machine_storage_replay_includes_slot_at_exact_commitment() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_slot_to_processed(&mut storage, 1, None);
+        storage.pop_ready_block();
+
+        let replayed: Vec<_> = storage
+            .replay_from_slot(1, CommitmentLevel::Processed)
+            .collect();
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(
+            replayed[0].slot_status_messages[0].commitment,
+            CommitmentLevel::Processed
+        );
+    }
+
+    #[test]
+    fn block_machine_storage_replay_includes_finalized_slot_when_min_is_confirmed() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Drive slot 1 all the way to Finalized (gap-filling gives Processed+Confirmed+Finalized)
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_block_meta_msg(1, 0));
+        storage.add(make_slot_msg(1, None, SlotStatus::Finalized));
+        // Drain ready queue
+        while storage.pop_ready_block().is_some() {}
+
+        // Even though we asked for Confirmed minimum, a Finalized slot satisfies it
+        let replayed: Vec<_> = storage
+            .replay_from_slot(1, CommitmentLevel::Confirmed)
+            .collect();
+        assert_eq!(replayed.len(), 1);
+    }
+
+    #[test]
+    fn block_machine_storage_entry_messages_preserved_in_frozen_block() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_entry_msg(1, 1));
+        storage.add(make_block_meta_msg(1, 0));
+        storage.add(make_slot_msg(1, None, SlotStatus::Processed));
+
+        let (_, frozen) = storage.pop_ready_block().expect("ready block");
+        let messages = frozen.messages();
+
+        let entry_count = messages
+            .iter()
+            .filter(|m| matches!(m, Message::Entry(_)))
+            .count();
+
+        let last_message = messages.last().unwrap();
+        assert!(
+            matches!(last_message, Message::BlockMeta(_)),
+            "last message should be BlockMeta"
+        );
+        assert_eq!(entry_count, 2);
+    }
+
+    #[test]
+    fn block_machine_storage_reemit_same_block_every_commitment_progression() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_entry_msg(1, 1));
+        storage.add(make_block_meta_msg(1, 0));
+
+        const ALL_COMMITMENT: [CommitmentLevel; 3] = [
+            CommitmentLevel::Processed,
+            CommitmentLevel::Confirmed,
+            CommitmentLevel::Finalized,
+        ];
+
+        for commitment_level in ALL_COMMITMENT {
+            let status = match commitment_level {
+                CommitmentLevel::Processed => SlotStatus::Processed,
+                CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                CommitmentLevel::Finalized => SlotStatus::Finalized,
+            };
+            storage.add(make_slot_msg(1, None, status));
+            let (actual_commitment, frozen) = storage.pop_ready_block().expect("ready block");
+            assert!(
+                actual_commitment.commitment == commitment_level,
+                "expected commitment {commitment_level:?} but got {:?}",
+                actual_commitment.commitment
+            );
+            let messages = frozen.messages();
+            let entry_count = messages
+                .iter()
+                .filter(|m| matches!(m, Message::Entry(_)))
+                .count();
+            let last_message = messages.last().unwrap();
+            assert!(
+                matches!(last_message, Message::BlockMeta(_)),
+                "last message should be BlockMeta"
+            );
+            assert_eq!(entry_count, 2);
+        }
+    }
+}
