@@ -1,4 +1,3 @@
-import yargs from "yargs";
 import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
@@ -14,7 +13,7 @@ import Client, {
 import type { ReconnectOptions } from "@triton-one/yellowstone-grpc";
 
 async function main() {
-  const args = parseCommandLineArgs();
+  const args = await parseCommandLineArgs();
   const reconnectOptions = buildReconnectOptions(args);
 
   // Open connection.
@@ -469,7 +468,9 @@ async function subscribeDeshredCommand(client: Client, args) {
   await streamClosed;
 }
 
-function parseCommandLineArgs() {
+async function parseCommandLineArgs() {
+  const { default: yargs } = await import("yargs");
+
   return yargs(process.argv.slice(2))
     .options({
       endpoint: {
