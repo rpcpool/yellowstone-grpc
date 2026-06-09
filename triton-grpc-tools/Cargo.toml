@@ -1,0 +1,28 @@
+[package]
+name = "triton-grpc-tools"
+version = "0.1.0"
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Triton gRPC Tools"
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+publish = { workspace = true }
+
+[dependencies]
+arc-swap = { workspace = true }
+bytes = { workspace = true }
+bytesize = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+pin-project = { workspace = true }
+tower-layer = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+x509-parser = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
