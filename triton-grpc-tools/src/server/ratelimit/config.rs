@@ -13,7 +13,7 @@ pub type TierLimitMap = BTreeMap<String, i64>;
 ///
 /// The key is the RPC method path (for example `/geyser.Geyser/Ping`) or a
 /// catch-all token such as `grpc`.
-pub type MethodLimitMap = BTreeMap<String, u64>;
+pub type MethodLimitMap = BTreeMap<String, i64>;
 
 /// Top-level HAProxy rate-limit configuration parsed from `ratelimit-example.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
