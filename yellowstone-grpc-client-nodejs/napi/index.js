@@ -576,6 +576,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.CompressedAccountFilterSet = nativeBinding.CompressedAccountFilterSet
 module.exports.DuplexStream = nativeBinding.DuplexStream
 module.exports.DuplexStreamDeshred = nativeBinding.DuplexStreamDeshred
 module.exports.GrpcClient = nativeBinding.GrpcClient

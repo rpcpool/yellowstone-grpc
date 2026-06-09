@@ -26,6 +26,24 @@ npm start -- --endpoint https://api.rpcpool.com \
   --accounts --accounts-account "<Pubkey>"
 ```
 
+### subscribe to account updates with a compressed account set
+
+Use the same `subscribe` command and `--accounts-account` inputs. Adding
+`--accounts-compressed` sends those pubkeys as a compressed cuckoo filter instead
+of an explicit account list. Account updates are still printed as `data ...`;
+the example drops cuckoo false positives with the local exact account set before
+printing.
+
+```shell
+npm start -- --endpoint https://api.rpcpool.com \
+  --x-token "<token>" \
+  subscribe \
+  --accounts \
+  --accounts-compressed \
+  --accounts-compressed-capacity 100000 \
+  --accounts-account "<Pubkey>"
+```
+
 ### subscribe to slot updates
 
 ```shell
@@ -125,6 +143,22 @@ npm start -- -e="https://api.rpcpool.com" \
   --transactions-vote false \
   --transactions-failed false \
   --transactions-account-include "<Pubkey>"
+```
+
+### subscribe to block updates with a compressed account include set
+
+Use the same `--blocks-account-include` input as the explicit block filter.
+Adding `--blocks-compressed` sends the included accounts as a compressed cuckoo
+filter.
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --blocks \
+  --blocks-compressed \
+  --blocks-compressed-capacity 100000 \
+  --blocks-account-include "<Pubkey>"
 ```
 
 ### subscribe to deshred transaction updates

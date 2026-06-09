@@ -1,6 +1,8 @@
 import Client, {
   ClientDeshredDuplexStream,
   ClientDuplexStream,
+  CompressedAccountFilterSet,
+  CuckooHashAlgorithm,
   txDeshredEncode,
 } from "../src";
 import * as net from "node:net";
@@ -74,6 +76,22 @@ function closeStreamAndWait(stream: any, timeoutMs = 2500): Promise<void> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function encodeNativeSubscribeUpdate(
+  update: Parameters<typeof geyser.SubscribeUpdate.fromPartial>[0],
+): Uint8Array {
+  return geyser.SubscribeUpdate.encode(
+    geyser.SubscribeUpdate.fromPartial(update),
+  ).finish();
+}
+
+function encodeNativeSubscribeUpdateDeshred(
+  update: Parameters<typeof geyser.SubscribeUpdateDeshred.fromPartial>[0],
+): Uint8Array {
+  return geyser.SubscribeUpdateDeshred.encode(
+    geyser.SubscribeUpdateDeshred.fromPartial(update),
+  ).finish();
 }
 
 type DisconnectableTcpProxy = {
@@ -766,6 +784,276 @@ function getAllGeyserMessageFns(): Array<[string, any]> {
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
+describe("CompressedAccountFilterSet", () => {
+  function pubkey(seed: number): Buffer {
+    return Buffer.alloc(32, seed);
+  }
+
+  test("tracks byte pubkeys exactly", () => {
+    const filter = new CompressedAccountFilterSet(100);
+
+    expect(filter.isEmpty()).toBe(true);
+
+    expect(filter.insert(pubkey(1))).toBe(true);
+    expect(filter.insert(pubkey(1))).toBe(false);
+    expect(filter.contains(pubkey(1))).toBe(true);
+    expect(filter.contains(pubkey(2))).toBe(false);
+    expect(filter.len()).toBe(1);
+
+    expect(filter.remove(pubkey(2))).toBe(false);
+    expect(filter.contains(pubkey(1))).toBe(true);
+    expect(filter.remove(pubkey(1))).toBe(true);
+    expect(filter.contains(pubkey(1))).toBe(false);
+  });
+
+  test("builds proto, account filter, and block filter payloads", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    expect(filter.insert(pubkey(7))).toBe(true);
+
+    const proto = filter.toProto();
+    expect(proto.data.length).toBeGreaterThan(0);
+    expect(proto.bucketCount).toBeGreaterThan(0);
+    expect(proto.entriesPerBucket).toBe(4);
+    expect(proto.fingerprintBits).toBe(16);
+    expect(proto.hashAlgorithm).toBe(CuckooHashAlgorithm.SIP_HASH);
+
+    const accountFilter = filter.toAccountFilter();
+    expect(accountFilter.account).toEqual([]);
+    expect(accountFilter.owner).toEqual([]);
+    expect(accountFilter.filters).toEqual([]);
+    expect(accountFilter.cuckooAccountsFilter?.fingerprintBits).toBe(16);
+
+    const blockFilter = filter.toBlockFilter();
+    expect(blockFilter.accountInclude).toEqual([]);
+    expect(blockFilter.cuckooAccountInclude?.fingerprintBits).toBe(16);
+  });
+
+  test("inserts account cuckoo filter into SubscribeRequest", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    const request = makeMinimalSubscribeRequest();
+    filter.insert(pubkey(9));
+
+    filter.insertIntoSubscribeRequest(request, "tracked");
+
+    expect(request.accounts.tracked.account).toEqual([]);
+    expect(
+      request.accounts.tracked.cuckooAccountsFilter?.data.length,
+    ).toBeGreaterThan(0);
+
+    const decoded = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+    expect(decoded.accounts.tracked.cuckooAccountsFilter?.fingerprintBits).toBe(
+      16,
+    );
+  });
+
+  test("inserts block cuckoo filter into SubscribeRequest", () => {
+    const filter = new CompressedAccountFilterSet(100);
+    const request = makeMinimalSubscribeRequest();
+    filter.insert(pubkey(10));
+
+    filter.insertIntoBlockSubscribeRequest(request, "trackedBlocks");
+
+    expect(request.blocks.trackedBlocks.accountInclude).toEqual([]);
+    expect(
+      request.blocks.trackedBlocks.cuckooAccountInclude?.data.length,
+    ).toBeGreaterThan(0);
+
+    const decoded = geyser.SubscribeRequest.decode(
+      geyser.SubscribeRequest.encode(request).finish(),
+    );
+    expect(
+      decoded.blocks.trackedBlocks.cuckooAccountInclude?.fingerprintBits,
+    ).toBe(16);
+  });
+
+  test("rejects invalid capacity before entering native code", () => {
+    expect(() => new CompressedAccountFilterSet(-1)).toThrow(
+      "Invalid maxCapacity",
+    );
+    expect(() => new CompressedAccountFilterSet(1.5)).toThrow(
+      "Invalid maxCapacity",
+    );
+  });
+});
+
+describe("CompressedAccountFilterSet public SDK subscription behavior", () => {
+  function pubkey(seed: number): Buffer {
+    return Buffer.alloc(32, seed);
+  }
+
+  function makeNativeAccountUpdate(pubkeyBytes: Buffer): Uint8Array {
+    return encodeNativeSubscribeUpdate({
+      filters: ["tracked"],
+      createdAt: new Date(),
+      account: {
+        slot: "1",
+        isStartup: false,
+        account: {
+          pubkey: pubkeyBytes,
+          lamports: "1",
+          owner: Buffer.alloc(32, 3),
+          executable: false,
+          rentEpoch: "0",
+          data: Buffer.alloc(0),
+          writeVersion: "1",
+        },
+      },
+    });
+  }
+
+  test("subscribe initial request carries account cuckoo filter through public Client", async () => {
+    const nativeStream = {
+      close: jest.fn(),
+      writeRaw: jest.fn(),
+      read: jest.fn(() => new Promise(() => {})),
+    };
+    const nativeSubscribe = jest.fn().mockResolvedValue(nativeStream);
+    const client = new Client("http://localhost:10000", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: nativeSubscribe,
+    };
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(pubkey(1));
+    filter.insert(pubkey(2));
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoSubscribeRequest(request, "tracked");
+
+    const stream = await client.subscribe(request);
+
+    expect(nativeSubscribe).toHaveBeenCalledTimes(1);
+
+    const forwardedBytes = nativeSubscribe.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
+    const accountFilter = decoded.accounts.tracked;
+
+    expect(accountFilter.account).toEqual([]);
+    expect(accountFilter.owner).toEqual([]);
+    expect(accountFilter.filters).toEqual([]);
+    expect(accountFilter.cuckooAccountsFilter?.data.length).toBeGreaterThan(0);
+    expect(accountFilter.cuckooAccountsFilter?.entriesPerBucket).toBe(4);
+    expect(accountFilter.cuckooAccountsFilter?.fingerprintBits).toBe(16);
+    expect(accountFilter.cuckooAccountsFilter?.hashAlgorithm).toBe(
+      CuckooHashAlgorithm.SIP_HASH,
+    );
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("stream write resends mutated cuckoo filter and exact local contains handles false positives", async () => {
+    const trackedPubkey = pubkey(1);
+    const addedPubkey = pubkey(2);
+    const falsePositivePubkey = pubkey(99);
+    const nativeUpdates = [
+      makeNativeAccountUpdate(addedPubkey),
+      makeNativeAccountUpdate(falsePositivePubkey),
+      undefined,
+    ];
+    const nativeStream = {
+      close: jest.fn(),
+      writeRaw: jest.fn(),
+      read: jest.fn(() => Promise.resolve(nativeUpdates.shift())),
+    };
+    const client = new Client("http://localhost:10000", undefined, {});
+    (client as any)._grpcClient = {
+      subscribe: jest.fn().mockResolvedValue(nativeStream),
+    };
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(trackedPubkey);
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoSubscribeRequest(request, "tracked");
+    const initialData = Buffer.from(
+      request.accounts.tracked.cuckooAccountsFilter?.data ?? [],
+    );
+
+    const stream = await client.subscribe(request);
+    stream.on("error", () => {});
+
+    filter.remove(trackedPubkey);
+    filter.insert(addedPubkey);
+    expect(filter.contains(trackedPubkey)).toBe(false);
+    expect(filter.contains(addedPubkey)).toBe(true);
+
+    filter.insertIntoSubscribeRequest(request, "tracked");
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+    expect(nativeStream.writeRaw).toHaveBeenCalledTimes(1);
+
+    const resentBytes = nativeStream.writeRaw.mock.calls[0][0] as Uint8Array;
+    const resentRequest = geyser.SubscribeRequest.decode(resentBytes);
+    const resentData = Buffer.from(
+      resentRequest.accounts.tracked.cuckooAccountsFilter?.data ?? [],
+    );
+
+    expect(resentData.length).toBeGreaterThan(0);
+    expect(Buffer.compare(resentData, initialData)).not.toBe(0);
+
+    const locallyAccepted: any[] = [];
+    stream.on("data", (update) => {
+      const pubkeyBytes = update.account?.account?.pubkey;
+      if (pubkeyBytes && filter.contains(pubkeyBytes)) {
+        locallyAccepted.push(update);
+      }
+    });
+
+    const terminalEvent = await waitForTerminalEvent(stream, 1000);
+
+    expect(terminalEvent).not.toBe("timeout");
+    expect(locallyAccepted).toHaveLength(1);
+    expect(locallyAccepted[0].account.account.pubkey).toEqual(addedPubkey);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("block cuckoo filter is sent through public stream writes", async () => {
+    const nativeWriteRaw = jest.fn();
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: nativeWriteRaw,
+        read: jest.fn(() => new Promise(() => {})),
+      },
+      { objectMode: true },
+    );
+    stream.on("error", () => {});
+
+    const filter = new CompressedAccountFilterSet(100);
+    filter.insert(pubkey(5));
+
+    const request = makeMinimalSubscribeRequest();
+    filter.insertIntoBlockSubscribeRequest(request, "trackedBlocks");
+
+    const writeError = await writeAndCaptureError(stream, request);
+    expect(writeError).toBeNull();
+
+    const forwardedBytes = nativeWriteRaw.mock.calls[0][0] as Uint8Array;
+    const decoded = geyser.SubscribeRequest.decode(forwardedBytes);
+    const blockFilter = decoded.blocks.trackedBlocks;
+
+    expect(blockFilter.accountInclude).toEqual([]);
+    expect(blockFilter.cuckooAccountInclude?.data.length).toBeGreaterThan(0);
+    expect(blockFilter.cuckooAccountInclude?.fingerprintBits).toBe(16);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("base58 user flow matches byte user flow", () => {
+    const zeroPubkey = "11111111111111111111111111111111";
+    const filter = new CompressedAccountFilterSet(100);
+
+    expect(filter.insert(zeroPubkey)).toBe(true);
+    expect(filter.contains(Buffer.alloc(32, 0))).toBe(true);
+    expect(filter.remove(Buffer.alloc(32, 0))).toBe(true);
+    expect(filter.contains(zeroPubkey)).toBe(false);
+  });
+});
+
 describe("ClientDuplexStream shutdown behavior", () => {
   test("shutdown: destroy emits terminal event and calls native close", async () => {
     const nativeClose = jest.fn();
@@ -930,14 +1218,12 @@ describe("Client connection guard behavior", () => {
 });
 
 describe("ClientDuplexStream read and lifecycle behavior", () => {
-  function makeNativeUpdate(): any {
-    return {
+  function makeNativeUpdate(): Uint8Array {
+    return encodeNativeSubscribeUpdate({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: {
-        ping: {},
-      },
-    };
+      ping: {},
+    });
   }
 
   test("read: prevents overlapping native read calls while one read is in flight", async () => {
@@ -1384,15 +1670,15 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       },
     ],
   ])(
-    "read: maps updateOneof.%s to top-level SDK field",
+    "read: decodes native SubscribeUpdate buffer field %s",
     async (variant, payload) => {
-      const nativeRead = jest.fn().mockResolvedValue({
+      const nativeUpdate = encodeNativeSubscribeUpdate({
         filters: ["client"],
         createdAt: new Date(),
-        updateOneof: {
-          [variant]: payload,
-        },
-      });
+        [variant]: payload,
+      } as any);
+      const expectedUpdate = geyser.SubscribeUpdate.decode(nativeUpdate);
+      const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
       const stream = new ClientDuplexStream(
         {
           close: jest.fn(),
@@ -1407,7 +1693,9 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       const mappedUpdate = await dataPromise;
 
       expect((mappedUpdate as any).updateOneof).toBeUndefined();
-      expect((mappedUpdate as any)[variant]).toEqual(payload);
+      expect((mappedUpdate as any)[variant]).toEqual(
+        (expectedUpdate as any)[variant],
+      );
       expect(mappedUpdate.filters).toEqual(["client"]);
       expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
         "[object Date]",
@@ -1417,7 +1705,7 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     },
   );
 
-  test("deshred read: maps updateOneof.deshredTransaction to top-level SDK field", async () => {
+  test("deshred read: decodes native SubscribeUpdateDeshred transaction buffer", async () => {
     const deshredPayload = {
       slot: "8",
       transaction: {
@@ -1429,13 +1717,13 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
       },
     };
 
-    const nativeRead = jest.fn().mockResolvedValue({
+    const nativeUpdate = encodeNativeSubscribeUpdateDeshred({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: {
-        deshredTransaction: deshredPayload,
-      },
+      deshredTransaction: deshredPayload,
     });
+    const expectedUpdate = geyser.SubscribeUpdateDeshred.decode(nativeUpdate);
+    const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
     const stream = new ClientDeshredDuplexStream(
       {
         close: jest.fn(),
@@ -1450,7 +1738,9 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     const mappedUpdate = await dataPromise;
 
     expect((mappedUpdate as any).updateOneof).toBeUndefined();
-    expect(mappedUpdate.deshredTransaction).toEqual(deshredPayload);
+    expect(mappedUpdate.deshredTransaction).toEqual(
+      expectedUpdate.deshredTransaction,
+    );
     expect(mappedUpdate.filters).toEqual(["client"]);
     expect(Object.prototype.toString.call(mappedUpdate.createdAt)).toBe(
       "[object Date]",
@@ -1459,13 +1749,14 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
     await closeStreamAndWait(stream);
   });
 
-  test("deshred read: maps ping and pong variants to top-level SDK fields", async () => {
+  test("deshred read: decodes ping and pong fields from native buffers", async () => {
     for (const variantPayload of [{ ping: {} }, { pong: { id: 3 } }]) {
-      const nativeRead = jest.fn().mockResolvedValue({
+      const nativeUpdate = encodeNativeSubscribeUpdateDeshred({
         filters: ["client"],
         createdAt: new Date(),
-        updateOneof: variantPayload,
+        ...variantPayload,
       });
+      const nativeRead = jest.fn().mockResolvedValue(nativeUpdate);
       const stream = new ClientDeshredDuplexStream(
         {
           close: jest.fn(),
@@ -1684,11 +1975,11 @@ describe("ClientDuplexStream read and lifecycle behavior", () => {
 
     (stream as any)._read(0);
     stream.destroy();
-    resolveRead?.({
+    resolveRead?.(encodeNativeSubscribeUpdate({
       filters: ["client"],
       createdAt: new Date(),
-      updateOneof: { ping: {} },
-    });
+      ping: {},
+    }));
     await flushMicrotasks();
 
     expect(onData).not.toHaveBeenCalled();
@@ -2054,6 +2345,32 @@ describe("subscribe response schema tests", () => {
     });
 
     await assertRequestsAcceptedOnSingleStream(requests);
+  }, 180000);
+
+  test("cuckoo account and block filters are accepted", async () => {
+    const accountFilter = new CompressedAccountFilterSet(100);
+    accountFilter.insert(Buffer.alloc(32, 1));
+    accountFilter.insert(Buffer.alloc(32, 2));
+    const accountRequest = baseSubscribeRequest();
+    accountFilter.insertIntoSubscribeRequest(accountRequest, "cuckoo_accounts");
+
+    const blockFilter = new CompressedAccountFilterSet(100);
+    blockFilter.insert(Buffer.alloc(32, 3));
+    blockFilter.insert(Buffer.alloc(32, 4));
+    const blockRequest = baseSubscribeRequest();
+    blockFilter.insertIntoBlockSubscribeRequest(blockRequest, "cuckoo_blocks");
+
+    expect(
+      accountRequest.accounts.cuckoo_accounts.cuckooAccountsFilter,
+    ).toBeDefined();
+    expect(
+      blockRequest.blocks.cuckoo_blocks.cuckooAccountInclude,
+    ).toBeDefined();
+
+    await assertRequestsAcceptedOnSingleStream([
+      { label: "cuckoo_accounts", request: accountRequest },
+      { label: "cuckoo_blocks", request: blockRequest },
+    ]);
   }, 180000);
 
   test("slots filter combinations are accepted", async () => {
@@ -2638,11 +2955,14 @@ describe("subscribe response schema tests", () => {
         blocks: {},
         entry: {},
         commitment: 2,
+        ping: {
+          id: 42,
+        },
       };
 
-      const waitForBlockMeta = waitForSubscribeUpdateMatchingPredicate(
+      const waitForBlockMetaOrPong = waitForSubscribeUpdateMatchingPredicate(
         subscribe_duplex_stream,
-        (data) => Boolean(data?.blockMeta),
+        (data) => Boolean(data?.blockMeta || data?.pong?.id === 42),
         TEST_TIMEOUT,
       );
 
@@ -2653,13 +2973,26 @@ describe("subscribe response schema tests", () => {
       });
 
       try {
-        subscribe_update_response = await waitForBlockMeta;
+        subscribe_update_response = await waitForBlockMetaOrPong;
       } catch (error) {
         if (isChannelClosedError(error)) {
           expect(isChannelClosedError(error)).toBe(true);
           return;
         }
         throw error;
+      }
+
+      if (!subscribe_update_response.blockMeta) {
+        const pong = subscribe_update_response.pong;
+        expect(typeof pong).toBe("object");
+        expect(pong.id).toBe(42);
+
+        const decodedEnvelope = expectEncodeDecodeRoundTrip(
+          SubscribeUpdate,
+          subscribe_update_response,
+        );
+        expect(decodedEnvelope.pong).toBeDefined();
+        return;
       }
 
       expect(subscribe_update_response.filters).toEqual(["client"]);

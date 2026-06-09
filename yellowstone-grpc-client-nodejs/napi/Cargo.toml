@@ -7,60 +7,43 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
-[workspace]
-# This is an independent workspace, not part of the parent workspace
-
 [dependencies]
-napi = { version = "3.4.0", features = ["async", "napi9", "serde-json", "web_stream", "compat-mode", "dyn-symbols"] }
-napi-derive = "3.3.0"
-napi-derive-backend = "3.0.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-solana-transaction-status = "3.1.6"
-base64 = "0.21"
-wincode = "0.4.4"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
-rustls = { version = "0.23", features = ["ring"] }
-bytes = "1"
-futures = "0.3"
-futures-util = "0.3"
-futures-channel = "0.3"
-parking_lot = "0.12"
-uuid = { version = "1", features = ["v4"] }
-yellowstone-grpc-client = "13.1.0"
-yellowstone-grpc-proto = "12.2.0"
-prost = "0.14"
-prost011 = { package = "prost", version = "0.11" }
-bs58 = { version = "0.5.0", features = ["alloc"] }
-fastrand = "2.0"
-lazy_static = "1.5.0"
-prost-types = "0.14"
-solana-storage-proto = "3.1.6"
-solana-transaction = "3.1.0"
-solana-transaction-error = { version = "3.1.0", features = ["wincode"] }
-home = "0.5.11"
+napi = { workspace = true, features = ["async", "napi9", "serde-json", "web_stream", "compat-mode", "dyn-symbols"] }
+napi-derive = { workspace = true }
+napi-derive-backend = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+solana-transaction-status = { workspace = true }
+base64 = { workspace = true }
+wincode = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+rustls = { workspace = true, features = ["ring"] }
+bytes = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+futures-channel = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
+prost = { workspace = true }
+prost_011 = { workspace = true }
+bs58 = { workspace = true, features = ["alloc"] }
+fastrand = { workspace = true }
+lazy_static = { workspace = true }
+prost-types = { workspace = true }
+solana-storage-proto = { workspace = true }
+solana-transaction = { workspace = true }
+solana-transaction-error = { workspace = true, features = ["wincode"] }
+# Keep solana-transaction-error/wincode on a compatible transitive wincode line.
+solana-instruction-error = { workspace = true }
+solana-pubkey = { workspace = true }
+home = { workspace = true }
 
 [build-dependencies]
-napi-build = "2.2.4"
-napi-sys = "3.0.1"
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
-walkdir = "2.5.0"
-napi-derive = "3.3.0"
-yellowstone-grpc-proto = "12.2.0"
-
-[dev-dependencies]
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
-
-
-[profile.release]
-lto = true
-opt-level = 3
-
+napi-build = { workspace = true }
+napi-sys = { workspace = true }
 
 [package.metadata.napi]
 name = "yellowstone-grpc-napi"
