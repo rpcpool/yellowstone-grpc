@@ -3,11 +3,9 @@ resolver = "2"
 members = [
     "examples/rust", # 12.3.0
     "yellowstone-grpc-client", # 13.1.0
+    "yellowstone-grpc-client-nodejs/napi", # 0.2.0
     "yellowstone-grpc-geyser", # 13.1.0
     "yellowstone-grpc-proto", # 12.4.0
-]
-exclude = [
-    "yellowstone-grpc-client-nodejs/napi", # 0.2.0
 ]
 
 [workspace.package]
@@ -35,9 +33,13 @@ clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
 env_logger = "0.11.3"
+fastrand = "2.0"
 futures = "0.3.24"
+futures-channel = "0.3.24"
+futures-util = "0.3.24"
 git-version = "0.3.5"
 hex = "0.4.3"
+home = "0.5.11"
 hostname = "0.4.0"
 http = "1.1.0"
 http-body-util = "0.1.2"
@@ -49,6 +51,12 @@ lazy_static = "1.4.0"
 local-ip-address = "0.6.1"
 log = "0.4.17"
 maplit = "1.0.2"
+napi = "3.4.0"
+napi-build = "2.2.4"
+napi-derive = "3.3.0"
+napi-derive-backend = "3.0.0"
+napi-sys = "3.0.1"
+parking_lot = "0.12"
 prometheus = "0.14.0"
 pin-project = "1.1.10"
 prost = "0.14.0"
@@ -57,6 +65,7 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protoc-bin-vendored = "3.2.0"
 rand = "0.8"
 rayon = "1.11.0"
+rustls = "0.23"
 serde = "1.0.145"
 serde_json = "1.0.86"
 siphasher = "1"
@@ -72,7 +81,9 @@ tonic-build = "0.14.0"
 tonic-prost = "0.14.0"
 tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
+uuid = "1"
 vergen = "9.0.6"
+wincode = "0.4.4"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "4.0.0"
@@ -87,6 +98,7 @@ solana-account = "3.4.0"
 solana-clock = "3.0.1"
 solana-commitment-config = "3.0.0"
 solana-hash = "4.2.0"
+solana-instruction-error = "2.2.0"
 solana-keypair = "3.1.0"
 solana-message = "3.1.0"
 solana-pubkey = "4.1.0"

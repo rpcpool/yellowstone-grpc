@@ -1,7 +1,7 @@
 use {
   napi::Status,
   napi_derive::napi,
-  prost011::Message as Prost11Message,
+  prost_011::Message as Prost11Message,
   serde::Serialize,
   solana_storage_proto::convert::generated::{
     Transaction as StorageTransaction, TransactionStatusMeta as StorageTransactionStatusMeta,

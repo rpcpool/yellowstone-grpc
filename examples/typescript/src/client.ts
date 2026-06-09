@@ -1,7 +1,7 @@
-import yargs from "yargs";
 import { inspect } from "node:util";
 import Client, {
   CommitmentLevel,
+  CompressedAccountFilterSet,
   SubscribeDeshredRequest,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
@@ -13,7 +13,7 @@ import Client, {
 import type { ReconnectOptions } from "@triton-one/yellowstone-grpc";
 
 async function main() {
-  const args = parseCommandLineArgs();
+  const args = await parseCommandLineArgs();
   const reconnectOptions = buildReconnectOptions(args);
 
   // Open connection.
@@ -38,27 +38,29 @@ async function main() {
       break;
 
     case "ping":
-      console.log("response: " + (await client.ping(1)));
+      console.log("response: " + inspect(await client.ping(1)));
       break;
 
     case "get-version":
-      console.log("response: " + (await client.getVersion()));
+      console.log("response: " + inspect(await client.getVersion()));
       break;
 
     case "get-slot":
-      console.log("response: " + (await client.getSlot(commitment)));
+      console.log("response: " + inspect(await client.getSlot(commitment)));
       break;
 
     case "get-block-height":
-      console.log("response: " + (await client.getBlockHeight(commitment)));
+      console.log("response: " + inspect(await client.getBlockHeight(commitment)));
       break;
 
     case "get-latest-blockhash":
-      console.log("response: ", await client.getLatestBlockhash(commitment));
+      console.log("response: " + inspect(await client.getLatestBlockhash(commitment)));
       break;
 
     case "is-blockhash-valid":
-      console.log("response: ", await client.isBlockhashValid(args.blockhash));
+      console.log(
+        "response: " + inspect(await client.isBlockhashValid(String(args.blockhash))),
+      );
       break;
 
     case "subscribe":
@@ -102,7 +104,54 @@ function buildReconnectOptions(args): ReconnectOptions | undefined {
   };
 }
 
-function buildSubscribeRequest(args): SubscribeRequest {
+function stringArray(values: unknown[] | unknown | undefined): string[] {
+  if (values === undefined) {
+    return [];
+  }
+  return (Array.isArray(values) ? values : [values]).map((value) =>
+    String(value),
+  );
+}
+
+function parsePair(value: unknown, separator: string, optionName: string) {
+  const spec = String(value);
+  const separatorIndex = spec.indexOf(separator);
+  if (separatorIndex <= 0 || separatorIndex === spec.length - 1) {
+    throw new Error(`invalid ${optionName}`);
+  }
+
+  return [
+    spec.slice(0, separatorIndex),
+    spec.slice(separatorIndex + separator.length),
+  ] as const;
+}
+
+function buildCompressedAccountSet(
+  pubkeys: unknown[] | undefined,
+  maxCapacity: number | undefined,
+  optionName: string,
+): CompressedAccountFilterSet {
+  const trackedPubkeys = stringArray(pubkeys);
+  if (trackedPubkeys.length === 0) {
+    throw new Error(`${optionName} requires at least one pubkey`);
+  }
+
+  const accounts = new CompressedAccountFilterSet(
+    maxCapacity ?? trackedPubkeys.length,
+  );
+  for (const pubkey of trackedPubkeys) {
+    accounts.insert(pubkey);
+  }
+
+  return accounts;
+}
+
+type BuiltSubscribeRequest = {
+  request: SubscribeRequest;
+  accountCompressedFilter?: CompressedAccountFilterSet;
+};
+
+function buildSubscribeRequest(args): BuiltSubscribeRequest {
   const request: SubscribeRequest = {
     accounts: {},
     slots: {},
@@ -115,54 +164,74 @@ function buildSubscribeRequest(args): SubscribeRequest {
     accountsDataSlice: [],
     ping: undefined,
   };
+  let accountCompressedFilter: CompressedAccountFilterSet | undefined;
+
+  if (args.accountsCompressed && !args.accounts) {
+    throw new Error("--accounts-compressed requires --accounts");
+  }
+
+  if (args.blocksCompressed && !args.blocks) {
+    throw new Error("--blocks-compressed requires --blocks");
+  }
+
+  if (args.accountsCompressed) {
+    accountCompressedFilter = buildCompressedAccountSet(
+      args.accountsAccount,
+      args.accountsCompressedCapacity,
+      "--accounts-compressed",
+    );
+  }
+
+  const blockCompressedFilter = args.blocksCompressed
+    ? buildCompressedAccountSet(
+        args.blocksAccountInclude,
+        args.blocksCompressedCapacity,
+        "--blocks-compressed",
+      )
+    : undefined;
+
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
 
-    if (args.accounts.memcmp) {
-      for (let filter in args.accounts.memcmp) {
-        const filterSpec = filter.split(",", 1);
-        if (filterSpec.length != 2) {
-          throw new Error("invalid memcmp");
-        }
-
-        const [offset, data] = filterSpec;
+    if (args.accountsMemcmp) {
+      for (const filter of stringArray(args.accountsMemcmp)) {
+        const [offset, data] = parsePair(filter, ",", "memcmp");
         filters.push({
           memcmp: { offset, base58: data.trim() },
         });
       }
     }
 
-    if (args.accounts.tokenaccountstate) {
+    if (args.accountsTokenaccountstate) {
       filters.push({
-        tokenAccountState: args.accounts.tokenaccountstate,
+        tokenAccountState: args.accountsTokenaccountstate,
       });
     }
 
-    if (args.accounts.datasize) {
-      filters.push({ datasize: args.accounts.datasize });
+    if (args.accountsDatasize) {
+      filters.push({ datasize: String(args.accountsDatasize) });
     }
 
-    if (args.accounts.lamports) {
-      for (let filter in args.accounts.lamports) {
-        const filterSpec = filter.split(":", 1);
-        if (filterSpec.length != 2) {
-          throw new Error("invalid lamports");
-        }
-
-        const [cmp, value] = filterSpec;
+    if (args.accountsLamports) {
+      for (const filter of stringArray(args.accountsLamports)) {
+        const [cmp, value] = parsePair(filter, ":", "lamports");
         let lamports: SubscribeRequestFilterAccountsFilterLamports = {};
         switch (cmp) {
           case "eq": {
             lamports.eq = value;
+            break;
           }
           case "ne": {
             lamports.ne = value;
+            break;
           }
           case "lt": {
             lamports.lt = value;
+            break;
           }
           case "gt": {
             lamports.gt = value;
+            break;
           }
           default:
             throw new Error("invalid lamports cmp");
@@ -174,11 +243,13 @@ function buildSubscribeRequest(args): SubscribeRequest {
     }
 
     request.accounts.client = {
-      account: args.accountsAccount,
-      owner: args.accountsOwner,
+      ...(accountCompressedFilter?.toAccountFilter() ?? {}),
+      account: accountCompressedFilter ? [] : stringArray(args.accountsAccount),
+      owner: stringArray(args.accountsOwner),
       filters,
       nonemptyTxnSignature: args.accountsNonemptytxnsignature,
     };
+
   }
 
   if (args.slots) {
@@ -215,27 +286,24 @@ function buildSubscribeRequest(args): SubscribeRequest {
 
   if (args.blocks) {
     request.blocks.client = {
-      accountInclude: args.blocksAccountInclude,
+      ...(blockCompressedFilter?.toBlockFilter() ?? {}),
+      accountInclude: blockCompressedFilter
+        ? []
+        : stringArray(args.blocksAccountInclude),
       includeTransactions: args.blocksIncludeTransactions,
       includeAccounts: args.blocksIncludeAccounts,
       includeEntries: args.blocksIncludeEntries,
     };
+
   }
 
   if (args.blocksMeta) {
-    request.blocksMeta.client = {
-      account_include: args.blocksAccountInclude,
-    };
+    request.blocksMeta.client = {};
   }
 
-  if (args.accounts.dataslice) {
-    for (let filter in args.accounts.dataslice) {
-      const filterSpec = filter.split(",", 1);
-      if (filterSpec.length != 2) {
-        throw new Error("invalid data slice");
-      }
-
-      const [offset, length] = filterSpec;
+  if (args.accountsDataslice) {
+    for (const filter of stringArray(args.accountsDataslice)) {
+      const [offset, length] = parsePair(filter, ",", "data slice");
       request.accountsDataSlice.push({
         offset,
         length,
@@ -247,12 +315,12 @@ function buildSubscribeRequest(args): SubscribeRequest {
     request.ping = { id: args.ping };
   }
 
-  return request;
+  return { request, accountCompressedFilter };
 }
 
 async function subscribeCommand(client: Client, args) {
   // Create subscribe request based on provided arguments.
-  const request = buildSubscribeRequest(args);
+  const { request, accountCompressedFilter } = buildSubscribeRequest(args);
 
   // Subscribe for events. When auto-reconnect is enabled, pass the initial
   // request at stream creation so reconnects can resume that subscription.
@@ -295,6 +363,13 @@ async function subscribeCommand(client: Client, args) {
         );
       }
       return;
+    }
+
+    if (accountCompressedFilter && data.account) {
+      const pubkey = data.account.account?.pubkey;
+      if (!pubkey || !accountCompressedFilter.contains(pubkey)) {
+        return;
+      }
     }
 
     console.log("data", data);
@@ -393,7 +468,9 @@ async function subscribeDeshredCommand(client: Client, args) {
   await streamClosed;
 }
 
-function parseCommandLineArgs() {
+async function parseCommandLineArgs() {
+  const { default: yargs } = await import("yargs");
+
   return yargs(process.argv.slice(2))
     .options({
       endpoint: {
@@ -466,6 +543,17 @@ function parseCommandLineArgs() {
           describe: "filter by account pubkey",
           type: "array",
         },
+        "accounts-compressed": {
+          default: false,
+          describe:
+            "send --accounts-account pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "accounts-compressed-capacity": {
+          describe:
+            "max capacity for --accounts-compressed; defaults to number of --accounts-account values",
+          type: "number",
+        },
         "accounts-owner": {
           default: [],
           describe: "filter by owner pubkey",
@@ -501,7 +589,7 @@ function parseCommandLineArgs() {
           default: [],
           describe:
             "receive only part of updated data account, format: `offset,size`",
-          type: "string",
+          type: "array",
         },
         slots: {
           default: false,
@@ -602,6 +690,17 @@ function parseCommandLineArgs() {
           description: "filter included account in transactions",
           type: "array",
         },
+        "blocks-compressed": {
+          default: false,
+          description:
+            "send --blocks-account-include pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "blocks-compressed-capacity": {
+          description:
+            "max capacity for --blocks-compressed; defaults to number of --blocks-account-include values",
+          type: "number",
+        },
         "blocks-include-transactions": {
           default: false,
           description: "include transactions to block messsage",
@@ -670,7 +769,8 @@ function parseCommandLineArgs() {
       },
     )
     .demandCommand(1)
-    .help().argv;
+    .help()
+    .parseSync();
 }
 
 main();

@@ -2,7 +2,7 @@ use std::fmt;
 
 use yellowstone_grpc_proto::geyser::{
   subscribe_request_filter_accounts_filter, subscribe_request_filter_accounts_filter_lamports,
-  subscribe_request_filter_accounts_filter_memcmp,
+  subscribe_request_filter_accounts_filter_memcmp, CuckooFilter, CuckooHashAlgorithm,
 };
 use yellowstone_grpc_proto::prelude::SubscribeRequest;
 
@@ -11,9 +11,36 @@ use crate::AUTORECONNECT_FILTER_KEY;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscribeRequestValidationError {
   ReservedFilterName,
-  MissingFilter { path: String },
-  MissingMemcmpData { path: String },
-  MissingLamportsComparator { path: String },
+  MissingFilter {
+    path: String,
+  },
+  MissingMemcmpData {
+    path: String,
+  },
+  MissingLamportsComparator {
+    path: String,
+  },
+  UnsupportedCuckooHashAlgorithm {
+    path: String,
+    value: i32,
+  },
+  InvalidCuckooEntriesPerBucket {
+    path: String,
+    value: u32,
+  },
+  InvalidCuckooFingerprintBits {
+    path: String,
+    value: u32,
+  },
+  InvalidCuckooBucketCount {
+    path: String,
+    value: u32,
+  },
+  InvalidCuckooDataLength {
+    path: String,
+    expected: usize,
+    actual: usize,
+  },
 }
 
 impl fmt::Display for SubscribeRequestValidationError {
@@ -43,6 +70,40 @@ impl fmt::Display for SubscribeRequestValidationError {
           "invalid subscribe request at {path}: lamports comparator should be defined"
         )
       }
+      Self::UnsupportedCuckooHashAlgorithm { path, value } => {
+        write!(
+          f,
+          "invalid subscribe request at {path}: unsupported cuckoo hash algorithm {value}"
+        )
+      }
+      Self::InvalidCuckooEntriesPerBucket { path, value } => {
+        write!(
+          f,
+          "invalid subscribe request at {path}: cuckoo entriesPerBucket should be 4, got {value}"
+        )
+      }
+      Self::InvalidCuckooFingerprintBits { path, value } => {
+        write!(
+          f,
+          "invalid subscribe request at {path}: cuckoo fingerprintBits should be 16, got {value}"
+        )
+      }
+      Self::InvalidCuckooBucketCount { path, value } => {
+        write!(
+          f,
+          "invalid subscribe request at {path}: cuckoo bucketCount should be a non-zero power of two, got {value}"
+        )
+      }
+      Self::InvalidCuckooDataLength {
+        path,
+        expected,
+        actual,
+      } => {
+        write!(
+          f,
+          "invalid subscribe request at {path}: cuckoo data length should be {expected} bytes, got {actual}"
+        )
+      }
     }
   }
 }
@@ -57,6 +118,13 @@ pub fn validate_subscribe_request(
   }
 
   for (account_key, account_filter) in &request.accounts {
+    if let Some(cuckoo_filter) = &account_filter.cuckoo_accounts_filter {
+      validate_cuckoo_filter(
+        cuckoo_filter,
+        &format!("accounts[\"{account_key}\"].cuckooAccountsFilter"),
+      )?;
+    }
+
     for (index, filter) in account_filter.filters.iter().enumerate() {
       let filter_path = format!("accounts[\"{account_key}\"].filters[{index}]");
 
@@ -78,6 +146,15 @@ pub fn validate_subscribe_request(
         subscribe_request_filter_accounts_filter::Filter::Datasize(_)
         | subscribe_request_filter_accounts_filter::Filter::TokenAccountState(_) => {}
       }
+    }
+  }
+
+  for (block_key, block_filter) in &request.blocks {
+    if let Some(cuckoo_filter) = &block_filter.cuckoo_account_include {
+      validate_cuckoo_filter(
+        cuckoo_filter,
+        &format!("blocks[\"{block_key}\"].cuckooAccountInclude"),
+      )?;
     }
   }
 
@@ -141,6 +218,66 @@ fn validate_lamports_filter(
   }
 }
 
+fn validate_cuckoo_filter(
+  cuckoo_filter: &CuckooFilter,
+  filter_path: &str,
+) -> Result<(), SubscribeRequestValidationError> {
+  if cuckoo_filter.hash_algorithm != CuckooHashAlgorithm::SipHash as i32 {
+    return Err(
+      SubscribeRequestValidationError::UnsupportedCuckooHashAlgorithm {
+        path: filter_path.to_string(),
+        value: cuckoo_filter.hash_algorithm,
+      },
+    );
+  }
+
+  if cuckoo_filter.entries_per_bucket != 4 {
+    return Err(
+      SubscribeRequestValidationError::InvalidCuckooEntriesPerBucket {
+        path: filter_path.to_string(),
+        value: cuckoo_filter.entries_per_bucket,
+      },
+    );
+  }
+
+  if cuckoo_filter.fingerprint_bits != 16 {
+    return Err(
+      SubscribeRequestValidationError::InvalidCuckooFingerprintBits {
+        path: filter_path.to_string(),
+        value: cuckoo_filter.fingerprint_bits,
+      },
+    );
+  }
+
+  if cuckoo_filter.bucket_count == 0 || !cuckoo_filter.bucket_count.is_power_of_two() {
+    return Err(SubscribeRequestValidationError::InvalidCuckooBucketCount {
+      path: filter_path.to_string(),
+      value: cuckoo_filter.bucket_count,
+    });
+  }
+
+  let expected_data_len = (cuckoo_filter.bucket_count as usize)
+    .checked_mul(cuckoo_filter.entries_per_bucket as usize)
+    .and_then(|slot_count| slot_count.checked_mul((cuckoo_filter.fingerprint_bits / 8) as usize))
+    .ok_or_else(
+      || SubscribeRequestValidationError::InvalidCuckooDataLength {
+        path: filter_path.to_string(),
+        expected: usize::MAX,
+        actual: cuckoo_filter.data.len(),
+      },
+    )?;
+
+  if cuckoo_filter.data.len() != expected_data_len {
+    return Err(SubscribeRequestValidationError::InvalidCuckooDataLength {
+      path: filter_path.to_string(),
+      expected: expected_data_len,
+      actual: cuckoo_filter.data.len(),
+    });
+  }
+
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
@@ -150,14 +287,25 @@ mod tests {
     subscribe_request_filter_accounts_filter_memcmp,
   };
   use yellowstone_grpc_proto::prelude::{
-    SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-    SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-    SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-    SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-    SubscribeRequestFilterTransactions, SubscribeRequestPing,
+    CuckooFilter, CuckooHashAlgorithm, SubscribeRequest, SubscribeRequestAccountsDataSlice,
+    SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+    SubscribeRequestFilterAccountsFilterLamports, SubscribeRequestFilterAccountsFilterMemcmp,
+    SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry,
+    SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeRequestPing,
   };
 
   use super::{validate_subscribe_request, SubscribeRequestValidationError};
+
+  fn valid_cuckoo_filter() -> CuckooFilter {
+    CuckooFilter {
+      data: vec![0; 8],
+      bucket_count: 1,
+      entries_per_bucket: 4,
+      fingerprint_bits: 16,
+      hash_seed: 0x796c_6c77_7374_6e21,
+      hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
+    }
+  }
 
   fn fully_populated_request() -> SubscribeRequest {
     let mut accounts = HashMap::new();
@@ -247,6 +395,7 @@ mod tests {
           },
         ],
         nonempty_txn_signature: Some(true),
+        cuckoo_accounts_filter: None,
       },
     );
 
@@ -293,6 +442,7 @@ mod tests {
         include_transactions: Some(true),
         include_accounts: Some(false),
         include_entries: Some(true),
+        cuckoo_account_include: None,
       },
     );
 
@@ -447,6 +597,7 @@ mod tests {
           SubscribeRequestFilterAccountsFilter { filter: None },
         ],
         nonempty_txn_signature: None,
+        cuckoo_accounts_filter: None,
       },
     );
 
@@ -457,6 +608,68 @@ mod tests {
       error,
       SubscribeRequestValidationError::MissingFilter {
         path: "accounts[\"secondary\"].filters[1]".to_string(),
+      }
+    );
+  }
+
+  #[test]
+  fn accepts_valid_account_and_block_cuckoo_filters() {
+    let mut request = fully_populated_request();
+    request
+      .accounts
+      .get_mut("full")
+      .unwrap()
+      .cuckoo_accounts_filter = Some(valid_cuckoo_filter());
+    request
+      .blocks
+      .get_mut("blocks_client")
+      .unwrap()
+      .cuckoo_account_include = Some(valid_cuckoo_filter());
+
+    validate_subscribe_request(&request).expect("valid cuckoo filters should be accepted");
+  }
+
+  #[test]
+  fn rejects_unsupported_cuckoo_hash_algorithm() {
+    let mut request = fully_populated_request();
+    let mut cuckoo_filter = valid_cuckoo_filter();
+    cuckoo_filter.hash_algorithm = 99;
+    request
+      .accounts
+      .get_mut("full")
+      .unwrap()
+      .cuckoo_accounts_filter = Some(cuckoo_filter);
+
+    let error = validate_subscribe_request(&request).expect_err("invalid algorithm must fail");
+
+    assert_eq!(
+      error,
+      SubscribeRequestValidationError::UnsupportedCuckooHashAlgorithm {
+        path: "accounts[\"full\"].cuckooAccountsFilter".to_string(),
+        value: 99,
+      }
+    );
+  }
+
+  #[test]
+  fn rejects_cuckoo_data_length_mismatch() {
+    let mut request = fully_populated_request();
+    let mut cuckoo_filter = valid_cuckoo_filter();
+    cuckoo_filter.data.pop();
+    request
+      .blocks
+      .get_mut("blocks_client")
+      .unwrap()
+      .cuckoo_account_include = Some(cuckoo_filter);
+
+    let error = validate_subscribe_request(&request).expect_err("invalid data length must fail");
+
+    assert_eq!(
+      error,
+      SubscribeRequestValidationError::InvalidCuckooDataLength {
+        path: "blocks[\"blocks_client\"].cuckooAccountInclude".to_string(),
+        expected: 8,
+        actual: 7,
       }
     );
   }
