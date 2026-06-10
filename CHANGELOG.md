@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## [Triton Extension Patches]
+
+## 2026-06-10
+
+- 13.2.2-triton-ext.1
+
+### misc
+
+- deshred messages are sent directly to the target broadcast channel, avoiding unnecessary hop on geyser_loop
+
 ## 2026-06-03
 
 - yellowstone-grpc-geyser 13.2.1
