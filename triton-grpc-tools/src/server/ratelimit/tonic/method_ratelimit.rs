@@ -1,6 +1,6 @@
 use {
     crate::server::ratelimit::window::{SlidingWindowRateLimiter, WindowDecision},
-    http::{Request, Response, StatusCode, header::RETRY_AFTER},
+    http::{header::RETRY_AFTER, Request, Response, StatusCode},
     pin_project::pin_project,
     std::{
         collections::HashMap,
@@ -59,9 +59,11 @@ where
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.project() {
             MethodRateLimitedFutureProj::Allowed { future } => future.poll(cx),
-            MethodRateLimitedFutureProj::Denied { result } => {
-                Poll::Ready(result.take().expect("denied future polled after completion"))
-            }
+            MethodRateLimitedFutureProj::Denied { result } => Poll::Ready(
+                result
+                    .take()
+                    .expect("denied future polled after completion"),
+            ),
         }
     }
 }
@@ -70,7 +72,10 @@ pub trait RateLimitKeyExtractor {
     type Key: Clone + PartialEq + Eq + std::hash::Hash;
 
     /// Extracts principal key and tier from the incoming request.
-    fn extract_key_tier_pair<ReqBody>(&self, request: &Request<ReqBody>) -> TieredRateLimitKey<Self::Key>;
+    fn extract_key_tier_pair<ReqBody>(
+        &self,
+        request: &Request<ReqBody>,
+    ) -> Option<TieredRateLimitKey<Self::Key>>;
 }
 
 impl<S, KE, K> MethodRateLimitedService<S, KE, K> {
@@ -130,12 +135,20 @@ where
     }
 
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
-        let TieredRateLimitKey { key, tier } = self.key_extractor.extract_key_tier_pair(&request);
+        let Some(TieredRateLimitKey { key, tier }) =
+            self.key_extractor.extract_key_tier_pair(&request)
+        else {
+            return MethodRateLimitedFuture::Allowed {
+                future: self.inner.call(request),
+            };
+        };
         let now = Instant::now();
 
         let decision = match &self.limiters {
             LimiterStore::Shared(shared_limiter) => {
-                let mut guard = shared_limiter.lock().expect("shared limiter mutex poisoned");
+                let mut guard = shared_limiter
+                    .lock()
+                    .expect("shared limiter mutex poisoned");
                 guard.check_at(key, now)
             }
             LimiterStore::ByTier(by_tier) => {
@@ -173,12 +186,17 @@ where
 #[cfg(test)]
 mod tests {
     use {
+        super::*,
         bytes::Bytes,
         futures::executor::block_on,
-        super::*,
         http_body_util::Empty,
-        std::sync::{Arc, atomic::{AtomicUsize, Ordering}},
-        std::convert::Infallible,
+        std::{
+            convert::Infallible,
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                Arc,
+            },
+        },
     };
 
     struct TestExtractor;
@@ -186,8 +204,11 @@ mod tests {
     impl RateLimitKeyExtractor for TestExtractor {
         type Key = String;
 
-        fn extract_key_tier_pair<ReqBody>(&self, request: &Request<ReqBody>) -> TieredRateLimitKey<Self::Key> {
-            TieredRateLimitKey {
+        fn extract_key_tier_pair<ReqBody>(
+            &self,
+            request: &Request<ReqBody>,
+        ) -> Option<TieredRateLimitKey<Self::Key>> {
+            Some(TieredRateLimitKey {
                 key: request
                     .headers()
                     .get("x-key")
@@ -202,7 +223,20 @@ mod tests {
                     .to_str()
                     .expect("x-tier utf8")
                     .to_owned(),
-            }
+            })
+        }
+    }
+
+    struct NoneExtractor;
+
+    impl RateLimitKeyExtractor for NoneExtractor {
+        type Key = String;
+
+        fn extract_key_tier_pair<ReqBody>(
+            &self,
+            _request: &Request<ReqBody>,
+        ) -> Option<TieredRateLimitKey<Self::Key>> {
+            None
         }
     }
 
@@ -227,7 +261,10 @@ mod tests {
 
         fn call(&mut self, _request: Request<()>) -> Self::Future {
             self.call_count.fetch_add(1, Ordering::Relaxed);
-            std::future::ready(Ok(Response::builder().status(StatusCode::OK).body(Empty::new()).expect("response build")))
+            std::future::ready(Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(Empty::new())
+                .expect("response build")))
         }
     }
 
@@ -264,7 +301,8 @@ mod tests {
             .header("x-key", "alice")
             .body(())
             .expect("request build");
-        let resp2 = block_on(svc.call(req_free_2)).expect("denied response should still be Ok transport-wise");
+        let resp2 = block_on(svc.call(req_free_2))
+            .expect("denied response should still be Ok transport-wise");
         assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
 
         let req_pro_1 = Request::builder()
@@ -296,5 +334,27 @@ mod tests {
         let resp = block_on(wrapped.call(req)).expect("unknown tier should fail open");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn none_extracted_key_skips_rate_limiting() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        let limiter = SlidingWindowRateLimiter::<String>::new(1, Duration::from_secs(10), 10);
+        let mut svc = MethodRateLimitedService::new(
+            TestService::new(Arc::clone(&call_count)),
+            NoneExtractor,
+            Arc::new(Mutex::new(limiter)),
+        );
+
+        let req1 = Request::builder().body(()).expect("request build");
+        let resp1 = block_on(svc.call(req1)).expect("first request should pass through");
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        let req2 = Request::builder().body(()).expect("request build");
+        let resp2 = block_on(svc.call(req2)).expect("second request should also pass through");
+        assert_eq!(resp2.status(), StatusCode::OK);
+
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 }

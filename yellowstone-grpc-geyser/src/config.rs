@@ -1,3 +1,5 @@
+#[cfg(feature = "proxyless")]
+use triton_grpc_tools::server::ratelimit::config::HAproxyRateLimitConfig;
 use {
     crate::plugin::filter::limits::FilterLimits,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -352,6 +354,18 @@ pub struct ConfigGrpc {
     ///
     #[serde(default)]
     pub traffic_reporting_byte_threhsold: Option<ByteSize>,
+
+    #[cfg(feature = "proxyless")]
+    /// Optional path to a proxyless gRPC configuration file.
+    /// If set, the server will start in proxyless mode and use the provided configuration.
+    pub proxyless_config_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "proxyless")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfigGrpcProxyless {
+    cert_dir: PathBuf,
+    haproxy_ratelimit: HAproxyRateLimitConfig,
 }
 
 impl ConfigGrpc {

@@ -26,3 +26,4 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 x509-parser = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

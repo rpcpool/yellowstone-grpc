@@ -2,7 +2,7 @@ use {
     crate::{
         block_reconstruction::BlockMachineStorage,
         config::{ConfigGrpc, GrpcAddress},
-        metered::MeteredLayer,
+        metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
             subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
@@ -18,7 +18,6 @@ use {
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -57,6 +56,9 @@ use {
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
+    triton_grpc_tools::server::tonic::metered::{
+        MeteredHooks, MeteredLayer, MeteredManager, DEFAULT_TRAFFIC_REPORTING_THRESHOLD,
+    },
     yellowstone_grpc_proto::prelude::{
         CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
         GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
@@ -489,7 +491,19 @@ impl GrpcService {
                     let incoming = TcpIncoming::bind(*addr)?
                         .with_nodelay(Some(true))
                         .with_keepalive(Some(Duration::from_secs(20)));
-                    Listener::Tcp(incoming)
+
+                    if cfg!(feature = "proxyless") {
+                        // if let Some(proxyless_config_path) = &config.proxyless_config_path {
+                        //     let proxyless_config = ConfigGrpcProxyless::load(proxyless_config_path)
+                        //         .context("failed to load proxyless config")?;
+                        //     Listener::Tcp();
+                        // } else {
+
+                        // }
+                        Listener::Tcp(incoming)
+                    } else {
+                        Listener::Tcp(incoming)
+                    }
                 }
                 GrpcAddress::Unix { path, mode } => {
                     if config.tls_config.is_some() {
@@ -543,12 +557,12 @@ impl GrpcService {
             };
 
         // Read TLS identity once (async, before per-listener loop)
-        let tls_identity = match &config.tls_config {
+        let maybe_server_tls_config = match &config.tls_config {
             Some(tls) => {
                 let (cert, key) =
                     tokio::try_join!(fs::read(&tls.cert_path), fs::read(&tls.key_path))
                         .context("failed to load tls_config files")?;
-                Some(Identity::from_pem(cert, key))
+                Some(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
             }
             None => None,
         };
@@ -556,7 +570,7 @@ impl GrpcService {
         // Capture traffic reporting threshold before config is moved
         let traffic_reporting_threshold = config
             .traffic_reporting_byte_threhsold
-            .unwrap_or_else(|| ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD));
+            .unwrap_or(DEFAULT_TRAFFIC_REPORTING_THRESHOLD);
 
         // Save HTTP/2 settings (all Copy) for use inside spawned tasks
         let http2_adaptive_window = config.server_http2_adaptive_window;
@@ -657,7 +671,7 @@ impl GrpcService {
         // Spawn one server task per listener
         for listener in listeners {
             let shutdown = shutdown_grpc.clone();
-            let tls_identity = tls_identity.clone();
+            let maybe_sever_tls_config = maybe_server_tls_config.clone();
             let x_token = x_token.clone();
             let health_service = health_service.clone();
             let service = service.clone();
@@ -665,7 +679,7 @@ impl GrpcService {
             task_tracker.spawn(async move {
                 if let Err(e) = GrpcService::serve_listener(
                     listener,
-                    tls_identity,
+                    maybe_sever_tls_config,
                     http2_adaptive_window,
                     http2_keepalive_interval,
                     http2_keepalive_timeout,
@@ -1265,7 +1279,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn serve_listener<H>(
         listener: Listener,
-        tls_identity: Option<Identity>,
+        server_tls_config: Option<ServerTlsConfig>,
         http2_adaptive_window: Option<bool>,
         http2_keepalive_interval: Option<Duration>,
         http2_keepalive_timeout: Option<Duration>,
@@ -1284,9 +1298,9 @@ impl GrpcService {
 
         // TLS only applies to TCP — UDS is local IPC, no encryption needed
         if matches!(listener, Listener::Tcp(_)) {
-            if let Some(identity) = tls_identity {
+            if let Some(server_tls_config) = server_tls_config {
                 builder = builder
-                    .tls_config(ServerTlsConfig::new().identity(identity))
+                    .tls_config(server_tls_config)
                     .context("failed to apply tls_config")?;
             }
         }
@@ -1308,7 +1322,10 @@ impl GrpcService {
         }
 
         let router = builder
-            .layer(MeteredLayer::new())
+            .layer(MeteredLayer::new(
+                PrometheusMeteredManager,
+                traffic_reporting_threshold,
+            ))
             .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
                 x_token,
             }))
@@ -1327,18 +1344,10 @@ impl GrpcService {
         info!("gRPC server listening on {addr}");
 
         let result = match listener {
-            Listener::Tcp(incoming) => {
-                let spy = SpyIncoming::new(
-                    incoming,
-                    SpyIncomingConfig {
-                        traffic_reporting_threshold,
-                    },
-                );
-                router
-                    .serve_with_incoming_shutdown(spy, shutdown.cancelled())
-                    .await
-                    .context("TCP listener error")
-            }
+            Listener::Tcp(incoming) => router
+                .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                .await
+                .context("TCP listener error"),
             Listener::Unix(path, incoming) => {
                 let result = router
                     .serve_with_incoming_shutdown(incoming, shutdown.cancelled())

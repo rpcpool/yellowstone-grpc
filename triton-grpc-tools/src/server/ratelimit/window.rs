@@ -170,8 +170,15 @@ where
         });
     }
 
-    fn refill_state(state: &mut TokenState, now: Instant, burst_capacity: f64, refill_per_sec: f64) {
-        let elapsed = now.saturating_duration_since(state.last_refill).as_secs_f64();
+    fn refill_state(
+        state: &mut TokenState,
+        now: Instant,
+        burst_capacity: f64,
+        refill_per_sec: f64,
+    ) {
+        let elapsed = now
+            .saturating_duration_since(state.last_refill)
+            .as_secs_f64();
         if elapsed > 0.0 {
             state.tokens = (state.tokens + elapsed * refill_per_sec).min(burst_capacity);
             state.last_refill = now;
@@ -226,7 +233,8 @@ mod tests {
 
     #[test]
     fn independent_keys_have_independent_buckets() {
-        let mut limiter = SlidingWindowRateLimiter::<&'static str>::new(1, Duration::from_secs(10), 10);
+        let mut limiter =
+            SlidingWindowRateLimiter::<&'static str>::new(1, Duration::from_secs(10), 10);
         let start = Instant::now();
 
         assert!(limiter.check_at("a", start).allowed);

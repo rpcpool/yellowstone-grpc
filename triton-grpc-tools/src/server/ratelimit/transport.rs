@@ -28,7 +28,7 @@ impl<T> TestTlsConnectInfo<T> {
 /// IP Rate-limiting wrapper around an incoming stream of transport connections.
 ///
 /// Wraps an incoming stream of transport connections and converts each item into [`RateLimitedIO`].
-pub struct ConnCurIncoming<I, IO> {
+pub struct RateLimitedIncoming<I, IO> {
     incoming: I,
     max_ip_conncur: u64,
     active_conn_map: Arc<Mutex<HashMap<IpAddr, u64>>>,
@@ -37,8 +37,7 @@ pub struct ConnCurIncoming<I, IO> {
 
 pub const DEFAULT_MAX_IP_CONNCUR: u64 = 400;
 
-
-impl<I, IO> ConnCurIncoming<I, IO>
+impl<I, IO> RateLimitedIncoming<I, IO>
 where
     I: Stream<Item = std::io::Result<IO>> + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Connected + Send + 'static,
@@ -55,13 +54,13 @@ where
 }
 
 /// IO wrapper that keeps tracks of active connections per peer IP and enforces a maximum concurrent connection limit.
-pub struct ConnCurIO<IO> {
+pub struct RateLimitedIO<IO> {
     wrappee: IO,
     remote_peer: Option<SocketAddr>,
     active_conn_map: Arc<Mutex<HashMap<IpAddr, u64>>>,
 }
 
-impl<IO> Connected for ConnCurIO<IO>
+impl<IO> Connected for RateLimitedIO<IO>
 where
     IO: Connected,
 {
@@ -73,7 +72,7 @@ where
     }
 }
 
-impl<IO> AsyncRead for ConnCurIO<IO>
+impl<IO> AsyncRead for RateLimitedIO<IO>
 where
     IO: AsyncRead + Unpin,
 {
@@ -87,7 +86,7 @@ where
     }
 }
 
-impl<IO> AsyncWrite for ConnCurIO<IO>
+impl<IO> AsyncWrite for RateLimitedIO<IO>
 where
     IO: AsyncWrite + Unpin,
 {
@@ -118,7 +117,7 @@ where
     }
 }
 
-impl<IO> Drop for ConnCurIO<IO> {
+impl<IO> Drop for RateLimitedIO<IO> {
     fn drop(&mut self) {
         if let Some(remote_peer_ip) = &self.remote_peer {
             let mut guard = self.active_conn_map.lock().unwrap();
@@ -155,7 +154,7 @@ fn extract_remote_peer_addr(info: &dyn Any) -> Option<std::net::SocketAddr> {
     maybe_tcp_info.and_then(TcpConnectInfo::remote_addr)
 }
 
-impl<IO> ConnCurIO<IO>
+impl<IO> RateLimitedIO<IO>
 where
     IO: Connected,
 {
@@ -192,12 +191,12 @@ where
     }
 }
 
-impl<I, IO> Stream for ConnCurIncoming<I, IO>
+impl<I, IO> Stream for RateLimitedIncoming<I, IO>
 where
     I: Stream<Item = std::io::Result<IO>> + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Connected + Send + 'static,
 {
-    type Item = std::io::Result<ConnCurIO<IO>>;
+    type Item = std::io::Result<RateLimitedIO<IO>>;
     /// Polls for the next accepted connection and wraps it as [`RateLimitedIO`].
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -208,7 +207,7 @@ where
         self.incoming.poll_next_unpin(cx).map(|maybe| {
             maybe.map(|result| {
                 result.and_then(|io| {
-                    ConnCurIO::try_new(io, max_ip_conncur, Arc::clone(&active_conn_map))
+                    RateLimitedIO::try_new(io, max_ip_conncur, Arc::clone(&active_conn_map))
                 })
             })
         })
@@ -277,7 +276,7 @@ mod tests {
         let remote_addr: SocketAddr = "192.168.1.42:50051".parse().expect("valid socket addr");
         let active_conn_map = Arc::new(Mutex::new(HashMap::new()));
 
-        let conn1 = ConnCurIO::try_new(
+        let conn1 = RateLimitedIO::try_new(
             MockIo {
                 remote_addr: Some(remote_addr),
             },
@@ -286,7 +285,7 @@ mod tests {
         )
         .expect("first connection should be accepted");
 
-        let err = ConnCurIO::try_new(
+        let err = RateLimitedIO::try_new(
             MockIo {
                 remote_addr: Some(remote_addr),
             },
@@ -309,7 +308,7 @@ mod tests {
             assert!(!guard.contains_key(&remote_addr.ip()));
         }
 
-        ConnCurIO::try_new(
+        RateLimitedIO::try_new(
             MockIo {
                 remote_addr: Some(remote_addr),
             },

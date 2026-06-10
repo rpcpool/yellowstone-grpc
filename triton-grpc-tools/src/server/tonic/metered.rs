@@ -1,5 +1,6 @@
 use {
     bytes::Buf,
+    bytesize::ByteSize,
     http::{HeaderMap, Request, Response},
     hyper::body::{Frame, SizeHint},
     pin_project::pin_project,
@@ -13,6 +14,8 @@ use {
     tonic::codegen::{Body as HttpBody, Service, StdError},
     tower_layer::Layer,
 };
+
+pub const DEFAULT_TRAFFIC_REPORTING_THRESHOLD: ByteSize = ByteSize::kib(32);
 
 pub trait MeteredHooks {
     /// Records bytes emitted by a response body frame.
@@ -48,13 +51,15 @@ pub trait MeteredManager {
 #[derive(Debug, Clone, Default)]
 pub struct MeteredLayer<MM> {
     metered_manager: Arc<MM>,
+    traffic_reporting_threshold: ByteSize,
 }
 
 impl<MM> MeteredLayer<MM> {
     /// Creates a new metering layer from a manager implementation.
-    pub fn new(metered_manager: MM) -> Self {
+    pub fn new(metered_manager: MM, traffic_reporting_threshold: ByteSize) -> Self {
         Self {
             metered_manager: Arc::new(metered_manager),
+            traffic_reporting_threshold,
         }
     }
 }
@@ -70,6 +75,7 @@ where
         MeteredService {
             inner: service,
             metered_manager: Arc::clone(&self.metered_manager),
+            traffic_reporting_threshold: self.traffic_reporting_threshold,
         }
     }
 }
@@ -82,6 +88,7 @@ where
 pub struct MeteredService<S, MM> {
     inner: S,
     metered_manager: Arc<MM>,
+    traffic_reporting_threshold: ByteSize,
 }
 
 /// Future returned by [`MeteredService`] that wraps successful responses.
@@ -94,6 +101,7 @@ pub struct MeteredFuture<F, B, E, MH> {
     future: F,
     metered_hooks: Option<MH>,
     _marker: std::marker::PhantomData<(B, E)>,
+    traffic_reporting_threshold: ByteSize,
 }
 
 /// Response body wrapper that reports emitted data-frame byte counts.
@@ -105,6 +113,8 @@ pub struct MeteredBody<B, MH> {
     #[pin]
     inner: B,
     metered_hooks: MH,
+    traffic_reporting_threshold: ByteSize,
+    cumulative_bytes: u64,
 }
 
 impl<B, MH> HttpBody for MeteredBody<B, MH>
@@ -124,8 +134,12 @@ where
         match ready!(this.inner.as_mut().poll_frame(cx)) {
             Some(Ok(frame)) => {
                 if let Some(data) = frame.data_ref() {
-                    this.metered_hooks
-                        .on_emit_bytes(data.remaining() as u64, Instant::now());
+                    *this.cumulative_bytes += data.remaining() as u64;
+                    if *this.cumulative_bytes >= this.traffic_reporting_threshold.as_u64() {
+                        this.metered_hooks
+                            .on_emit_bytes(*this.cumulative_bytes, Instant::now());
+                        *this.cumulative_bytes = 0;
+                    }
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
@@ -165,6 +179,8 @@ where
                 let metered_body = MeteredBody {
                     inner: body,
                     metered_hooks: this.metered_hooks.take().expect("poll after completed"),
+                    traffic_reporting_threshold: *this.traffic_reporting_threshold,
+                    cumulative_bytes: 0,
                 };
                 Poll::Ready(Ok(Response::from_parts(parts, metered_body)))
             }
@@ -202,6 +218,7 @@ where
         MeteredFuture {
             future,
             metered_hooks: Some(hooks),
+            traffic_reporting_threshold: self.traffic_reporting_threshold,
             _marker: std::marker::PhantomData,
         }
     }
@@ -282,6 +299,8 @@ mod tests {
         let mut body = MeteredBody {
             inner: Full::new(Bytes::from_static(b"hello")),
             metered_hooks: hooks,
+            traffic_reporting_threshold: ByteSize::b(0),
+            cumulative_bytes: 0,
         };
 
         let frame = body
@@ -312,6 +331,7 @@ mod tests {
         let metered_future = MeteredFuture {
             future,
             metered_hooks: Some(hooks),
+            traffic_reporting_threshold: ByteSize::b(0),
             _marker: std::marker::PhantomData,
         };
 
@@ -347,6 +367,7 @@ mod tests {
         let mut service = MeteredService {
             inner,
             metered_manager: Arc::new(manager),
+            traffic_reporting_threshold: ByteSize::b(0),
         };
 
         let request = Request::builder()

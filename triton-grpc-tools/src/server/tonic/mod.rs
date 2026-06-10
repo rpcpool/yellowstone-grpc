@@ -1,2 +1,2 @@
-pub mod metered;
 pub mod auth;
+pub mod metered;

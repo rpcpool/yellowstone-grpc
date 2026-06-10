@@ -1,51 +1,31 @@
-use std::{future::Future, task::{Context, Poll}};
-
-use futures::{FutureExt, future::BoxFuture};
-use http::{HeaderMap, Request, Response, StatusCode};
-use pin_project::pin_project;
-use tower_layer::Layer;
-use tonic::{
-    codegen::{Body as HttpBody, Service, StdError},
+use {
+    http::{Request, Response, StatusCode},
+    pin_project::pin_project,
+    std::{
+        future::Future,
+        task::{Context, Poll},
+    },
+    tonic::codegen::{Body as HttpBody, Service, StdError},
+    tower_layer::Layer,
 };
 
-/// Async authenticator used by [`AuthGuardService`] and [`AuthGuardLayer`].
-///
-/// Implementations validate request metadata (typically headers/metadata copied
-/// into an [`http::HeaderMap`]) and decide whether the request can proceed.
-pub trait SharedAuthenticator: Send + Sync + Clone + 'static {
-
+pub trait SharedAuthenticator<ReqBody>: Send + Sync + Clone + 'static {
     type AuthError: std::error::Error + Sync + Send + 'static;
-    type AuthFut: Future<Output = Result<(), Self::AuthError>> + Send + 'static;
+    type AuthFut: Future<Output = Result<Request<ReqBody>, Self::AuthError>> + Send + 'static;
 
-    /// Validates an incoming request represented by cloned headers.
-    ///
-    /// Returning `Ok(())` allows the request to continue to the wrapped
-    /// service. Returning `Err(())` causes [`AuthGuardFuture`] to synthesize a
-    /// `401 UNAUTHORIZED` response.
-    fn authenticate(&self, headers: &HeaderMap) -> Self::AuthFut;
+    fn authenticate(&self, request: Request<ReqBody>) -> Self::AuthFut;
 }
 
-/// Service middleware that authenticates each request before polling the inner
-/// service future.
-///
-/// This wrapper defers the auth decision to [`SharedAuthenticator`] and uses a
-/// custom future (`[`AuthGuardFuture`]`) to sequence authentication and service
-/// execution.
 pub struct AuthGuardService<S, Auth> {
     inner: S,
     authenticator: Auth,
 }
 
-/// Tower layer that wraps services in [`AuthGuardService`].
-///
-/// Useful for composing authentication into an existing service stack via
-/// `.layer(...)` style APIs.
 pub struct AuthGuardLayer<Auth> {
     authenticator: Auth,
 }
 
 impl<Auth> AuthGuardLayer<Auth> {
-    /// Creates a new [`AuthGuardLayer`] with the provided authenticator.
     pub fn new(authenticator: Auth) -> Self {
         Self { authenticator }
     }
@@ -57,76 +37,68 @@ where
 {
     type Service = AuthGuardService<S, Auth>;
 
-    /// Wraps `inner` in [`AuthGuardService`].
     fn layer(&self, inner: S) -> Self::Service {
         AuthGuardService::new(inner, self.authenticator.clone())
     }
 }
 
 impl<S, Auth> AuthGuardService<S, Auth> {
-    /// Creates a new auth-guarding service wrapper.
     pub fn new(inner: S, authenticator: Auth) -> Self {
-        Self { inner, authenticator }
+        Self {
+            inner,
+            authenticator,
+        }
     }
 }
 
 #[pin_project(project = AuthGuardFutureProj)]
-/// Future driving auth + service execution for [`AuthGuardService`].
-///
-/// State flow:
-/// - `Authenticating`: polls the async authenticator.
-/// - `Allowed`: polls the inner service future.
-/// - `Denied`: returns a synthetic unauthorized response exactly once.
-pub enum AuthGuardFuture<F, ResBody, E, AuthE> {
-    /// Authentication is in-flight and the inner future is held for later.
+pub enum AuthGuardFuture<S, AF, SF, ReqBody, ResBody, E, AuthE>
+where
+    S: Service<Request<ReqBody>, Response = Response<ResBody>, Error = E, Future = SF>,
+    AF: Future<Output = Result<Request<ReqBody>, AuthE>>,
+    SF: Future<Output = Result<Response<ResBody>, E>>,
+{
     Authenticating {
         #[pin]
-        auth_fut: BoxFuture<'static, Result<(), AuthE>>,
-        inner_fut: Option<F>,
-        _marker: std::marker::PhantomData<(ResBody, E)>,
+        auth_fut: AF,
+        inner_service: Option<S>,
     },
-    /// Authentication failed and an immediate response should be emitted.
+    CallingInner {
+        #[pin]
+        inner_fut: SF,
+    },
     Denied {
         result: Option<Result<Response<ResBody>, E>>,
     },
-    /// Authentication succeeded and we are polling the inner future.
-    Allowed {
-        #[pin]
-        inner_fut: F,
-    },
 }
 
-impl<F, ResBody, E, AuthE> std::future::Future for AuthGuardFuture<F, ResBody, E, AuthE>
+impl<S, AF, SF, ReqBody, ResBody, E, AuthE> Future
+    for AuthGuardFuture<S, AF, SF, ReqBody, ResBody, E, AuthE>
 where
-    F: std::future::Future<Output = Result<Response<ResBody>, E>> + Unpin,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>, Error = E, Future = SF>,
+    AF: Future<Output = Result<Request<ReqBody>, AuthE>>,
+    SF: Future<Output = Result<Response<ResBody>, E>>,
     ResBody: Default,
     AuthE: Into<StdError>,
 {
     type Output = Result<Response<ResBody>, E>;
 
-    /// Polls authentication first, then transitions into polling the inner
-    /// service future when auth succeeds.
-    ///
-    /// On authentication failure, returns a single `401 UNAUTHORIZED`
-    /// response with `ResBody::default()`.
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             match self.as_mut().project() {
                 AuthGuardFutureProj::Authenticating {
                     auth_fut,
-                    inner_fut,
-                    ..
+                    inner_service,
                 } => match auth_fut.poll(cx) {
                     Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Ok(())) => {
-                        let next_inner = inner_fut
+                    Poll::Ready(Ok(request)) => {
+                        let mut inner = inner_service
                             .take()
-                            .expect("auth future completed without inner future");
-                        self.set(AuthGuardFuture::Allowed {
-                            inner_fut: next_inner,
-                        });
+                            .expect("auth future completed without inner service");
+                        let inner_fut = inner.call(request);
+                        self.set(AuthGuardFuture::CallingInner { inner_fut });
                     }
-                    Poll::Ready(Err(_auth_e)) => {
+                    Poll::Ready(Err(_auth_err)) => {
                         let denied = Response::builder()
                             .status(StatusCode::UNAUTHORIZED)
                             .body(ResBody::default())
@@ -136,14 +108,14 @@ where
                         });
                     }
                 },
+                AuthGuardFutureProj::CallingInner { inner_fut } => return inner_fut.poll(cx),
                 AuthGuardFutureProj::Denied { result } => {
                     return Poll::Ready(
                         result
                             .take()
                             .expect("denied future polled after completion"),
-                    );
+                    )
                 }
-                AuthGuardFutureProj::Allowed { inner_fut } => return inner_fut.poll(cx),
             }
         }
     }
@@ -151,33 +123,26 @@ where
 
 impl<S, Auth, ReqBody, ResBody> Service<Request<ReqBody>> for AuthGuardService<S, Auth>
 where
-    S: Service<Request<ReqBody>, Response = Response<ResBody>>,
-    S::Future: Send + 'static + Unpin,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone,
+    S::Future: Send + 'static,
     ResBody: HttpBody + Send + 'static + Default,
     ResBody::Error: Into<StdError>,
-    Auth: SharedAuthenticator,
+    Auth: SharedAuthenticator<ReqBody>,
 {
     type Response = Response<ResBody>;
     type Error = S::Error;
-    type Future = AuthGuardFuture<S::Future, ResBody, S::Error, Auth::AuthError>;
+    type Future =
+        AuthGuardFuture<S, Auth::AuthFut, S::Future, ReqBody, ResBody, S::Error, Auth::AuthError>;
 
-    /// Delegates readiness to the wrapped inner service.
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
-    /// Starts authentication and captures the inner future.
-    ///
-    /// The returned [`AuthGuardFuture`] will ensure authentication completes
-    /// before any polling of the inner service future occurs.
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
-        let auth = self.authenticator.clone();
-        let auth_fut = auth.authenticate(request.headers()).boxed();
-
+        let auth_fut = self.authenticator.clone().authenticate(request);
         AuthGuardFuture::Authenticating {
             auth_fut,
-            inner_fut: Some(self.inner.call(request)),
-            _marker: std::marker::PhantomData,
+            inner_service: Some(self.inner.clone()),
         }
     }
 }
@@ -192,8 +157,8 @@ mod tests {
         std::{
             convert::Infallible,
             sync::{
-                Arc,
                 atomic::{AtomicUsize, Ordering},
+                Arc,
             },
         },
     };
@@ -203,13 +168,13 @@ mod tests {
         allow: bool,
     }
 
-    impl SharedAuthenticator for MockAuthenticator {
+    impl SharedAuthenticator<()> for MockAuthenticator {
         type AuthError = std::io::Error;
-        type AuthFut = std::future::Ready<Result<(), Self::AuthError>>;
+        type AuthFut = std::future::Ready<Result<Request<()>, Self::AuthError>>;
 
-        fn authenticate(&self, _headers: &HeaderMap) -> Self::AuthFut {
+        fn authenticate(&self, request: Request<()>) -> Self::AuthFut {
             if self.allow {
-                std::future::ready(Ok(()))
+                std::future::ready(Ok(request))
             } else {
                 std::future::ready(Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -219,6 +184,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct TestService {
         call_count: Arc<AtomicUsize>,
     }
@@ -228,7 +194,7 @@ mod tests {
         polled: bool,
     }
 
-    impl std::future::Future for TestFuture {
+    impl Future for TestFuture {
         type Output = Result<Response<Empty<Bytes>>, Infallible>;
 
         fn poll(mut self: std::pin::Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -237,12 +203,10 @@ mod tests {
                 self.polled = true;
             }
 
-            Poll::Ready(Ok(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Empty::new())
-                    .expect("response build"),
-            ))
+            Poll::Ready(Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(Empty::new())
+                .expect("response build")))
         }
     }
 

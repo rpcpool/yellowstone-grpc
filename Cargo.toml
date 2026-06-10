@@ -124,6 +124,7 @@ yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0"
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.5" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.4.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
+triton-grpc-tools = { path = "triton-grpc-tools", version = "0.1.0" }
 
 # tokio-grpc-tools
 tokio-rustls = "0.26.0"
