@@ -14,16 +14,20 @@ publish = { workspace = true }
 arc-swap = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
+log = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 pin-project = { workspace = true }
+pin-project-lite = { workspace = true }
 tower-layer = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 x509-parser = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+socket2 = { workspace = true }

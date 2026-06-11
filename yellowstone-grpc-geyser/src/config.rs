@@ -355,17 +355,19 @@ pub struct ConfigGrpc {
     #[serde(default)]
     pub traffic_reporting_byte_threhsold: Option<ByteSize>,
 
-    #[cfg(feature = "proxyless")]
-    /// Optional path to a proxyless gRPC configuration file.
-    /// If set, the server will start in proxyless mode and use the provided configuration.
-    pub proxyless_config_path: Option<PathBuf>,
+    ///
+    /// Optional directory to load TLS certificates for gRPC server. If set, the server will start in TLS mode and load certificates from the provided directory.
+    ///
+    /// This option is mutually exclusive with `tls_config`. If both are set, the server will prioritize `cert_dir`.
+    #[serde(default)]
+    pub cert_dir: Option<PathBuf>,
 }
 
 #[cfg(feature = "proxyless")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfigGrpcProxyless {
-    cert_dir: PathBuf,
-    haproxy_ratelimit: HAproxyRateLimitConfig,
+    pub cert_dir: PathBuf,
+    pub haproxy_ratelimit: HAproxyRateLimitConfig,
 }
 
 impl ConfigGrpc {

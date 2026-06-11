@@ -17,6 +17,52 @@ use {
 
 pub const DEFAULT_TRAFFIC_REPORTING_THRESHOLD: ByteSize = ByteSize::kib(32);
 
+/// Hooks fanout used by [`StackMeteredManager`].
+#[derive(Debug, Clone)]
+pub struct StackMeteredHooks<MH1, MH2> {
+    hooks1: MH1,
+    hooks2: MH2,
+}
+
+impl<MH1, MH2> MeteredHooks for StackMeteredHooks<MH1, MH2>
+where
+    MH1: MeteredHooks,
+    MH2: MeteredHooks,
+{
+    fn on_emit_bytes(&self, byte_count: u64, now: Instant) {
+        self.hooks1.on_emit_bytes(byte_count, now);
+        self.hooks2.on_emit_bytes(byte_count, now);
+    }
+}
+
+/// Manager composition that forwards hook construction to both managers.
+#[derive(Debug, Clone)]
+pub struct StackMeteredManager<MM1, MM2> {
+    manager1: MM1,
+    manager2: MM2,
+}
+
+impl<MM1, MM2> StackMeteredManager<MM1, MM2> {
+    pub fn new(manager1: MM1, manager2: MM2) -> Self {
+        Self { manager1, manager2 }
+    }
+}
+
+impl<MM1, MM2> MeteredManager for StackMeteredManager<MM1, MM2>
+where
+    MM1: MeteredManager,
+    MM2: MeteredManager,
+{
+    type Hooks = StackMeteredHooks<MM1::Hooks, MM2::Hooks>;
+
+    fn build_hooks(&self, header_map: &HeaderMap, uri_path: &str) -> Self::Hooks {
+        StackMeteredHooks {
+            hooks1: self.manager1.build_hooks(header_map, uri_path),
+            hooks2: self.manager2.build_hooks(header_map, uri_path),
+        }
+    }
+}
+
 pub trait MeteredHooks {
     /// Records bytes emitted by a response body frame.
     ///
@@ -42,6 +88,14 @@ pub trait MeteredManager {
     /// # Returns
     /// A hooks instance attached to the response body wrapper.
     fn build_hooks(&self, header_map: &HeaderMap, uri_path: &str) -> Self::Hooks;
+
+    fn stack<Next>(self, next: Next) -> StackMeteredManager<Self, Next>
+    where
+        Self: Sized,
+        Next: MeteredManager,
+    {
+        StackMeteredManager::new(self, next)
+    }
 }
 
 /// Tower layer that wraps services with byte metering for response bodies.
@@ -400,5 +454,94 @@ mod tests {
             "/stream"
         );
         assert_eq!(total_bytes.load(Ordering::Relaxed), 6);
+    }
+
+    #[tokio::test]
+    async fn metered_manager_stack_api_fanouts_to_all_managers() {
+        let total_bytes_1 = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls_1 = Arc::new(AtomicUsize::new(0));
+        let last_path_1 = Arc::new(Mutex::new(None));
+
+        let total_bytes_2 = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls_2 = Arc::new(AtomicUsize::new(0));
+        let last_path_2 = Arc::new(Mutex::new(None));
+
+        let total_bytes_3 = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls_3 = Arc::new(AtomicUsize::new(0));
+        let last_path_3 = Arc::new(Mutex::new(None));
+
+        let manager_1 = TestManager {
+            total_bytes: Arc::clone(&total_bytes_1),
+            build_hooks_calls: Arc::clone(&build_hooks_calls_1),
+            last_path: Arc::clone(&last_path_1),
+        };
+        let manager_2 = TestManager {
+            total_bytes: Arc::clone(&total_bytes_2),
+            build_hooks_calls: Arc::clone(&build_hooks_calls_2),
+            last_path: Arc::clone(&last_path_2),
+        };
+        let manager_3 = TestManager {
+            total_bytes: Arc::clone(&total_bytes_3),
+            build_hooks_calls: Arc::clone(&build_hooks_calls_3),
+            last_path: Arc::clone(&last_path_3),
+        };
+
+        let composed_manager = manager_1.stack(manager_2).stack(manager_3);
+
+        let inner = TestInnerService {
+            body_data: b"fanout",
+        };
+        let mut service = MeteredService {
+            inner,
+            metered_manager: Arc::new(composed_manager),
+            traffic_reporting_threshold: ByteSize::b(0),
+        };
+
+        let request = Request::builder()
+            .uri("http://localhost/fluent")
+            .body(())
+            .expect("request should build");
+        let response = service
+            .call(request)
+            .await
+            .expect("service call should succeed");
+        let mut body = response.into_body();
+        let _ = body
+            .frame()
+            .await
+            .expect("expected first frame")
+            .expect("expected successful frame");
+
+        assert_eq!(build_hooks_calls_1.load(Ordering::Relaxed), 1);
+        assert_eq!(build_hooks_calls_2.load(Ordering::Relaxed), 1);
+        assert_eq!(build_hooks_calls_3.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            last_path_1
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("path should be captured"),
+            "/fluent"
+        );
+        assert_eq!(
+            last_path_2
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("path should be captured"),
+            "/fluent"
+        );
+        assert_eq!(
+            last_path_3
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("path should be captured"),
+            "/fluent"
+        );
+
+        assert_eq!(total_bytes_1.load(Ordering::Relaxed), 6);
+        assert_eq!(total_bytes_2.load(Ordering::Relaxed), 6);
+        assert_eq!(total_bytes_3.load(Ordering::Relaxed), 6);
     }
 }
