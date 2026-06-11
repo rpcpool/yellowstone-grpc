@@ -879,12 +879,6 @@ impl FilterTransactions {
 ///
 /// Returns the empty set when `mode == None` (the common case; no scan).
 ///
-/// For `All`, every parseable owner in pre OR post is included.
-///
-/// For `BalanceChanged`, an owner is included when any of its token
-/// balances changed in amount (compared by `account_index` between pre and
-/// post) or the account was closed (present in pre but missing in post).
-///
 /// This is recomputed per filter per tx. Caching is intentionally avoided
 /// here for simplicity — see the originating PR discussion.
 fn collect_token_account_owners(
@@ -893,63 +887,84 @@ fn collect_token_account_owners(
 ) -> HashSet<Pubkey> {
     match mode {
         TokenAccountsMode::None => HashSet::new(),
-        TokenAccountsMode::All => {
-            let mut owners = HashSet::new();
-            for bal in meta
-                .pre_token_balances
-                .iter()
-                .chain(meta.post_token_balances.iter())
-            {
-                if let Ok(pubkey) = bal.owner.parse::<Pubkey>() {
-                    owners.insert(pubkey);
-                }
-            }
-            owners
-        }
-        TokenAccountsMode::BalanceChanged => {
-            // Index pre by account_index: (owner pubkey, amount string ref).
-            let mut pre_by_index: HashMap<u32, (Pubkey, &str)> = HashMap::new();
-            for bal in &meta.pre_token_balances {
-                if let Ok(pubkey) = bal.owner.parse::<Pubkey>() {
-                    let amount = bal
-                        .ui_token_amount
-                        .as_ref()
-                        .map(|a| a.amount.as_str())
-                        .unwrap_or("");
-                    pre_by_index.insert(bal.account_index, (pubkey, amount));
-                }
-            }
+        TokenAccountsMode::All => owners_in_any_balance(meta),
+        TokenAccountsMode::BalanceChanged => owners_with_changed_balance(meta),
+    }
+}
 
-            let mut changed: HashSet<Pubkey> = HashSet::new();
-            let mut seen_in_post: HashSet<u32> = HashSet::new();
-            for bal in &meta.post_token_balances {
-                let Ok(pubkey) = bal.owner.parse::<Pubkey>() else {
-                    continue;
-                };
-                seen_in_post.insert(bal.account_index);
-                let post_amount = bal
-                    .ui_token_amount
-                    .as_ref()
-                    .map(|a| a.amount.as_str())
-                    .unwrap_or("");
-                let amount_differs = match pre_by_index.get(&bal.account_index) {
-                    Some((_, pre_amount)) => *pre_amount != post_amount,
-                    None => true, // new account
-                };
-                if amount_differs {
-                    changed.insert(pubkey);
-                }
-            }
+/// Owners of every parseable pre OR post token balance on the tx.
+fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> HashSet<Pubkey> {
+    meta.pre_token_balances
+        .iter()
+        .chain(meta.post_token_balances.iter())
+        .filter_map(parse_token_balance_owner)
+        .collect()
+}
 
-            // Closed accounts: present in pre, absent in post.
-            for (index, (pubkey, _)) in &pre_by_index {
-                if !seen_in_post.contains(index) {
-                    changed.insert(*pubkey);
-                }
-            }
-            changed
+/// Owners whose token balance changed (compared by `account_index`) between
+/// pre and post, OR whose account was closed (present in pre, missing in post).
+fn owners_with_changed_balance(
+    meta: &confirmed_block::TransactionStatusMeta,
+) -> HashSet<Pubkey> {
+    let pre_by_index = index_pre_token_balances(&meta.pre_token_balances);
+
+    let mut changed: HashSet<Pubkey> = HashSet::new();
+    let mut seen_in_post: HashSet<u32> = HashSet::new();
+    for bal in &meta.post_token_balances {
+        let Some(pubkey) = parse_token_balance_owner(bal) else {
+            continue;
+        };
+        seen_in_post.insert(bal.account_index);
+        let post_amount = token_balance_amount(bal);
+        let amount_differs = match pre_by_index.get(&bal.account_index) {
+            Some((_, pre_amount)) => *pre_amount != post_amount,
+            None => true, // new account
+        };
+        if amount_differs {
+            changed.insert(pubkey);
         }
     }
+
+    // Closed accounts: present in pre, absent in post.
+    for (index, (pubkey, _)) in &pre_by_index {
+        if !seen_in_post.contains(index) {
+            changed.insert(*pubkey);
+        }
+    }
+    changed
+}
+
+/// Index parseable pre-balances by `account_index`, carrying the owner
+/// pubkey and a borrowed amount string for comparison against post.
+fn index_pre_token_balances(
+    pre: &[confirmed_block::TokenBalance],
+) -> HashMap<u32, (Pubkey, &str)> {
+    let mut by_index = HashMap::with_capacity(pre.len());
+    for bal in pre {
+        if let Some(pubkey) = parse_token_balance_owner(bal) {
+            by_index.insert(bal.account_index, (pubkey, token_balance_amount(bal)));
+        }
+    }
+    by_index
+}
+
+/// Parse the `owner` string on a token balance into a `Pubkey`, or `None`
+/// if it doesn't decode. Suitable for `Iterator::filter_map`.
+#[inline]
+fn parse_token_balance_owner(balance: &confirmed_block::TokenBalance) -> Option<Pubkey> {
+    balance.owner.parse::<Pubkey>().ok()
+}
+
+/// Borrowed raw on-chain `amount` string for a token balance, or `""` when
+/// missing. Empty is a sentinel that won't equal any real amount, so a
+/// missing pre or post amount reliably reads as "changed".
+#[inline]
+fn token_balance_amount(balance: &confirmed_block::TokenBalance) -> &str {
+    balance
+        .ui_token_amount
+        .as_ref()
+        .map(|a| a.amount.as_str())
+        .unwrap_or("")
 }
 
 #[derive(Debug, Default, Clone)]
