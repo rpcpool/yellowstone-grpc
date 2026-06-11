@@ -71,6 +71,8 @@ pub enum FilterError {
     CreateDataSliceOutOfOrder,
     #[error("failed to create filter: data slices overlapped")]
     CreateDataSliceOverlap,
+    #[error("invalid token_accounts mode {0:?}; expected \"none\", \"balanceChanged\", or \"all\"")]
+    InvalidTokenAccountsMode(String),
 }
 
 pub type FilterResult<T> = Result<T, FilterError>;
@@ -694,6 +696,31 @@ enum FilterTransactionsType {
     TransactionStatus,
 }
 
+/// ATA / token-account expansion mode for a transaction filter. When not
+/// `None`, `account_include` / `account_exclude` / `account_required` also
+/// match against owners of pre/post token balances on each transaction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TokenAccountsMode {
+    #[default]
+    None,
+    /// Match an owner if it owns a pre OR post token balance on the tx.
+    All,
+    /// Match an owner if any of its token balances changed in amount
+    /// (per `account_index`) or the account was closed.
+    BalanceChanged,
+}
+
+impl TokenAccountsMode {
+    fn parse(value: Option<&String>) -> FilterResult<Self> {
+        match value.map(String::as_str) {
+            None | Some("") | Some("none") => Ok(Self::None),
+            Some("all") => Ok(Self::All),
+            Some("balanceChanged") => Ok(Self::BalanceChanged),
+            Some(other) => Err(FilterError::InvalidTokenAccountsMode(other.to_owned())),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FilterTransactionsInner {
     vote: Option<bool>,
@@ -702,6 +729,11 @@ struct FilterTransactionsInner {
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
     account_required: HashSet<Pubkey>,
+    // Read by `FilterTransactions::get_updates` in the follow-up commit
+    // that wires the matching logic; tolerated here so the failing-tests
+    // commit compiles cleanly.
+    #[allow(dead_code)]
+    token_accounts: TokenAccountsMode,
 }
 
 #[derive(Debug, Clone)]
@@ -726,7 +758,8 @@ impl FilterTransactions {
                     && filter.failed.is_none()
                     && filter.account_include.is_empty()
                     && filter.account_exclude.is_empty()
-                    && filter.account_required.is_empty(),
+                    && filter.account_required.is_empty()
+                    && filter.token_accounts.as_deref().unwrap_or("none") == "none",
                 limits.any,
             )?;
             FilterLimits::check_pubkey_max(
@@ -766,6 +799,7 @@ impl FilterTransactions {
                         &filter.account_required,
                         &HashSet::new(),
                     )?,
+                    token_accounts: TokenAccountsMode::parse(filter.token_accounts.as_ref())?,
                 },
             );
         }
@@ -1344,6 +1378,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                token_accounts: None,
             },
         );
 
@@ -1379,6 +1414,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                token_accounts: None,
             },
         );
 
@@ -1420,6 +1456,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                token_accounts: None,
             },
         );
 
@@ -1485,6 +1522,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                token_accounts: None,
             },
         );
 
@@ -1550,6 +1588,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude,
                 account_required: vec![],
+                token_accounts: None,
             },
         );
 
@@ -1601,6 +1640,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                token_accounts: None,
             },
         );
 
@@ -1674,6 +1714,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                token_accounts: None,
             },
         );
 
@@ -1938,5 +1979,734 @@ mod cuckoo_tests {
         let message2 = create_message_account(pubkey, wrong_owner);
         let updates2 = filter.get_updates(&Message::Account(message2), None);
         assert!(updates2.is_empty());
+    }
+
+    mod token_accounts {
+        //! Tests for the optional `token_accounts` field on
+        //! `SubscribeRequestFilterTransactions` that expands the effective
+        //! account set of a tx with owners of its pre/post token balances.
+
+        use {
+            super::{create_filter_names, Filter, FilterError, TokenAccountsMode},
+            crate::plugin::{
+                convert_to,
+                filter::message::{FilteredUpdateFilters, FilteredUpdateOneof},
+                message::{Message, MessageTransaction, MessageTransactionInfo},
+            },
+            prost_types::Timestamp,
+            solana_hash::Hash,
+            solana_keypair::Keypair,
+            solana_message::{v0::LoadedAddresses, Message as SolMessage, MessageHeader},
+            solana_pubkey::Pubkey,
+            solana_signer::Signer,
+            solana_transaction::{versioned::VersionedTransaction, Transaction},
+            solana_transaction_status::TransactionStatusMeta,
+            std::{
+                collections::HashMap,
+                sync::{Arc, OnceLock},
+                time::SystemTime,
+            },
+            yellowstone_grpc_proto::{
+                geyser::{SubscribeRequest, SubscribeRequestFilterTransactions},
+                solana::storage::confirmed_block,
+            },
+        };
+
+        // --- mode parsing -----------------------------------------------
+
+        #[test]
+        fn mode_parse_accepts_known_values() {
+            assert_eq!(
+                TokenAccountsMode::parse(None).unwrap(),
+                TokenAccountsMode::None
+            );
+            assert_eq!(
+                TokenAccountsMode::parse(Some(&String::new())).unwrap(),
+                TokenAccountsMode::None
+            );
+            assert_eq!(
+                TokenAccountsMode::parse(Some(&"none".to_owned())).unwrap(),
+                TokenAccountsMode::None
+            );
+            assert_eq!(
+                TokenAccountsMode::parse(Some(&"all".to_owned())).unwrap(),
+                TokenAccountsMode::All
+            );
+            assert_eq!(
+                TokenAccountsMode::parse(Some(&"balanceChanged".to_owned())).unwrap(),
+                TokenAccountsMode::BalanceChanged
+            );
+        }
+
+        #[test]
+        fn mode_parse_rejects_unknown_value() {
+            let err = TokenAccountsMode::parse(Some(&"All".to_owned())).unwrap_err();
+            assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
+
+            let err = TokenAccountsMode::parse(Some(&"changed".to_owned())).unwrap_err();
+            assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
+        }
+
+        // --- helpers ----------------------------------------------------
+
+        fn token_balance(account_index: u32, owner: Pubkey, amount: &str) -> confirmed_block::TokenBalance {
+            confirmed_block::TokenBalance {
+                account_index,
+                mint: Pubkey::new_unique().to_string(),
+                ui_token_amount: Some(confirmed_block::UiTokenAmount {
+                    ui_amount: 0.0,
+                    decimals: 0,
+                    amount: amount.to_owned(),
+                    ui_amount_string: amount.to_owned(),
+                }),
+                owner: owner.to_string(),
+                program_id: spl_token_2022_interface::id().to_string(),
+            }
+        }
+
+        /// Build a `MessageTransaction` carrying explicit pre/post token
+        /// balances. `account_keys` is the static account-key set used by
+        /// the include/exclude/required match (unchanged from upstream).
+        ///
+        /// A fresh signer is generated and prepended to `account_keys` so
+        /// `Transaction::sign` does not reject the build with
+        /// `KeypairPubkeyMismatch`. Tests should treat the signer's
+        /// pubkey as opaque and only rely on the keys they pass in.
+        fn make_tx_with_balances(
+            account_keys: Vec<Pubkey>,
+            pre: Vec<confirmed_block::TokenBalance>,
+            post: Vec<confirmed_block::TokenBalance>,
+        ) -> MessageTransaction {
+            let signer = Keypair::new();
+            let signer_pk = signer.pubkey();
+            let mut full_keys = Vec::with_capacity(1 + account_keys.len());
+            full_keys.push(signer_pk);
+            full_keys.extend(account_keys);
+            let sol_message = SolMessage {
+                header: MessageHeader {
+                    num_required_signatures: 1,
+                    ..MessageHeader::default()
+                },
+                account_keys: full_keys,
+                ..SolMessage::default()
+            };
+            let versioned = VersionedTransaction::from(Transaction::new(
+                &[&signer],
+                sol_message,
+                Hash::default(),
+            ));
+            // Build the proto meta via convert_to so we get sensible defaults,
+            // then override the pre/post token balance vectors directly.
+            let mut meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
+                status: Ok(()),
+                fee: 0,
+                pre_balances: vec![],
+                post_balances: vec![],
+                inner_instructions: None,
+                log_messages: None,
+                pre_token_balances: None,
+                post_token_balances: None,
+                rewards: None,
+                loaded_addresses: LoadedAddresses::default(),
+                return_data: None,
+                compute_units_consumed: None,
+                cost_units: None,
+            });
+            meta.pre_token_balances = pre;
+            meta.post_token_balances = post;
+            let sig = *versioned
+                .signatures
+                .first()
+                .expect("transaction should be signed");
+            let key_set = versioned
+                .message
+                .static_account_keys()
+                .iter()
+                .copied()
+                .collect();
+            MessageTransaction {
+                transaction: Arc::new(MessageTransactionInfo {
+                    signature: sig,
+                    is_vote: false,
+                    transaction: convert_to::create_transaction(&versioned),
+                    meta,
+                    index: 0,
+                    account_keys: key_set,
+                    pre_encoded: OnceLock::new(),
+                }),
+                slot: 100,
+                created_at: Timestamp::from(SystemTime::now()),
+            }
+        }
+
+        fn filter_with_transactions(
+            tx_filters: HashMap<String, SubscribeRequestFilterTransactions>,
+        ) -> Filter {
+            let config = SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: tx_filters,
+                transactions_status: HashMap::new(),
+                blocks: HashMap::new(),
+                blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
+                commitment: None,
+                accounts_data_slice: Vec::new(),
+                ping: None,
+                from_slot: None,
+            };
+            Filter::new(
+                &config,
+                &super::FilterLimits::default(),
+                &mut create_filter_names(),
+            )
+            .expect("filter should build")
+        }
+
+        fn make_filter_def(
+            account_include: Vec<Pubkey>,
+            account_exclude: Vec<Pubkey>,
+            account_required: Vec<Pubkey>,
+            mode: Option<&str>,
+        ) -> SubscribeRequestFilterTransactions {
+            SubscribeRequestFilterTransactions {
+                vote: None,
+                failed: None,
+                signature: None,
+                account_include: account_include
+                    .into_iter()
+                    .map(|k| k.to_string())
+                    .collect(),
+                account_exclude: account_exclude
+                    .into_iter()
+                    .map(|k| k.to_string())
+                    .collect(),
+                account_required: account_required
+                    .into_iter()
+                    .map(|k| k.to_string())
+                    .collect(),
+                token_accounts: mode.map(str::to_owned),
+            }
+        }
+
+        fn matches(filter: &Filter, message: &Message) -> bool {
+            !filter.get_updates(message, None).is_empty()
+        }
+
+        // --- mode == None preserves legacy behavior ---------------------
+
+        #[test]
+        fn mode_none_ignores_token_balance_owner() {
+            let owner = Pubkey::new_unique();
+            let other_key = Pubkey::new_unique();
+            // owner is NOT in account_keys; it only shows up in token balances.
+            let tx = make_tx_with_balances(
+                vec![other_key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], None),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(
+                !matches(&filter, &message),
+                "mode=None must not promote token-balance owners into the include set"
+            );
+        }
+
+        #[test]
+        fn mode_none_account_keys_match_unchanged() {
+            let pubkey = Pubkey::new_unique();
+            let tx = make_tx_with_balances(vec![pubkey], vec![], vec![]);
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![pubkey], vec![], vec![], None),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        // --- mode == "all" ----------------------------------------------
+
+        #[test]
+        fn mode_all_matches_pre_only_owner() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![], // account closed
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_all_matches_post_only_owner() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![],
+                vec![token_balance(0, owner, "100")], // freshly created
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_all_matches_owner_in_pre_and_post() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "100")], // unchanged amount
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_all_rejects_owner_not_in_any_balance() {
+            let owner = Pubkey::new_unique();
+            let unrelated_owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, unrelated_owner, "100")],
+                vec![token_balance(0, unrelated_owner, "100")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(!matches(&filter, &message));
+        }
+
+        // --- mode == "balanceChanged" -----------------------------------
+
+        #[test]
+        fn mode_balance_changed_matches_amount_change() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "150")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_balance_changed_skips_unchanged_amount() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "100")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(!matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_balance_changed_matches_account_close() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![], // closed
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_balance_changed_matches_new_account() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![],
+                vec![token_balance(0, owner, "100")], // brand new
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_balance_changed_multi_ata_same_owner_keyed_by_index() {
+            // Same owner holds two ATAs; one changes, one does not.
+            // Owner must be in `changed` because at least one balance moved.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![
+                    token_balance(0, owner, "100"),
+                    token_balance(1, owner, "500"),
+                ],
+                vec![
+                    token_balance(0, owner, "100"), // unchanged
+                    token_balance(1, owner, "600"), // changed
+                ],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        // --- exclude / required uniformity ------------------------------
+
+        #[test]
+        fn mode_all_exclude_drops_owner_only_tx() {
+            // Filter requires include=key, excludes owner via token-balance.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![key], vec![owner], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(
+                !matches(&filter, &message),
+                "exclude with mode=All must drop a tx whose token-balance owner matches"
+            );
+        }
+
+        #[test]
+        fn mode_all_required_satisfied_by_owner_set() {
+            // `account_required` lists `owner` which is NOT an account key,
+            // but is a token-balance owner. With mode=All this must match.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![],
+                vec![token_balance(0, owner, "100")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![], vec![], vec![owner], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn mode_balance_changed_required_unsatisfied_when_balance_static() {
+            // Owner present in pre+post but amount unchanged — under
+            // BalanceChanged the owner is NOT in the effective set, so a
+            // required-on-owner filter must reject the tx.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "100")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![], vec![], vec![owner], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(!matches(&filter, &message));
+        }
+
+        // --- robustness -------------------------------------------------
+
+        #[test]
+        fn mode_all_skips_unparseable_owner_strings() {
+            let valid_owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            // Insert a balance whose owner string is garbage. It must be
+            // silently skipped; valid balances still match.
+            let mut bad_pre = token_balance(0, valid_owner, "100");
+            bad_pre.owner = "not-a-real-pubkey".to_owned();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![bad_pre],
+                vec![token_balance(1, valid_owner, "200")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![valid_owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            assert!(matches(&filter, &message));
+        }
+
+        #[test]
+        fn empty_balances_under_mode_does_not_panic() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(vec![key], vec![], vec![]);
+            let message = Message::Transaction(tx);
+
+            for mode in [Some("all"), Some("balanceChanged"), None] {
+                let mut tx_filters = HashMap::new();
+                tx_filters.insert(
+                    "f".to_owned(),
+                    make_filter_def(vec![owner], vec![], vec![], mode),
+                );
+                let filter = filter_with_transactions(tx_filters);
+                // owner never appears anywhere — must not match.
+                assert!(!matches(&filter, &message));
+            }
+        }
+
+        // --- multi-filter / sister path ---------------------------------
+
+        #[test]
+        fn multiple_filters_independent_modes() {
+            // Same tx, two filters: one with mode=All matches via owner,
+            // the other with mode=None does not.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "with_ata".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            tx_filters.insert(
+                "without_ata".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], None),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            let updates = filter.get_updates(&message, None);
+            assert_eq!(updates.len(), 1, "expect exactly one matching filter");
+            assert_eq!(
+                updates[0].filters,
+                FilteredUpdateFilters::from_vec(vec![super::FilterName::new("with_ata")])
+            );
+            assert!(matches!(
+                updates[0].message,
+                FilteredUpdateOneof::Transaction(_)
+            ));
+        }
+
+        #[test]
+        fn transactions_status_path_honors_token_accounts_mode() {
+            // The sister filter map (transactions_status) shares the same
+            // FilterTransactions impl, so mode must work there too.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![],
+                vec![token_balance(0, owner, "100")],
+            );
+            let message = Message::Transaction(tx);
+
+            let mut tx_status_filters = HashMap::new();
+            tx_status_filters.insert(
+                "status".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+
+            let config = SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: HashMap::new(),
+                transactions_status: tx_status_filters,
+                blocks: HashMap::new(),
+                blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
+                commitment: None,
+                accounts_data_slice: Vec::new(),
+                ping: None,
+                from_slot: None,
+            };
+            let filter = Filter::new(
+                &config,
+                &super::FilterLimits::default(),
+                &mut create_filter_names(),
+            )
+            .unwrap();
+
+            let updates = filter.get_updates(&message, None);
+            assert_eq!(updates.len(), 1);
+            assert!(matches!(
+                updates[0].message,
+                FilteredUpdateOneof::TransactionStatus(_)
+            ));
+        }
+
+        // --- limits.any interplay --------------------------------------
+
+        #[test]
+        fn token_accounts_mode_counts_as_non_any_filter() {
+            // limits.any = false rejects empty filters. A filter with ONLY
+            // token_accounts set (no include/exclude/required, no vote/sig)
+            // must still build — it's a real constraint, not "match all".
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![], vec![], vec![], Some("all")),
+            );
+
+            let config = SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: tx_filters,
+                transactions_status: HashMap::new(),
+                blocks: HashMap::new(),
+                blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
+                commitment: None,
+                accounts_data_slice: Vec::new(),
+                ping: None,
+                from_slot: None,
+            };
+            let mut limits = super::FilterLimits::default();
+            limits.transactions.any = false;
+
+            let result = Filter::new(&config, &limits, &mut create_filter_names());
+            assert!(
+                result.is_ok(),
+                "filter with token_accounts set should not be considered \"any\""
+            );
+        }
+
+        #[test]
+        fn invalid_mode_string_rejected_at_filter_build() {
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![Pubkey::new_unique()], vec![], vec![], Some("bogus")),
+            );
+
+            let config = SubscribeRequest {
+                accounts: HashMap::new(),
+                slots: HashMap::new(),
+                transactions: tx_filters,
+                transactions_status: HashMap::new(),
+                blocks: HashMap::new(),
+                blocks_meta: HashMap::new(),
+                entry: HashMap::new(),
+                commitment: None,
+                accounts_data_slice: Vec::new(),
+                ping: None,
+                from_slot: None,
+            };
+            let err = Filter::new(
+                &config,
+                &super::FilterLimits::default(),
+                &mut create_filter_names(),
+            )
+            .expect_err("invalid mode must fail filter construction");
+            assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
+        }
     }
 }

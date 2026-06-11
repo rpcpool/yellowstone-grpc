@@ -114,6 +114,11 @@ message SubscribeRequestFilterTransactions {
   repeated string account_include = 3;
   repeated string account_exclude = 4;
   repeated string account_required = 6;
+  // ATA / token-account expansion control. One of "none" (default),
+  // "balanceChanged", or "all". When set, account_include /
+  // account_exclude / account_required also match against owners of
+  // pre/post token balances on each transaction.
+  optional string token_accounts = 30;
 }
 
 message SubscribeRequestFilterBlocks {
