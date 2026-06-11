@@ -3,13 +3,13 @@ use {
     bytesize::ByteSize,
     http::{HeaderMap, Request, Response},
     hyper::body::{Frame, SizeHint},
-    pin_project::pin_project,
+    pin_project::{pin_project, pinned_drop},
     std::{
         future::Future,
         pin::Pin,
         sync::Arc,
         task::{ready, Context, Poll},
-        time::Instant,
+        time::{Instant, SystemTime},
     },
     tonic::codegen::{Body as HttpBody, Service, StdError},
     tower_layer::Layer,
@@ -24,34 +24,34 @@ pub struct StackMeteredHooks<MH1, MH2> {
     hooks2: MH2,
 }
 
-impl<MH1, MH2> MeteredHooks for StackMeteredHooks<MH1, MH2>
+impl<MH1, MH2> MeteredBandwidthHooks for StackMeteredHooks<MH1, MH2>
 where
-    MH1: MeteredHooks,
-    MH2: MeteredHooks,
+    MH1: MeteredBandwidthHooks,
+    MH2: MeteredBandwidthHooks,
 {
-    fn on_emit_bytes(&self, byte_count: u64, now: Instant) {
-        self.hooks1.on_emit_bytes(byte_count, now);
-        self.hooks2.on_emit_bytes(byte_count, now);
+    fn on_emit_bytes(&mut self, byte_count: u64, now: Instant, system_now: SystemTime) {
+        self.hooks1.on_emit_bytes(byte_count, now, system_now);
+        self.hooks2.on_emit_bytes(byte_count, now, system_now);
     }
 }
 
 /// Manager composition that forwards hook construction to both managers.
 #[derive(Debug, Clone)]
-pub struct StackMeteredManager<MM1, MM2> {
+pub struct StackMeteredBandwidthManager<MM1, MM2> {
     manager1: MM1,
     manager2: MM2,
 }
 
-impl<MM1, MM2> StackMeteredManager<MM1, MM2> {
+impl<MM1, MM2> StackMeteredBandwidthManager<MM1, MM2> {
     pub fn new(manager1: MM1, manager2: MM2) -> Self {
         Self { manager1, manager2 }
     }
 }
 
-impl<MM1, MM2> MeteredManager for StackMeteredManager<MM1, MM2>
+impl<MM1, MM2> MeteredBandwidthManager for StackMeteredBandwidthManager<MM1, MM2>
 where
-    MM1: MeteredManager,
-    MM2: MeteredManager,
+    MM1: MeteredBandwidthManager,
+    MM2: MeteredBandwidthManager,
 {
     type Hooks = StackMeteredHooks<MM1::Hooks, MM2::Hooks>;
 
@@ -63,7 +63,7 @@ where
     }
 }
 
-pub trait MeteredHooks {
+pub trait MeteredBandwidthHooks {
     /// Records bytes emitted by a response body frame.
     ///
     /// Implementations can forward this event to metrics systems, tracing,
@@ -72,12 +72,12 @@ pub trait MeteredHooks {
     /// # Arguments
     /// - `byte_count`: Number of payload bytes emitted by the current frame.
     /// - `now`: [`Instant`] sampled when the frame was observed.
-    fn on_emit_bytes(&self, byte_count: u64, now: Instant);
+    fn on_emit_bytes(&mut self, byte_count: u64, now: Instant, system_now: SystemTime);
 }
 
-pub trait MeteredManager {
+pub trait MeteredBandwidthManager {
     /// Concrete hooks type produced for each request.
-    type Hooks: MeteredHooks + Send + Sync + 'static;
+    type Hooks: MeteredBandwidthHooks + Send + Sync + 'static;
 
     /// Builds per-request hooks used to meter the response body.
     ///
@@ -89,12 +89,12 @@ pub trait MeteredManager {
     /// A hooks instance attached to the response body wrapper.
     fn build_hooks(&self, header_map: &HeaderMap, uri_path: &str) -> Self::Hooks;
 
-    fn stack<Next>(self, next: Next) -> StackMeteredManager<Self, Next>
+    fn stack<Next>(self, next: Next) -> StackMeteredBandwidthManager<Self, Next>
     where
         Self: Sized,
-        Next: MeteredManager,
+        Next: MeteredBandwidthManager,
     {
-        StackMeteredManager::new(self, next)
+        StackMeteredBandwidthManager::new(self, next)
     }
 }
 
@@ -103,12 +103,12 @@ pub trait MeteredManager {
 /// The layer clones a shared manager and applies a [`MeteredService`] wrapper
 /// to each inner service instance.
 #[derive(Debug, Clone, Default)]
-pub struct MeteredLayer<MM> {
+pub struct MeteredBandwidthLayer<MM> {
     metered_manager: Arc<MM>,
     traffic_reporting_threshold: ByteSize,
 }
 
-impl<MM> MeteredLayer<MM> {
+impl<MM> MeteredBandwidthLayer<MM> {
     /// Creates a new metering layer from a manager implementation.
     pub fn new(metered_manager: MM, traffic_reporting_threshold: ByteSize) -> Self {
         Self {
@@ -118,15 +118,15 @@ impl<MM> MeteredLayer<MM> {
     }
 }
 
-impl<S, MM> Layer<S> for MeteredLayer<MM>
+impl<S, MM> Layer<S> for MeteredBandwidthLayer<MM>
 where
-    MM: MeteredManager,
+    MM: MeteredBandwidthManager,
 {
-    type Service = MeteredService<S, MM>;
+    type Service = MeteredBandwidthService<S, MM>;
 
     /// Wraps the provided service with metering behavior.
     fn layer(&self, service: S) -> Self::Service {
-        MeteredService {
+        MeteredBandwidthService {
             inner: service,
             metered_manager: Arc::clone(&self.metered_manager),
             traffic_reporting_threshold: self.traffic_reporting_threshold,
@@ -139,7 +139,7 @@ where
 /// Each call creates hooks via [`MeteredManager::build_hooks`] and returns a
 /// [`MeteredFuture`] that wraps the eventual response body with [`MeteredBody`].
 #[derive(Debug, Clone)]
-pub struct MeteredService<S, MM> {
+pub struct MeteredBandwidthService<S, MM> {
     inner: S,
     metered_manager: Arc<MM>,
     traffic_reporting_threshold: ByteSize,
@@ -150,7 +150,7 @@ pub struct MeteredService<S, MM> {
 /// On completion, this future replaces the original response body with a
 /// [`MeteredBody`] that reports emitted byte counts through request-scoped hooks.
 #[pin_project]
-pub struct MeteredFuture<F, B, E, MH> {
+pub struct MeteredBandwidthFuture<F, B, E, MH> {
     #[pin]
     future: F,
     metered_hooks: Option<MH>,
@@ -162,8 +162,8 @@ pub struct MeteredFuture<F, B, E, MH> {
 ///
 /// For each yielded data frame, the wrapper calls [`MeteredHooks::on_emit_bytes`]
 /// with the number of remaining bytes in the frame payload.
-#[pin_project]
-pub struct MeteredBody<B, MH> {
+#[pin_project(PinnedDrop)]
+pub struct MeteredBandwidthBody<B, MH: MeteredBandwidthHooks> {
     #[pin]
     inner: B,
     metered_hooks: MH,
@@ -171,10 +171,25 @@ pub struct MeteredBody<B, MH> {
     cumulative_bytes: u64,
 }
 
-impl<B, MH> HttpBody for MeteredBody<B, MH>
+#[pinned_drop]
+impl<B, MH> PinnedDrop for MeteredBandwidthBody<B, MH>
+where
+    MH: MeteredBandwidthHooks,
+{
+    fn drop(self: Pin<&mut Self>) {
+        // This Drop impl is required to satisfy the !Unpin requirement of the
+        // pin projection in [`MeteredBandwidthBody`], but it should never actually be called
+        // since [`MeteredBandwidthBody`] is always pinned behind a future and service wrapper.
+        let this = self.project();
+        this.metered_hooks
+            .on_emit_bytes(*this.cumulative_bytes, Instant::now(), SystemTime::now());
+    }
+}
+
+impl<B, MH> HttpBody for MeteredBandwidthBody<B, MH>
 where
     B: HttpBody,
-    MH: MeteredHooks,
+    MH: MeteredBandwidthHooks,
 {
     type Data = B::Data;
     type Error = B::Error;
@@ -190,8 +205,11 @@ where
                 if let Some(data) = frame.data_ref() {
                     *this.cumulative_bytes += data.remaining() as u64;
                     if *this.cumulative_bytes >= this.traffic_reporting_threshold.as_u64() {
-                        this.metered_hooks
-                            .on_emit_bytes(*this.cumulative_bytes, Instant::now());
+                        this.metered_hooks.on_emit_bytes(
+                            *this.cumulative_bytes,
+                            Instant::now(),
+                            SystemTime::now(),
+                        );
                         *this.cumulative_bytes = 0;
                     }
                 }
@@ -213,14 +231,14 @@ where
     }
 }
 
-impl<F, B, E, MH> Future for MeteredFuture<F, B, E, MH>
+impl<F, B, E, MH> Future for MeteredBandwidthFuture<F, B, E, MH>
 where
     F: Future<Output = Result<Response<B>, E>>,
     B: HttpBody + Send + 'static,
     B::Error: Into<StdError>,
-    MH: MeteredHooks,
+    MH: MeteredBandwidthHooks,
 {
-    type Output = Result<Response<MeteredBody<B, MH>>, E>;
+    type Output = Result<Response<MeteredBandwidthBody<B, MH>>, E>;
 
     /// Polls the inner future and wraps successful response bodies.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -230,7 +248,7 @@ where
             Ok(response) => {
                 let (parts, body) = response.into_parts();
                 // increment_active_metered_bodies_for_subscriber_and_path(&subscriber_id, &uri_path);
-                let metered_body = MeteredBody {
+                let metered_body = MeteredBandwidthBody {
                     inner: body,
                     metered_hooks: this.metered_hooks.take().expect("poll after completed"),
                     traffic_reporting_threshold: *this.traffic_reporting_threshold,
@@ -243,17 +261,17 @@ where
     }
 }
 
-impl<S, ReqBody, ResBody, MM> Service<Request<ReqBody>> for MeteredService<S, MM>
+impl<S, ReqBody, ResBody, MM> Service<Request<ReqBody>> for MeteredBandwidthService<S, MM>
 where
     S: Service<Request<ReqBody>, Response = Response<ResBody>>,
     S::Future: Send + 'static,
     ResBody: HttpBody + Send + 'static,
     ResBody::Error: Into<StdError>,
-    MM: MeteredManager + Send + Sync + 'static,
+    MM: MeteredBandwidthManager + Send + Sync + 'static,
 {
-    type Response = Response<MeteredBody<ResBody, MM::Hooks>>;
+    type Response = Response<MeteredBandwidthBody<ResBody, MM::Hooks>>;
     type Error = S::Error;
-    type Future = MeteredFuture<S::Future, ResBody, S::Error, MM::Hooks>;
+    type Future = MeteredBandwidthFuture<S::Future, ResBody, S::Error, MM::Hooks>;
 
     /// Delegates readiness to the wrapped inner service.
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -269,7 +287,7 @@ where
             .metered_manager
             .build_hooks(request.headers(), request.uri().path());
         let future = self.inner.call(request);
-        MeteredFuture {
+        MeteredBandwidthFuture {
             future,
             metered_hooks: Some(hooks),
             traffic_reporting_threshold: self.traffic_reporting_threshold,
@@ -301,8 +319,8 @@ mod tests {
         total_bytes: Arc<AtomicU64>,
     }
 
-    impl MeteredHooks for TestHooks {
-        fn on_emit_bytes(&self, byte_count: u64, _now: Instant) {
+    impl MeteredBandwidthHooks for TestHooks {
+        fn on_emit_bytes(&mut self, byte_count: u64, _now: Instant, _system_now: SystemTime) {
             self.total_bytes.fetch_add(byte_count, Ordering::Relaxed);
         }
     }
@@ -313,7 +331,7 @@ mod tests {
         last_path: Arc<Mutex<Option<String>>>,
     }
 
-    impl MeteredManager for TestManager {
+    impl MeteredBandwidthManager for TestManager {
         type Hooks = TestHooks;
 
         fn build_hooks(&self, _header_map: &HeaderMap, uri_path: &str) -> Self::Hooks {
@@ -350,7 +368,7 @@ mod tests {
             total_bytes: Arc::clone(&total_bytes),
         };
 
-        let mut body = MeteredBody {
+        let mut body = MeteredBandwidthBody {
             inner: Full::new(Bytes::from_static(b"hello")),
             metered_hooks: hooks,
             traffic_reporting_threshold: ByteSize::b(0),
@@ -382,7 +400,7 @@ mod tests {
         let future = std::future::ready(Ok::<Response<BoxBody<Bytes, std::io::Error>>, ()>(
             Response::new(make_body(b"abc")),
         ));
-        let metered_future = MeteredFuture {
+        let metered_future = MeteredBandwidthFuture {
             future,
             metered_hooks: Some(hooks),
             traffic_reporting_threshold: ByteSize::b(0),
@@ -418,7 +436,7 @@ mod tests {
         let inner = TestInnerService {
             body_data: b"world!",
         };
-        let mut service = MeteredService {
+        let mut service = MeteredBandwidthService {
             inner,
             metered_manager: Arc::new(manager),
             traffic_reporting_threshold: ByteSize::b(0),
@@ -491,7 +509,7 @@ mod tests {
         let inner = TestInnerService {
             body_data: b"fanout",
         };
-        let mut service = MeteredService {
+        let mut service = MeteredBandwidthService {
             inner,
             metered_manager: Arc::new(composed_manager),
             traffic_reporting_threshold: ByteSize::b(0),

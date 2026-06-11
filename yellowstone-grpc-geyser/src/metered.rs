@@ -4,7 +4,7 @@ use {
         collections::HashMap,
         sync::{LazyLock, Mutex},
     },
-    triton_grpc_tools::server::tonic::metered::{MeteredHooks, MeteredManager},
+    triton_grpc_tools::server::tonic::metered::{MeteredBandwidthHooks, MeteredBandwidthManager},
 };
 
 pub const X_SUBSCRIPTION_ID_HEADER: &str = "x-subscription-id";
@@ -62,8 +62,13 @@ impl Drop for PrometheusMeteredHooks {
     }
 }
 
-impl MeteredHooks for PrometheusMeteredHooks {
-    fn on_emit_bytes(&self, byte_count: u64, _now: std::time::Instant) {
+impl MeteredBandwidthHooks for PrometheusMeteredHooks {
+    fn on_emit_bytes(
+        &mut self,
+        byte_count: u64,
+        _now: std::time::Instant,
+        _system_now: std::time::SystemTime,
+    ) {
         metrics::add_grpc_service_outbound_bytes(&self.subscriber_id, &self.uri_path, byte_count);
     }
 }
@@ -71,7 +76,7 @@ impl MeteredHooks for PrometheusMeteredHooks {
 #[derive(Clone, Debug)]
 pub struct PrometheusMeteredManager;
 
-impl MeteredManager for PrometheusMeteredManager {
+impl MeteredBandwidthManager for PrometheusMeteredManager {
     type Hooks = PrometheusMeteredHooks;
 
     fn build_hooks(&self, header_map: &http::HeaderMap, uri_path: &str) -> Self::Hooks {
