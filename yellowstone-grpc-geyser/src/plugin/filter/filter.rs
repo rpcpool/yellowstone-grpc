@@ -44,6 +44,7 @@ use {
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
             SubscribeRequestFilterTransactions,
         },
+        solana::storage::confirmed_block,
     },
 };
 
@@ -729,10 +730,6 @@ struct FilterTransactionsInner {
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
     account_required: HashSet<Pubkey>,
-    // Read by `FilterTransactions::get_updates` in the follow-up commit
-    // that wires the matching logic; tolerated here so the failing-tests
-    // commit compiles cleanly.
-    #[allow(dead_code)]
     token_accounts: TokenAccountsMode,
 }
 
@@ -833,31 +830,30 @@ impl FilterTransactions {
                     }
                 }
 
+                // Effective account set used by include/exclude/required.
+                // When token_accounts mode is set, owners of pre/post token
+                // balances are included alongside the real account keys.
+                // Built fresh per (filter, tx); see TokenAccountsMode docs.
+                let token_owners = collect_token_account_owners(
+                    inner.token_accounts,
+                    &message.transaction.meta,
+                );
+                let in_effective_set = |pubkey: &Pubkey| -> bool {
+                    message.transaction.account_keys.contains(pubkey)
+                        || token_owners.contains(pubkey)
+                };
+
                 if !inner.account_include.is_empty()
-                    && inner
-                        .account_include
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_none()
+                    && !inner.account_include.iter().any(in_effective_set)
                 {
                     return None;
                 }
 
-                if !inner.account_exclude.is_empty()
-                    && inner
-                        .account_exclude
-                        .intersection(&message.transaction.account_keys)
-                        .next()
-                        .is_some()
-                {
+                if inner.account_exclude.iter().any(in_effective_set) {
                     return None;
                 }
 
-                if !inner.account_required.is_empty()
-                    && !inner
-                        .account_required
-                        .is_subset(&message.transaction.account_keys)
-                {
+                if !inner.account_required.iter().all(in_effective_set) {
                     return None;
                 }
 
@@ -875,6 +871,84 @@ impl FilterTransactions {
             },
             message.created_at
         )
+    }
+}
+
+/// Build the set of token-balance owners that should expand the effective
+/// account set for this (filter, tx) pair, given the requested mode.
+///
+/// Returns the empty set when `mode == None` (the common case; no scan).
+///
+/// For `All`, every parseable owner in pre OR post is included.
+///
+/// For `BalanceChanged`, an owner is included when any of its token
+/// balances changed in amount (compared by `account_index` between pre and
+/// post) or the account was closed (present in pre but missing in post).
+///
+/// This is recomputed per filter per tx. Caching is intentionally avoided
+/// here for simplicity — see the originating PR discussion.
+fn collect_token_account_owners(
+    mode: TokenAccountsMode,
+    meta: &confirmed_block::TransactionStatusMeta,
+) -> HashSet<Pubkey> {
+    match mode {
+        TokenAccountsMode::None => HashSet::new(),
+        TokenAccountsMode::All => {
+            let mut owners = HashSet::new();
+            for bal in meta
+                .pre_token_balances
+                .iter()
+                .chain(meta.post_token_balances.iter())
+            {
+                if let Ok(pubkey) = bal.owner.parse::<Pubkey>() {
+                    owners.insert(pubkey);
+                }
+            }
+            owners
+        }
+        TokenAccountsMode::BalanceChanged => {
+            // Index pre by account_index: (owner pubkey, amount string ref).
+            let mut pre_by_index: HashMap<u32, (Pubkey, &str)> = HashMap::new();
+            for bal in &meta.pre_token_balances {
+                if let Ok(pubkey) = bal.owner.parse::<Pubkey>() {
+                    let amount = bal
+                        .ui_token_amount
+                        .as_ref()
+                        .map(|a| a.amount.as_str())
+                        .unwrap_or("");
+                    pre_by_index.insert(bal.account_index, (pubkey, amount));
+                }
+            }
+
+            let mut changed: HashSet<Pubkey> = HashSet::new();
+            let mut seen_in_post: HashSet<u32> = HashSet::new();
+            for bal in &meta.post_token_balances {
+                let Ok(pubkey) = bal.owner.parse::<Pubkey>() else {
+                    continue;
+                };
+                seen_in_post.insert(bal.account_index);
+                let post_amount = bal
+                    .ui_token_amount
+                    .as_ref()
+                    .map(|a| a.amount.as_str())
+                    .unwrap_or("");
+                let amount_differs = match pre_by_index.get(&bal.account_index) {
+                    Some((_, pre_amount)) => *pre_amount != post_amount,
+                    None => true, // new account
+                };
+                if amount_differs {
+                    changed.insert(pubkey);
+                }
+            }
+
+            // Closed accounts: present in pre, absent in post.
+            for (index, (pubkey, _)) in &pre_by_index {
+                if !seen_in_post.contains(index) {
+                    changed.insert(*pubkey);
+                }
+            }
+            changed
+        }
     }
 }
 
