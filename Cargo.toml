@@ -101,7 +101,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.2-triton-ext.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.2+solana.4.0.0.triton.1" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.4.0", default-features = false }
 
 [workspace.lints.clippy]
