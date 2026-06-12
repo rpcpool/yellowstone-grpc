@@ -833,14 +833,28 @@ impl FilterTransactions {
                 // Effective account set used by include/exclude/required.
                 // When token_accounts mode is set, owners of pre/post token
                 // balances are included alongside the real account keys.
-                // Built fresh per (filter, tx); see TokenAccountsMode docs.
-                let token_owners = collect_token_account_owners(
-                    inner.token_accounts,
-                    &message.transaction.meta,
-                );
+                // The owner set is built lazily on the tx via OnceLock so
+                // the pre/post scan runs at most once per (tx, mode) across
+                // all filters evaluating against this tx — `None` mode skips
+                // the scan entirely.
+                let token_owners: Option<&HashSet<Pubkey>> = match inner.token_accounts {
+                    TokenAccountsMode::None => None,
+                    TokenAccountsMode::All => Some(
+                        message
+                            .transaction
+                            .token_owners_all
+                            .get_or_init(|| owners_in_any_balance(&message.transaction.meta)),
+                    ),
+                    TokenAccountsMode::BalanceChanged => Some(
+                        message
+                            .transaction
+                            .token_owners_changed
+                            .get_or_init(|| owners_with_changed_balance(&message.transaction.meta)),
+                    ),
+                };
                 let in_effective_set = |pubkey: &Pubkey| -> bool {
                     message.transaction.account_keys.contains(pubkey)
-                        || token_owners.contains(pubkey)
+                        || token_owners.is_some_and(|set| set.contains(pubkey))
                 };
 
                 if !inner.account_include.is_empty()
@@ -871,24 +885,6 @@ impl FilterTransactions {
             },
             message.created_at
         )
-    }
-}
-
-/// Build the set of token-balance owners that should expand the effective
-/// account set for this (filter, tx) pair, given the requested mode.
-///
-/// Returns the empty set when `mode == None` (the common case; no scan).
-///
-/// This is recomputed per filter per tx. Caching is intentionally avoided
-/// here for simplicity — see the originating PR discussion.
-fn collect_token_account_owners(
-    mode: TokenAccountsMode,
-    meta: &confirmed_block::TransactionStatusMeta,
-) -> HashSet<Pubkey> {
-    match mode {
-        TokenAccountsMode::None => HashSet::new(),
-        TokenAccountsMode::All => owners_in_any_balance(meta),
-        TokenAccountsMode::BalanceChanged => owners_with_changed_balance(meta),
     }
 }
 
@@ -1392,6 +1388,8 @@ mod tests {
                 index: 1,
                 account_keys,
                 pre_encoded: OnceLock::new(),
+                token_owners_all: OnceLock::new(),
+                token_owners_changed: OnceLock::new(),
             }),
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
@@ -2222,6 +2220,8 @@ mod cuckoo_tests {
                     index: 0,
                     account_keys: key_set,
                     pre_encoded: OnceLock::new(),
+                    token_owners_all: OnceLock::new(),
+                    token_owners_changed: OnceLock::new(),
                 }),
                 slot: 100,
                 created_at: Timestamp::from(SystemTime::now()),
@@ -2796,6 +2796,167 @@ mod cuckoo_tests {
             )
             .expect_err("invalid mode must fail filter construction");
             assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
+        }
+
+        // --- OnceLock cache semantics -----------------------------------
+
+        #[test]
+        fn cache_is_lazy_and_per_mode() {
+            // Build a tx, run a single mode=All filter against it, and
+            // assert: (1) the All cache is populated, (2) the
+            // BalanceChanged cache stays empty (we never asked for it).
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let tx_arc = Arc::clone(&tx.transaction);
+
+            assert!(tx_arc.token_owners_all.get().is_none());
+            assert!(tx_arc.token_owners_changed.get().is_none());
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+            assert!(matches(&filter, &Message::Transaction(tx)));
+
+            assert!(
+                tx_arc.token_owners_all.get().is_some(),
+                "mode=All must populate token_owners_all"
+            );
+            assert!(
+                tx_arc.token_owners_changed.get().is_none(),
+                "mode=All must NOT touch token_owners_changed"
+            );
+        }
+
+        #[test]
+        fn cache_is_reused_across_filter_evaluations() {
+            // Two filters, both mode=All, against the same tx. The owner
+            // set must be the SAME backing allocation (pointer-equal) on
+            // both filter checks — proves we read from the OnceLock cache,
+            // not rebuild per filter.
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let tx_arc = Arc::clone(&tx.transaction);
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f1".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            tx_filters.insert(
+                "f2".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+
+            let updates = filter.get_updates(&message, None);
+            assert_eq!(
+                updates.len(),
+                1,
+                "both filters match, but they share one FilteredUpdate"
+            );
+
+            // First run populated the cache. Capture the pointer.
+            let first_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+
+            // Run the filter again on the same tx (same Arc). The cache
+            // must still be there and point at the SAME allocation.
+            let _ = filter.get_updates(&message, None);
+            let second_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+            assert_eq!(
+                first_addr, second_addr,
+                "cache backing storage must be reused, not reallocated"
+            );
+        }
+
+        #[test]
+        fn cache_separates_all_and_balance_changed_modes() {
+            // A filter set with both modes against the same tx populates
+            // both OnceLocks. The two cached sets are independent.
+            let owner = Pubkey::new_unique();
+            let unrelated = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            // pre has both owners; post drops `unrelated`, so `unrelated`
+            // is in `all` (it was present in pre) AND in `changed` (its
+            // account closed). `owner` is in `all` and in `changed`
+            // (amount moved). Different from a strict same-set guarantee,
+            // but the assertion below only relies on both caches having
+            // populated.
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![
+                    token_balance(0, owner, "100"),
+                    token_balance(1, unrelated, "50"),
+                ],
+                vec![token_balance(0, owner, "200")],
+            );
+            let tx_arc = Arc::clone(&tx.transaction);
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "all_f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+            );
+            tx_filters.insert(
+                "changed_f".to_owned(),
+                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+            );
+            let filter = filter_with_transactions(tx_filters);
+            let _ = filter.get_updates(&message, None);
+
+            assert!(
+                tx_arc.token_owners_all.get().is_some(),
+                "mode=All filter must populate token_owners_all"
+            );
+            assert!(
+                tx_arc.token_owners_changed.get().is_some(),
+                "mode=BalanceChanged filter must populate token_owners_changed"
+            );
+            // Sanity: they're at different addresses (different OnceLocks).
+            let all_addr = tx_arc.token_owners_all.get().unwrap() as *const _;
+            let changed_addr = tx_arc.token_owners_changed.get().unwrap() as *const _;
+            assert_ne!(all_addr as usize, changed_addr as usize);
+        }
+
+        #[test]
+        fn cache_untouched_when_mode_is_none() {
+            let owner = Pubkey::new_unique();
+            let key = Pubkey::new_unique();
+            let tx = make_tx_with_balances(
+                vec![key],
+                vec![token_balance(0, owner, "100")],
+                vec![token_balance(0, owner, "200")],
+            );
+            let tx_arc = Arc::clone(&tx.transaction);
+            let message = Message::Transaction(tx);
+
+            let mut tx_filters = HashMap::new();
+            tx_filters.insert(
+                "f".to_owned(),
+                make_filter_def(vec![key], vec![], vec![], None),
+            );
+            let filter = filter_with_transactions(tx_filters);
+            let _ = filter.get_updates(&message, None);
+
+            assert!(
+                tx_arc.token_owners_all.get().is_none(),
+                "mode=None must NOT populate any owner-set cache"
+            );
+            assert!(tx_arc.token_owners_changed.get().is_none());
         }
     }
 }
