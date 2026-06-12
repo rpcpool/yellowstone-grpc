@@ -1080,6 +1080,8 @@ async fn geyser_subscribe_deshred(
     let pb_multi = MultiProgress::new();
     let mut pb_txs_c = 0;
     let pb_txs = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("deshred transactions"))?;
+    let mut pb_slot_c = 0;
+    let pb_slot = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("deshred slots"))?;
     let mut pb_pp_c = 0;
     let pb_pp = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("ping/pong"))?;
     let mut pb_total_c = 0;
@@ -1098,7 +1100,7 @@ async fn geyser_subscribe_deshred(
                         Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
-                        Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_pp_c, &pb_pp),
+                        Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_slot_c, &pb_slot),
                         None => {
                             pb_multi.println("update not found in the deshred message")?;
                             break;
