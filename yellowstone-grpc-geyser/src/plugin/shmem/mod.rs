@@ -1,4 +1,3 @@
-pub mod codec;
 pub mod decoder;
 
 use std::path::Path;
@@ -10,21 +9,10 @@ use tokio::sync::mpsc;
 use yellowstone_shmem_client::client::ShmemClient;
 use yellowstone_shmem_client::ClientError;
 use yellowstone_shmem_common::GeyserMessage;
-use yellowstone_shmem_plugin::plugin::YellowstoneShmemPlugin;
 
 use crate::metrics;
 use crate::plugin::message::Message;
-
-use self::codec::ProstGeyserCodec;
 use self::decoder::ProstShmemDecoder;
-
-/// Creates the shmem geyser plugin with the prost codec injected.
-///
-/// Called from `_create_plugin` — this is the only place in the
-/// codebase that couples the plugin to a concrete codec.
-pub fn create_plugin() -> YellowstoneShmemPlugin<ProstGeyserCodec> {
-    YellowstoneShmemPlugin::new(ProstGeyserCodec)
-}
 
 /// Spawns a task that polls the shmem ring and forwards decoded
 /// [`Message`]s to `messages_tx` — the same channel `geyser_loop`
@@ -42,7 +30,15 @@ pub async fn run_shmem_reader(
         client.wait_for_data();
         loop {
             match client.try_recv() {
-                None => break,
+                None => {
+                    let wh = client.writer_head();
+                    let tail = client.tail();
+                    if wh != tail {
+                        std::hint::spin_loop();
+                        continue;
+                    }
+                    break;
+                }
                 Some(Ok(msg)) => {
                     let plugin_ts_ns = match &msg {
                         GeyserMessage::Account(a) => a.plugin_ts_ns,
