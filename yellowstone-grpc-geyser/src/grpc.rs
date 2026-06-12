@@ -287,7 +287,7 @@ type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 /// Messages broadcast on the deshred channel. Deshred is a pre-execution
 /// stream and has no commitment level: each message is emitted exactly
 /// once, when first received from the geyser plugin.
-type DeshredBroadcastedMessage = Arc<Vec<Message>>;
+type DeshredBroadcastedMessage = Message;
 
 enum ReplayedResponse {
     Messages(Vec<Message>),
@@ -530,6 +530,7 @@ impl GrpcService {
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
+        broadcast::Sender<DeshredBroadcastedMessage>,
     )> {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
@@ -692,13 +693,7 @@ impl GrpcService {
         }
 
         task_tracker.spawn(async move {
-            Self::geyser_loop(
-                messages_rx,
-                broadcast_tx,
-                block_reconstruction_tx,
-                deshred_broadcast_tx,
-            )
-            .await;
+            Self::geyser_loop(messages_rx, broadcast_tx, block_reconstruction_tx).await;
         });
 
         // Health check service
@@ -744,7 +739,7 @@ impl GrpcService {
             });
         }
 
-        Ok((snapshot_tx, messages_tx))
+        Ok((snapshot_tx, messages_tx, deshred_broadcast_tx))
     }
 
     /// Core message routing loop that reconstructs Solana blocks from raw Geyser plugin events
@@ -818,7 +813,6 @@ impl GrpcService {
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         block_reconstruction_tx: mpsc::UnboundedSender<Message>,
-        deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
@@ -828,10 +822,6 @@ impl GrpcService {
         let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
 
         let mut blockmeta_detected: SmallVec<[Message; 4]> = SmallVec::new();
-        /* In the future, DeshredTransactions should not be received here at all. They are just forwarded to the deshred broadcast channel.
-         * Making a hop here is completely unnecessary
-         */
-        let mut deshred_transaction = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
         loop {
             tokio::select! {
@@ -840,6 +830,7 @@ impl GrpcService {
                         info!("Geyser loop: messages channel closed");
                         break;
                     };
+
                     metrics::message_queue_size_dec();
 
                     if matches!(&message, Message::BlockMeta(_)) {
@@ -869,8 +860,6 @@ impl GrpcService {
                         match message {
                             Message::Slot(slot_message) => {
                                 metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
-                                // Deshred transaction subscribers are interested in all slot status updates, as they need to track slot lifecycle.
-                                deshred_transaction.push(Message::Slot(slot_message.clone()));
                                 // Only match on slot lifecycle update not commitment update, as
                                 // we must go through the block machine to make sure users sees block content before any commitment update.
                                 if matches!(slot_message.status,
@@ -892,20 +881,10 @@ impl GrpcService {
                         }
                     }
 
-                    /* In the future, DeshredTransactions should not be received here at all. They are just forwarded to the deshred broadcast channel.
-                     * In such a case, we wouldn't need to check the length of processed_messages here.
-                     */
-                    if !processed_messages.is_empty() {
-                        encode_messages(&processed_messages);
-                        GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
-
-                    if !deshred_transaction.is_empty() {
-                        let _ = deshred_broadcast_tx.send(Arc::new(deshred_transaction));
-                        deshred_transaction = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
+                    encode_messages(&processed_messages);
+                    GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
+                    let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
+                    processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
                     if !confirmed_messages.is_empty() {
                         let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(confirmed_messages)));
@@ -1494,41 +1473,41 @@ impl GrpcService {
                     }
                 }
                 message = messages_rx.recv() => {
-                    let messages = match message {
-                        Ok(messages) => messages,
+                    let message = match message {
+                        Ok(message) => message,
                         Err(broadcast::error::RecvError::Closed) => {
                             session.disconnect_reason = "broadcast_closed";
                             break 'outer;
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            info!("deshred client #{id}: lagged to receive geyser messages");
+                            info!("deshred client #{id}: lagged to receive deshred messages");
                             session.disconnect_reason = "client_broadcast_lag";
                             task_tracker.spawn(async move {
-                                let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
+                                let _ = stream_tx.send(Err(Status::internal("lagged to receive deshred messages"))).await;
                             });
                             break 'outer;
                         }
                     };
 
-                    for message in messages.iter() {
-                        for update in session.filter.get_updates(message, None) {
-                            match stream_tx.try_send(Ok(update)) {
-                                Ok(()) => {
-                                    metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                }
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    error!("deshred client #{id}: lagged to send an update");
-                                    session.disconnect_reason = "client_channel_full";
-                                    task_tracker.spawn(async move {
-                                        let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                    });
-                                    break 'outer;
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    error!("deshred client #{id}: stream closed");
-                                    session.disconnect_reason = "client_closed";
-                                    break 'outer;
-                                }
+                    metrics::deshred_queue_size_dec();
+
+                    for update in session.filter.get_updates(&message, None) {
+                        match stream_tx.try_send(Ok(update)) {
+                            Ok(()) => {
+                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                            }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                error!("deshred client #{id}: lagged to send an update");
+                                session.disconnect_reason = "client_channel_full";
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                });
+                                break 'outer;
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                error!("deshred client #{id}: stream closed");
+                                session.disconnect_reason = "client_closed";
+                                break 'outer;
                             }
                         }
                     }
@@ -2140,7 +2119,9 @@ mod tests {
 
         struct Harness {
             messages_tx: mpsc::UnboundedSender<Message>,
+            #[allow(dead_code)]
             broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
+            deshred_tx: broadcast::Sender<DeshredBroadcastedMessage>,
             deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
             handle: tokio::task::JoinHandle<()>,
             handle_reconstruction: tokio::task::JoinHandle<()>,
@@ -2157,7 +2138,6 @@ mod tests {
                     messages_rx,
                     broadcast_tx,
                     block_reconstruction_tx,
-                    deshred_tx,
                 ))
             };
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
@@ -2171,33 +2151,20 @@ mod tests {
             Harness {
                 messages_tx,
                 broadcast_rx,
+                deshred_tx,
                 deshred_rx,
                 handle,
                 handle_reconstruction,
             }
         }
 
-        async fn drain_main(
-            rx: &mut broadcast::Receiver<BroadcastedMessage>,
-        ) -> Vec<(CommitmentLevel, Vec<Message>)> {
-            // The processed-messages flush is driven by a 10ms sleep timer;
-            // wait long enough that any pending batch has been emitted.
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let mut out = Vec::new();
-            while let Ok((commitment, batch)) = rx.try_recv() {
-                let msgs = batch.iter().cloned().collect();
-                out.push((commitment, msgs));
-            }
-            out
-        }
-
         async fn drain_deshred(
             rx: &mut broadcast::Receiver<DeshredBroadcastedMessage>,
-        ) -> Vec<Vec<Message>> {
+        ) -> Vec<Message> {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let mut out = Vec::new();
             while let Ok(batch) = rx.try_recv() {
-                out.push(batch.iter().cloned().collect());
+                out.push(batch);
             }
             out
         }
@@ -2245,64 +2212,16 @@ mod tests {
             })
         }
 
-        fn count_deshred(messages: &[Message]) -> usize {
-            messages
-                .iter()
-                .filter(|m| matches!(m, Message::DeshredTransaction(_)))
-                .count()
-        }
-
-        fn count_slot(messages: &[Message]) -> usize {
-            messages
-                .iter()
-                .filter(|m| matches!(m, Message::Slot(_)))
-                .count()
-        }
-
         #[tokio::test]
         async fn deshred_emitted_once_on_deshred_channel() {
             let mut harness = spawn_loop();
-            harness.messages_tx.send(make_deshred(100, 1)).unwrap();
+            harness.deshred_tx.send(make_deshred(100, 1)).unwrap();
 
             let batches = drain_deshred(&mut harness.deshred_rx).await;
-            let total: usize = batches.iter().map(|b| count_deshred(b)).sum();
+            let total: usize = batches.len();
             assert_eq!(total, 1, "deshred should be emitted exactly once");
 
-            drop(harness.messages_tx);
-            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
-            let _ =
-                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
-        }
-
-        #[tokio::test]
-        async fn deshred_never_appears_on_main_channel() {
-            let mut harness = spawn_loop();
-            harness.messages_tx.send(make_deshred(100, 1)).unwrap();
-            // Drive Slot through Confirmed and Finalized so the main channel
-            // would historically replay any DeshredTransaction we'd stored.
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Processed, Some(99)))
-                .unwrap();
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Confirmed, None))
-                .unwrap();
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Finalized, None))
-                .unwrap();
-
-            let main_batches = drain_main(&mut harness.broadcast_rx).await;
-            for (commitment, batch) in &main_batches {
-                assert_eq!(
-                    count_deshred(batch),
-                    0,
-                    "main channel must never carry DeshredTransaction (commitment={commitment:?})"
-                );
-            }
-
-            drop(harness.messages_tx);
+            drop(harness.deshred_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
             let _ =
                 tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
@@ -2311,6 +2230,18 @@ mod tests {
         #[tokio::test]
         async fn slot_emitted_once_on_deshred_channel() {
             let mut harness = spawn_loop();
+            harness
+                .deshred_tx
+                .send(make_slot(100, SlotStatus::Processed, Some(99)))
+                .unwrap();
+            harness
+                .deshred_tx
+                .send(make_slot(100, SlotStatus::Confirmed, None))
+                .unwrap();
+            harness
+                .deshred_tx
+                .send(make_slot(100, SlotStatus::Finalized, None))
+                .unwrap();
             harness
                 .messages_tx
                 .send(make_slot(100, SlotStatus::Processed, Some(99)))
@@ -2325,7 +2256,7 @@ mod tests {
                 .unwrap();
 
             let deshred_batches = drain_deshred(&mut harness.deshred_rx).await;
-            let total: usize = deshred_batches.iter().map(|b| count_slot(b)).sum();
+            let total: usize = deshred_batches.len();
             assert_eq!(
                 total, 3,
                 "deshred channel should see each Slot status once (3 statuses sent => 3 emissions)"

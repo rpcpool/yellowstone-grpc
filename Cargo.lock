@@ -5796,11 +5796,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-<<<<<<< HEAD
-version = "13.2.5"
-=======
-version = "13.2.4-triton-ext"
->>>>>>> 98628339 (feat(grpc): add deshred transaction support)
+version = "13.2.5-triton-ext"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
