@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.2.2"
+version = "13.0.0-triton-ext"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -16,12 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
-[[bin]]
-name = "yellowstone-grpc-geyser"
-
 [dependencies]
-tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
-
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
@@ -47,7 +42,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tower-layer = { workspace = true }
@@ -63,7 +58,6 @@ solana-logger = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-clock = { workspace = true }
-solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
@@ -83,9 +77,6 @@ prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
-yellowstone-shmem-plugin = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-plugin" }
-yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
-yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
@@ -95,10 +86,6 @@ affinity = { workspace = true }
 name = "encode"
 harness = false
 required-features = ["bench"]
-
-[[bench]]
-name = "codec"
-harness = false
 
 [features]
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
@@ -121,7 +108,6 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
-yellowstone-conduit = { path = "../../yellowstone-conduit" }
 
 [lints]
 workspace = true

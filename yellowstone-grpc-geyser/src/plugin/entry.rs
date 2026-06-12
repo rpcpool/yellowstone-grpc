@@ -9,7 +9,6 @@ use {
                 Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
                 MessageSlot, MessageTransaction,
             },
-            shmem::codec::ProstGeyserCodec,
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -31,7 +30,6 @@ use {
         sync::mpsc,
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
-    yellowstone_shmem_plugin::YellowstoneShmemPlugin,
 };
 
 #[derive(Debug)]
@@ -56,7 +54,6 @@ impl PluginInner {
 #[derive(Debug, Default)]
 pub struct Plugin {
     inner: Option<PluginInner>,
-    shmem_plugin: Option<YellowstoneShmemPlugin<ProstGeyserCodec>>,
 }
 
 impl Plugin {
@@ -115,9 +112,6 @@ impl GeyserPlugin for Plugin {
             .enable_all()
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-
-        let encoder_threads = config.grpc.encoder_threads;
-        let (encoder, encoder_handle) = ParallelEncoder::new(encoder_threads);
 
         let result = runtime.block_on(async move {
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
@@ -191,9 +185,6 @@ impl GeyserPlugin for Plugin {
         slot: u64,
         is_startup: bool,
     ) -> PluginResult<()> {
-        if let Some(shmem) = &self.shmem_plugin {
-            return shmem.update_account(account, slot, is_startup);
-        }
         self.with_inner(|inner| {
             let account = match account {
                 ReplicaAccountInfoVersions::V0_0_1(_info) => {
@@ -251,9 +242,6 @@ impl GeyserPlugin for Plugin {
         parent: Option<u64>,
         status: &SlotStatus,
     ) -> PluginResult<()> {
-        if let Some(shmem) = &self.shmem_plugin {
-            return shmem.update_slot_status(slot, parent, status);
-        }
         self.with_inner(|inner| {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
             inner.send_message(message);
@@ -267,9 +255,6 @@ impl GeyserPlugin for Plugin {
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: u64,
     ) -> PluginResult<()> {
-        if let Some(shmem) = &self.shmem_plugin {
-            return shmem.notify_transaction(transaction, slot);
-        }
         self.with_inner(|inner| {
             let transaction = match transaction {
                 ReplicaTransactionInfoVersions::V0_0_1(_info) => {
@@ -289,9 +274,6 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_entry(&self, entry: ReplicaEntryInfoVersions) -> PluginResult<()> {
-        if let Some(shmem) = &self.shmem_plugin {
-            return shmem.notify_entry(entry);
-        }
         self.with_inner(|inner| {
             #[allow(clippy::infallible_destructuring_match)]
             let entry = match entry {
@@ -309,9 +291,6 @@ impl GeyserPlugin for Plugin {
     }
 
     fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
-        if let Some(shmem) = &self.shmem_plugin {
-            return shmem.notify_block_metadata(blockinfo);
-        }
         self.with_inner(|inner| {
             let blockinfo = match blockinfo {
                 ReplicaBlockInfoVersions::V0_0_1(_info) => {
@@ -375,7 +354,7 @@ impl GeyserPlugin for Plugin {
 ///
 /// This function returns the Plugin pointer as trait GeyserPlugin.
 pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin {
-    let plugin = crate::plugin::shmem::create_plugin();
+    let plugin = Plugin::default();
     let plugin: Box<dyn GeyserPlugin> = Box::new(plugin);
     Box::into_raw(plugin)
 }

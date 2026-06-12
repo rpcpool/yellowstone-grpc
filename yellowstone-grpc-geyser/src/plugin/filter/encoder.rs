@@ -134,8 +134,8 @@ impl AccountEncoder {
     }
 }
 
-pub fn encode_messages(messages: &Vec<Message>) {
-    for msg in messages {
+pub fn encode_messages(messages: &Vec<(u64, Message)>) {
+    for (_, msg) in messages {
         match msg {
             Message::Transaction(tx) => {
                 if tx.transaction.pre_encoded.get().is_none() {
