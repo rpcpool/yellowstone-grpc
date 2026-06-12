@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.0.0-triton-ext"
+version = "13.2.2-triton-ext"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -17,6 +17,8 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [dependencies]
+tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
+
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
@@ -42,7 +44,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "signal"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-stream = { workspace = true }
 tower-layer = { workspace = true }
@@ -58,6 +60,7 @@ solana-logger = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-clock = { workspace = true }
+solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
@@ -77,6 +80,9 @@ prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
+yellowstone-block-machine = { workspace = true, default-features = false }
+yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
+yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
