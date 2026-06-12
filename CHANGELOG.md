@@ -32,6 +32,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - client: auto-reconnect now quarantines replayed slots and compares blockhashes to handle the equivocation problem, preventing silent data loss when reconnecting to a node with different block content for the same slot.
 
+## [Triton Extension Patches]
+
+## 2026-06-10
+
+- 13.2.2-triton-ext.1
+
+### misc
+
+- deshred messages are sent directly to the target broadcast channel, avoiding unnecessary hop on geyser_loop
+
 ## 2026-06-03
 
 - yellowstone-grpc-geyser 13.2.1
