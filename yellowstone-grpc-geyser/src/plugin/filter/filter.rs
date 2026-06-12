@@ -42,7 +42,7 @@ use {
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions,
+            SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
         },
         solana::storage::confirmed_block,
     },
@@ -72,8 +72,8 @@ pub enum FilterError {
     CreateDataSliceOutOfOrder,
     #[error("failed to create filter: data slices overlapped")]
     CreateDataSliceOverlap,
-    #[error("invalid token_accounts mode {0:?}; expected \"none\", \"balanceChanged\", or \"all\"")]
-    InvalidTokenAccountsMode(String),
+    #[error("invalid token_accounts mode value {0}; expected ALL (0) or BALANCE_CHANGED (1)")]
+    InvalidTokenAccountsMode(i32),
 }
 
 pub type FilterResult<T> = Result<T, FilterError>;
@@ -697,13 +697,12 @@ enum FilterTransactionsType {
     TransactionStatus,
 }
 
-/// ATA / token-account expansion mode for a transaction filter. When not
-/// `None`, `account_include` / `account_exclude` / `account_required` also
-/// match against owners of pre/post token balances on each transaction.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// ATA / token-account expansion mode for a transaction filter. When set,
+/// `account_include` / `account_exclude` / `account_required` also match
+/// against owners of pre/post token balances on each transaction. The
+/// proto field is `optional`, so absence (`None`) means no expansion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TokenAccountsMode {
-    #[default]
-    None,
     /// Match an owner if it owns a pre OR post token balance on the tx.
     All,
     /// Match an owner if any of its token balances changed in amount
@@ -712,12 +711,11 @@ enum TokenAccountsMode {
 }
 
 impl TokenAccountsMode {
-    fn parse(value: Option<&String>) -> FilterResult<Self> {
-        match value.map(String::as_str) {
-            None | Some("") | Some("none") => Ok(Self::None),
-            Some("all") => Ok(Self::All),
-            Some("balanceChanged") => Ok(Self::BalanceChanged),
-            Some(other) => Err(FilterError::InvalidTokenAccountsMode(other.to_owned())),
+    fn from_proto(value: i32) -> FilterResult<Self> {
+        match TokenAccountExpansionControlFlag::try_from(value) {
+            Ok(TokenAccountExpansionControlFlag::All) => Ok(Self::All),
+            Ok(TokenAccountExpansionControlFlag::BalanceChanged) => Ok(Self::BalanceChanged),
+            Err(_) => Err(FilterError::InvalidTokenAccountsMode(value)),
         }
     }
 }
@@ -730,7 +728,8 @@ struct FilterTransactionsInner {
     account_include: HashSet<Pubkey>,
     account_exclude: HashSet<Pubkey>,
     account_required: HashSet<Pubkey>,
-    token_accounts: TokenAccountsMode,
+    /// `None` means no ATA expansion (the proto field is absent).
+    token_accounts: Option<TokenAccountsMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -756,7 +755,7 @@ impl FilterTransactions {
                     && filter.account_include.is_empty()
                     && filter.account_exclude.is_empty()
                     && filter.account_required.is_empty()
-                    && filter.token_accounts.as_deref().unwrap_or("none") == "none",
+                    && filter.token_accounts.is_none(),
                 limits.any,
             )?;
             FilterLimits::check_pubkey_max(
@@ -796,7 +795,10 @@ impl FilterTransactions {
                         &filter.account_required,
                         &HashSet::new(),
                     )?,
-                    token_accounts: TokenAccountsMode::parse(filter.token_accounts.as_ref())?,
+                    token_accounts: filter
+                        .token_accounts
+                        .map(TokenAccountsMode::from_proto)
+                        .transpose()?,
                 },
             );
         }
@@ -835,23 +837,19 @@ impl FilterTransactions {
                 // balances are included alongside the real account keys.
                 // The owner set is built lazily on the tx via OnceLock so
                 // the pre/post scan runs at most once per (tx, mode) across
-                // all filters evaluating against this tx — `None` mode skips
-                // the scan entirely.
-                let token_owners: Option<&HashSet<Pubkey>> = match inner.token_accounts {
-                    TokenAccountsMode::None => None,
-                    TokenAccountsMode::All => Some(
-                        message
+                // all filters evaluating against this tx. A `None`
+                // configured mode skips the scan entirely.
+                let token_owners: Option<&HashSet<Pubkey>> =
+                    inner.token_accounts.map(|mode| match mode {
+                        TokenAccountsMode::All => message
                             .transaction
                             .token_owners_all
                             .get_or_init(|| owners_in_any_balance(&message.transaction.meta)),
-                    ),
-                    TokenAccountsMode::BalanceChanged => Some(
-                        message
+                        TokenAccountsMode::BalanceChanged => message
                             .transaction
                             .token_owners_changed
                             .get_or_init(|| owners_with_changed_balance(&message.transaction.meta)),
-                    ),
-                };
+                    });
                 let in_effective_set = |pubkey: &Pubkey| -> bool {
                     message.transaction.account_keys.contains(pubkey)
                         || token_owners.is_some_and(|set| set.contains(pubkey))
@@ -899,9 +897,7 @@ fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> HashS
 
 /// Owners whose token balance changed (compared by `account_index`) between
 /// pre and post, OR whose account was closed (present in pre, missing in post).
-fn owners_with_changed_balance(
-    meta: &confirmed_block::TransactionStatusMeta,
-) -> HashSet<Pubkey> {
+fn owners_with_changed_balance(meta: &confirmed_block::TransactionStatusMeta) -> HashSet<Pubkey> {
     let pre_by_index = index_pre_token_balances(&meta.pre_token_balances);
 
     let mut changed: HashSet<Pubkey> = HashSet::new();
@@ -932,9 +928,7 @@ fn owners_with_changed_balance(
 
 /// Index parseable pre-balances by `account_index`, carrying the owner
 /// pubkey and a borrowed amount string for comparison against post.
-fn index_pre_token_balances(
-    pre: &[confirmed_block::TokenBalance],
-) -> HashMap<u32, (Pubkey, &str)> {
+fn index_pre_token_balances(pre: &[confirmed_block::TokenBalance]) -> HashMap<u32, (Pubkey, &str)> {
     let mut by_index = HashMap::with_capacity(pre.len());
     for bal in pre {
         if let Some(pubkey) = parse_token_balance_owner(bal) {
@@ -2102,41 +2096,37 @@ mod cuckoo_tests {
         // --- mode parsing -----------------------------------------------
 
         #[test]
-        fn mode_parse_accepts_known_values() {
+        fn mode_from_proto_accepts_known_values() {
             assert_eq!(
-                TokenAccountsMode::parse(None).unwrap(),
-                TokenAccountsMode::None
-            );
-            assert_eq!(
-                TokenAccountsMode::parse(Some(&String::new())).unwrap(),
-                TokenAccountsMode::None
-            );
-            assert_eq!(
-                TokenAccountsMode::parse(Some(&"none".to_owned())).unwrap(),
-                TokenAccountsMode::None
-            );
-            assert_eq!(
-                TokenAccountsMode::parse(Some(&"all".to_owned())).unwrap(),
+                TokenAccountsMode::from_proto(super::TokenAccountExpansionControlFlag::All as i32)
+                    .unwrap(),
                 TokenAccountsMode::All
             );
             assert_eq!(
-                TokenAccountsMode::parse(Some(&"balanceChanged".to_owned())).unwrap(),
+                TokenAccountsMode::from_proto(
+                    super::TokenAccountExpansionControlFlag::BalanceChanged as i32
+                )
+                .unwrap(),
                 TokenAccountsMode::BalanceChanged
             );
         }
 
         #[test]
-        fn mode_parse_rejects_unknown_value() {
-            let err = TokenAccountsMode::parse(Some(&"All".to_owned())).unwrap_err();
+        fn mode_from_proto_rejects_unknown_value() {
+            let err = TokenAccountsMode::from_proto(42).unwrap_err();
             assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
 
-            let err = TokenAccountsMode::parse(Some(&"changed".to_owned())).unwrap_err();
+            let err = TokenAccountsMode::from_proto(-1).unwrap_err();
             assert!(matches!(err, FilterError::InvalidTokenAccountsMode(_)));
         }
 
         // --- helpers ----------------------------------------------------
 
-        fn token_balance(account_index: u32, owner: Pubkey, amount: &str) -> confirmed_block::TokenBalance {
+        fn token_balance(
+            account_index: u32,
+            owner: Pubkey,
+            amount: &str,
+        ) -> confirmed_block::TokenBalance {
             confirmed_block::TokenBalance {
                 account_index,
                 mint: Pubkey::new_unique().to_string(),
@@ -2256,25 +2246,19 @@ mod cuckoo_tests {
             account_include: Vec<Pubkey>,
             account_exclude: Vec<Pubkey>,
             account_required: Vec<Pubkey>,
-            mode: Option<&str>,
+            mode: Option<super::TokenAccountExpansionControlFlag>,
         ) -> SubscribeRequestFilterTransactions {
             SubscribeRequestFilterTransactions {
                 vote: None,
                 failed: None,
                 signature: None,
-                account_include: account_include
-                    .into_iter()
-                    .map(|k| k.to_string())
-                    .collect(),
-                account_exclude: account_exclude
-                    .into_iter()
-                    .map(|k| k.to_string())
-                    .collect(),
+                account_include: account_include.into_iter().map(|k| k.to_string()).collect(),
+                account_exclude: account_exclude.into_iter().map(|k| k.to_string()).collect(),
                 account_required: account_required
                     .into_iter()
                     .map(|k| k.to_string())
                     .collect(),
-                token_accounts: mode.map(str::to_owned),
+                token_accounts: mode.map(|m| m as i32),
             }
         }
 
@@ -2341,7 +2325,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2362,7 +2351,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2383,7 +2377,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2405,7 +2404,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2428,7 +2432,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2449,7 +2458,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2470,7 +2484,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2491,7 +2510,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2520,7 +2544,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2544,7 +2573,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![key], vec![owner], vec![], Some("all")),
+                make_filter_def(
+                    vec![key],
+                    vec![owner],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2560,17 +2594,18 @@ mod cuckoo_tests {
             // but is a token-balance owner. With mode=All this must match.
             let owner = Pubkey::new_unique();
             let key = Pubkey::new_unique();
-            let tx = make_tx_with_balances(
-                vec![key],
-                vec![],
-                vec![token_balance(0, owner, "100")],
-            );
+            let tx = make_tx_with_balances(vec![key], vec![], vec![token_balance(0, owner, "100")]);
             let message = Message::Transaction(tx);
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![], vec![], vec![owner], Some("all")),
+                make_filter_def(
+                    vec![],
+                    vec![],
+                    vec![owner],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2594,7 +2629,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![], vec![], vec![owner], Some("balanceChanged")),
+                make_filter_def(
+                    vec![],
+                    vec![],
+                    vec![owner],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2621,7 +2661,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![valid_owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![valid_owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2635,7 +2680,11 @@ mod cuckoo_tests {
             let tx = make_tx_with_balances(vec![key], vec![], vec![]);
             let message = Message::Transaction(tx);
 
-            for mode in [Some("all"), Some("balanceChanged"), None] {
+            for mode in [
+                Some(super::TokenAccountExpansionControlFlag::All),
+                Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                None,
+            ] {
                 let mut tx_filters = HashMap::new();
                 tx_filters.insert(
                     "f".to_owned(),
@@ -2665,7 +2714,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "with_ata".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             tx_filters.insert(
                 "without_ata".to_owned(),
@@ -2691,17 +2745,18 @@ mod cuckoo_tests {
             // FilterTransactions impl, so mode must work there too.
             let owner = Pubkey::new_unique();
             let key = Pubkey::new_unique();
-            let tx = make_tx_with_balances(
-                vec![key],
-                vec![],
-                vec![token_balance(0, owner, "100")],
-            );
+            let tx = make_tx_with_balances(vec![key], vec![], vec![token_balance(0, owner, "100")]);
             let message = Message::Transaction(tx);
 
             let mut tx_status_filters = HashMap::new();
             tx_status_filters.insert(
                 "status".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
 
             let config = SubscribeRequest {
@@ -2742,7 +2797,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
 
             let config = SubscribeRequest {
@@ -2769,11 +2829,20 @@ mod cuckoo_tests {
         }
 
         #[test]
-        fn invalid_mode_string_rejected_at_filter_build() {
+        fn invalid_mode_value_rejected_at_filter_build() {
+            // 99 is not a valid TokenAccountExpansionControlFlag variant.
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![Pubkey::new_unique()], vec![], vec![], Some("bogus")),
+                SubscribeRequestFilterTransactions {
+                    vote: None,
+                    failed: None,
+                    signature: None,
+                    account_include: vec![Pubkey::new_unique().to_string()],
+                    account_exclude: vec![],
+                    account_required: vec![],
+                    token_accounts: Some(99),
+                },
             );
 
             let config = SubscribeRequest {
@@ -2820,7 +2889,12 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
             assert!(matches(&filter, &Message::Transaction(tx)));
@@ -2854,11 +2928,21 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "f1".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             tx_filters.insert(
                 "f2".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
 
@@ -2909,11 +2993,21 @@ mod cuckoo_tests {
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
                 "all_f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("all")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::All),
+                ),
             );
             tx_filters.insert(
                 "changed_f".to_owned(),
-                make_filter_def(vec![owner], vec![], vec![], Some("balanceChanged")),
+                make_filter_def(
+                    vec![owner],
+                    vec![],
+                    vec![],
+                    Some(super::TokenAccountExpansionControlFlag::BalanceChanged),
+                ),
             );
             let filter = filter_with_transactions(tx_filters);
             let _ = filter.get_updates(&message, None);
