@@ -7,9 +7,7 @@ use yellowstone_grpc_geyser::{
     config::Config,
     grpc::GrpcService,
     metrics::PrometheusService,
-    parallel::ParallelEncoder,
 };
-
 
 fn main() -> anyhow::Result<()> {
     let config_path = std::env::args()
@@ -36,9 +34,6 @@ fn main() -> anyhow::Result<()> {
         let cancellation_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
 
-        let encoder_threads = config.grpc.encoder_threads;
-        let (encoder, encoder_handle) = ParallelEncoder::new(encoder_threads);
-
         let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
 
         PrometheusService::spawn(
@@ -55,14 +50,11 @@ fn main() -> anyhow::Result<()> {
             false,
             cancellation_token.child_token(),
             task_tracker.clone(),
-            encoder,
         )
         .await?;
 
-        // Keep messages_tx alive — dropping it closes the channel and exits geyser_loop.
         let _keep_alive = messages_tx;
 
-        // Wait for SIGTERM or SIGINT.
         let cancel = cancellation_token.clone();
         task_tracker.spawn(async move {
             #[cfg(unix)]
@@ -89,10 +81,6 @@ fn main() -> anyhow::Result<()> {
 
         task_tracker.close();
         task_tracker.wait().await;
-
-        if let Err(e) = encoder_handle.join() {
-            log::error!("encoder thread panicked: {:?}", e);
-        }
 
         log::info!("yellowstone-grpc-geyser shutdown complete");
         Ok::<_, anyhow::Error>(())
