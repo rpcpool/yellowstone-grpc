@@ -456,6 +456,8 @@ mod tests {
                 index: 0,
                 account_keys: HashSet::new(),
                 pre_encoded: OnceLock::new(),
+                token_owners_all: OnceLock::new(),
+                token_owners_changed: OnceLock::new(),
             }),
             slot,
             created_at: ts(),

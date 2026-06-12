@@ -280,6 +280,13 @@ pub struct MessageTransactionInfo {
     pub index: usize,
     pub account_keys: HashSet<Pubkey>,
     pub pre_encoded: OnceLock<Vec<u8>>,
+    /// Per-tx cache of token-balance owners under `TokenAccountsMode::All`.
+    /// Lazily built on first read; shared across all filters evaluating
+    /// against this tx so the pre/post scan runs at most once per tx.
+    pub token_owners_all: OnceLock<HashSet<Pubkey>>,
+    /// Per-tx cache of token-balance owners under
+    /// `TokenAccountsMode::BalanceChanged`. Same laziness as above.
+    pub token_owners_changed: OnceLock<HashSet<Pubkey>>,
 }
 
 impl MessageTransactionInfo {
@@ -312,6 +319,8 @@ impl MessageTransactionInfo {
             index: info.index,
             account_keys,
             pre_encoded: OnceLock::new(),
+            token_owners_all: OnceLock::new(),
+            token_owners_changed: OnceLock::new(),
         }
     }
 
@@ -327,6 +336,8 @@ impl MessageTransactionInfo {
             index: msg.index as usize,
             account_keys: HashSet::new(),
             pre_encoded: OnceLock::new(),
+            token_owners_all: OnceLock::new(),
+            token_owners_changed: OnceLock::new(),
         })
     }
 

@@ -291,6 +291,8 @@ impl FilteredUpdate {
                         index: msg.index as usize,
                         account_keys: HashSet::new(),
                         pre_encoded: OnceLock::new(),
+                        token_owners_all: OnceLock::new(),
+                        token_owners_changed: OnceLock::new(),
                     }),
                     slot: msg.slot,
                 })
@@ -1228,6 +1230,8 @@ pub mod tests {
                             index,
                             account_keys: HashSet::new(),
                             pre_encoded: OnceLock::new(),
+                            token_owners_all: OnceLock::new(),
+                            token_owners_changed: OnceLock::new(),
                         }
                     })
                     .map(Arc::new)
@@ -1447,6 +1451,8 @@ pub mod tests {
                 index: tx_arc.index,
                 account_keys: tx_arc.account_keys.clone(),
                 pre_encoded: OnceLock::new(),
+                token_owners_all: OnceLock::new(),
+                token_owners_changed: OnceLock::new(),
             };
 
             // Create version without cache (fallback path)
@@ -1458,6 +1464,8 @@ pub mod tests {
                 index: tx_arc.index,
                 account_keys: tx_arc.account_keys.clone(),
                 pre_encoded: OnceLock::new(),
+                token_owners_all: OnceLock::new(),
+                token_owners_changed: OnceLock::new(),
             };
 
             // Pre-encode one of them
