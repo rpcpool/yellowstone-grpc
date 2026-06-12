@@ -1062,6 +1062,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5836,6 +5842,23 @@ dependencies = [
  "tower-layer",
  "vergen",
  "yellowstone-block-machine",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
+name = "yellowstone-grpc-intg-test"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "env_logger",
+ "log",
+ "solana-commitment-config",
+ "solana-pubkey 4.1.0",
+ "tokio",
+ "tokio-stream",
+ "yellowstone-block-machine",
+ "yellowstone-grpc-client",
+ "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",
 ]
 

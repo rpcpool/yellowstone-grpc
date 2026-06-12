@@ -1,0 +1,29 @@
+[package]
+name = "yellowstone-grpc-intg-test"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+
+
+[dependencies]
+log = { workspace = true }
+env_logger = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
+yellowstone-block-machine = { workspace = true }
+yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-geyser = { workspace = true }
+
+solana-pubkey = { workspace = true }
+solana-commitment-config = { workspace = true }
+
+[dev-dependencies]
+dotenvy = "0.15"
+
+
+[lints]
+workspace = true

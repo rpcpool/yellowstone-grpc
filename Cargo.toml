@@ -6,6 +6,7 @@ members = [
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
     "yellowstone-grpc-geyser", # 13.1.0
     "yellowstone-grpc-proto", # 12.4.0
+    "yellowstone-grpc-e2e-test", # 0.1.0
 ]
 
 [workspace.package]
