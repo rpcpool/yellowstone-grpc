@@ -560,3 +560,22 @@ async fn any_commitment_level_of_subscription_should_return_all_possible_values(
         );
     }
 }
+
+#[tokio::test]
+async fn test_token_accounts_transaction_filter() {
+    init_log();
+    let mut client = new_client().await;
+    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+
+    let subscription = SubscribeRequest {
+        transactions: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterTransactions {
+                account_include: vec![sysvar_clock_str.to_string()],
+                ..Default::default()
+            },
+        )]),
+        commitment: Some(0), // CommitmentLevel::Confirmed as i32
+        ..Default::default()
+    };
+}
