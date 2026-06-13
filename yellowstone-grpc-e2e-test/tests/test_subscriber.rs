@@ -1,5 +1,4 @@
 use {
-    env_logger::init,
     solana_pubkey::Pubkey,
     std::{
         collections::{HashMap, HashSet},
@@ -11,9 +10,7 @@ use {
     tokio_stream::StreamExt,
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::geyser::{
-        subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
-        SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
+        SlotStatus, SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag, subscribe_update::UpdateOneof, subscribe_update_deshred
     },
 };
 
@@ -57,6 +54,8 @@ async fn new_client() -> GeyserGrpcClient {
 
     builder
         .max_decoding_message_size(100_000_000) // 100 MB, larger than the default of 4 MB, to allow for blocks with many transactions and accounts. Adjust as needed for your tests.
+        .http2_adaptive_window(true)
+        .accept_compressed(yellowstone_grpc_proto::tonic::codec::CompressionEncoding::Zstd)
         .connect()
         .await
         .expect("client should build from endpoint and token")
@@ -205,7 +204,7 @@ async fn subscribe_should_receive_full_blocks() {
     let subscription = SubscribeRequest {
         blocks: HashMap::from([("test".to_string(), block_filter)]),
         blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
-        commitment: Some(2), // CommitmentLevel::Confirmed as i32
+        commitment: Some(1), // CommitmentLevel::Confirmed as i32
         ..Default::default()
     };
 
@@ -213,10 +212,11 @@ async fn subscribe_should_receive_full_blocks() {
         .subscribe_once(subscription)
         .await
         .expect("subscription should succeed");
-    let mut count = 0usize;
-    const MAX_UPDATES: usize = 3;
+    const MAX_UPDATES: usize = 12;
 
-    let mut block_received = HashMap::new();
+    let mut block_received: HashMap<u64, (String, usize)> = HashMap::new();
+    let mut block_meta_received: HashMap<u64, (String, u64)> = HashMap::new();
+    let mut count = 0;
     while let Some(update) = stream.next().await {
         if count >= MAX_UPDATES {
             break;
@@ -246,28 +246,35 @@ async fn subscribe_should_receive_full_blocks() {
                     "executed transaction count should match number of transactions"
                 );
                 let blockhash = block.blockhash.clone();
-                if let Some(blockmeta_blockhash) =
-                    block_received.insert(block.slot, block.blockhash)
-                {
+                block_received.insert(block.slot, (blockhash.clone(), block.transactions.len()));
+                if let Some((blockmeta_blockhash, actual_txn_cnt)) = block_meta_received.get(&block.slot) {
                     assert_eq!(
-                        blockhash, blockmeta_blockhash,
+                        blockhash.as_str(), blockmeta_blockhash.as_str(),
                         "blockhash in block should match block meta update"
                     );
+                    let txn_count = block.transactions.len();
+                    assert_eq!(
+                        *actual_txn_cnt, txn_count as u64,
+                        "executed transaction count in meta should match number of transactions in block"
+                    );
+                    let account_count = block.accounts.len();
                     count += 1;
                     log::info!(
-                        "received block update for slot {} {count}/{MAX_UPDATES}",
-                        block.slot
+                        "received block update for slot {}, txn: {txn_count}, acct:{account_count}  {}/{MAX_UPDATES}",
+                        block.slot,
+                        block_received.len(),
                     );
                 }
             }
             UpdateOneof::BlockMeta(meta) => {
                 let blockhash = meta.blockhash.clone();
-                if let Some(block_blockhash) = block_received.insert(meta.slot, meta.blockhash) {
+                block_meta_received.insert(meta.slot, (blockhash.clone(), meta.executed_transaction_count));
+
+                if let Some((block_blockhash, _actual_txn_cnt)) = block_received.get(&meta.slot) {
                     assert_eq!(
-                        blockhash, block_blockhash,
+                        blockhash, *block_blockhash,
                         "blockhash in meta should match block update"
                     );
-                    count += 1;
                     log::info!(
                         "received block update for slot {} {count}/{MAX_UPDATES}",
                         meta.slot
@@ -562,20 +569,65 @@ async fn any_commitment_level_of_subscription_should_return_all_possible_values(
 }
 
 #[tokio::test]
-async fn test_token_accounts_transaction_filter() {
+async fn it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner() {
     init_log();
     let mut client = new_client().await;
-    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+    const TOKEN_ACCOUNT_OWNER: &str = "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV";
+    let bisonfi_token_owner = Pubkey::from_str(TOKEN_ACCOUNT_OWNER).expect("valid pubkey string");
 
     let subscription = SubscribeRequest {
         transactions: HashMap::from([(
             "test".to_string(),
             SubscribeRequestFilterTransactions {
-                account_include: vec![sysvar_clock_str.to_string()],
+                account_include: vec![TOKEN_ACCOUNT_OWNER.to_string()],
+                token_accounts: Some(TokenAccountExpansionControlFlag::BalanceChanged as i32),
                 ..Default::default()
             },
         )]),
         commitment: Some(0), // CommitmentLevel::Confirmed as i32
         ..Default::default()
     };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .expect("subscription should succeed");
+
+    let mut count = 0usize;
+    const MAX_UPDATES: usize = 1;
+    while let Some(update) = stream.next().await {
+        if count >= MAX_UPDATES {
+            break;
+        }
+
+        let update = update.expect("stream should yield updates without error");
+        match update.update_oneof.unwrap() {
+            UpdateOneof::Transaction(subscribe_update_transaction) => {
+                let transaction = subscribe_update_transaction
+                    .transaction
+                    .expect("transaction update should have transaction field");
+
+                let meta = transaction.meta.unwrap();
+
+                let in_post_balance = meta.post_token_balances.iter().any(|b| {
+                    let actual_pubkey = Pubkey::from_str(&b.owner)
+                        .expect("pubkey in post balance");
+                    actual_pubkey == bisonfi_token_owner
+                });
+                let in_pre_balance = meta.pre_token_balances.iter().any(|b| {
+                    let actual_pubkey = Pubkey::from_str(&b.owner)
+                        .expect("pubkey in pre balance");
+                    actual_pubkey == bisonfi_token_owner
+                });
+
+                if in_post_balance && in_pre_balance {
+                    log::info!("received transaction update with token balance change for account {TOKEN_ACCOUNT_OWNER}");
+                    count += 1;
+                } else {
+                    log::info!("received transaction update but it does not have token balance change for account {TOKEN_ACCOUNT_OWNER}, pre balance has account: {in_pre_balance}, post balance has account: {in_post_balance}");
+                }
+            }
+            _ => {}
+        };
+    }
 }
