@@ -449,7 +449,7 @@ where
                         if status.code() == Code::OutOfRange {
                             me.last_checkpoint = None;
                         }
-                    
+
                         if me.backoff.max_retries == 0 {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));

@@ -23,7 +23,7 @@ jobs:
           free -h
           df -h
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 1
 
@@ -43,7 +43,7 @@ jobs:
           df -h
 
       - name: cargo deny check advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.0.14
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           command: check advisories
           rust-version: ${{ env.RUST_STABLE }}
