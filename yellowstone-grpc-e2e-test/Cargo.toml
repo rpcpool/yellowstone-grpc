@@ -9,6 +9,9 @@ publish = false
 
 
 [dependencies]
+anyhow = "1"
+clap = { workspace = true, features = ["derive"] }
+dotenvy = "0.15"
 log = { workspace = true }
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -20,10 +23,6 @@ yellowstone-grpc-geyser = { workspace = true }
 
 solana-pubkey = { workspace = true }
 solana-commitment-config = { workspace = true }
-
-[dev-dependencies]
-dotenvy = "0.15"
-
 
 [lints]
 workspace = true
