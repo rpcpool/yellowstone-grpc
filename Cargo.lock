@@ -1809,6 +1809,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5777,6 +5786,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "yellowstone-grpc-e2e-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "yellowstone-grpc-geyser"
 version = "13.2.3"
 dependencies = [
@@ -5853,6 +5871,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "env_logger",
+ "inventory",
  "log",
  "solana-commitment-config",
  "solana-pubkey 4.1.0",
@@ -5860,6 +5879,7 @@ dependencies = [
  "tokio-stream",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",
+ "yellowstone-grpc-e2e-macros",
  "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",
 ]

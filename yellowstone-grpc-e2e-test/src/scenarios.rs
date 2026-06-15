@@ -1,42 +1,51 @@
-use anyhow::{bail, ensure, Context, Result};
-use solana_pubkey::Pubkey;
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    sync::Once,
-};
-use tokio_stream::StreamExt;
-use yellowstone_grpc_client::GeyserGrpcClient;
-use yellowstone_grpc_proto::geyser::{
-    subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
-    SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-    SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
-    SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
+//! E2E subscription scenarios and discovery metadata for the test CLI.
+
+use {
+    anyhow::{bail, ensure, Context, Result},
+    solana_pubkey::Pubkey,
+    std::{
+        collections::{HashMap, HashSet},
+        str::FromStr,
+        sync::Once,
+    },
+    tokio_stream::StreamExt,
+    yellowstone_grpc_client::GeyserGrpcClient,
+    yellowstone_grpc_e2e_macros::test_helper,
+    yellowstone_grpc_proto::geyser::{
+        subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
+        SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
+    },
 };
 
 static LOG_INIT: Once = Once::new();
 
-pub const SCENARIO_SYSVAR_ACCOUNT_DESCRIPTION: &str =
-    "Subscribes to account updates and verifies only SysvarClock updates are returned";
-pub const SCENARIO_SYSVAR_BLOCK_DESCRIPTION: &str =
-    "Subscribes to blocks and verifies updates include changes touching SysvarClock";
-pub const SCENARIO_FULL_BLOCKS_DESCRIPTION: &str =
-    "Subscribes to full block stream and validates full block payload delivery";
-pub const SCENARIO_REPLAY_DESCRIPTION: &str =
-    "Verifies replay support by receiving historical data from a replay request";
-pub const SCENARIO_DESHRED_DESCRIPTION: &str =
-    "Validates deshred subscription flow and deshredded output handling";
-pub const SCENARIO_ANY_COMMITMENT_DESCRIPTION: &str =
-    "Checks that subscriptions can observe all supported commitment levels";
-pub const SCENARIO_TOKEN_OWNER_BALANCE_CHANGED_DESCRIPTION: &str =
-    "Ensures token ATA activity for an owner is observed in transaction subscriptions";
+pub struct ScenarioDoc {
+    /// Stable CLI scenario name (for example `sysvar-account`).
+    pub name: &'static str,
+    /// Human-friendly scenario description shown in `yellowstone-e2e list`.
+    pub description: &'static str,
+}
+
+inventory::collect!(ScenarioDoc);
+
+/// Returns the registered scenario description for a CLI scenario name.
+pub fn scenario_description(name: &str) -> Option<&'static str> {
+    inventory::iter::<ScenarioDoc>
+        .into_iter()
+        .find_map(|scenario| (scenario.name == name).then_some(scenario.description))
+}
 
 #[derive(Debug, Clone)]
 pub struct RunConfig {
+    /// gRPC endpoint URI used by scenarios.
     pub endpoint: String,
+    /// Optional x-token used for authenticated requests.
     pub x_token: Option<String>,
 }
 
+/// Initializes logger once for scenario execution.
 pub fn init_log() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -61,9 +70,8 @@ async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
         .context("client should build from endpoint and token")
 }
 
-/// Scenario: sysvar-account.
-///
-/// [`SCENARIO_SYSVAR_ACCOUNT_DESCRIPTION`]
+/// Subscribes to account updates and verifies only SysvarClock updates are returned.
+#[test_helper(name = "sysvar-account")]
 pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
     let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
@@ -99,7 +107,10 @@ pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfi
                     .context("account update should have account field")?;
                 let actual_pubkey = Pubkey::try_from(account.pubkey.clone())
                     .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
-                ensure!(actual_pubkey == sysvar_clock_pubkey, "received unexpected pubkey");
+                ensure!(
+                    actual_pubkey == sysvar_clock_pubkey,
+                    "received unexpected pubkey"
+                );
                 count += 1;
                 log::info!(
                     "received account update for slot {} {count}/{MAX_UPDATES}",
@@ -114,9 +125,8 @@ pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfi
     Ok(())
 }
 
-/// Scenario: sysvar-block.
-///
-/// [`SCENARIO_SYSVAR_BLOCK_DESCRIPTION`]
+/// Subscribes to blocks and verifies updates include changes touching SysvarClock.
+#[test_helper(name = "sysvar-block")]
 pub async fn subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(
     config: &RunConfig,
 ) -> Result<()> {
@@ -157,11 +167,15 @@ pub async fn subscribe_should_receive_block_where_sysvarclock1111_account_has_be
                 for account in &block.accounts {
                     let actual_pubkey = Pubkey::try_from(account.pubkey.clone())
                         .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
-                    ensure!(actual_pubkey == sysvar_clock_pubkey, "received non-sysvar account");
+                    ensure!(
+                        actual_pubkey == sysvar_clock_pubkey,
+                        "received non-sysvar account"
+                    );
                 }
 
                 let blockhash = block.blockhash.clone();
-                if let Some(blockmeta_blockhash) = block_received.insert(block.slot, block.blockhash)
+                if let Some(blockmeta_blockhash) =
+                    block_received.insert(block.slot, block.blockhash)
                 {
                     ensure!(
                         blockhash == blockmeta_blockhash,
@@ -189,9 +203,8 @@ pub async fn subscribe_should_receive_block_where_sysvarclock1111_account_has_be
     Ok(())
 }
 
-/// Scenario: full-blocks.
-///
-/// [`SCENARIO_FULL_BLOCKS_DESCRIPTION`]
+/// Subscribes to full block stream and validates full block payload delivery.
+#[test_helper(name = "full-blocks")]
 pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
 
@@ -228,12 +241,18 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
 
         match update_oneof {
             UpdateOneof::Block(block) => {
-                ensure!(!block.accounts.is_empty(), "should receive accounts for blocks");
+                ensure!(
+                    !block.accounts.is_empty(),
+                    "should receive accounts for blocks"
+                );
                 ensure!(
                     !block.transactions.is_empty(),
                     "should receive transactions for blocks"
                 );
-                ensure!(!block.entries.is_empty(), "should receive entries for blocks");
+                ensure!(
+                    !block.entries.is_empty(),
+                    "should receive entries for blocks"
+                );
                 ensure!(
                     block.executed_transaction_count == block.transactions.len() as u64,
                     "executed transaction count should match number of transactions"
@@ -287,9 +306,8 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
     Ok(())
 }
 
-/// Scenario: replay.
-///
-/// [`SCENARIO_REPLAY_DESCRIPTION`]
+/// Verifies replay support by receiving historical data from a replay request.
+#[test_helper(name = "replay")]
 pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
 
@@ -347,7 +365,10 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
                     .context("account update should have account field")?;
                 let actual_pubkey = Pubkey::try_from(account.pubkey.clone())
                     .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
-                ensure!(actual_pubkey == sysvar_clock_pubkey, "received unexpected pubkey");
+                ensure!(
+                    actual_pubkey == sysvar_clock_pubkey,
+                    "received unexpected pubkey"
+                );
                 count += 1;
                 remaining_slot_to_visit.retain(|&slot| slot != subscribe_update_account.slot);
                 log::info!(
@@ -371,9 +392,8 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     Ok(())
 }
 
-/// Scenario: deshred.
-///
-/// [`SCENARIO_DESHRED_DESCRIPTION`]
+/// Validates deshred subscription flow and deshredded output handling.
+#[test_helper(name = "deshred")]
 pub async fn test_subscribe_deshred(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
 
@@ -458,9 +478,8 @@ pub async fn test_subscribe_deshred(config: &RunConfig) -> Result<()> {
     Ok(())
 }
 
-/// Scenario: any-commitment.
-///
-/// [`SCENARIO_ANY_COMMITMENT_DESCRIPTION`]
+/// Insure subscription at any commitment level returns all possible updates for that commitment, including all slot lifecycle updates, account updates, transaction updates and entry updates.
+#[test_helper(name = "any-commitment")]
 pub async fn any_commitment_level_of_subscription_should_return_all_possible_values(
     config: &RunConfig,
 ) -> Result<()> {
@@ -480,8 +499,10 @@ pub async fn any_commitment_level_of_subscription_should_return_all_possible_val
                     ..Default::default()
                 },
             )]),
+            blocks: HashMap::from([("test".to_string(), Default::default())]),
             entry: HashMap::from([("test".to_string(), Default::default())]),
             transactions: HashMap::from([("test".to_string(), Default::default())]),
+            blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
             accounts: HashMap::from([("test".to_string(), account_filter)]),
             commitment: Some(commitment),
             ..Default::default()
@@ -506,13 +527,17 @@ pub async fn any_commitment_level_of_subscription_should_return_all_possible_val
         let mut received_account_update = false;
         let mut rececived_txn_update = false;
         let mut received_entry = false;
+        let mut received_blockmeta = false;
+        let mut received_block = false;
 
         while let Some(update) = stream.next().await {
             if block_visited.len() >= MAX_UPDATES
                 || (remaining_slot_lifecycle_to_visit.is_empty()
                     && received_account_update
                     && rececived_txn_update
-                    && received_entry)
+                    && received_entry
+                    && received_blockmeta
+                    && received_block)
             {
                 break;
             }
@@ -545,6 +570,12 @@ pub async fn any_commitment_level_of_subscription_should_return_all_possible_val
                 UpdateOneof::Entry(_) => {
                     received_entry = true;
                 }
+                UpdateOneof::BlockMeta(_) => {
+                    received_blockmeta = true;
+                }
+                UpdateOneof::Block(_) => {
+                    received_block = true;
+                }
                 _ => {}
             }
         }
@@ -570,9 +601,8 @@ pub async fn any_commitment_level_of_subscription_should_return_all_possible_val
     Ok(())
 }
 
-/// Scenario: token-owner-balance-changed.
-///
-/// [`SCENARIO_TOKEN_OWNER_BALANCE_CHANGED_DESCRIPTION`]
+/// Ensures token ATA activity for an owner is observed in transaction subscriptions.
+#[test_helper(name = "token-owner-balance-changed")]
 pub async fn it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(
     config: &RunConfig,
 ) -> Result<()> {
@@ -611,7 +641,9 @@ pub async fn it_should_subscribe_to_all_transaction_include_token_ata_to_an_owne
             let transaction = subscribe_update_transaction
                 .transaction
                 .context("transaction update should have transaction field")?;
-            let meta = transaction.meta.context("transaction update should have meta")?;
+            let meta = transaction
+                .meta
+                .context("transaction update should have meta")?;
 
             let in_post_balance = meta.post_token_balances.iter().any(|b| {
                 Pubkey::from_str(&b.owner)

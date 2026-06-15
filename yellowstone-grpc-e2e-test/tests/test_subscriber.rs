@@ -10,7 +10,10 @@ use {
     tokio_stream::StreamExt,
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::geyser::{
-        SlotStatus, SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag, subscribe_update::UpdateOneof, subscribe_update_deshred
+        subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
+        SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
     },
 };
 
@@ -247,9 +250,12 @@ async fn subscribe_should_receive_full_blocks() {
                 );
                 let blockhash = block.blockhash.clone();
                 block_received.insert(block.slot, (blockhash.clone(), block.transactions.len()));
-                if let Some((blockmeta_blockhash, actual_txn_cnt)) = block_meta_received.get(&block.slot) {
+                if let Some((blockmeta_blockhash, actual_txn_cnt)) =
+                    block_meta_received.get(&block.slot)
+                {
                     assert_eq!(
-                        blockhash.as_str(), blockmeta_blockhash.as_str(),
+                        blockhash.as_str(),
+                        blockmeta_blockhash.as_str(),
                         "blockhash in block should match block meta update"
                     );
                     let txn_count = block.transactions.len();
@@ -268,7 +274,10 @@ async fn subscribe_should_receive_full_blocks() {
             }
             UpdateOneof::BlockMeta(meta) => {
                 let blockhash = meta.blockhash.clone();
-                block_meta_received.insert(meta.slot, (blockhash.clone(), meta.executed_transaction_count));
+                block_meta_received.insert(
+                    meta.slot,
+                    (blockhash.clone(), meta.executed_transaction_count),
+                );
 
                 if let Some((block_blockhash, _actual_txn_cnt)) = block_received.get(&meta.slot) {
                     assert_eq!(
@@ -610,13 +619,11 @@ async fn it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner() 
                 let meta = transaction.meta.unwrap();
 
                 let in_post_balance = meta.post_token_balances.iter().any(|b| {
-                    let actual_pubkey = Pubkey::from_str(&b.owner)
-                        .expect("pubkey in post balance");
+                    let actual_pubkey = Pubkey::from_str(&b.owner).expect("pubkey in post balance");
                     actual_pubkey == bisonfi_token_owner
                 });
                 let in_pre_balance = meta.pre_token_balances.iter().any(|b| {
-                    let actual_pubkey = Pubkey::from_str(&b.owner)
-                        .expect("pubkey in pre balance");
+                    let actual_pubkey = Pubkey::from_str(&b.owner).expect("pubkey in pre balance");
                     actual_pubkey == bisonfi_token_owner
                 });
 

@@ -11,11 +11,13 @@ publish = false
 [dependencies]
 anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
-dotenvy = "0.15"
+dotenvy = { workspace = true }
+inventory = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
+yellowstone-grpc-e2e-macros = { path = "../yellowstone-grpc-e2e-macros" }
 yellowstone-grpc-proto = { workspace = true }
 yellowstone-block-machine = { workspace = true }
 yellowstone-grpc-client = { workspace = true }

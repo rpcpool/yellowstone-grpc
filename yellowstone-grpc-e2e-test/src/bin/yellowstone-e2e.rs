@@ -1,17 +1,15 @@
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
-use std::{collections::HashMap, env, path::PathBuf, process::ExitCode};
-use yellowstone_grpc_intg_test::scenarios::{
-    any_commitment_level_of_subscription_should_return_all_possible_values,
-    init_log, it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
-    it_should_support_replay,
-    SCENARIO_ANY_COMMITMENT_DESCRIPTION, SCENARIO_DESHRED_DESCRIPTION,
-    SCENARIO_FULL_BLOCKS_DESCRIPTION, SCENARIO_REPLAY_DESCRIPTION,
-    SCENARIO_SYSVAR_ACCOUNT_DESCRIPTION, SCENARIO_SYSVAR_BLOCK_DESCRIPTION,
-    SCENARIO_TOKEN_OWNER_BALANCE_CHANGED_DESCRIPTION,
-    subscribe_should_only_returns_sysvarclock_account,
-    subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
-    subscribe_should_receive_full_blocks, test_subscribe_deshred, RunConfig,
+use {
+    anyhow::{Context, Result},
+    clap::{Parser, Subcommand, ValueEnum},
+    std::{collections::HashMap, env, path::PathBuf, process::ExitCode},
+    yellowstone_grpc_intg_test::scenarios::{
+        any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
+        it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
+        it_should_support_replay, scenario_description,
+        subscribe_should_only_returns_sysvarclock_account,
+        subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
+        subscribe_should_receive_full_blocks, test_subscribe_deshred, RunConfig,
+    },
 };
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -39,15 +37,7 @@ impl Scenario {
     }
 
     fn description(&self) -> &'static str {
-        match self {
-            Self::SysvarAccount => SCENARIO_SYSVAR_ACCOUNT_DESCRIPTION,
-            Self::SysvarBlock => SCENARIO_SYSVAR_BLOCK_DESCRIPTION,
-            Self::FullBlocks => SCENARIO_FULL_BLOCKS_DESCRIPTION,
-            Self::Replay => SCENARIO_REPLAY_DESCRIPTION,
-            Self::Deshred => SCENARIO_DESHRED_DESCRIPTION,
-            Self::AnyCommitment => SCENARIO_ANY_COMMITMENT_DESCRIPTION,
-            Self::TokenOwnerBalanceChanged => SCENARIO_TOKEN_OWNER_BALANCE_CHANGED_DESCRIPTION,
-        }
+        scenario_description(self.name()).unwrap_or("No description available")
     }
 }
 
@@ -202,8 +192,7 @@ async fn run(cli: Cli) -> Result<()> {
 
     let dotenv_values = load_dotenv(cli.dotenv.as_ref());
 
-    let endpoint =
-        resolve_endpoint(&cli, &dotenv_values).map_err(|msg| anyhow::anyhow!(msg))?;
+    let endpoint = resolve_endpoint(&cli, &dotenv_values).map_err(|msg| anyhow::anyhow!(msg))?;
     let x_token = resolve_x_token(&cli, &dotenv_values);
     let run_config = RunConfig { endpoint, x_token };
 
