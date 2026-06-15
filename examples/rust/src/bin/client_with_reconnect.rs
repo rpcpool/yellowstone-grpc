@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
                 "".to_owned(),
                 SubscribeRequestFilterSlots {
                     filter_by_commitment: Some(true),
-                    interslot_updates: None,
+                    interslot_updates: Some(true),
                 },
             );
             m
