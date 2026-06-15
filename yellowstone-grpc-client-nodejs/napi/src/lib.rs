@@ -21,7 +21,7 @@ use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
 use prost::Message;
 use std::sync::{
-  atomic::{AtomicBool, Ordering},
+  atomic::{AtomicBool, AtomicU64, Ordering},
   Arc, Mutex as StdMutex, Once,
 };
 use tokio::sync::{
@@ -99,6 +99,85 @@ fn strip_autoreconnect_filter(update: &mut SubscribeUpdate) -> bool {
   before != update.filters.len()
 }
 
+#[napi(object)]
+pub struct DuplexStreamStats {
+  pub queued_messages: f64,
+  pub queued_bytes: f64,
+  pub max_queued_bytes: f64,
+  pub updates_enqueued: f64,
+  pub updates_dequeued: f64,
+  pub grpc_updates_received: f64,
+  pub read_calls: f64,
+}
+
+#[derive(Default)]
+struct StreamStats {
+  queued_messages: AtomicU64,
+  queued_bytes: AtomicU64,
+  max_queued_bytes: AtomicU64,
+  updates_enqueued: AtomicU64,
+  updates_dequeued: AtomicU64,
+  grpc_updates_received: AtomicU64,
+  read_calls: AtomicU64,
+}
+
+impl StreamStats {
+  fn record_grpc_update_received(&self) {
+    self.grpc_updates_received.fetch_add(1, Ordering::Relaxed);
+  }
+
+  fn record_enqueued(&self, byte_len: usize) {
+    let byte_len = byte_len as u64;
+    self.updates_enqueued.fetch_add(1, Ordering::Relaxed);
+    self.queued_messages.fetch_add(1, Ordering::Relaxed);
+    let queued_bytes = self.queued_bytes.fetch_add(byte_len, Ordering::Relaxed) + byte_len;
+    self.update_max_queued_bytes(queued_bytes);
+  }
+
+  fn record_dequeued(&self, byte_len: usize) {
+    self.updates_dequeued.fetch_add(1, Ordering::Relaxed);
+    Self::saturating_sub(&self.queued_messages, 1);
+    Self::saturating_sub(&self.queued_bytes, byte_len as u64);
+  }
+
+  fn record_read_call(&self) {
+    self.read_calls.fetch_add(1, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> DuplexStreamStats {
+    DuplexStreamStats {
+      queued_messages: self.queued_messages.load(Ordering::Relaxed) as f64,
+      queued_bytes: self.queued_bytes.load(Ordering::Relaxed) as f64,
+      max_queued_bytes: self.max_queued_bytes.load(Ordering::Relaxed) as f64,
+      updates_enqueued: self.updates_enqueued.load(Ordering::Relaxed) as f64,
+      updates_dequeued: self.updates_dequeued.load(Ordering::Relaxed) as f64,
+      grpc_updates_received: self.grpc_updates_received.load(Ordering::Relaxed) as f64,
+      read_calls: self.read_calls.load(Ordering::Relaxed) as f64,
+    }
+  }
+
+  fn update_max_queued_bytes(&self, observed: u64) {
+    let mut current = self.max_queued_bytes.load(Ordering::Relaxed);
+    while observed > current {
+      match self.max_queued_bytes.compare_exchange_weak(
+        current,
+        observed,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+      ) {
+        Ok(_) => break,
+        Err(next) => current = next,
+      }
+    }
+  }
+
+  fn saturating_sub(counter: &AtomicU64, amount: u64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+      Some(value.saturating_sub(amount))
+    });
+  }
+}
+
 /// DuplexStream Engine
 ///
 /// The inner engine for a custom implementation of stream.Duplex
@@ -126,6 +205,8 @@ struct DuplexStream {
   terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
+  /// Diagnostic counters for native queue/backpressure investigations.
+  stats: Arc<StreamStats>,
 }
 
 #[napi]
@@ -180,6 +261,8 @@ impl DuplexStream {
         let terminal_error_worker = terminal_error.clone();
         let is_closing = Arc::new(AtomicBool::new(false));
         let is_closing_worker = is_closing.clone();
+        let stats = Arc::new(StreamStats::default());
+        let stats_worker = Arc::clone(&stats);
 
         // Worker lifecycle:
         // - Runs until JS closes the writable side, gRPC side ends, or a
@@ -221,17 +304,20 @@ impl DuplexStream {
               maybe_update_result = stream_rx.next() => {
                 match maybe_update_result {
                   Some(Ok(mut update)) => {
+                    stats_worker.record_grpc_update_received();
                     let stripped = strip_autoreconnect_filter(&mut update);
                     if stripped && update.filters.is_empty() {
                       continue;
                     }
 
                     let update_bytes = update.encode_to_vec();
+                    let update_bytes_len = update_bytes.len();
 
                     // JS reader side disappeared; no point continuing the worker.
                     if readable_tx.send(update_bytes).is_err() {
                       break;
                     }
+                    stats_worker.record_enqueued(update_bytes_len);
                   }
                   Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
@@ -261,6 +347,7 @@ impl DuplexStream {
           writable,
           terminal_error,
           is_closing,
+          stats,
         })
       },
       move |_environment, stream| Ok(stream),
@@ -274,11 +361,19 @@ impl DuplexStream {
   pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Option<Buffer>>> {
     let readable = self.readable.clone();
     let terminal_error = self.terminal_error.clone();
+    let stats = Arc::clone(&self.stats);
+    self.stats.record_read_call();
 
     env.spawn_future_with_callback(
-      async move { Self::recv_update_or_error(readable, terminal_error).await },
+      async move { Self::recv_update_or_error(readable, terminal_error, stats).await },
       move |_environment, update_bytes_opt| Ok(update_bytes_opt.map(Buffer::from)),
     )
+  }
+
+  /// Return current native stream queue counters for diagnostics.
+  #[napi]
+  pub fn stats(&self) -> DuplexStreamStats {
+    self.stats.snapshot()
   }
 
   /// Close the stream and reject future writes.
@@ -358,9 +453,13 @@ impl DuplexStream {
   async fn recv_update_or_error(
     readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
+    stats: Arc<StreamStats>,
   ) -> Result<Option<Vec<u8>>> {
     match readable.lock().await.recv().await {
-      Some(update) => Ok(Some(update)),
+      Some(update) => {
+        stats.record_dequeued(update.len());
+        Ok(Some(update))
+      }
       // Channel close indicates worker termination. If worker captured a native
       // terminal error, surface it to JS instead of silently ending the stream.
       None => {
@@ -393,6 +492,8 @@ struct DuplexStreamDeshred {
   terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
+  /// Diagnostic counters for native queue/backpressure investigations.
+  stats: Arc<StreamStats>,
 }
 
 #[napi]
@@ -425,6 +526,8 @@ impl DuplexStreamDeshred {
         let terminal_error_worker = Arc::clone(&terminal_error);
         let is_closing = Arc::new(AtomicBool::new(false));
         let is_closing_worker = Arc::clone(&is_closing);
+        let stats = Arc::new(StreamStats::default());
+        let stats_worker = Arc::clone(&stats);
 
         // Same lifecycle contract as `DuplexStream`:
         // propagate first non-graceful gRPC error through `terminal_error`,
@@ -456,9 +559,13 @@ impl DuplexStreamDeshred {
               maybe_update_result = stream_rx.next() => {
                 match maybe_update_result {
                   Some(Ok(update)) => {
-                    if readable_tx.send(update.encode_to_vec()).is_err() {
+                    stats_worker.record_grpc_update_received();
+                    let update_bytes = update.encode_to_vec();
+                    let update_bytes_len = update_bytes.len();
+                    if readable_tx.send(update_bytes).is_err() {
                       break;
                     }
+                    stats_worker.record_enqueued(update_bytes_len);
                   }
                   Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
@@ -487,6 +594,7 @@ impl DuplexStreamDeshred {
           writable,
           terminal_error,
           is_closing,
+          stats,
         })
       },
       move |_environment, stream| Ok(stream),
@@ -498,11 +606,19 @@ impl DuplexStreamDeshred {
   pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Option<Buffer>>> {
     let readable = self.readable.clone();
     let terminal_error = self.terminal_error.clone();
+    let stats = Arc::clone(&self.stats);
+    self.stats.record_read_call();
 
     env.spawn_future_with_callback(
-      async move { Self::recv_update_or_error(readable, terminal_error).await },
+      async move { Self::recv_update_or_error(readable, terminal_error, stats).await },
       move |_environment, update_bytes_opt| Ok(update_bytes_opt.map(Buffer::from)),
     )
+  }
+
+  /// Return current native stream queue counters for diagnostics.
+  #[napi]
+  pub fn stats(&self) -> DuplexStreamStats {
+    self.stats.snapshot()
   }
 
   #[napi]
@@ -578,9 +694,13 @@ impl DuplexStreamDeshred {
   async fn recv_update_or_error(
     readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
+    stats: Arc<StreamStats>,
   ) -> Result<Option<Vec<u8>>> {
     match readable.lock().await.recv().await {
-      Some(update) => Ok(Some(update)),
+      Some(update) => {
+        stats.record_dequeued(update.len());
+        Ok(Some(update))
+      }
       None => {
         // Match regular subscribe semantics: graceful EOF when no terminal
         // error, otherwise reject and bubble root cause to TypeScript caller.
@@ -598,7 +718,7 @@ impl DuplexStreamDeshred {
 
 #[cfg(test)]
 mod tests {
-  use crate::{DuplexStream, DuplexStreamDeshred};
+  use crate::{DuplexStream, DuplexStreamDeshred, StreamStats};
   use napi::bindgen_prelude::Buffer;
   use napi::Status;
   use prost::Message;
@@ -740,6 +860,7 @@ mod tests {
         writable: Arc::new(StdMutex::new(Some(writable_tx))),
         terminal_error: Arc::new(StdMutex::new(None)),
         is_closing: Arc::new(AtomicBool::new(false)),
+        stats: Arc::new(StreamStats::default()),
       },
       writable_rx,
     )
@@ -758,6 +879,7 @@ mod tests {
         writable: Arc::new(StdMutex::new(Some(writable_tx))),
         terminal_error: Arc::new(StdMutex::new(None)),
         is_closing: Arc::new(AtomicBool::new(false)),
+        stats: Arc::new(StreamStats::default()),
       },
       writable_rx,
     )
@@ -778,6 +900,27 @@ mod tests {
       update_oneof: None,
       created_at: None,
     }
+  }
+
+  #[test]
+  fn stream_stats_tracks_queue_counters() {
+    let stats = StreamStats::default();
+
+    stats.record_grpc_update_received();
+    stats.record_enqueued(64);
+    stats.record_enqueued(36);
+    stats.record_read_call();
+    stats.record_dequeued(64);
+
+    let snapshot = stats.snapshot();
+
+    assert_eq!(snapshot.queued_messages, 1.0);
+    assert_eq!(snapshot.queued_bytes, 36.0);
+    assert_eq!(snapshot.max_queued_bytes, 100.0);
+    assert_eq!(snapshot.updates_enqueued, 2.0);
+    assert_eq!(snapshot.updates_dequeued, 1.0);
+    assert_eq!(snapshot.grpc_updates_received, 1.0);
+    assert_eq!(snapshot.read_calls, 1.0);
   }
 
   #[test]
@@ -1182,9 +1325,13 @@ mod tests {
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
 
-    let result = DuplexStream::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect("closed channel without error should map to None");
+    let result = DuplexStream::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect("closed channel without error should map to None");
 
     assert!(result.is_none());
   }
@@ -1199,9 +1346,13 @@ mod tests {
       "upstream grpc status unavailable",
     ))));
 
-    let error = DuplexStream::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect_err("terminal error should be propagated to caller");
+    let error = DuplexStream::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect_err("terminal error should be propagated to caller");
 
     assert!(
       error
@@ -1234,9 +1385,13 @@ mod tests {
       });
     }
 
-    let error = DuplexStream::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect_err("terminal error should still propagate from poisoned lock");
+    let error = DuplexStream::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect_err("terminal error should still propagate from poisoned lock");
 
     assert!(
       error
@@ -1534,9 +1689,13 @@ mod tests {
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
 
-    let result = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect("closed channel without error should map to None");
+    let result = DuplexStreamDeshred::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect("closed channel without error should map to None");
 
     assert!(result.is_none());
   }
@@ -1551,9 +1710,13 @@ mod tests {
       "upstream grpc status unavailable",
     ))));
 
-    let error = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect_err("terminal error should be propagated to caller");
+    let error = DuplexStreamDeshred::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect_err("terminal error should be propagated to caller");
 
     assert!(
       error
@@ -1586,9 +1749,13 @@ mod tests {
       });
     }
 
-    let error = DuplexStreamDeshred::recv_update_or_error(readable, terminal_error)
-      .await
-      .expect_err("terminal error should still propagate from poisoned lock");
+    let error = DuplexStreamDeshred::recv_update_or_error(
+      readable,
+      terminal_error,
+      Arc::new(StreamStats::default()),
+    )
+    .await
+    .expect_err("terminal error should still propagate from poisoned lock");
 
     assert!(
       error

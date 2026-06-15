@@ -33,6 +33,8 @@ export declare class DuplexStream {
    * Retrieve one encoded `SubscribeUpdate` payload from the worker.
    */
   read(): Promise<Buffer | undefined | null>
+  /** Return current native stream queue counters for diagnostics. */
+  stats(): DuplexStreamStats
   /** Close the stream and reject future writes. */
   close(): void
   writeRaw(requestBytes: Buffer): void
@@ -46,6 +48,8 @@ export declare class DuplexStream {
 export declare class DuplexStreamDeshred {
   /** Retrieve one encoded `SubscribeUpdateDeshred` payload. */
   read(): Promise<Buffer | undefined | null>
+  /** Return current native stream queue counters for diagnostics. */
+  stats(): DuplexStreamStats
   close(): void
   writeRaw(requestBytes: Buffer): void
 }
@@ -96,6 +100,16 @@ export declare class GrpcClient {
 export const AUTORECONNECT_FILTER_KEY: string
 
 export declare function decodeTxError(err: Array<number>): string
+
+export interface DuplexStreamStats {
+  queuedMessages: number
+  queuedBytes: number
+  maxQueuedBytes: number
+  updatesEnqueued: number
+  updatesDequeued: number
+  grpcUpdatesReceived: number
+  readCalls: number
+}
 
 export declare function encodeDeshredTx(data: Uint8Array, encoding: WasmUiTransactionEncoding): string
 

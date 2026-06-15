@@ -101,6 +101,7 @@ export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
  * duplicating option fields in this file.
  */
 export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
+export type NativeStreamStats = napi.DuplexStreamStats;
 
 export interface ReconnectOptions {
   enabled?: boolean;
@@ -453,6 +454,16 @@ export class ClientDuplexStream extends Duplex {
     });
   }
 
+  nativeStats(): NativeStreamStats {
+    const nativeStream = this._napiDuplexStream as { stats?: () => NativeStreamStats };
+    if (typeof nativeStream.stats !== "function") {
+      throw new Error(
+        "Native stream does not support stats; reinstall the SDK so JS and native bindings match",
+      );
+    }
+    return nativeStream.stats();
+  }
+
   _pullNextUpdate() {
     if (this._isClosed || this._isDestroying || this._readInFlight) {
       return;
@@ -584,6 +595,16 @@ export class ClientDeshredDuplexStream extends Duplex {
     this.once("close", () => {
       this._isClosed = true;
     });
+  }
+
+  nativeStats(): NativeStreamStats {
+    const nativeStream = this._napiDuplexStream as { stats?: () => NativeStreamStats };
+    if (typeof nativeStream.stats !== "function") {
+      throw new Error(
+        "Native stream does not support stats; reinstall the SDK so JS and native bindings match",
+      );
+    }
+    return nativeStream.stats();
   }
 
   _pullNextUpdate() {

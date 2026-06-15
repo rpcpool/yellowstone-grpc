@@ -1218,6 +1218,60 @@ describe("Client connection guard behavior", () => {
 });
 
 describe("ClientDuplexStream read and lifecycle behavior", () => {
+  test("nativeStats: forwards native queue counters", async () => {
+    const stats = {
+      queuedMessages: 2,
+      queuedBytes: 1024,
+      maxQueuedBytes: 2048,
+      updatesEnqueued: 5,
+      updatesDequeued: 3,
+      grpcUpdatesReceived: 5,
+      readCalls: 4,
+    };
+    const nativeStats = jest.fn().mockReturnValue(stats);
+    const stream = new ClientDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: jest.fn(),
+        read: jest.fn(),
+        stats: nativeStats,
+      },
+      { objectMode: true },
+    );
+
+    expect(stream.nativeStats()).toBe(stats);
+    expect(nativeStats).toHaveBeenCalledTimes(1);
+
+    await closeStreamAndWait(stream);
+  });
+
+  test("deshred nativeStats: forwards native queue counters", async () => {
+    const stats = {
+      queuedMessages: 1,
+      queuedBytes: 512,
+      maxQueuedBytes: 1024,
+      updatesEnqueued: 2,
+      updatesDequeued: 1,
+      grpcUpdatesReceived: 2,
+      readCalls: 1,
+    };
+    const nativeStats = jest.fn().mockReturnValue(stats);
+    const stream = new ClientDeshredDuplexStream(
+      {
+        close: jest.fn(),
+        writeRaw: jest.fn(),
+        read: jest.fn(),
+        stats: nativeStats,
+      },
+      { objectMode: true },
+    );
+
+    expect(stream.nativeStats()).toBe(stats);
+    expect(nativeStats).toHaveBeenCalledTimes(1);
+
+    await closeStreamAndWait(stream);
+  });
+
   function makeNativeUpdate(): Uint8Array {
     return encodeNativeSubscribeUpdate({
       filters: ["client"],
