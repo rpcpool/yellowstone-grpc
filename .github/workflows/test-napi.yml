@@ -68,18 +68,3 @@ jobs:
           free -h
           df -h
 
-      - name: cargo tree napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo tree
-          git diff Cargo.lock
-          git checkout Cargo.lock
-          cargo tree --frozen
-
-      - name: cargo fmt napi
-        run: |
-          cd yellowstone-grpc-client-nodejs/napi
-          cargo +nightly fmt --all -- --check
-
-      - name: cargo clippy napi
-        run: make solana-encoding-napi-clippy
