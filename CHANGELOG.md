@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Fixes
+
+- client: auto-reconnect now quarantines replayed slots and compares blockhashes to handle the equivocation problem, preventing silent data loss when reconnecting to a node with different block content for the same slot.
+
 ## [Triton Extension Patches]
 
 ## 2026-06-10

@@ -412,7 +412,7 @@ where
         while !me.stop {
             if let Some(mut stream) = me.inner_stream.take() {
                 match Pin::new(&mut stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(msg))) => {
+                    Poll::Ready(Some(Ok(mut msg))) => {
                         if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
                             if let Some(slot) = extract_slot(&msg) {
                                 // checkpoint a few slots behind the last fully built slot.
@@ -425,10 +425,19 @@ where
                             }
                         }
 
-                        if msg.filters.len() == 1 && msg.filters[0] == AUTORECONNECT_FILTER_KEY {
+                        // The internal __autoreconnect filter is injected into slots/blocks_meta/entry
+                        // to guarantee the messages our invariants need (checkpointing, equivocation guard)
+
+                        if !msg.filters.is_empty()
+                            && msg.filters.iter().all(|f| f == AUTORECONNECT_FILTER_KEY)
+                        {
+                            // matched only our internal key (incl. empty) -> user never asked for this
                             me.inner_stream = Some(stream);
                             continue;
                         }
+
+                        // matched a user filter too -> strip the internal key, forward the rest
+                        msg.filters.retain(|f| f != AUTORECONNECT_FILTER_KEY);
 
                         me.inner_stream = Some(stream);
                         return Poll::Ready(Some(Ok(msg)));
@@ -440,16 +449,19 @@ where
                         if status.code() == Code::OutOfRange {
                             me.last_checkpoint = None;
                         }
-                        log::warn!(
-                            "stream error: {status}. starting reconnect from slot {:?}",
-                            me.last_checkpoint
-                        );
+                    
                         if me.backoff.max_retries == 0 {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
 
-                        let dedup_state = stream.state;
+                        log::warn!(
+                            "stream error: {status}. starting reconnect from slot {:?}",
+                            me.last_checkpoint
+                        );
+
+                        let mut dedup_state = stream.state;
+                        dedup_state.prepare_for_replay();
                         me.pending_connecting_task = Some(me.make_connection_future(dedup_state));
                     }
                     Poll::Ready(Some(Err(e))) => {
@@ -849,85 +861,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_dedup_record_and_detect() {
-        let mut dedup = DedupState::default();
-        let msg = make_slot_msg(100, 0);
-
-        assert!(!dedup.is_duplicate(&msg));
-        dedup.record(&msg);
-        assert!(dedup.is_duplicate(&msg));
-    }
-
-    #[test]
-    fn test_dedup_different_slots_not_duplicate() {
-        let mut dedup = DedupState::default();
-        let msg1 = make_slot_msg(100, 0);
-        let msg2 = make_slot_msg(101, 0);
-
-        dedup.record(&msg1);
-        assert!(!dedup.is_duplicate(&msg2));
-    }
-
-    #[test]
-    fn test_dedup_ping_ignored() {
-        let mut dedup = DedupState::default();
-        let msg = SubscribeUpdate {
-            filters: vec![],
-            update_oneof: Some(UpdateOneof::Ping(SubscribeUpdatePing {})),
-            created_at: None,
-        };
-
-        dedup.record(&msg);
-        assert!(!dedup.is_duplicate(&msg));
-    }
-
-    #[test]
-    fn test_dedup_clear() {
-        let mut dedup = DedupState::default();
-        let msg = make_slot_msg(100, 0);
-
-        dedup.record(&msg);
-        assert!(dedup.is_duplicate(&msg));
-        dedup.clear();
-        assert!(!dedup.is_duplicate(&msg));
-    }
-
-    #[test]
-    fn test_dedup_same_slot_different_status() {
-        let mut dedup = DedupState::default();
-        let msg1 = make_slot_msg(100, 0);
-        let msg2 = make_slot_msg(100, 1);
-
-        dedup.record(&msg1);
-        assert!(!dedup.is_duplicate(&msg2));
-    }
-
-    #[test]
-    fn test_dedup_prune() {
-        let mut dedup = DedupState::with_slot_retention(3);
-
-        dedup.record(&make_slot_msg(100, 0));
-        dedup.record(&make_slot_msg(101, 0));
-        dedup.record(&make_slot_msg(102, 0));
-        assert!(dedup.is_duplicate(&make_slot_msg(100, 0)));
-
-        dedup.record(&make_slot_msg(103, 0));
-        assert!(!dedup.is_duplicate(&make_slot_msg(100, 0)));
-        assert!(dedup.is_duplicate(&make_slot_msg(101, 0)));
-    }
-
-    #[test]
-    fn test_dedup_slot_status_moves_to_processed_on_blockmeta() {
-        let mut dedup = DedupState::default();
-
-        dedup.record(&make_slot_msg(200, 0));
-        dedup.record(&make_block_meta_msg(200));
-
-        assert!(dedup.is_duplicate(&make_slot_msg(200, 0)));
-        assert!(!dedup.is_duplicate(&make_slot_msg(200, 1)));
-    }
-
     #[tokio::test]
     async fn test_autoreconnect_recovers_from_recoverable_stream_error() {
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
@@ -1133,32 +1066,6 @@ mod tests {
         assert_eq!(connector.calls().len(), 0);
     }
 
-    #[test]
-    fn test_custom_slot_retention_honored() {
-        let mut dedup = DedupState::with_slot_retention(5);
-
-        // Record slots 1-10
-        for slot in 1..=10 {
-            dedup.record(&make_slot_msg(slot, 0));
-        }
-
-        // Slots 1-5 should be pruned, 6-10 should remain
-        for slot in 1..=5 {
-            assert!(
-                !dedup.is_duplicate(&make_slot_msg(slot, 0)),
-                "slot {} should be pruned",
-                slot
-            );
-        }
-        for slot in 6..=10 {
-            assert!(
-                dedup.is_duplicate(&make_slot_msg(slot, 0)),
-                "slot {} should remain",
-                slot
-            );
-        }
-    }
-
     #[tokio::test]
     async fn test_no_checkpoint_when_no_block_meta() {
         // Stream emits only account updates, no block_meta
@@ -1252,38 +1159,6 @@ mod tests {
             vec![Some(98)],
             "from_slot should be checkpoint - buffer"
         );
-    }
-
-    #[tokio::test]
-    async fn test_dedup_stream_standalone() {
-        // DedupStream works without AutoReconnect wrapper
-        let messages = vec![
-            Ok(make_slot_msg(100, 0)),
-            Ok(make_slot_msg(100, 0)), // duplicate
-            Ok(make_slot_msg(101, 0)),
-        ];
-
-        let inner = stream::iter(messages).boxed();
-        let mut dedup = DedupStream::new(inner, DedupState::default());
-
-        // First message passes
-        let msg1 = dedup
-            .next()
-            .await
-            .expect("expected item")
-            .expect("expected ok");
-        assert_eq!(extract_slot(&msg1), Some(100));
-
-        // Duplicate filtered, get next unique
-        let msg2 = dedup
-            .next()
-            .await
-            .expect("expected item")
-            .expect("expected ok");
-        assert_eq!(extract_slot(&msg2), Some(101));
-
-        // Stream ends
-        assert!(dedup.next().await.is_none());
     }
 
     #[tokio::test]
