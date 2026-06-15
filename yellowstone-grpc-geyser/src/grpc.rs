@@ -775,10 +775,20 @@ impl GrpcService {
                     };
                     metrics::message_queue_size_dec();
 
+                    if matches!(&message, Message::BlockMeta(_)) {
+                        let _ = block_reconstruction_tx.send(message);
+                        continue;
+                    }
+
                     processed_messages.push(message);
 
                     while let Ok(message) = messages_rx.try_recv() {
                         metrics::message_queue_size_dec();
+
+                        if matches!(&message, Message::BlockMeta(_)) {
+                            let _ = block_reconstruction_tx.send(message);
+                            continue;
+                        }
 
                         processed_messages.push(message);
                         if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
@@ -878,6 +888,10 @@ impl GrpcService {
                         // While, confirmed,finalized must be sent in the two flavors: as a stream of individual events and block.
                         if commitment_level != CommitmentLevel::Processed {
                             let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
+                        }
+                        else {
+                            let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
+                            let _ = broadcast_tx.send((commitment_level, Arc::new(vec![block_meta])));
                         }
                         let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
                         let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block])));
