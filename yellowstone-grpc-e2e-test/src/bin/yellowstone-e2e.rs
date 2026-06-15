@@ -24,7 +24,7 @@ enum Scenario {
 }
 
 impl Scenario {
-    fn name(&self) -> &'static str {
+    const fn name(&self) -> &'static str {
         match self {
             Self::SysvarAccount => "sysvar-account",
             Self::SysvarBlock => "sysvar-block",

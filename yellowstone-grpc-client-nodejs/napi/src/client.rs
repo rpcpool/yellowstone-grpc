@@ -88,7 +88,7 @@ impl GrpcClient {
       )
     })?;
 
-    Ok(Self { client: client })
+    Ok(Self { client })
   }
 
   #[napi]
