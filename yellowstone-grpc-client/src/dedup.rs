@@ -346,14 +346,17 @@ impl DedupState {
         for sealed in self.sealed.values_mut() {
             sealed.awaiting_replay = true;
         }
-        
+
         // Promote inflight slots to sealed-without-blockhash
         for (slot, state) in self.inflight.drain() {
-            self.sealed.insert(slot, SealedSlot {
-                blockhash: None,
-                statuses: state.statuses,
-                awaiting_replay: true,
-            });
+            self.sealed.insert(
+                slot,
+                SealedSlot {
+                    blockhash: None,
+                    statuses: state.statuses,
+                    awaiting_replay: true,
+                },
+            );
         }
     }
 

@@ -12,6 +12,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- client: only quarantine slots pending replay verification, not live-sealed slots
+- plugin: changed order of sent messages to client such that block_meta arrives 1 index before block message
+
+## 2026-06-15
+
+- yellowstone-grpc-geyser 13.2.3
+
+### Fixes
+
 - client: auto-reconnect now quarantines replayed slots and compares blockhashes to handle the equivocation problem, preventing silent data loss when reconnecting to a node with different block content for the same slot.
 
 ## 2026-06-03
