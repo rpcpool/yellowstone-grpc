@@ -9,8 +9,6 @@
 //! - Keep JS-facing API small and stable (`read` / `write_raw`)
 //! - Pass protobuf payload bytes over the N-API boundary
 //! - Stop worker tasks deterministically when JS drops stream handles
-#![cfg_attr(test, allow(dead_code))]
-
 mod bindings;
 mod client;
 mod cuckoo;

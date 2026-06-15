@@ -9,7 +9,7 @@ use {
         sync::Once,
     },
     tokio_stream::StreamExt,
-    yellowstone_grpc_client::GeyserGrpcClient,
+    yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_proto::geyser::{
         subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
@@ -55,8 +55,15 @@ pub fn init_log() {
 }
 
 async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
-    let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())
+    let mut builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())
         .context("endpoint should be a valid URI")?;
+
+    if config.endpoint.starts_with("https://") {
+        builder = builder
+            .tls_config(ClientTlsConfig::new().with_enabled_roots())
+            .context("failed to configure TLS for HTTPS endpoint")?;
+    }
+
     let builder = builder
         .x_token(config.x_token.clone())
         .context("x-token should be valid ASCII metadata if provided")?;

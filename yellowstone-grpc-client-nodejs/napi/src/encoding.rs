@@ -147,7 +147,6 @@ pub fn encode_tx(
 }
 
 #[napi]
-#[allow(dead_code)] // Exported through N-API and consumed from Node.js, not Rust call sites.
 pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
   let tx_error = wincode::deserialize::<TransactionErrorSolana>(&err).map_err(|error| {
     napi_error_with_cause(
