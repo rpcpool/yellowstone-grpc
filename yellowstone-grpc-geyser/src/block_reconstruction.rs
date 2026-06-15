@@ -126,6 +126,10 @@ impl FrozenBlock {
     pub fn messages(&self) -> Arc<Vec<Message>> {
         Arc::clone(&self.original_messages)
     }
+
+    pub fn get_block_meta(&self) -> Arc<MessageBlockMeta> {
+        Arc::clone(&self.block_meta)
+    }
 }
 
 pub struct SlotProgression {
