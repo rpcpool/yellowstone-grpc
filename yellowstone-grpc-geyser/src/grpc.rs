@@ -1,5 +1,6 @@
 use {
     crate::{
+        auth::PassthroughXTokenResolver,
         block_reconstruction::BlockMachineStorage,
         config::{ConfigGrpc, GrpcAddress},
         metered::PrometheusMeteredManager,
@@ -34,11 +35,9 @@ use {
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
-        future::Future,
         io,
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
-        path::PathBuf,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc, LazyLock, Mutex as StdMutex,
@@ -58,16 +57,18 @@ use {
         metadata::AsciiMetadataValue,
         service::interceptor,
         transport::{
-            server::{Connected, Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
+            server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
             CertificateDer,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
     triton_grpc_tools::server::{
-        tcp::{TcpConfiguration, TcpIncoming as TrtonTcpIncoming},
+        tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
         tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
-        tonic::metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+        tonic::{
+            metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+        },
     },
     yellowstone_grpc_proto::prelude::{
         CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
@@ -439,7 +440,7 @@ impl Drop for ClientSession {
 }
 
 enum Listener {
-    Tcp(TrtonTcpIncoming),
+    Tcp(TritonTcpIncoming),
     Tls(TlsIncoming),
     Unix(UnixListenerStream), // path needed to remove the socket file on exit
 }
@@ -533,7 +534,7 @@ impl GrpcService {
         for addr in &config.address.inner {
             let listener = match addr {
                 GrpcAddress::Tcp(addr) => {
-                    let incoming = TrtonTcpIncoming::bind_with_config(
+                    let incoming = TritonTcpIncoming::bind_with_config(
                         addr,
                         TcpConfiguration::default()
                             .with_nodelay(Some(true))

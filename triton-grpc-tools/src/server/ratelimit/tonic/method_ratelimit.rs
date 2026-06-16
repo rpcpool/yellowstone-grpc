@@ -1,31 +1,15 @@
 use {
-    crate::server::ratelimit::window::{SlidingWindowRateLimiter, WindowDecision},
+    crate::server::ratelimit::window::TokenBucketRateLimiter,
     http::{header::RETRY_AFTER, Request, Response, StatusCode},
     pin_project::pin_project,
     std::{
         collections::HashMap,
         future::Future,
-        sync::{Arc, Mutex},
         task::{Context, Poll},
         time::{Duration, Instant},
     },
     tonic::codegen::{Body as HttpBody, Service, StdError},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Key material used by method-level limiters.
-///
-/// Combines the extracted principal key with its resolved tier.
-pub struct TieredRateLimitKey<K> {
-    pub key: K,
-    pub tier: String,
-}
-
-#[derive(Debug)]
-enum LimiterStore<K> {
-    Shared(Arc<Mutex<SlidingWindowRateLimiter<K>>>),
-    ByTier(Arc<Mutex<HashMap<String, SlidingWindowRateLimiter<K>>>>),
-}
 
 #[pin_project(project = MethodRateLimitedFutureProj)]
 /// Future returned by [`MethodRateLimitedService`].
@@ -68,62 +52,36 @@ where
     }
 }
 
-pub trait RateLimitKeyExtractor {
-    type Key: Clone + PartialEq + Eq + std::hash::Hash;
-
-    /// Extracts principal key and tier from the incoming request.
-    fn extract_key_tier_pair<ReqBody>(
-        &self,
-        request: &Request<ReqBody>,
-    ) -> Option<TieredRateLimitKey<Self::Key>>;
+pub trait RateLimiterStore {
+    fn accept_req<B>(&self, request: &Request<B>, now: Instant) -> Result<(), Duration>;
 }
 
-impl<S, KE, K> MethodRateLimitedService<S, KE, K> {
+impl<S, RL> MethodRateLimitedService<S, RL> {
     /// Creates a service that applies one shared limiter to all extracted keys.
-    pub fn new(
-        inner: S,
-        key_extractor: KE,
-        shared_limiter: Arc<Mutex<SlidingWindowRateLimiter<K>>>,
-    ) -> Self {
+    pub fn new(inner: S, rate_limiter: RL) -> Self {
         Self {
             inner,
-            key_extractor,
-            limiters: LimiterStore::Shared(shared_limiter),
-        }
-    }
-
-    /// Creates a service with independent limiters per tier.
-    pub fn new_tiered(
-        inner: S,
-        key_extractor: KE,
-        limiters_by_tier: Arc<Mutex<HashMap<String, SlidingWindowRateLimiter<K>>>>,
-    ) -> Self {
-        Self {
-            inner,
-            key_extractor,
-            limiters: LimiterStore::ByTier(limiters_by_tier),
+            rate_limiter,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct MethodRateLimitedService<S, KE, K> {
+pub struct MethodRateLimitedService<S, RL> {
     inner: S,
-    key_extractor: KE,
-    limiters: LimiterStore<K>,
+    rate_limiter: RL,
 }
 
 /// Backward-compatible alias for previous naming.
-pub type MethodRatelimitedService<S, KE, K> = MethodRateLimitedService<S, KE, K>;
+pub type MethodRatelimitedService<S, RL> = MethodRateLimitedService<S, RL>;
 
-impl<S, KE, K, ReqBody, ResBody> Service<Request<ReqBody>> for MethodRateLimitedService<S, KE, K>
+impl<S, RL, ReqBody, ResBody> Service<Request<ReqBody>> for MethodRateLimitedService<S, RL>
 where
     S: Service<Request<ReqBody>, Response = Response<ResBody>>,
     S::Future: Send + 'static + Unpin,
     ResBody: HttpBody + Send + 'static,
     ResBody::Error: Into<StdError>,
-    KE: RateLimitKeyExtractor<Key = K>,
-    K: Eq + std::hash::Hash,
+    RL: RateLimiterStore,
     ResBody: Default,
 {
     type Response = Response<ResBody>;
@@ -135,52 +93,30 @@ where
     }
 
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
-        let Some(TieredRateLimitKey { key, tier }) =
-            self.key_extractor.extract_key_tier_pair(&request)
-        else {
-            return MethodRateLimitedFuture::Allowed {
-                future: self.inner.call(request),
-            };
-        };
         let now = Instant::now();
-
-        let decision = match &self.limiters {
-            LimiterStore::Shared(shared_limiter) => {
-                let mut guard = shared_limiter
-                    .lock()
-                    .expect("shared limiter mutex poisoned");
-                guard.check_at(key, now)
-            }
-            LimiterStore::ByTier(by_tier) => {
-                let mut guard = by_tier.lock().expect("tiered limiter mutex poisoned");
-                if let Some(limiter) = guard.get_mut(&tier) {
-                    limiter.check_at(key, now)
-                } else {
-                    // Unknown tiers are allowed by default so callers can phase in limits.
-                    WindowDecision {
-                        allowed: true,
-                        remaining: u64::MAX,
-                        retry_after: Duration::ZERO,
-                    }
-                }
-            }
-        };
-
-        if decision.allowed {
-            return MethodRateLimitedFuture::Allowed {
+        if let Err(retry_after) = self.rate_limiter.accept_req(&request, now) {
+            let retry_after_secs = retry_after.as_secs().max(1).to_string();
+            let response = Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header(RETRY_AFTER, retry_after_secs)
+                .body(ResBody::default())
+                .expect("failed to build rate-limited response");
+            MethodRateLimitedFuture::denied(response)
+        } else {
+            MethodRateLimitedFuture::Allowed {
                 future: self.inner.call(request),
-            };
+            }
         }
-
-        let retry_after_secs = decision.retry_after.as_secs().max(1).to_string();
-        let response = Response::builder()
-            .status(StatusCode::TOO_MANY_REQUESTS)
-            .header(RETRY_AFTER, retry_after_secs)
-            .body(ResBody::default())
-            .expect("failed to build rate-limited response");
-
-        MethodRateLimitedFuture::denied(response)
     }
+}
+
+pub struct SlidingWindowRateLimiterStore<K> {
+    active_window_map: TokenBucketRateLimiter<K>,
+    last_window_update: HashMap<K, Instant>,
+    /// Duration after which an inactive key is evicted from the limiter state.
+    idle_timeout: Duration,
+    // After how many calls to accept_req() should we perform a GC tick to evict inactive keys.
+    gc_tick: usize,
 }
 
 #[cfg(test)]
@@ -199,44 +135,30 @@ mod tests {
         },
     };
 
-    struct TestExtractor;
+    #[derive(Clone, Copy)]
+    enum StoreDecision {
+        Allow,
+        Deny(Duration),
+    }
 
-    impl RateLimitKeyExtractor for TestExtractor {
-        type Key = String;
+    struct TestStore {
+        decision: StoreDecision,
+        calls: Arc<AtomicUsize>,
+    }
 
-        fn extract_key_tier_pair<ReqBody>(
-            &self,
-            request: &Request<ReqBody>,
-        ) -> Option<TieredRateLimitKey<Self::Key>> {
-            Some(TieredRateLimitKey {
-                key: request
-                    .headers()
-                    .get("x-key")
-                    .expect("x-key required")
-                    .to_str()
-                    .expect("x-key utf8")
-                    .to_owned(),
-                tier: request
-                    .headers()
-                    .get("x-tier")
-                    .expect("x-tier required")
-                    .to_str()
-                    .expect("x-tier utf8")
-                    .to_owned(),
-            })
+    impl TestStore {
+        fn new(decision: StoreDecision, calls: Arc<AtomicUsize>) -> Self {
+            Self { decision, calls }
         }
     }
 
-    struct NoneExtractor;
-
-    impl RateLimitKeyExtractor for NoneExtractor {
-        type Key = String;
-
-        fn extract_key_tier_pair<ReqBody>(
-            &self,
-            _request: &Request<ReqBody>,
-        ) -> Option<TieredRateLimitKey<Self::Key>> {
-            None
+    impl RateLimiterStore for TestStore {
+        fn accept_req<B>(&self, _request: &Request<B>, _now: Instant) -> Result<(), Duration> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            match self.decision {
+                StoreDecision::Allow => Ok(()),
+                StoreDecision::Deny(retry_after) => Err(retry_after),
+            }
         }
     }
 
@@ -269,92 +191,71 @@ mod tests {
     }
 
     #[test]
-    fn tiered_mode_selects_tier_specific_limiter() {
+    fn allowed_request_forwards_to_inner_service() {
         let call_count = Arc::new(AtomicUsize::new(0));
+        let limiter_calls = Arc::new(AtomicUsize::new(0));
 
-        let mut per_tier = HashMap::new();
-        per_tier.insert(
-            "free".to_owned(),
-            SlidingWindowRateLimiter::<String>::new(1, Duration::from_secs(10), 10),
-        );
-        per_tier.insert(
-            "pro".to_owned(),
-            SlidingWindowRateLimiter::<String>::new(2, Duration::from_secs(10), 10),
-        );
-
-        let mut svc = MethodRateLimitedService::new_tiered(
+        let mut svc = MethodRateLimitedService::new(
             TestService::new(Arc::clone(&call_count)),
-            TestExtractor,
-            Arc::new(Mutex::new(per_tier)),
+            TestStore::new(StoreDecision::Allow, Arc::clone(&limiter_calls)),
         );
 
-        let req_free_1 = Request::builder()
-            .header("x-tier", "free")
-            .header("x-key", "alice")
-            .body(())
-            .expect("request build");
-        let resp1 = block_on(svc.call(req_free_1)).expect("free request 1 should succeed");
-        assert_eq!(resp1.status(), StatusCode::OK);
-
-        let req_free_2 = Request::builder()
-            .header("x-tier", "free")
-            .header("x-key", "alice")
-            .body(())
-            .expect("request build");
-        let resp2 = block_on(svc.call(req_free_2))
-            .expect("denied response should still be Ok transport-wise");
-        assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let req_pro_1 = Request::builder()
-            .header("x-tier", "pro")
-            .header("x-key", "alice")
-            .body(())
-            .expect("request build");
-        let resp3 = block_on(svc.call(req_pro_1)).expect("pro request should be allowed");
-        assert_eq!(resp3.status(), StatusCode::OK);
-
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn unknown_tier_fails_open_and_forwards() {
-        let call_count = Arc::new(AtomicUsize::new(0));
-
-        let mut wrapped = MethodRateLimitedService::new_tiered(
-            TestService::new(Arc::clone(&call_count)),
-            TestExtractor,
-            Arc::new(Mutex::new(HashMap::new())),
-        );
-
-        let req = Request::builder()
-            .header("x-tier", "unknown")
-            .header("x-key", "alice")
-            .body(())
-            .expect("request build");
-        let resp = block_on(wrapped.call(req)).expect("unknown tier should fail open");
+        let req = Request::builder().body(()).expect("request build");
+        let resp = block_on(svc.call(req)).expect("request should succeed");
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(limiter_calls.load(Ordering::Relaxed), 1);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn none_extracted_key_skips_rate_limiting() {
+    fn denied_request_returns_429_without_calling_inner_service() {
         let call_count = Arc::new(AtomicUsize::new(0));
+        let limiter_calls = Arc::new(AtomicUsize::new(0));
 
-        let limiter = SlidingWindowRateLimiter::<String>::new(1, Duration::from_secs(10), 10);
         let mut svc = MethodRateLimitedService::new(
             TestService::new(Arc::clone(&call_count)),
-            NoneExtractor,
-            Arc::new(Mutex::new(limiter)),
+            TestStore::new(
+                StoreDecision::Deny(Duration::from_secs(5)),
+                Arc::clone(&limiter_calls),
+            ),
         );
 
-        let req1 = Request::builder().body(()).expect("request build");
-        let resp1 = block_on(svc.call(req1)).expect("first request should pass through");
-        assert_eq!(resp1.status(), StatusCode::OK);
+        let req = Request::builder().body(()).expect("request build");
+        let resp = block_on(svc.call(req)).expect("denied response should still resolve");
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get(RETRY_AFTER)
+                .expect("retry-after header expected"),
+            "5"
+        );
+        assert_eq!(limiter_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+    }
 
-        let req2 = Request::builder().body(()).expect("request build");
-        let resp2 = block_on(svc.call(req2)).expect("second request should also pass through");
-        assert_eq!(resp2.status(), StatusCode::OK);
+    #[test]
+    fn denied_request_retry_after_is_at_least_one_second() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let limiter_calls = Arc::new(AtomicUsize::new(0));
 
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+        let mut svc = MethodRateLimitedService::new(
+            TestService::new(Arc::clone(&call_count)),
+            TestStore::new(
+                StoreDecision::Deny(Duration::from_millis(250)),
+                Arc::clone(&limiter_calls),
+            ),
+        );
+
+        let req = Request::builder().body(()).expect("request build");
+        let resp = block_on(svc.call(req)).expect("denied response should still resolve");
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get(RETRY_AFTER)
+                .expect("retry-after header expected"),
+            "1"
+        );
+        assert_eq!(limiter_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
     }
 }

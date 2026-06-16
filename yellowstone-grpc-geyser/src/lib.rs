@@ -1,11 +1,11 @@
+pub mod auth;
+pub mod billing;
 mod block_reconstruction;
 pub mod config;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;
 pub mod plugin;
-// pub mod transport;
-pub mod lago_billing;
 pub(crate) mod util;
 pub mod version;
 
