@@ -30,7 +30,6 @@ pub(crate) enum Observation {
 struct SealedSlot {
     blockhash: Option<String>,
     statuses: HashSet<i32>,
-    awaiting_replay: bool,
 }
 
 struct ReplayBuffer<T> {
@@ -271,13 +270,9 @@ impl DedupState {
                 // across the reconnect. If no blockhash is stored (slot was partial
                 // when we disconnected), treat as changed and flush always.
                 if let Some(sealed) = self.sealed.get_mut(&slot) {
-                    if sealed.awaiting_replay {
-                        let same = sealed.blockhash.as_ref() == Some(&blockhash);
-                        sealed.blockhash = Some(blockhash);
-                        sealed.awaiting_replay = false;
-                        return Observation::ReplayComplete { same };
-                    }
-                    return Observation::Duplicate;
+                    let same = sealed.blockhash.as_ref() == Some(&blockhash);
+                    sealed.blockhash = Some(blockhash);
+                    return Observation::ReplayComplete { same };
                 }
 
                 // First BlockMeta for this slot: seal it. The SlotState is destroyed;
@@ -288,7 +283,6 @@ impl DedupState {
                     SealedSlot {
                         blockhash: Some(blockhash),
                         statuses: state.statuses,
-                        awaiting_replay: false,
                     },
                 );
                 self.prune();
@@ -297,21 +291,10 @@ impl DedupState {
 
             // Accounts, transactions, entries, blocks, etc.
             payload => {
-                // Sealed slot: three cases depending on state.
-                // 1. Awaiting replay verification: quarantine until replayed BlockMeta verdict.
-                // 2. Block message on live path: arrives after seal, forward to user.
-                // 3. Everything else: already delivered before seal, drop as duplicate.
-                if let Some(sealed) = self.sealed.get(&slot) {
-                    if sealed.awaiting_replay {
-                        return Observation::Replay;
-                    }
-                    // Block is assembled after BlockMeta seals the slot and is never
-                    // part of replay. Forward it; other payloads were already delivered
-                    // before seal and are genuine duplicates.
-                    if matches!(payload, DedupKey::Block(_)) {
-                        return Observation::New;
-                    }
-                    return Observation::Duplicate;
+                // Sealed slot: hold for quarantine. The verdict comes when the
+                // replayed BlockMeta arrives; until then we buffer without deduping.
+                if self.sealed.contains_key(&slot) {
+                    return Observation::Replay;
                 }
 
                 let state = self.slot_mut(slot);
@@ -342,19 +325,12 @@ impl DedupState {
     /// Replayed content for these slots will be quarantined and flushed at
     /// BlockMeta (no stored blockhash to compare, so always flush).
     pub(crate) fn prepare_for_replay(&mut self) {
-        // Mark all already-sealed slots for verification
-        for sealed in self.sealed.values_mut() {
-            sealed.awaiting_replay = true;
-        }
-
-        // Promote inflight slots to sealed-without-blockhash
         for (slot, state) in self.inflight.drain() {
             self.sealed.insert(
                 slot,
                 SealedSlot {
                     blockhash: None,
                     statuses: state.statuses,
-                    awaiting_replay: true,
                 },
             );
         }
@@ -606,8 +582,6 @@ mod tests {
         observe(&mut dedup, &make_slot_msg(300, 0));
         observe(&mut dedup, &make_block_meta_msg(300));
 
-        dedup.prepare_for_replay(); // simulate reconnect
-
         // a replayed account for a sealed slot should be quarantined
         let account_msg = make_account_msg(300);
         assert!(matches!(
@@ -624,8 +598,6 @@ mod tests {
         observe(&mut dedup, &make_slot_msg(400, 0));
         observe(&mut dedup, &make_block_meta_msg_with_hash(400, "abc"));
 
-        dedup.prepare_for_replay();
-
         // replayed BlockMeta with same hash: same block, discard
         assert!(matches!(
             observe(&mut dedup, &make_block_meta_msg_with_hash(400, "abc")),
@@ -640,8 +612,6 @@ mod tests {
         // seal slot 500 with blockhash "block_a"
         observe(&mut dedup, &make_slot_msg(500, 0));
         observe(&mut dedup, &make_block_meta_msg_with_hash(500, "block_a"));
-
-        dedup.prepare_for_replay();
 
         // replayed BlockMeta with different hash: block changed, flush
         assert!(matches!(

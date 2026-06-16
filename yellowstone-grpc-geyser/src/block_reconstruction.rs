@@ -1,7 +1,10 @@
 use {
-    crate::plugin::message::{
-        Message, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
-        MessageTransactionInfo, SlotStatus,
+    crate::{
+        metrics,
+        plugin::message::{
+            Message, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransactionInfo, SlotStatus,
+        },
     },
     solana_commitment_config::CommitmentLevel,
     solana_hash::Hash,
@@ -75,7 +78,7 @@ impl ProcessingSlot {
             })
             .collect::<Vec<_>>();
         // Yet another clone of all the messages, but that prevents from doing this later on anyway, while making iterator code easier to implement.
-        let mut dedup_messages = self
+        let dedup_messages = self
             .original_messages
             .into_iter()
             .filter_map(|message| {
@@ -94,9 +97,15 @@ impl ProcessingSlot {
             })
             .collect::<Vec<_>>();
 
-        // We absolutely need to add blockmeta add the add of the message list, so when we replay from the beginning to the end
-        // we get: all the accounts/transactions/entries + the blockmeta at the end.
-        dedup_messages.push(Message::BlockMeta(Arc::clone(&block_meta)));
+        if self.transactions.len() != block_meta.executed_transaction_count as usize {
+            metrics::incr_geyser_block_mismatch_transaction();
+            log::warn!(
+                "Block meta transaction count {} does not match actual transaction count {} for slot {}",
+                block_meta.executed_transaction_count,
+                self.transactions.len(),
+                block_meta.slot
+            );
+        }
 
         let pre_computed_message_block = MessageBlock::new(
             Arc::clone(&block_meta),
@@ -104,6 +113,7 @@ impl ProcessingSlot {
             account_info_vec,
             self.entries,
         );
+
         FrozenBlock {
             original_messages: Arc::new(dedup_messages),
             block_meta,
@@ -825,11 +835,7 @@ mod tests {
             .filter(|m| matches!(m, Message::Entry(_)))
             .count();
 
-        let last_message = messages.last().unwrap();
-        assert!(
-            matches!(last_message, Message::BlockMeta(_)),
-            "last message should be BlockMeta"
-        );
+        /* Last message is explicitly sent as BlockMeta, its no longer implicit inside of original_messages */
         assert_eq!(entry_count, 2);
     }
 
@@ -867,11 +873,7 @@ mod tests {
                 .iter()
                 .filter(|m| matches!(m, Message::Entry(_)))
                 .count();
-            let last_message = messages.last().unwrap();
-            assert!(
-                matches!(last_message, Message::BlockMeta(_)),
-                "last message should be BlockMeta"
-            );
+            /* Last message is explicitly sent as BlockMeta, its no longer implicit inside of original_messages */
             assert_eq!(entry_count, 2);
         }
     }
