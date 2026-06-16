@@ -5,6 +5,8 @@ use {
     std::{
         collections::HashMap,
         future::Future,
+        hash::Hash,
+        sync::{Arc, Mutex},
         task::{Context, Poll},
         time::{Duration, Instant},
     },
@@ -111,12 +113,81 @@ where
 }
 
 pub struct SlidingWindowRateLimiterStore<K> {
+    inner: Arc<Mutex<SlidingWindowRateLimiterStoreInner<K>>>,
+}
+
+struct SlidingWindowRateLimiterStoreInner<K> {
     active_window_map: TokenBucketRateLimiter<K>,
     last_window_update: HashMap<K, Instant>,
     /// Duration after which an inactive key is evicted from the limiter state.
     idle_timeout: Duration,
     // After how many calls to accept_req() should we perform a GC tick to evict inactive keys.
     gc_tick: usize,
+    request_counter: usize,
+}
+
+impl<K> SlidingWindowRateLimiterStore<K>
+where
+    K: Eq + Hash + Clone + From<String>,
+{
+    pub fn new(
+        active_window_map: TokenBucketRateLimiter<K>,
+        idle_timeout: Duration,
+        gc_tick: usize,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SlidingWindowRateLimiterStoreInner {
+                active_window_map,
+                last_window_update: HashMap::new(),
+                idle_timeout,
+                gc_tick,
+                request_counter: 0,
+            })),
+        }
+    }
+
+    fn maybe_run_gc(inner: &mut SlidingWindowRateLimiterStoreInner<K>, now: Instant) {
+        if inner.gc_tick == 0 {
+            return;
+        }
+
+        inner.request_counter += 1;
+        if inner.request_counter % inner.gc_tick != 0 {
+            return;
+        }
+
+        inner
+            .last_window_update
+            .retain(|_, seen_at| now.saturating_duration_since(*seen_at) <= inner.idle_timeout);
+
+        // Token bucket keeps internal states private; prune fully refilled buckets on GC ticks.
+        inner.active_window_map.prune_at(now);
+    }
+}
+
+impl<K> RateLimiterStore for SlidingWindowRateLimiterStore<K>
+where
+    K: Eq + Hash + Clone + From<String>,
+{
+    fn accept_req<B>(&self, request: &Request<B>, now: Instant) -> Result<(), Duration> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("sliding window store mutex poisoned");
+
+        Self::maybe_run_gc(&mut inner, now);
+
+        let key = K::from(request.uri().path().to_owned());
+        let decision = inner.active_window_map.check_at(key.clone(), now);
+
+        inner.last_window_update.insert(key, now);
+
+        if decision.allowed {
+            Ok(())
+        } else {
+            Err(decision.retry_after)
+        }
+    }
 }
 
 #[cfg(test)]
