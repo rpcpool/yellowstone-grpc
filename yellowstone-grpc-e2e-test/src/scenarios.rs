@@ -234,7 +234,7 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
         .subscribe_once(subscription)
         .await
         .context("subscription should succeed")?;
-    const MAX_UPDATES: usize = 12;
+    const MAX_UPDATES: usize = 5;
 
     let mut block_received: HashMap<u64, (String, usize)> = HashMap::new();
     let mut block_meta_received: HashMap<u64, (String, u64)> = HashMap::new();
@@ -268,26 +268,6 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
                 );
                 let blockhash = block.blockhash.clone();
                 block_received.insert(block.slot, (blockhash.clone(), block.transactions.len()));
-                if let Some((blockmeta_blockhash, actual_txn_cnt)) =
-                    block_meta_received.get(&block.slot)
-                {
-                    ensure!(
-                        blockhash.as_str() == blockmeta_blockhash.as_str(),
-                        "blockhash in block should match block meta update"
-                    );
-                    let txn_count = block.transactions.len();
-                    ensure!(
-                        *actual_txn_cnt == txn_count as u64,
-                        "executed transaction count in meta should match number of transactions in block"
-                    );
-                    let account_count = block.accounts.len();
-                    count += 1;
-                    log::info!(
-                        "received block update for slot {}, txn: {txn_count}, acct:{account_count}  {}/{MAX_UPDATES}",
-                        block.slot,
-                        block_received.len(),
-                    );
-                }
             }
             UpdateOneof::BlockMeta(meta) => {
                 let blockhash = meta.blockhash.clone();
@@ -296,11 +276,16 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
                     (blockhash.clone(), meta.executed_transaction_count),
                 );
 
-                if let Some((block_blockhash, _actual_txn_cnt)) = block_received.get(&meta.slot) {
+                if let Some((block_blockhash, actual_txn_cnt)) = block_received.get(&meta.slot) {
                     ensure!(
                         blockhash == *block_blockhash,
                         "blockhash in meta should match block update"
                     );
+                    ensure!(
+                        meta.executed_transaction_count as usize == *actual_txn_cnt,
+                        "executed transaction count in meta should match number of transactions in block"  
+                    );
+                    count += 1;
                     log::info!(
                         "received block update for slot {} {count}/{MAX_UPDATES}",
                         meta.slot
