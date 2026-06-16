@@ -1,13 +1,10 @@
 use {
-    crate::auth::SubscriptionInfo,
-    bytesize::ByteSize,
-    std::{
+    crate::auth::SubscriptionInfo, bytesize::ByteSize, std::{
         sync::Arc,
         time::{Duration, Instant, SystemTime},
-    },
-    tonic::service::Interceptor,
-    triton_grpc_tools::server::tonic::metered::MeteredBandwidthHooks,
+    }, tokio::sync::mpsc::UnboundedReceiver, tonic::service::Interceptor, triton_grpc_tools::server::tonic::metered::MeteredBandwidthHooks
 };
+
 
 #[derive(Debug, serde::Serialize)]
 pub struct BandwidthBillingEvent {
@@ -17,6 +14,7 @@ pub struct BandwidthBillingEvent {
     pub bytes: ByteSize,
 }
 
+
 #[derive(Debug, serde::Serialize)]
 pub struct RequestBillingEvent {
     pub timestamp: SystemTime,
@@ -24,12 +22,25 @@ pub struct RequestBillingEvent {
     pub method: String,
 }
 
-/// So you will do two types of lines
+
+pub enum ServiceBillingEvent {
+    Bandwidth(BandwidthBillingEvent),
+    Request(RequestBillingEvent),
+}
+
+
+pub struct FileBillingAppender {
+    rx: UnboundedReceiver<ServiceBillingEvent>,
+    
+}
+
+
+/// So you will do two types of lines 
 
 /// timestamp
 /// Sub_id
 /// Method
-/// Count
+/// Count 
 /// And
 /// timestamp
 /// sub_id
@@ -43,6 +54,7 @@ pub struct RequestBillingEvent {
 pub struct BillingBandwidthMeteredHooks {
     subscriber_id: String,
     uri_path: String,
+
 }
 impl MeteredBandwidthHooks for BillingBandwidthMeteredHooks {
     fn on_emit_bytes(&mut self, byte_count: u64, _now: Instant, system_now: SystemTime) {
@@ -52,15 +64,17 @@ impl MeteredBandwidthHooks for BillingBandwidthMeteredHooks {
     }
 }
 
-pub struct RequestBillingInterceptor {}
+
+
+pub struct RequestBillingInterceptor {
+}
+
 
 impl Interceptor for RequestBillingInterceptor {
-    fn call(
-        &mut self,
-        request: tonic::Request<()>,
-    ) -> std::result::Result<tonic::Request<()>, tonic::Status> {
+    fn call(&mut self, request: tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status> {
         let ext = request.extensions().get::<SubscriptionInfo>();
-        let subscription_id = ext.map(|mapping| mapping.subscription_id.clone());
+        let subscription_id = ext
+            .map(|mapping| mapping.subscription_id.clone());
 
         // TODO emit billing event to Lago with method name and subscription id (if available in request metadata)
         Ok(request)
