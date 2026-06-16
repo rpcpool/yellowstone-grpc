@@ -11,7 +11,7 @@ on:
   pull_request:
     paths:
       - 'yellowstone-grpc-client-nodejs/**'
-      - '.github/workflows/napi-integration-tests.yml'
+      - '.github/workflows/ts-sdk-integration-tests.yml'
   workflow_dispatch:
 
 env:
