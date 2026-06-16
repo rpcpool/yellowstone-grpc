@@ -48,7 +48,7 @@ pub struct RunConfig {
 /// Initializes logger once for scenario execution.
 pub fn init_log() {
     LOG_INIT.call_once(|| {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error"))
             .try_init()
             .ok();
     });

@@ -1,7 +1,8 @@
 use {
     anyhow::{Context, Result},
     clap::{Parser, Subcommand, ValueEnum},
-    std::{collections::HashMap, env, path::PathBuf, process::ExitCode},
+    std::{collections::HashMap, env, io::Write, path::PathBuf, process::ExitCode},
+    tokio::time::{self, Duration, MissedTickBehavior},
     yellowstone_grpc_intg_test::scenarios::{
         any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
         it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
@@ -152,20 +153,58 @@ fn resolve_x_token(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option
 }
 
 async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
-    match scenario {
-        Scenario::SysvarAccount => subscribe_should_only_returns_sysvarclock_account(config).await,
-        Scenario::SysvarBlock => {
-            subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(config)
-                .await
+    let mut result = Box::pin(async {
+        match scenario {
+            Scenario::SysvarAccount => subscribe_should_only_returns_sysvarclock_account(config).await,
+            Scenario::SysvarBlock => {
+                subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(config)
+                    .await
+            }
+            Scenario::FullBlocks => subscribe_should_receive_full_blocks(config).await,
+            Scenario::Replay => it_should_support_replay(config).await,
+            Scenario::Deshred => test_subscribe_deshred(config).await,
+            Scenario::AnyCommitment => {
+                any_commitment_level_of_subscription_should_return_all_possible_values(config).await
+            }
+            Scenario::TokenOwnerBalanceChanged => {
+                it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(config).await
+            }
         }
-        Scenario::FullBlocks => subscribe_should_receive_full_blocks(config).await,
-        Scenario::Replay => it_should_support_replay(config).await,
-        Scenario::Deshred => test_subscribe_deshred(config).await,
-        Scenario::AnyCommitment => {
-            any_commitment_level_of_subscription_should_return_all_possible_values(config).await
-        }
-        Scenario::TokenOwnerBalanceChanged => {
-            it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(config).await
+    });
+    let mut interval = time::interval(Duration::from_millis(120));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    let frames = ["|", "/", "-", "\\"];
+    let mut frame_index = 0usize;
+    let mut stdout = std::io::stdout();
+
+    loop {
+        tokio::select! {
+            res = &mut result => {
+                write!(stdout, "\r\x1b[2K")?;
+                if res.is_ok() {
+                    writeln!(stdout, "✅ scenario '{}' passed", scenario.name())?;
+                } else {
+                    writeln!(
+                        stdout,
+                        "[failed] scenario '{}' failed: {:#}",
+                        scenario.name(),
+                        res.as_ref().err().expect("error should be present on failure")
+                    )?;
+                }
+                stdout.flush()?;
+                return res;
+            }
+            _ = interval.tick() => {
+                write!(
+                    stdout,
+                    "\r{} running scenario '{}'...",
+                    frames[frame_index],
+                    scenario.name()
+                )?;
+                stdout.flush()?;
+                frame_index = (frame_index + 1) % frames.len();
+            }
         }
     }
 }
