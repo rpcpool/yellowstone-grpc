@@ -6,8 +6,8 @@ use {
     yellowstone_grpc_intg_test::scenarios::{
         any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
         it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
-        it_should_support_replay, scenario_description,
-        subscribe_should_only_returns_sysvarclock_account,
+        it_should_support_replay, it_should_verifies_geyser_event_ordering_is_correct,
+        scenario_description, subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
         subscribe_should_receive_full_blocks, test_subscribe_deshred, RunConfig,
     },
@@ -22,6 +22,7 @@ enum Scenario {
     Deshred,
     AnyCommitment,
     TokenOwnerBalanceChanged,
+    Ordering,
 }
 
 impl Scenario {
@@ -34,6 +35,7 @@ impl Scenario {
             Self::Deshred => "deshred",
             Self::AnyCommitment => "any-commitment",
             Self::TokenOwnerBalanceChanged => "token-owner-balance-changed",
+            Self::Ordering => "event-ordering",
         }
     }
 
@@ -155,10 +157,14 @@ fn resolve_x_token(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option
 async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
     let mut result = Box::pin(async {
         match scenario {
-            Scenario::SysvarAccount => subscribe_should_only_returns_sysvarclock_account(config).await,
+            Scenario::SysvarAccount => {
+                subscribe_should_only_returns_sysvarclock_account(config).await
+            }
             Scenario::SysvarBlock => {
-                subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(config)
-                    .await
+                subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(
+                    config,
+                )
+                .await
             }
             Scenario::FullBlocks => subscribe_should_receive_full_blocks(config).await,
             Scenario::Replay => it_should_support_replay(config).await,
@@ -169,6 +175,7 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
             Scenario::TokenOwnerBalanceChanged => {
                 it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(config).await
             }
+            Scenario::Ordering => it_should_verifies_geyser_event_ordering_is_correct(config).await,
         }
     });
     let mut interval = time::interval(Duration::from_millis(120));
@@ -187,9 +194,9 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
                 } else {
                     writeln!(
                         stdout,
-                        "[failed] scenario '{}' failed: {:#}",
+                        "❌ scenario '{}' failed: {:#}",
                         scenario.name(),
-                        res.as_ref().err().expect("error should be present on failure")
+                        res.as_ref().expect_err("error should be present on failure")
                     )?;
                 }
                 stdout.flush()?;
@@ -246,6 +253,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Scenario::Deshred,
                 Scenario::AnyCommitment,
                 Scenario::TokenOwnerBalanceChanged,
+                Scenario::Ordering,
             ];
 
             for scenario in scenarios {

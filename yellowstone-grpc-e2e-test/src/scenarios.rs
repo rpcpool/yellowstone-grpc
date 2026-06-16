@@ -15,7 +15,9 @@ use {
         subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
         SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
+        SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateBlock,
+        SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateTransaction,
+        TokenAccountExpansionControlFlag,
     },
 };
 
@@ -680,5 +682,171 @@ pub async fn it_should_subscribe_to_all_transaction_include_token_ata_to_an_owne
         count > 0,
         "should receive at least one matching token balance-changed transaction update"
     );
+    Ok(())
+}
+
+/// validators message ordering guarantees that are provided by geyser.
+#[test_helper(name = "event-ordering")]
+pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+    let subscription = SubscribeRequest {
+        transactions: HashMap::from([("test".to_string(), Default::default())]),
+        blocks: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterBlocks {
+                include_accounts: Some(false),
+                include_transactions: Some(false),
+                include_entries: Some(false),
+                ..Default::default()
+            },
+        )]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        accounts: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![],
+                ..Default::default()
+            },
+        )]),
+        entry: HashMap::from([("test".to_string(), Default::default())]),
+        slots: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterSlots {
+                interslot_updates: Some(true),
+                ..Default::default()
+            },
+        )]),
+        commitment: Some(0),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+
+    struct BlockBuffer {
+        slot: u64,
+        account: Vec<SubscribeUpdateAccount>,
+        transaction: Vec<SubscribeUpdateTransaction>,
+        entry: Vec<SubscribeUpdateEntry>,
+        block: Option<SubscribeUpdateBlock>,
+        blockmeta: Option<SubscribeUpdateBlockMeta>,
+    }
+
+    let mut block_started = None;
+
+    while let Some(Ok(update)) = stream.next().await {
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Slot(slot) => {
+                log::info!(
+                    "received slot update for slot {} with status {:?}",
+                    slot.slot,
+                    slot.status()
+                );
+                if slot.status() == SlotStatus::SlotCreatedBank {
+                    log::info!("starting to buffer updates for slot {}", slot.slot);
+                    block_started = Some(BlockBuffer {
+                        slot: slot.slot,
+                        account: vec![],
+                        transaction: vec![],
+                        entry: vec![],
+                        block: None,
+                        blockmeta: None,
+                    });
+                }
+            }
+            UpdateOneof::Account(ev) => {
+                if let Some(block) = &mut block_started {
+                    log::info!("received account update for slot {}", ev.slot);
+                    ensure!(
+                        block.slot == ev.slot,
+                        "account update slot should match current block slot"
+                    );
+                    block.account.push(ev);
+                }
+            }
+            UpdateOneof::Transaction(ev) => {
+                if let Some(block) = &mut block_started {
+                    log::info!("received transaction update for slot {}", ev.slot);
+                    ensure!(
+                        block.slot == ev.slot,
+                        "transaction slot should match current block slot"
+                    );
+                    block.transaction.push(ev);
+                }
+            }
+            UpdateOneof::Entry(ev) => {
+                if let Some(block) = &mut block_started {
+                    log::info!("received entry update for slot {}", ev.slot);
+                    ensure!(
+                        block.slot == ev.slot,
+                        "entry slot should match current block slot"
+                    );
+                    block.entry.push(ev);
+                }
+            }
+            UpdateOneof::Block(ev) => {
+                if let Some(block) = &mut block_started {
+                    log::info!("received block update for slot {}", ev.slot);
+                    ensure!(
+                        block.slot == ev.slot,
+                        "block slot should match current block slot"
+                    );
+                    block.block = Some(ev);
+                }
+            }
+            UpdateOneof::BlockMeta(ev) => {
+                if let Some(block) = &mut block_started {
+                    log::info!("received block meta update for slot {}", ev.slot);
+                    ensure!(
+                        block.slot == ev.slot,
+                        "block meta slot should match current block slot"
+                    );
+                    block.blockmeta = Some(ev);
+                    // We break here because block meta is the last update geyser sends for a block, so we can validate the ordering guarantees up to the end of block lifecycle.
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ensure!(
+        block_started.is_some(),
+        "should have received slot update indicating block start"
+    );
+
+    let block = block_started.unwrap();
+    ensure!(
+        block.block.is_some(),
+        "should have received block update for the block"
+    );
+    ensure!(
+        !block.account.is_empty(),
+        "should have received account updates for the block"
+    );
+    ensure!(
+        !block.transaction.is_empty(),
+        "should have received transaction updates for the block"
+    );
+    ensure!(
+        !block.entry.is_empty(),
+        "should have received entry updates for the block"
+    );
+    ensure!(
+        block.blockmeta.is_some(),
+        "should have received block meta update for the block"
+    );
+    let blockmeta = block.blockmeta.unwrap();
+    ensure!(
+        blockmeta.executed_transaction_count as usize == block.transaction.len(),
+        "executed transaction count in block meta should match number of transaction updates received for the block"
+    );
+
     Ok(())
 }
