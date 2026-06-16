@@ -12,6 +12,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- client: reverted to 13.1.0 from 13.1.1
+- plugin: changed order of sent messages to client such that block_meta arrives after block message
+
+## 2026-06-16
+
+- yellowstone-grpc-geyser 13.2.4
+
+### Fixes
+
 - client: only quarantine slots pending replay verification, not live-sealed slots
 - plugin: changed order of sent messages to client such that block_meta arrives 1 index before block message
 

@@ -169,13 +169,16 @@ lazy_static::lazy_static! {
         &["subscriber_id", "uri_path"]
     ).unwrap();
 
-
     static ref GEYSER_EVENT_DROPPED: IntCounterVec = IntCounterVec::new(
         Opts::new(
             "geyser_event_dropped_total",
             "Total number of events dropped in the plugin due to drop_list"
         ),
         &["event"]
+    ).unwrap();
+
+    static ref GEYSER_BLOCK_MISMATCH_TRANSACTION: IntGauge = IntGauge::new(
+        "geyser_block_mismatch_transaction", "Number of block mismatch transactions encountered in the plugin"
     ).unwrap();
 }
 
@@ -337,6 +340,7 @@ impl PrometheusService {
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
+            register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
 
             VERSION
                 .with_label_values(&[
@@ -462,6 +466,10 @@ pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
     GEYSER_EVENT_DROPPED
         .with_label_values(&[event.as_ref()])
         .inc();
+}
+
+pub fn incr_geyser_block_mismatch_transaction() {
+    GEYSER_BLOCK_MISMATCH_TRANSACTION.inc();
 }
 
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
@@ -652,6 +660,7 @@ pub fn reset_metrics() {
     PRE_ENCODED_CACHE_MISS.reset();
 
     GEYSER_EVENT_DROPPED.reset();
+    GEYSER_BLOCK_MISMATCH_TRANSACTION.set(0);
 
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup

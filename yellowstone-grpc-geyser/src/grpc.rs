@@ -889,12 +889,11 @@ impl GrpcService {
                         if commitment_level != CommitmentLevel::Processed {
                             let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
                         }
-                        else {
-                            let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                            let _ = broadcast_tx.send((commitment_level, Arc::new(vec![block_meta])));
-                        }
+
+                        let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
                         let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
-                        let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block])));
+                        let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
+
                         let slot_message = Message::Slot(MessageSlot {
                             slot: slot_update.slot,
                             parent: slot_update.parent_slot,
