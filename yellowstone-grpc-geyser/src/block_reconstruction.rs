@@ -25,9 +25,16 @@ use {
 pub struct ProcessingSlot {
     original_messages: Vec<Message>,
     account_write_version_map: HashMap<Pubkey, u64>,
+    blockmeta: Option<Arc<MessageBlockMeta>>,
     transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts: Vec<Arc<MessageAccountInfo>>,
     entries: Vec<Arc<MessageEntry>>,
+    is_sealed: bool,
+}
+
+enum TrySealError {
+    NotSealable,
+    AlreadySealed,
 }
 
 impl ProcessingSlot {
@@ -64,7 +71,30 @@ impl ProcessingSlot {
         self.original_messages.push(event);
     }
 
-    pub fn into_block(self, block_meta: Arc<MessageBlockMeta>) -> FrozenBlock {
+    fn try_seal(&mut self) -> Result<(), TrySealError> {
+        if self.is_sealed {
+            return Err(TrySealError::AlreadySealed);
+        }
+        if self.blockmeta.is_none() {
+            return Err(TrySealError::NotSealable);
+        }
+        let expected_txn_count =
+            self.blockmeta.as_ref().unwrap().executed_transaction_count as usize;
+
+        let expected_entry_count = self.blockmeta.as_ref().unwrap().entries_count as usize;
+        if self.transactions.len() < expected_txn_count {
+            return Err(TrySealError::NotSealable);
+        }
+
+        if self.entries.len() < expected_entry_count {
+            return Err(TrySealError::NotSealable);
+        }
+        self.is_sealed = true;
+        Ok(())
+    }
+
+    pub fn seal(self) -> FrozenBlock {
+        let block_meta = self.blockmeta.expect("should be sealable");
         let account_info_vec = self
             .accounts
             .into_iter()
@@ -278,17 +308,42 @@ impl BlockMachineStorage {
         Ok(())
     }
 
+    fn try_seal(&mut self, slot: u64) {
+        let Some(outcome) = self
+            .processing_slots
+            .get_mut(&slot)
+            .map(|slot_buf| slot_buf.try_seal())
+        else {
+            return;
+        };
+
+        match outcome {
+            Ok(()) => {
+                // We cannot seal the same slot twice, so we won't update the state machine twice.
+                let block_meta = self
+                    .processing_slots
+                    .get(&slot)
+                    .unwrap()
+                    .blockmeta
+                    .as_ref()
+                    .unwrap();
+                let block_summary = BlockReplayEvent::BlockSummary(BlockSummary {
+                    slot: block_meta.slot,
+                    parent_slot: block_meta.parent_slot,
+                    blockhash: Hash::from_str(&block_meta.blockhash).expect("blockhash format"),
+                    entry_count: block_meta.entries_count,
+                    executed_transaction_count: block_meta.executed_transaction_count,
+                });
+                let _ = self.state.process_replay_event(block_summary);
+            }
+            Err(_) => {}
+        };
+    }
+
     fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {
-        let blockhash = Hash::from_str(&block_meta.blockhash).expect("blockhash format");
-        let block_summary = BlockReplayEvent::BlockSummary(BlockSummary {
-            slot: block_meta.slot,
-            parent_slot: block_meta.parent_slot,
-            blockhash,
-            entry_count: block_meta.entries_count,
-            executed_transaction_count: block_meta.executed_transaction_count,
-        });
-        if self.state.process_replay_event(block_summary).is_ok() {
-            self.pending_blockmeta.insert(block_meta.slot, block_meta);
+        if let Some(block) = self.processing_slots.get_mut(&block_meta.slot) {
+            block.blockmeta = Some(Arc::clone(&block_meta));
+            self.try_seal(block_meta.slot);
         }
     }
 
@@ -300,6 +355,7 @@ impl BlockMachineStorage {
         }
         let slot_buf = self.processing_slots.entry(slot).or_default();
         slot_buf.add_event(block_data);
+        self.try_seal(slot);
     }
 
     fn gc(&mut self) {
@@ -318,14 +374,9 @@ impl BlockMachineStorage {
                 let Some(replayed_slot) = self.processing_slots.remove(&frozen_block.slot) else {
                     return;
                 };
-                let block_meta = self
-                    .pending_blockmeta
-                    .remove(&frozen_block.slot)
-                    .expect("block meta should be present when frozen block is emitted");
-
                 let slot = frozen_block.slot;
                 self.min_slot = Some(self.min_slot.map_or(slot, |min| min.min(slot)));
-                let frozen_slot = replayed_slot.into_block(block_meta);
+                let frozen_slot = replayed_slot.seal();
                 self.replayed_slot
                     .insert(frozen_block.slot, Arc::new(frozen_slot));
             }
@@ -568,8 +619,9 @@ mod tests {
         let mut slot = ProcessingSlot::default();
         slot.add_event(make_account_msg(1, pubkey, 1));
         slot.add_event(make_account_msg(1, pubkey, 5)); // winner
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
 
-        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let frozen = slot.seal();
         let msgs = frozen.messages();
         let accounts: Vec<_> = msgs
             .iter()
@@ -595,8 +647,9 @@ mod tests {
         slot.add_event(make_account_msg(1, pk1, 1));
         slot.add_event(make_account_msg(1, pk1, 4)); // pk1 winner
         slot.add_event(make_account_msg(1, pk2, 9)); // pk2 only entry
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
 
-        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let frozen = slot.seal();
         let msgs = frozen.messages();
         let accounts: Vec<_> = msgs
             .iter()
@@ -620,8 +673,9 @@ mod tests {
         let mut slot = ProcessingSlot::default();
         slot.add_event(make_transaction_msg(1));
         slot.add_event(make_transaction_msg(1));
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
 
-        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let frozen = slot.seal();
         let tx_count = frozen
             .messages()
             .iter()
@@ -636,8 +690,9 @@ mod tests {
         slot.add_event(make_entry_msg(1, 0));
         slot.add_event(make_entry_msg(1, 1));
         slot.add_event(make_entry_msg(1, 2));
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
 
-        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let frozen = slot.seal();
         let entry_count = frozen
             .messages()
             .iter()
@@ -660,8 +715,9 @@ mod tests {
         let mut slot = ProcessingSlot::default();
         slot.add_event(make_account_msg(1, pubkey, 2));
         slot.add_event(make_account_msg(1, pubkey, 8)); // winner
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
 
-        let frozen = slot.into_block(make_block_meta_arc(1, 0));
+        let frozen = slot.seal();
         let mb = frozen.get_message_block();
         assert_eq!(mb.accounts.len(), 1);
         assert_eq!(mb.updated_account_count, 1);
