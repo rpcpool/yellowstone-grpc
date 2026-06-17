@@ -10,10 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+
+## 2026-06-17
+
 ### Fixes
 
-- client: reverted to 13.1.0 from 13.1.1
-- plugin: changed order of sent messages to client such that block_meta arrives after block message
+- plugin: turns out block meta may arrive too early, even before all transaction for a given block have been emitted. We now buffer block meta and make sure the block can be sealed comparing transaction count from block meta.
 
 ## 2026-06-16
 
