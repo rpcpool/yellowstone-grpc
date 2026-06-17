@@ -822,7 +822,10 @@ impl GrpcService {
         let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
 
         let mut blockmeta_detected: SmallVec<[Message; 4]> = SmallVec::new();
+<<<<<<< HEAD
 
+=======
+>>>>>>> ecee9430 (wip)
         loop {
             tokio::select! {
                 maybe = messages_rx.recv() => {
