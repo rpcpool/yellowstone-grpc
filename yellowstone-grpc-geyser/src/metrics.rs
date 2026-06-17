@@ -177,8 +177,12 @@ lazy_static::lazy_static! {
         &["event"]
     ).unwrap();
 
-    static ref GEYSER_BLOCK_MISMATCH_TRANSACTION: IntGauge = IntGauge::new(
+    static ref GEYSER_BLOCK_MISMATCH_TRANSACTION: IntCounter = IntCounter::new(
         "geyser_block_mismatch_transaction", "Number of block mismatch transactions encountered in the plugin"
+    ).unwrap();
+
+    static ref GEYSER_UNTRACK_SLOT_EVENT_DROPPED: IntCounter = IntCounter::new(
+        "geyser_untrack_slot_event_dropped_total", "Number of geyser event drop due to untrack slot"
     ).unwrap();
 }
 
@@ -341,6 +345,7 @@ impl PrometheusService {
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
+            register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
 
             VERSION
                 .with_label_values(&[
@@ -470,6 +475,10 @@ pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
 
 pub fn incr_geyser_block_mismatch_transaction() {
     GEYSER_BLOCK_MISMATCH_TRANSACTION.inc();
+}
+
+pub fn incr_geyser_untrack_slot_event_dropped() {
+    GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
@@ -660,8 +669,8 @@ pub fn reset_metrics() {
     PRE_ENCODED_CACHE_MISS.reset();
 
     GEYSER_EVENT_DROPPED.reset();
-    GEYSER_BLOCK_MISMATCH_TRANSACTION.set(0);
-
+    GEYSER_BLOCK_MISMATCH_TRANSACTION.reset();
+    GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()

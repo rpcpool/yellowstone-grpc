@@ -26,6 +26,7 @@ use {
     bytesize::ByteSize,
     log::{error, info},
     prost_types::Timestamp,
+    smallvec::SmallVec,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
@@ -766,6 +767,7 @@ impl GrpcService {
         let mut confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
         let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
 
+        let mut blockmeta_detected: SmallVec<[Message; 4]> = SmallVec::new();
         loop {
             tokio::select! {
                 maybe = messages_rx.recv() => {
@@ -786,7 +788,7 @@ impl GrpcService {
                         metrics::message_queue_size_dec();
 
                         if matches!(&message, Message::BlockMeta(_)) {
-                            let _ = block_reconstruction_tx.send(message);
+                            blockmeta_detected.push(message);
                             continue;
                         }
 
@@ -836,6 +838,12 @@ impl GrpcService {
                     if !finalized_messages.is_empty() {
                         let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(finalized_messages)));
                         finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
+                    }
+
+                    // Make sure that blockmeta is always after all kind of other events so the block-machine sees every block
+                    // updates.
+                    for blockmeta_message in blockmeta_detected.drain(..) {
+                        let _ = block_reconstruction_tx.send(blockmeta_message);
                     }
                 }
             }

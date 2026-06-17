@@ -295,6 +295,7 @@ impl BlockMachineStorage {
     fn handle_block_data(&mut self, block_data: Message) {
         let slot = block_data.get_slot();
         if !self.state.is_slot_tracked(slot) {
+            metrics::incr_geyser_untrack_slot_event_dropped();
             return;
         }
         let slot_buf = self.processing_slots.entry(slot).or_default();
