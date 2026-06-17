@@ -4,8 +4,10 @@ members = [
     "examples/rust", # 12.3.0
     "yellowstone-grpc-client", # 13.1.0
     "yellowstone-grpc-client-nodejs/napi", # 0.2.0
+    "yellowstone-grpc-e2e-macros", # 0.1.0
     "yellowstone-grpc-geyser", # 13.1.0
     "yellowstone-grpc-proto", # 12.4.0
+    "yellowstone-grpc-e2e-test", # 0.1.0
 ]
 
 [workspace.package]
@@ -32,6 +34,7 @@ chrono = "0.4.26"
 clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
+dotenvy = "0.15.0"
 env_logger = "0.11.3"
 fastrand = "2.0"
 futures = "0.3.24"
@@ -47,6 +50,7 @@ humantime-serde = "1.1.1"
 hyper = "1.4.1"
 hyper-util = "0.1.7"
 indicatif = "0.18.0"
+inventory = "0.3.0"
 lazy_static = "1.4.0"
 local-ip-address = "0.6.1"
 log = "0.4.17"
@@ -59,10 +63,12 @@ napi-sys = "3.0.1"
 parking_lot = "0.12"
 prometheus = "0.14.0"
 pin-project = "1.1.10"
+proc-macro2 = "1"
 prost = "0.14.0"
 prost-types = "0.14.0"
 prost_011 = { package = "prost", version = "0.11.9" }
 protoc-bin-vendored = "3.2.0"
+quote = "1"
 rand = "0.8"
 rayon = "1.11.0"
 rustls = "0.23"
@@ -70,6 +76,7 @@ serde = "1.0.145"
 serde_json = "1.0.86"
 siphasher = "1"
 smallvec = "1.15.1"
+syn = { version = "2", features = ["full"] }
 thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
@@ -115,6 +122,7 @@ yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.4" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.4.0", default-features = false }
+yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
