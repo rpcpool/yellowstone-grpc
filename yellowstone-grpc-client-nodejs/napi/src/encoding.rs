@@ -1,7 +1,6 @@
 use {
   napi::Status,
   napi_derive::napi,
-  prost_011::Message as Prost11Message,
   serde::Serialize,
   solana_storage_proto::convert::generated::{
     Transaction as StorageTransaction, TransactionStatusMeta as StorageTransactionStatusMeta,
@@ -14,7 +13,7 @@ use {
   },
   yellowstone_grpc_proto::{
     prelude::{SubscribeUpdateDeshredTransactionInfo, SubscribeUpdateTransactionInfo},
-    prost::Message as Prost14Message,
+    prost::Message,
   },
 };
 
@@ -84,36 +83,34 @@ pub fn encode_tx(
   let transaction_proto = tx
     .transaction
     .ok_or_else(|| napi_error(Status::InvalidArg, "failed to get transaction payload"))?;
-  let transaction =
-    <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
-      .map_err(|error| {
-        napi_error_with_cause(
-          Status::InvalidArg,
-          "failed to decode transaction payload",
-          &error,
-        )
-      })?;
+  let transaction = StorageTransaction::decode(transaction_proto.encode_to_vec().as_slice())
+    .map_err(|error| {
+      napi_error_with_cause(
+        Status::InvalidArg,
+        "failed to decode transaction payload",
+        &error,
+      )
+    })?;
   let transaction = transaction.into();
   let meta_proto = tx
     .meta
     .ok_or_else(|| napi_error(Status::InvalidArg, "failed to get transaction meta"))?;
-  let meta =
-    <StorageTransactionStatusMeta as Prost11Message>::decode(meta_proto.encode_to_vec().as_slice())
-      .map_err(|error| {
-        napi_error_with_cause(
-          Status::InvalidArg,
-          "failed to decode transaction meta",
-          &error,
-        )
-      })?
-      .try_into()
-      .map_err(|error| {
-        napi_error_with_cause(
-          Status::InvalidArg,
-          "failed to decode transaction meta",
-          &error,
-        )
-      })?;
+  let meta = StorageTransactionStatusMeta::decode(meta_proto.encode_to_vec().as_slice())
+    .map_err(|error| {
+      napi_error_with_cause(
+        Status::InvalidArg,
+        "failed to decode transaction meta",
+        &error,
+      )
+    })?
+    .try_into()
+    .map_err(|error| {
+      napi_error_with_cause(
+        Status::InvalidArg,
+        "failed to decode transaction meta",
+        &error,
+      )
+    })?;
 
   let tx_with_meta =
     TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta { transaction, meta });
@@ -191,15 +188,14 @@ pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> na
       "failed to get deshred transaction payload",
     )
   })?;
-  let transaction =
-    <StorageTransaction as Prost11Message>::decode(transaction_proto.encode_to_vec().as_slice())
-      .map_err(|error| {
-        napi_error_with_cause(
-          Status::InvalidArg,
-          "failed to decode deshred transaction payload",
-          &error,
-        )
-      })?;
+  let transaction = StorageTransaction::decode(transaction_proto.encode_to_vec().as_slice())
+    .map_err(|error| {
+      napi_error_with_cause(
+        Status::InvalidArg,
+        "failed to decode deshred transaction payload",
+        &error,
+      )
+    })?;
   let transaction: VersionedTransaction = transaction.into();
 
   let meta: solana_transaction_status::TransactionStatusMeta = StorageTransactionStatusMeta {

@@ -317,27 +317,24 @@ impl BlockMachineStorage {
             return;
         };
 
-        match outcome {
-            Ok(()) => {
-                // We cannot seal the same slot twice, so we won't update the state machine twice.
-                let block_meta = self
-                    .processing_slots
-                    .get(&slot)
-                    .unwrap()
-                    .blockmeta
-                    .as_ref()
-                    .unwrap();
-                let block_summary = BlockReplayEvent::BlockSummary(BlockSummary {
-                    slot: block_meta.slot,
-                    parent_slot: block_meta.parent_slot,
-                    blockhash: Hash::from_str(&block_meta.blockhash).expect("blockhash format"),
-                    entry_count: block_meta.entries_count,
-                    executed_transaction_count: block_meta.executed_transaction_count,
-                });
-                let _ = self.state.process_replay_event(block_summary);
-            }
-            Err(_) => {}
-        };
+        if outcome.is_ok() {
+            // We cannot seal the same slot twice, so we won't update the state machine twice.
+            let block_meta = self
+                .processing_slots
+                .get(&slot)
+                .unwrap()
+                .blockmeta
+                .as_ref()
+                .unwrap();
+            let block_summary = BlockReplayEvent::BlockSummary(BlockSummary {
+                slot: block_meta.slot,
+                parent_slot: block_meta.parent_slot,
+                blockhash: Hash::from_str(&block_meta.blockhash).expect("blockhash format"),
+                entry_count: block_meta.entries_count,
+                executed_transaction_count: block_meta.executed_transaction_count,
+            });
+            let _ = self.state.process_replay_event(block_summary);
+        }
     }
 
     fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {

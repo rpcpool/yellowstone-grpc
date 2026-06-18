@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "13.2.5-triton-ext"
+version = "14.0.0+solana.4.1.0.rc.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -18,10 +18,8 @@ name = "config-check"
 
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
-
 anyhow = { workspace = true }
 base64 = { workspace = true }
-bincode = { workspace = true }
 bs58 = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true, features = ["serde"]}
@@ -51,6 +49,7 @@ tower-layer = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
+wincode = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
@@ -65,18 +64,15 @@ solana-hash = { workspace = true }
 solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
-solana-transaction = { workspace = true }
+solana-transaction = { workspace = true, features = ["wincode"] }
 solana-transaction-context = { workspace = true }
-solana-transaction-error = { workspace = true }
+solana-transaction-error = { workspace = true, features = ["wincode"] }
 solana-transaction-status = { workspace = true }
 
 # Solana Misc
 smallvec = { workspace = true }
 solana-storage-proto = { workspace = true, optional = true }
 spl-token-2022-interface = { workspace = true }
-
-# Bench
-prost_011 = { workspace = true, optional = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
@@ -92,7 +88,7 @@ harness = false
 required-features = ["bench"]
 
 [features]
-bench = ["dep:prost_011", "dep:solana-storage-proto"]
+bench = ["dep:solana-storage-proto"]
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -106,12 +102,11 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 [dev-dependencies]
 bytes = { workspace = true }
 criterion = { workspace = true }
-prost_011 = { workspace = true }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
-solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+solana-transaction = { workspace = true, features = ["wincode", "blake3"] }
 
 [lints]
 workspace = true

@@ -202,7 +202,7 @@ pub fn create_tx_meta(meta: proto::TransactionStatusMeta) -> CreateResult<Transa
 pub fn create_tx_error(
     err: Option<&proto::TransactionError>,
 ) -> CreateResult<Option<TransactionError>> {
-    err.map(|err| bincode::deserialize::<TransactionError>(&err.err))
+    err.map(|err| wincode::deserialize::<TransactionError>(&err.err))
         .transpose()
         .map_err(|_| "failed to decode TransactionError")
 }
@@ -263,6 +263,7 @@ pub fn create_reward(reward: proto::Reward) -> CreateResult<Reward> {
             proto::RewardType::Rent => Some(RewardType::Rent),
             proto::RewardType::Staking => Some(RewardType::Staking),
             proto::RewardType::Voting => Some(RewardType::Voting),
+            proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
         },
         commission: if reward.commission.is_empty() {
             None
