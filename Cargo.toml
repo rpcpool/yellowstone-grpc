@@ -75,12 +75,12 @@ tonic-health = "0.14.0"
 vergen = "9.0.6"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "=4.1.0-beta.2"
-solana-account-decoder = "=4.1.0-beta.2"
+agave-geyser-plugin-interface = "4.1.0-rc.1"
+solana-account-decoder = "=4.1.0-rc.1"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "=4.1.0-beta.2", features = ["agave-unstable-api"] }
-solana-transaction-context = "=4.1.0-beta.2"
-solana-transaction-status = "=4.1.0-beta.2"
+solana-storage-proto = { version = "=4.1.0-rc.1", features = ["agave-unstable-api"] }
+solana-transaction-context = "=4.1.0-rc.1"
+solana-transaction-status = "=4.1.0-rc.1"
 
 # Solana SDK
 solana-account = "4.3.0"
@@ -112,3 +112,9 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+agave-geyser-plugin-interface = { git = "https://github.com/rpcpool/solana-public", branch = "geyser-contact-info" }
+solana-transaction-status = { git = "https://github.com/rpcpool/solana-public", branch = "geyser-contact-info" }
+solana-account-decoder = { git = "https://github.com/rpcpool/solana-public", branch = "geyser-contact-info" }
+solana-transaction-context = { git = "https://github.com/rpcpool/solana-public", branch = "geyser-contact-info" }

@@ -68,9 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9ad3c2045583499cfbbfd4889b01ca418b6fb4bdce1d44f2ee9c0a044e03504"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -83,9 +82,8 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "935d9c75887c631729cf3e071d29c3c57df5ed36b2f403b74cd42986136e1996"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "log",
  "solana-clock",
@@ -99,9 +97,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e2c936ed08fd3de78724dd3c6afd8107e3827b5ff7684fb799c590fccdd32b9"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.2.0",
@@ -2976,9 +2973,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b787c48442e9e3579d0ffcc06c4c563fbf2933b167b9bb860e2b9666904619d"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "Inflector",
  "base64",
@@ -3018,9 +3014,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "732b7b64baf923ec5d98ebbdecf09337cdf277355958fb9e9f77f040cc84eb3f"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "base64",
  "bs58",
@@ -3718,9 +3713,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "4.1.0-beta.2"
+version = "4.1.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9487995af2b8ec19d6fc994f999128273b628ef700d0478e9fd12e48f9a34bad"
+checksum = "824bf7d0365b3618220fa44b46e6aeae61b2f627cd7334b0f319288eb9a70396"
 dependencies = [
  "bincode",
  "bs58",
@@ -3744,9 +3739,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5500d0dcb2f31a53b255d6b92aa0dbfd7a19669917f20c489119deb639b18b25"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 
 [[package]]
 name = "solana-system-interface"
@@ -3845,9 +3839,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88cdcaaa5bdbdf7758b4a053e4e2f9bf32c2500ad76b18a706292e09fb9dc232"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "bincode",
  "serde",
@@ -3876,9 +3869,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e2232bac641b6b0ce219208414670846122d2ac6faf9bcce56db97d869b2488"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -3919,9 +3911,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "4.1.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f1d26e5e8234f11760a3e68347ba89c161399cfa0785b2bf10dc3c8e7eef99b"
+version = "4.1.0-rc.1"
+source = "git+https://github.com/rpcpool/solana-public?branch=geyser-contact-info#e6a4b71a178c1490c94bf7905a3e1b619621ea70"
 dependencies = [
  "base64",
  "bincode",

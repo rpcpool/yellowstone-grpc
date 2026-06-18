@@ -4,64 +4,63 @@ use {
         config::{ConfigGrpc, GrpcAddress},
         metered::MeteredLayer,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
+            self, DebugClientMessage, GEYSER_BATCH_SIZE, incr_grpc_method_call_count, set_subscriber_queue_size, subscription_limit_exceeded_inc
         },
         plugin::{
             filter::{
-                encoder::encode_messages,
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
-                name::FilterNames,
-                DeshredFilter, Filter,
+                DeshredFilter, Filter, encoder::encode_messages, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof}, name::FilterNames
             },
-            message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
+            message::{
+                CommitmentLevel, Message, MessageBlockMeta, MessageContactInfo, MessageSlot,
+                SlotStatus,
+            },
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        transport::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, SpyIncoming, SpyIncomingConfig},
+        util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel},
         version::GrpcVersionInfo,
     },
     anyhow::Context,
     bytesize::ByteSize,
     log::{error, info},
     prost_types::Timestamp,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_clock::{MAX_RECENT_BLOCKHASHES, Slot},
+    solana_pubkey::Pubkey,
     std::{
         collections::HashMap,
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, LazyLock, Mutex as StdMutex,
+            Arc, LazyLock, Mutex as StdMutex, atomic::{AtomicU64, AtomicUsize, Ordering}
         },
         time::SystemTime,
     },
     tokio::{
         fs,
         net::UnixListener,
-        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration},
+        sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot},
+        time::{Duration, sleep},
     },
     tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
-        metadata::AsciiMetadataValue,
-        service::interceptor,
-        transport::{
-            server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
-            Identity, ServerTlsConfig,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
+        Request, Response, Result as TonicResult, Status, Streaming, metadata::AsciiMetadataValue, service::interceptor, transport::{
+            Identity, ServerTlsConfig, server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo}
+        }
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
-    yellowstone_grpc_proto::prelude::{
-        CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
-        GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
-        GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
-        PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest,
-        SubscribeReplayInfoResponse, SubscribeRequest,
+    yellowstone_grpc_proto::{
+        geyser::{GossipContactInfoFull, SubscribeUpdatePing, subscribe_gossip_response},
+        prelude::{
+            CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
+            GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
+            GetVersionRequest, GetVersionResponse, GossipContactInfo, GossipContactInfoRemoved,
+            GossipContactInfoUpdate, IsBlockhashValidRequest, IsBlockhashValidResponse,
+            PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeGossipRequest,
+            SubscribeGossipResponse, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
+            SubscribeRequest,
+        },
     },
 };
 
@@ -281,12 +280,46 @@ impl BlockMetaStorage {
     }
 }
 
+#[derive(Debug)]
+pub struct GossipTopology {
+    contacts: RwLock<HashMap<Pubkey, MessageContactInfo>>,
+}
+
+impl GossipTopology {
+    pub fn new() -> Self {
+        Self {
+            contacts: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub async fn update(&self, msg: &Message) {
+        match msg {
+            Message::ContactInfo(info) => {
+                self.contacts
+                    .write()
+                    .await
+                    .insert(info.pubkey, info.clone());
+            }
+            Message::ContactInfoRemoved(removed) => {
+                self.contacts.write().await.remove(&removed.pubkey);
+            }
+            _ => {}
+        }
+    }
+
+    pub async fn snapshot(&self) -> Vec<MessageContactInfo> {
+        self.contacts.read().await.values().cloned().collect()
+    }
+}
+
 type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 
 /// Messages broadcast on the deshred channel. Deshred is a pre-execution
 /// stream and has no commitment level: each message is emitted exactly
 /// once, when first received from the geyser plugin.
 type DeshredBroadcastedMessage = Arc<Vec<Message>>;
+
+type ContactInfoBroadcast = Arc<Vec<Message>>;
 
 enum ReplayedResponse {
     Messages(Vec<Message>),
@@ -510,6 +543,8 @@ pub struct GrpcService {
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
+    gossip_broadcast_tx: broadcast::Sender<ContactInfoBroadcast>,
+    gossip_topology: Arc<GossipTopology>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -585,6 +620,11 @@ impl GrpcService {
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         // Deshred subscribers receive their own commitment-free stream.
         let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
+        let (gossip_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
+        let gossip_topology = Arc::new(GossipTopology::new());
+
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {
                 (None, None, None)
@@ -636,6 +676,8 @@ impl GrpcService {
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast_tx: broadcast_tx.clone(),
             deshred_broadcast_tx: deshred_broadcast_tx.clone(),
+            gossip_broadcast_tx: gossip_broadcast_tx.clone(),
+            gossip_topology: gossip_topology.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
@@ -696,6 +738,8 @@ impl GrpcService {
                 broadcast_tx,
                 block_reconstruction_tx,
                 deshred_broadcast_tx,
+                gossip_broadcast_tx,
+                gossip_topology
             )
             .await;
         });
@@ -818,6 +862,8 @@ impl GrpcService {
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         block_reconstruction_tx: mpsc::UnboundedSender<Message>,
         deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
+        gossip_broadcast_tx: broadcast::Sender<ContactInfoBroadcast>,
+        gossip_topology: Arc<GossipTopology>,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
@@ -828,90 +874,100 @@ impl GrpcService {
 
         let mut deshred_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
+        let mut gossip_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+
         loop {
             tokio::select! {
-                maybe = messages_rx.recv() => {
-                    let Some(message) = maybe else {
-                        info!("Geyser loop: messages channel closed");
-                        break;
-                    };
-                    metrics::message_queue_size_dec();
+                        maybe = messages_rx.recv() => {
+                            let Some(message) = maybe else {
+                                info!("Geyser loop: messages channel closed");
+                                break;
+                            };
+                            metrics::message_queue_size_dec();
 
-                    if !matches!(message, Message::DeshredTransaction(_)) {
-                        processed_messages.push(message);
-                    }
-                    else {
-                        deshred_messages.push(message);
-                    }
+                            if !matches!(message, Message::DeshredTransaction(_)) {
+                                processed_messages.push(message);
+                            }
+                            else {
+                                deshred_messages.push(message);
+                            }
 
-                    while let Ok(message) = messages_rx.try_recv() {
-                        metrics::message_queue_size_dec();
+                            while let Ok(message) = messages_rx.try_recv() {
+                                metrics::message_queue_size_dec();
 
-                        if !matches!(message, Message::DeshredTransaction(_)) {
-                            processed_messages.push(message);
-                        }
-                        else {
-                            deshred_messages.push(message);
-                        }
-                        if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
-                            break;
-                        }
-                    }
-
-                    for message in processed_messages.iter() {
-                        let _ = block_reconstruction_tx.send(message.clone());
-
-                        match message {
-                            Message::Slot(slot_message) => {
-                                metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
-                                // Slot statuses are also relevant to deshred subscribers
-                                // (reconnect checkpointing); forward each one to the
-                                // deshred channel.
-                                deshred_messages.push(Message::Slot(slot_message.clone()));
-                                // Only match on slot lifecycle update not commitment update, as
-                                // we must go through the block machine to make sure users sees block content before any commitment update.
-                                if matches!(slot_message.status,
-                                    SlotStatus::FirstShredReceived |
-                                    SlotStatus::Completed |
-                                    SlotStatus::CreatedBank |
-                                    SlotStatus::Dead
-                                ) {
-                                    confirmed_messages.push(Message::Slot(slot_message.clone()));
-                                    finalized_messages.push(Message::Slot(slot_message.clone()));
+                                if !matches!(message, Message::DeshredTransaction(_)) {
+                                    processed_messages.push(message);
+                                }
+                                else {
+                                    deshred_messages.push(message);
+                                }
+                                if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
+                                    break;
                                 }
                             }
-                            Message::Block(_) => {
-                               unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
+
+                            for message in processed_messages.iter() {
+                                let _ = block_reconstruction_tx.send(message.clone());
+
+                                match message {
+                                    Message::Slot(slot_message) => {
+                                        metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                                        // Slot statuses are also relevant to deshred subscribers
+                                        // (reconnect checkpointing); forward each one to the
+                                        // deshred channel.
+                                        deshred_messages.push(Message::Slot(slot_message.clone()));
+                                        // Only match on slot lifecycle update not commitment update, as
+                                        // we must go through the block machine to make sure users sees block content before any commitment update.
+                                        if matches!(slot_message.status,
+                                            SlotStatus::FirstShredReceived |
+                                            SlotStatus::Completed |
+                                            SlotStatus::CreatedBank |
+                                            SlotStatus::Dead
+                                        ) {
+                                            confirmed_messages.push(Message::Slot(slot_message.clone()));
+                                            finalized_messages.push(Message::Slot(slot_message.clone()));
+                                        }
+                                    }
+                                    Message::Block(_) => {
+                                       unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
+                                    }
+                                    _ => {
+                                        /* We don't need to process anything here.  */
+                                    }
+                                }
                             }
-                            _ => {
-                                /* We don't need to process anything here.  */
+
+                            if !processed_messages.is_empty() {
+                                encode_messages(&processed_messages);
+                                GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
+                                let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
+                                processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                            }
+
+                            if !deshred_messages.is_empty() {
+                                let _ = deshred_broadcast_tx.send(Arc::new(deshred_messages));
+                                deshred_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
+                            }
+
+                            if !confirmed_messages.is_empty() {
+                                let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(confirmed_messages)));
+                                confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
+                            }
+
+                            if !finalized_messages.is_empty() {
+                                let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(finalized_messages)));
+                                finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
+                            }
+
+                            if !gossip_messages.is_empty() {
+                                for msg in gossip_messages.iter() {
+                                    gossip_topology.update(msg).await;
+                                }
+                                let _ = gossip_broadcast_tx.send(Arc::new(gossip_messages));
+                                gossip_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
                             }
                         }
                     }
-
-                    if !processed_messages.is_empty() {
-                        encode_messages(&processed_messages);
-                        GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
-                        let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
-                        processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
-
-                    if !deshred_messages.is_empty() {
-                        let _ = deshred_broadcast_tx.send(Arc::new(deshred_messages));
-                        deshred_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
-                    }
-
-                    if !confirmed_messages.is_empty() {
-                        let _ = broadcast_tx.send((CommitmentLevel::Confirmed, Arc::new(confirmed_messages)));
-                        confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
-                    }
-
-                    if !finalized_messages.is_empty() {
-                        let _ = broadcast_tx.send((CommitmentLevel::Finalized, Arc::new(finalized_messages)));
-                        finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
-                    }
-                }
-            }
         }
     }
 
@@ -1528,6 +1584,7 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
     type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
+    type SubscribeGossipStream = LoadAwareReceiver<TonicResult<SubscribeGossipResponse>>;
 
     async fn subscribe(
         &self,
@@ -1836,6 +1893,115 @@ impl Geyser for GrpcService {
         Ok(Response::new(stream_rx))
     }
 
+    async fn subscribe_gossip(
+        &self,
+        _request: Request<SubscribeGossipRequest>,
+    ) -> TonicResult<Response<Self::SubscribeGossipStream>> {
+        incr_grpc_method_call_count("subscribe_gossip");
+
+        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+        let client_cancellation_token = self.cancellation_token.child_token();
+        if client_cancellation_token.is_cancelled() {
+            return Err(Status::unavailable("server is shutting down"));
+        }
+
+        let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
+        let mut messages_rx = self.gossip_broadcast_tx.subscribe();
+
+        let snapshot = self.gossip_topology.snapshot().await;
+        if !snapshot.is_empty() {
+            let contacts = snapshot.iter().map(GossipContactInfo::from).collect();
+            let response = SubscribeGossipResponse {
+                update_oneof: Some(subscribe_gossip_response::UpdateOneof::Full(
+                    GossipContactInfoFull { contacts },
+                )),
+            };
+            if stream_tx.send(Ok(response)).await.is_err() {
+                return Err(Status::internal("failed to send snapshot"));
+            }
+        }
+
+        let ping_stream_tx = stream_tx.clone();
+        let ping_cancellation_token = client_cancellation_token.clone();
+        let ping_client_cancel = client_cancellation_token.clone();
+        self.task_tracker.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                tokio::select! {
+                    _ = ping_cancellation_token.cancelled() => {
+                        info!("gossip client #{id}: ping cancelled");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        let response = SubscribeGossipResponse {
+                            update_oneof: Some(subscribe_gossip_response::UpdateOneof::Ping(
+                                SubscribeUpdatePing {},
+                            )),
+                        };
+                        info!("gossip client #{id}: sending ping");
+                        if ping_stream_tx.send(Ok(response)).await.is_err() {
+                            ping_client_cancel.cancel();
+                            info!("detected dead gossip client #{id}");
+                            break;
+                        }
+                    }
+                }
+            }
+            info!("gossip client #{id}: ping task exiting");
+        });
+
+        self.task_tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = client_cancellation_token.cancelled() => {
+                        info!("gossip client #{id}: cancelled");
+                        break;
+                    }
+                    message = messages_rx.recv() => {
+                        match message {
+                            Ok(messages) => {
+                                for msg in messages.iter() {
+                                    let response = match msg {
+                                        Message::ContactInfo(info) => {
+                                            SubscribeGossipResponse {
+                                                update_oneof: Some(subscribe_gossip_response::UpdateOneof::Update(
+                                                    GossipContactInfoUpdate {
+                                                        contact: Some(GossipContactInfo::from(info)),
+                                                    }
+                                                )),
+                                            }
+                                        }
+                                        Message::ContactInfoRemoved(removed) => {
+                                            SubscribeGossipResponse {
+                                                update_oneof: Some(subscribe_gossip_response::UpdateOneof::Removed(
+                                                    GossipContactInfoRemoved {
+                                                        pubkey: removed.pubkey.to_bytes().to_vec(),
+                                                    }
+                                                )),
+                                            }
+                                        }
+                                        _ => continue,
+                                    };
+                                    if stream_tx.send(Ok(response)).await.is_err() {
+                                        info!("gossip client #{id}: stream closed");
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Closed) => break,
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                let _ = stream_tx.send(Err(Status::internal("lagged"))).await;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Response::new(stream_rx))
+    }
+
     async fn subscribe_first_available_slot(
         &self,
         _request: Request<SubscribeReplayInfoRequest>,
@@ -2132,6 +2298,7 @@ mod tests {
             messages_tx: mpsc::UnboundedSender<Message>,
             broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
             deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
+            _gossip_rx: broadcast::Receiver<ContactInfoBroadcast>,
             handle: tokio::task::JoinHandle<()>,
             handle_reconstruction: tokio::task::JoinHandle<()>,
         }
@@ -2141,11 +2308,15 @@ mod tests {
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_tx, broadcast_rx) = broadcast::channel(1024);
             let (deshred_tx, deshred_rx) = broadcast::channel(1024);
+            let (gossip_tx, gossip_rx) = broadcast::channel(1024);
+            let gossip_topology = Arc::new(GossipTopology::new());
             let handle = tokio::spawn(GrpcService::geyser_loop(
                 messages_rx,
                 broadcast_tx.clone(),
                 block_reconstruction_tx,
                 deshred_tx,
+                gossip_tx,
+                gossip_topology,
             ));
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
                 block_reconstruction_rx,
@@ -2159,6 +2330,7 @@ mod tests {
                 messages_tx,
                 broadcast_rx,
                 deshred_rx,
+                _gossip_rx: gossip_rx,
                 handle,
                 handle_reconstruction,
             }
@@ -2310,11 +2482,17 @@ mod tests {
         async fn deshred_channel_should_see_slot_update() {
             let mut harness = spawn_loop();
             harness.messages_tx.send(make_deshred(100, 1)).unwrap();
-            harness.messages_tx.send(make_slot(100, SlotStatus::Processed, Some(99))).unwrap();
+            harness
+                .messages_tx
+                .send(make_slot(100, SlotStatus::Processed, Some(99)))
+                .unwrap();
             let batches = drain_deshred(&mut harness.deshred_rx).await;
             let total_deshed_txn: usize = batches.iter().map(|b| count_deshred(b)).sum();
             let actual_total_msg: usize = batches.iter().map(|b| b.len()).sum();
-            assert_eq!(total_deshed_txn, 1, "deshred should be emitted exactly once");
+            assert_eq!(
+                total_deshed_txn, 1,
+                "deshred should be emitted exactly once"
+            );
             assert_eq!(
                 actual_total_msg, 2,
                 "deshred channel should see both the deshred transaction and the slot update"

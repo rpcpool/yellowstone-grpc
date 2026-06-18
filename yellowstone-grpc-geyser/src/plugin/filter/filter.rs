@@ -21,6 +21,7 @@ use {
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
     prost::encoding::{encode_key, encode_varint, WireType},
+    smallvec::SmallVec,
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
     spl_token_2022_interface::{
@@ -253,6 +254,8 @@ impl Filter {
             Message::Entry(message) => self.entries.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
+            Message::ContactInfo(_) => SmallVec::new(),
+            Message::ContactInfoRemoved(_) => SmallVec::new(),
         }
     }
 

@@ -1,9 +1,10 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
-        ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
-        ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
+        ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+        SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     prost_types::Timestamp,
@@ -20,9 +21,10 @@ use {
     yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            GossipContactInfo, SlotStatus as SlotStatusProto, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdateEntry, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo,
         },
         solana::storage::confirmed_block,
     },
@@ -549,6 +551,109 @@ impl MessageEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MessageContactInfo {
+    pub pubkey: Pubkey,
+    pub wallclock: u64,
+    pub outset: u64,
+    pub shred_version: u16,
+    pub version_major: u16,
+    pub version_minor: u16,
+    pub version_patch: u16,
+    pub version_commit: u32,
+    pub version_feature_set: u32,
+    pub version_client_id: u16,
+    pub gossip: Option<String>,
+    pub tpu_quic: Option<String>,
+    pub tpu_forwards_quic: Option<String>,
+    pub tpu_vote_udp: Option<String>,
+    pub tpu_vote_quic: Option<String>,
+    pub tvu_udp: Option<String>,
+    pub tvu_quic: Option<String>,
+    pub serve_repair_udp: Option<String>,
+    pub serve_repair_quic: Option<String>,
+    pub rpc: Option<String>,
+    pub rpc_pubsub: Option<String>,
+    pub alpenglow: Option<String>,
+    pub is_startup: bool,
+    pub created_at: Timestamp,
+}
+
+impl MessageContactInfo {
+    pub fn from_geyser(info: &ReplicaContactInfoV0_0_1<'_>, is_startup: bool) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
+            wallclock: info.wallclock,
+            outset: info.outset,
+            shred_version: info.shred_version,
+            version_major: info.version_major,
+            version_minor: info.version_minor,
+            version_patch: info.version_patch,
+            version_commit: info.version_commit,
+            version_feature_set: info.version_feature_set,
+            version_client_id: info.version_client_id,
+            gossip: info.gossip.map(|s| s.to_string()),
+            tpu_quic: info.tpu_quic.map(|s| s.to_string()),
+            tpu_forwards_quic: info.tpu_forwards_quic.map(|s| s.to_string()),
+            tpu_vote_udp: info.tpu_vote_udp.map(|s| s.to_string()),
+            tpu_vote_quic: info.tpu_vote_quic.map(|s| s.to_string()),
+            tvu_udp: info.tvu_udp.map(|s| s.to_string()),
+            tvu_quic: info.tvu_quic.map(|s| s.to_string()),
+            serve_repair_udp: info.serve_repair_udp.map(|s| s.to_string()),
+            serve_repair_quic: info.serve_repair_quic.map(|s| s.to_string()),
+            rpc: info.rpc.map(|s| s.to_string()),
+            rpc_pubsub: info.rpc_pubsub.map(|s| s.to_string()),
+            alpenglow: info.alpenglow.map(|s| s.to_string()),
+            is_startup,
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+impl From<&MessageContactInfo> for GossipContactInfo {
+    fn from(info: &MessageContactInfo) -> Self {
+        Self {
+            pubkey: info.pubkey.to_bytes().to_vec(),
+            wallclock: info.wallclock,
+            outset: info.outset,
+            shred_version: info.shred_version as u32,
+            version_major: info.version_major as u32,
+            version_minor: info.version_minor as u32,
+            version_patch: info.version_patch as u32,
+            version_commit: info.version_commit,
+            version_feature_set: info.version_feature_set,
+            version_client_id: info.version_client_id as u32,
+            gossip: info.gossip.clone(),
+            tpu_quic: info.tpu_quic.clone(),
+            tpu_forwards_quic: info.tpu_forwards_quic.clone(),
+            tpu_vote_udp: info.tpu_vote_udp.clone(),
+            tpu_vote_quic: info.tpu_vote_quic.clone(),
+            tvu_udp: info.tvu_udp.clone(),
+            tvu_quic: info.tvu_quic.clone(),
+            serve_repair_udp: info.serve_repair_udp.clone(),
+            serve_repair_quic: info.serve_repair_quic.clone(),
+            rpc: info.rpc.clone(),
+            rpc_pubsub: info.rpc_pubsub.clone(),
+            alpenglow: info.alpenglow.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageContactInfoRemoved {
+    pub pubkey: Pubkey,
+    pub created_at: Timestamp,
+}
+
+impl MessageContactInfoRemoved {
+    pub fn from_geyser(pubkey: &[u8]) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(pubkey).expect("valid Pubkey"),
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlockMeta {
     pub block_meta: SubscribeUpdateBlockMeta,
     pub created_at: Timestamp,
@@ -676,6 +781,8 @@ pub enum Message {
     Entry(Arc<MessageEntry>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
+    ContactInfo(MessageContactInfo),
+    ContactInfoRemoved(MessageContactInfoRemoved),
 }
 
 impl Message {
@@ -689,6 +796,9 @@ impl Message {
             Self::Entry(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
+            // contact info messages has no slot
+            Self::ContactInfo(_) => 0,
+            Self::ContactInfoRemoved(_) => 0,
         }
     }
 

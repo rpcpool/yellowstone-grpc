@@ -6,15 +6,17 @@ use {
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
-                MessageSlot, MessageTransaction,
+                Message, MessageAccount, MessageBlockMeta, MessageContactInfo,
+                MessageContactInfoRemoved, MessageDeshredTransaction, MessageEntry, MessageSlot,
+                MessageTransaction,
             },
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
-        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+        ReplicaContactInfoVersions, ReplicaDeshredTransactionInfoVersions,
+        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
+        SlotStatus,
     },
     solana_pubkey::Pubkey,
     std::{
@@ -308,6 +310,33 @@ impl GeyserPlugin for Plugin {
             let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
             inner.send_message(message);
 
+            Ok(())
+        })
+    }
+
+    fn notify_contact_info(
+        &self,
+        info: ReplicaContactInfoVersions,
+        is_startup: bool,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
+            let info = match info {
+                ReplicaContactInfoVersions::V0_0_1(info) => info,
+            };
+
+            let message = Message::ContactInfo(MessageContactInfo::from_geyser(info, is_startup));
+            inner.send_message(message);
+
+            Ok(())
+        })
+    }
+
+    fn notify_contact_info_removed(&self, pubkey: &[u8]) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message =
+                Message::ContactInfoRemoved(MessageContactInfoRemoved::from_geyser(pubkey));
+            inner.send_message(message);
             Ok(())
         })
     }

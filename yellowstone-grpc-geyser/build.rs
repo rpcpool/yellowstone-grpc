@@ -59,6 +59,16 @@ fn main() -> anyhow::Result<()> {
         )
         .method(
             Method::builder()
+                .name("subscribe_gossip")
+                .route_name("SubscribeGossip")
+                .input_type("yellowstone_grpc_proto::geyser::SubscribeGossipRequest")
+                .output_type("yellowstone_grpc_proto::geyser::SubscribeGossipResponse")
+                .codec_path("tonic_prost::ProstCodec")
+                .server_streaming()
+                .build(),
+        )
+        .method(
+            Method::builder()
                 .name("subscribe_first_available_slot")
                 .route_name("SubscribeReplayInfo")
                 .input_type("yellowstone_grpc_proto::geyser::SubscribeReplayInfoRequest")
