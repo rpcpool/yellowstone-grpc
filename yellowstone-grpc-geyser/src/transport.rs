@@ -97,7 +97,7 @@ pub struct SpyIncoming<I, IO> {
     _io: PhantomData<IO>,
 }
 
-pub const DEFAULT_TRAFFIC_REPORTING_THRESHOLD: u64 = 64 * 1024; // 64 KiB
+pub const DEFAULT_TRAFFIC_REPORTING_THRESHOLD: ByteSize = ByteSize::b(64 * 1024); // 64 KiB
 
 /// Runtime options for [`SpyIncoming`].
 pub struct SpyIncomingConfig {
@@ -108,7 +108,7 @@ pub struct SpyIncomingConfig {
 impl Default for SpyIncomingConfig {
     fn default() -> Self {
         Self {
-            traffic_reporting_threshold: ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD),
+            traffic_reporting_threshold: DEFAULT_TRAFFIC_REPORTING_THRESHOLD,
         }
     }
 }

@@ -16,6 +16,10 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
+[features]
+default = []
+bench = ["dep:prost_011", "dep:solana-storage-proto"]
+
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 
@@ -41,11 +45,13 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rayon = { workspace = true }
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-util = { workspace = true, features = ["rt"]}
+tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tower-layer = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
@@ -81,6 +87,7 @@ prost_011 = { workspace = true, optional = true }
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-block-machine = { workspace = true, default-features = false }
+yellowstone-grpc-tools = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
@@ -91,8 +98,6 @@ name = "encode"
 harness = false
 required-features = ["bench"]
 
-[features]
-bench = ["dep:prost_011", "dep:solana-storage-proto"]
 
 [build-dependencies]
 anyhow = { workspace = true }
