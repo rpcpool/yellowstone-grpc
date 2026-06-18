@@ -3,7 +3,7 @@ use {
     arc_swap::ArcSwap,
     futures::Stream,
     std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         fmt,
         fs::{self, File},
         io::{self, BufReader, ErrorKind},
@@ -21,7 +21,7 @@ use {
     tokio_rustls::{
         rustls::{
             crypto::aws_lc_rs::sign::any_supported_type,
-            server::{ClientHello, ResolvesServerCert, ResolvesServerCertUsingSni},
+            server::{ClientHello, ResolvesServerCert},
             sign::CertifiedKey,
         },
         server::TlsStream,
@@ -32,10 +32,91 @@ use {
 };
 
 ///
-/// A wrapper around [`ResolvesServerCertUsingSni`] that allows hot-swapping the underlying cert resolver at runtime.
+/// A certificate resolver that supports both exact SNI names and wildcard patterns.
+#[derive(Default)]
+pub struct SniResolver {
+    exact: HashMap<String, Arc<CertifiedKey>>,
+    wildcard: Vec<(String, Arc<CertifiedKey>)>,
+}
+
+impl SniResolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add(&mut self, name: &str, certified_key: CertifiedKey) -> io::Result<()> {
+        let name = name.to_ascii_lowercase();
+        let cert = Arc::new(certified_key);
+
+        if let Some(suffix) = name.strip_prefix("*.") {
+            let suffix = format!(".{suffix}");
+            if self.wildcard.iter().any(|(existing, _)| existing == &suffix) {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("duplicate wildcard SNI name: {name}"),
+                ));
+            }
+            self.wildcard.push((suffix, cert));
+            return Ok(());
+        }
+
+        if self.exact.insert(name.clone(), cert).is_some() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("duplicate SNI name: {name}"),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn resolve_by_name(&self, server_name: &str) -> Option<Arc<CertifiedKey>> {
+        let server_name = server_name.to_ascii_lowercase();
+        if let Some(cert) = self.exact.get(&server_name) {
+            return Some(Arc::clone(cert));
+        }
+
+        let mut best_match: Option<(&str, Arc<CertifiedKey>)> = None;
+        for (suffix, cert) in &self.wildcard {
+            if !server_name.ends_with(suffix) {
+                continue;
+            }
+
+            let prefix = &server_name[..server_name.len().saturating_sub(suffix.len())];
+            if prefix.is_empty() || prefix.contains('.') {
+                continue;
+            }
+
+            match best_match {
+                Some((best_suffix, _)) if best_suffix.len() >= suffix.len() => {}
+                _ => best_match = Some((suffix.as_str(), Arc::clone(cert))),
+            }
+        }
+
+        best_match.map(|(_, cert)| cert)
+    }
+}
+
+impl fmt::Debug for SniResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SniResolver")
+            .field("exact_names", &self.exact.len())
+            .field("wildcard_names", &self.wildcard.len())
+            .finish()
+    }
+}
+
+impl ResolvesServerCert for SniResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let server_name = client_hello.server_name()?;
+        self.resolve_by_name(server_name)
+    }
+}
+
+/// A wrapper around [`SniResolver`] that allows hot-swapping the underlying cert resolver at runtime.
 ///
 pub struct HotResolvesServerCertUsingSni {
-    inner: Arc<ArcSwap<ResolvesServerCertUsingSni>>,
+    inner: Arc<ArcSwap<SniResolver>>,
 }
 
 impl Default for HotResolvesServerCertUsingSni {
@@ -46,24 +127,24 @@ impl Default for HotResolvesServerCertUsingSni {
 
 impl HotResolvesServerCertUsingSni {
     ///
-    /// Creates a new [`HotResolvesServerCertUsingSni`] with an empty [`ResolvesServerCertUsingSni`] as the initial resolver.
+    /// Creates a new [`HotResolvesServerCertUsingSni`] with an empty [`SniResolver`] as the initial resolver.
     ///
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(ArcSwap::from_pointee(ResolvesServerCertUsingSni::new())),
+            inner: Arc::new(ArcSwap::from_pointee(SniResolver::new())),
         }
     }
 
     ///
-    /// Swaps the underlying [`ResolvesServerCertUsingSni`] with a new one at runtime.
+    /// Swaps the underlying [`SniResolver`] with a new one at runtime.
     ///
-    pub fn swap(&self, new_resolver: ResolvesServerCertUsingSni) {
+    pub fn swap(&self, new_resolver: SniResolver) {
         self.inner.store(Arc::new(new_resolver));
     }
 }
 
-impl From<ResolvesServerCertUsingSni> for HotResolvesServerCertUsingSni {
-    fn from(resolver: ResolvesServerCertUsingSni) -> Self {
+impl From<SniResolver> for HotResolvesServerCertUsingSni {
+    fn from(resolver: SniResolver) -> Self {
         Self {
             inner: Arc::new(ArcSwap::from_pointee(resolver)),
         }
@@ -83,15 +164,15 @@ impl ResolvesServerCert for HotResolvesServerCertUsingSni {
 }
 
 ///
-/// Builds a `ResolvesServerCertUsingSni` by loading all PEM files in the given directory.
+/// Builds an [`SniResolver`] by loading all PEM files in the given directory.
 ///
 /// Each PEM file must contain at least one certificate and a private key.
 /// The same cert/key pair will be registered for each DNS name found in the cert's SAN and CN fields.
 ///
 pub fn build_sni_resolver_from_cert_dir<D: AsRef<Path>>(
     dir: D,
-) -> Result<ResolvesServerCertUsingSni, io::Error> {
-    let mut resolver = ResolvesServerCertUsingSni::new();
+) -> Result<SniResolver, io::Error> {
+    let mut resolver = SniResolver::new();
     let mut loaded_bundle_count = 0usize;
     let dir_path = dir.as_ref();
 
@@ -168,10 +249,7 @@ pub fn build_sni_resolver_from_cert_dir<D: AsRef<Path>>(
 }
 
 fn is_pem_like_file(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|ext| ext.to_str()),
-        Some("pem") | Some("crt")
-    )
+    matches!(path.extension().and_then(|ext| ext.to_str()), Some("pem"))
 }
 
 fn extract_cert_names(cert: &CertificateDer<'_>) -> Result<Vec<String>, io::Error> {
@@ -459,8 +537,9 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
     #[test]
     fn is_pem_like_file_matches_expected_extensions() {
         assert!(is_pem_like_file(Path::new("cert.pem")));
-        assert!(is_pem_like_file(Path::new("cert.crt")));
+        assert!(!is_pem_like_file(Path::new("cert.crt")));
         assert!(!is_pem_like_file(Path::new("cert.key")));
+        assert!(!is_pem_like_file(Path::new("cert.pem.key")));
         assert!(!is_pem_like_file(Path::new("cert")));
     }
 
@@ -502,10 +581,51 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
     #[test]
     fn hot_resolver_swap_preserves_debug_and_no_panic() {
         let resolver = HotResolvesServerCertUsingSni::new();
-        resolver.swap(ResolvesServerCertUsingSni::new());
+        resolver.swap(SniResolver::new());
 
         let debug = format!("{resolver:?}");
         assert!(!debug.is_empty());
+    }
+
+    fn make_test_certified_key() -> CertifiedKey {
+        let (certs, key) = load_test_cert_and_key();
+        let signing_key = any_supported_type(&key).expect("test key should parse");
+        CertifiedKey::new(certs, signing_key)
+    }
+
+    #[test]
+    fn sni_resolver_wildcard_matches_exactly_one_label() {
+        let mut resolver = SniResolver::new();
+        resolver
+            .add("*.rpcpool.com", make_test_certified_key())
+            .expect("wildcard should register");
+
+        assert!(resolver.resolve_by_name("api.rpcpool.com").is_some());
+        assert!(resolver.resolve_by_name("rpcpool.com").is_none());
+        assert!(resolver.resolve_by_name("foo.api.rpcpool.com").is_none());
+    }
+
+    #[test]
+    fn sni_resolver_prefers_more_specific_wildcard() {
+        let mut resolver = SniResolver::new();
+        resolver
+            .add("*.rpcpool.com", make_test_certified_key())
+            .expect("broad wildcard should register");
+        resolver
+            .add("*.mainnet.rpcpool.com", make_test_certified_key())
+            .expect("specific wildcard should register");
+
+        let selected = resolver
+            .resolve_by_name("api.mainnet.rpcpool.com")
+            .expect("matching wildcard should resolve");
+        let broad = resolver
+            .resolve_by_name("api.rpcpool.com")
+            .expect("broad wildcard should resolve");
+
+        assert!(
+            !Arc::ptr_eq(&selected, &broad),
+            "more specific wildcard should select a different certificate"
+        );
     }
 
     fn load_test_cert_and_key() -> (

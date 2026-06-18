@@ -507,11 +507,12 @@ impl GrpcService {
 
             let cert_der = CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
             let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
-            Some(
-                ServerConfig::builder()
-                    .with_no_client_auth()
-                    .with_single_cert(vec![cert_der], key_der)?,
-            )
+            let mut server_config = ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)?;
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
+            Some(server_config)
         } else {
             None
         };
@@ -521,9 +522,11 @@ impl GrpcService {
         if let Some(cert_dir) = &config.cert_dir {
             let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
             let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
-            let server_config = ServerConfig::builder()
+            let mut server_config = ServerConfig::builder()
                 .with_no_client_auth()
                 .with_cert_resolver(Arc::new(hot_resolver));
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
             let _ = maybe_tls_server_config.replace(server_config);
         }
 
