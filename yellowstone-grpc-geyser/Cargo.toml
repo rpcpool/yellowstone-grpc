@@ -18,7 +18,6 @@ name = "config-check"
 
 [features]
 default = []
-proxyless = []
 bench = ["dep:prost_011", "dep:solana-storage-proto"]
 
 [dependencies]

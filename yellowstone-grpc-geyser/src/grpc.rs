@@ -2,7 +2,7 @@ use {
     crate::{
         auth::PassthroughXTokenResolver,
         block_reconstruction::BlockMachineStorage,
-        config::{ConfigGrpc, GrpcAddress},
+        config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
@@ -27,11 +27,11 @@ use {
     futures::Stream,
     log::{error, info},
     prost_types::Timestamp,
-    smallvec::SmallVec,
     rustls::{
         pki_types::{pem::PemObject, PrivateKeyDer},
         ServerConfig,
     },
+    smallvec::SmallVec,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
@@ -481,6 +481,49 @@ pub struct GrpcService {
     task_tracker: TaskTracker,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TlsConfigLoadError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Rustls(#[from] rustls::Error),
+}
+
+///
+/// Loads TLS server configuration from the given `GrpcTlsConfig`. This is used for both the legacy `tls_config` field and the new `listen[].tls` field in the configuration. The `listen[].tls` field takes precedence over the legacy `tls_config` if both are set.
+///
+fn load_server_config_from_tls_config(
+    tls_config: &GrpcTlsConfig,
+) -> Result<ServerConfig, TlsConfigLoadError> {
+    match tls_config {
+        GrpcTlsConfig::IdentityPair { identity } => {
+            let cert_pem =
+                std::fs::read(&identity.cert_path).expect("failed to read TLS cert file");
+            let key = std::fs::read(&identity.key_path).expect("failed to read TLS key file");
+
+            let cert_der = CertificateDer::from_pem_slice(&cert_pem).expect("tls cert_path");
+            let key_der = PrivateKeyDer::from_pem_slice(&key).expect("tls key_path");
+            let mut server_config = ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)?;
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
+            Ok(server_config)
+        }
+        GrpcTlsConfig::CertDir { cert_dir } => {
+            let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())
+                .expect("failed to build SNI resolver from cert_dir");
+            let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+            let mut server_config = ServerConfig::builder()
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(hot_resolver));
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
+            Ok(server_config)
+        }
+    }
+}
+
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
@@ -493,95 +536,139 @@ impl GrpcService {
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
     )> {
-        if config.tls_config.is_some() && config.cert_dir.is_some() {
-            log::warn!("Both tls_config and cert_dir are set; cert_dir will take precedence and tls_config will be ignored");
-        }
-
-        let mut maybe_tls_server_config = if let Some(tls) = &config.tls_config {
-            let cert_pem = std::fs::read(&tls.cert_path)
-                .context("failed to read TLS cert file")
-                .unwrap();
-            let key = std::fs::read(&tls.key_path)
-                .context("failed to read TLS key file")
-                .unwrap();
-
-            let cert_der = CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
-            let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
-            let mut server_config = ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(vec![cert_der], key_der)?;
-            // gRPC over TLS requires ALPN negotiation for HTTP/2.
-            server_config.alpn_protocols = vec![b"h2".to_vec()];
-            Some(server_config)
-        } else {
-            None
-        };
-
-        // Cert-dir has precedence over tls_config if both are set.
-        // TODO: supports hot reload via sighub signal and watching cert_dir changes
-        if let Some(cert_dir) = &config.cert_dir {
-            let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
-            let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
-            let mut server_config = ServerConfig::builder()
-                .with_no_client_auth()
-                .with_cert_resolver(Arc::new(hot_resolver));
-            // gRPC over TLS requires ALPN negotiation for HTTP/2.
-            server_config.alpn_protocols = vec![b"h2".to_vec()];
-            let _ = maybe_tls_server_config.replace(server_config);
-        }
-
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
-        for addr in &config.address.inner {
-            let listener = match addr {
-                GrpcAddress::Tcp(addr) => {
-                    let incoming = TritonTcpIncoming::bind_with_config(
-                        addr,
-                        TcpConfiguration::default()
-                            .with_nodelay(Some(true))
-                            .with_keepalive(Some(Duration::from_secs(20))),
-                    )
-                    .await?;
-                    log::info!(
-                        "binding gRPC server to TCP socket: {}",
-                        incoming.local_addr()?
-                    );
-                    match &maybe_tls_server_config {
-                        Some(tls_server_config) => {
-                            log::info!(
-                                "TLS enabled for TCP listener at {}",
-                                incoming.local_addr()?
-                            );
-                            let tls_acceptor =
-                                TlsAcceptor::from(Arc::new(tls_server_config.clone()));
-                            let incoming = TlsIncoming::new(incoming, tls_acceptor);
-                            Listener::Tls(incoming)
-                        }
-                        None => Listener::Tcp(incoming),
+
+        // This is the LEGACY way of configuring the listen address, which is still supported for backward compatibility but will be removed in the future. The new way is to use the `listen` field which supports multiple addresses and TLS configuration per address.
+        if let Some(addresses) = config.address.clone() {
+            log::warn!("The 'address' field is deprecated; please use the 'listen' field with an array of addresses instead");
+            if config.tls_config.is_some() && config.cert_dir.is_some() {
+                log::warn!("Both tls_config and cert_dir are set; cert_dir will take precedence and tls_config will be ignored");
+            }
+            let mut maybe_tls_server_config = if let Some(tls) = &config.tls_config {
+                let cert_pem = std::fs::read(&tls.cert_path)
+                    .context("failed to read TLS cert file")
+                    .unwrap();
+                let key = std::fs::read(&tls.key_path)
+                    .context("failed to read TLS key file")
+                    .unwrap();
+
+                let cert_der =
+                    CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
+                let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
+                let mut server_config = ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(vec![cert_der], key_der)?;
+                // gRPC over TLS requires ALPN negotiation for HTTP/2.
+                server_config.alpn_protocols = vec![b"h2".to_vec()];
+                Some(server_config)
+            } else {
+                None
+            };
+
+            // Cert-dir has precedence over tls_config if both are set.
+            // TODO: supports hot reload via sighub signal and watching cert_dir changes
+            if let Some(cert_dir) = &config.cert_dir {
+                let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
+                let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+                let mut server_config = ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_cert_resolver(Arc::new(hot_resolver));
+                // gRPC over TLS requires ALPN negotiation for HTTP/2.
+                server_config.alpn_protocols = vec![b"h2".to_vec()];
+                let _ = maybe_tls_server_config.replace(server_config);
+            }
+
+            log::warn!("The 'address' field is deprecated; please use the 'listen' field with an array of addresses instead");
+            for address in addresses {
+                match address {
+                    GrpcAddress::Tcp(addr) => {
+                        let incoming = TritonTcpIncoming::bind_with_config(
+                            addr,
+                            TcpConfiguration::default()
+                                .with_nodelay(Some(true))
+                                .with_keepalive(Some(Duration::from_secs(20))),
+                        )
+                        .await?;
+                        log::info!(
+                            "binding gRPC server to TCP socket: {}",
+                            incoming.local_addr()?
+                        );
+                        listeners.push(Listener::Tcp(incoming));
                     }
-                }
-                GrpcAddress::Unix { path, mode } => {
-                    if config.tls_config.is_some() || config.cert_dir.is_some() {
-                        log::warn!(
-                            "TLS config is ignored for Unix domain socket: {}",
+                    GrpcAddress::Unix { path, mode } => {
+                        if config.tls_config.is_some() || config.cert_dir.is_some() {
+                            log::warn!(
+                                "TLS config is ignored for Unix domain socket: {}",
+                                path.display()
+                            );
+                        }
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                return Err(e.into());
+                            }
+                        }
+                        log::info!(
+                            "binding gRPC server to Unix domain socket: {}",
                             path.display()
                         );
+                        let uds = UnixListener::bind(&path)?;
+                        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+                        listeners.push(Listener::Unix(UnixListenerStream::new(uds)));
                     }
-                    if let Err(e) = std::fs::remove_file(path) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            return Err(e.into());
-                        }
-                    }
-                    log::info!(
-                        "binding gRPC server to Unix domain socket: {}",
-                        path.display()
-                    );
-                    let uds = UnixListener::bind(path)?;
-                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode))?;
-                    Listener::Unix(UnixListenerStream::new(uds))
                 }
-            };
-            listeners.push(listener);
+            }
+        }
+
+        if let Some(listen_configs) = config.listen.clone() {
+            for listen_config in listen_configs {
+                let address = listen_config.address;
+                let tls_config = listen_config.tls;
+                match address {
+                    GrpcAddress::Tcp(addr) => {
+                        let incoming = TritonTcpIncoming::bind_with_config(
+                            addr,
+                            TcpConfiguration::default()
+                                .with_nodelay(Some(true))
+                                .with_keepalive(Some(Duration::from_secs(20))),
+                        )
+                        .await?;
+                        log::info!(
+                            "binding gRPC server to TCP socket: {}",
+                            incoming.local_addr()?
+                        );
+                        let listener = if let Some(tls) = tls_config {
+                            let server_config = load_server_config_from_tls_config(&tls)
+                                .context("failed to load TLS server config")?;
+                            let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+                            Listener::Tls(TlsIncoming::new(incoming, tls_acceptor))
+                        } else {
+                            Listener::Tcp(incoming)
+                        };
+                        listeners.push(listener);
+                    }
+                    GrpcAddress::Unix { path, mode } => {
+                        if tls_config.is_some() {
+                            log::warn!(
+                                "TLS config is ignored for Unix domain socket: {}",
+                                path.display()
+                            );
+                        }
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                return Err(e.into());
+                            }
+                        }
+                        log::info!(
+                            "binding gRPC server to Unix domain socket: {}",
+                            path.display()
+                        );
+                        let uds = UnixListener::bind(&path)?;
+                        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+                        listeners.push(Listener::Unix(UnixListenerStream::new(uds)));
+                    }
+                }
+            }
         }
 
         // Snapshot channel

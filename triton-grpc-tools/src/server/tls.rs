@@ -50,7 +50,11 @@ impl SniResolver {
 
         if let Some(suffix) = name.strip_prefix("*.") {
             let suffix = format!(".{suffix}");
-            if self.wildcard.iter().any(|(existing, _)| existing == &suffix) {
+            if self
+                .wildcard
+                .iter()
+                .any(|(existing, _)| existing == &suffix)
+            {
                 return Err(io::Error::new(
                     ErrorKind::InvalidInput,
                     format!("duplicate wildcard SNI name: {name}"),
@@ -169,9 +173,7 @@ impl ResolvesServerCert for HotResolvesServerCertUsingSni {
 /// Each PEM file must contain at least one certificate and a private key.
 /// The same cert/key pair will be registered for each DNS name found in the cert's SAN and CN fields.
 ///
-pub fn build_sni_resolver_from_cert_dir<D: AsRef<Path>>(
-    dir: D,
-) -> Result<SniResolver, io::Error> {
+pub fn build_sni_resolver_from_cert_dir<D: AsRef<Path>>(dir: D) -> Result<SniResolver, io::Error> {
     let mut resolver = SniResolver::new();
     let mut loaded_bundle_count = 0usize;
     let dir_path = dir.as_ref();
