@@ -5882,7 +5882,6 @@ dependencies = [
  "prost-types 0.14.3",
  "protoc-bin-vendored",
  "rayon",
- "rustls",
  "serde",
  "serde_json",
  "smallvec",

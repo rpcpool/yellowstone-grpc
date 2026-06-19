@@ -52,7 +52,7 @@ use {
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration},
     },
-    tokio_rustls::TlsAcceptor,
+    tokio_rustls::{rustls, TlsAcceptor},
     tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{

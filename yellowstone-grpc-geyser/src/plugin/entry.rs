@@ -21,7 +21,7 @@ use {
         concat, env,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
+            Arc, Mutex, Once,
         },
         time::Duration,
     },
@@ -29,6 +29,7 @@ use {
         runtime::{Builder, Runtime},
         sync::mpsc,
     },
+    tokio_rustls::rustls,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
@@ -114,6 +115,11 @@ impl GeyserPlugin for Plugin {
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
         let result = runtime.block_on(async move {
+            static CRYPTO_PROVIDER_INIT: Once = Once::new();
+
+            CRYPTO_PROVIDER_INIT.call_once(|| {
+                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            });
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
             PrometheusService::spawn(
