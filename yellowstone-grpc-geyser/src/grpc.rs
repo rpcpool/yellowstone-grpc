@@ -18,6 +18,7 @@ use {
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
+        ratelimit::PrometheusRatelimitCallbacks,
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -875,8 +876,12 @@ impl GrpcService {
             let rate_limit_table = rate_limit_table.clone();
             task_tracker.spawn(async move {
                 if let Err(e) = with_listener!(listener, |incoming| {
-                    let rate_limited_incoming =
-                        RateLimitedIncoming::new(incoming, ip_conncur, rate_limit_table);
+                    let rate_limited_incoming = RateLimitedIncoming::new(
+                        incoming,
+                        ip_conncur,
+                        rate_limit_table,
+                        PrometheusRatelimitCallbacks,
+                    );
 
                     GrpcService::serve_listener(
                         rate_limited_incoming,

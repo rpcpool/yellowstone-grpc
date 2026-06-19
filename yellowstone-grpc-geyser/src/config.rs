@@ -373,7 +373,7 @@ pub struct ConfigGrpc {
     /// Maximum concurrent connections allowed per remote IP address. If not set, there is no limit enforced at the transport layer,
     /// but the server may still enforce limits at the application layer (e.g. subscription_limit).
     ///
-    /// Defaults to 250
+    /// Defaults to 2^64 - 1 (effectively no limit).
     ///
     #[serde(
         default = "ConfigGrpc::default_max_ip_conncur",
@@ -403,7 +403,7 @@ pub struct ListenConfig {
 
 impl ConfigGrpc {
     const fn default_max_ip_conncur() -> u64 {
-        250
+        u64::MAX
     }
 
     const fn max_decoding_message_size_default() -> usize {

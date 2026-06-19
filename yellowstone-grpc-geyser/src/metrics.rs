@@ -179,6 +179,15 @@ lazy_static::lazy_static! {
     static ref GEYSER_UNTRACK_SLOT_EVENT_DROPPED: IntCounter = IntCounter::new(
         "geyser_untrack_slot_event_dropped_total", "Number of geyser event drop due to untrack slot"
     ).unwrap();
+
+
+    static ref IP_CONNCUR_RATE_LIMIT_EXCEEDED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_ip_conncur_rate_limit_exceeded_total",
+            "Number of incoming connections that exceeded the per-IP connection limit at the transport layer"
+        ),
+        &["remote_peer_ip"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -340,6 +349,7 @@ impl PrometheusService {
             register!(GEYSER_EVENT_DROPPED);
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
             register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
+            register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
 
             VERSION
                 .with_label_values(&[
@@ -459,6 +469,12 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn incr_ip_conncur_rate_limit_exceeded(remote_peer_ip: Option<String>) {
+    IP_CONNCUR_RATE_LIMIT_EXCEEDED
+        .with_label_values(&[remote_peer_ip.as_deref().unwrap_or("unknown")])
+        .inc();
 }
 
 pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
@@ -649,6 +665,8 @@ pub fn reset_metrics() {
     GEYSER_EVENT_DROPPED.reset();
     GEYSER_BLOCK_MISMATCH_TRANSACTION.reset();
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
+
+    IP_CONNCUR_RATE_LIMIT_EXCEEDED.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()

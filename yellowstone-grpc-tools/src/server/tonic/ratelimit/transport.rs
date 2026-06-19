@@ -12,6 +12,12 @@ use {
     tonic::transport::server::{Connected, TcpConnectInfo, TlsConnectInfo},
 };
 
+pub trait RatelimitedCallbacks: Send + Sync + 'static {
+    /// Callback invoked when an incoming connection is rejected due to exceeding the per-IP connection limit.
+    /// The remote peer IP is provided if it could be extracted from the connection metadata.
+    fn on_rate_limit_exceeded(&self, _remote_peer_ip: Option<IpAddr>) {}
+}
+
 #[cfg(test)]
 #[derive(Clone)]
 struct TestTlsConnectInfo<T> {
@@ -28,9 +34,10 @@ impl<T> TestTlsConnectInfo<T> {
 /// IP Rate-limiting wrapper around an incoming stream of transport connections.
 ///
 /// Wraps an incoming stream of transport connections and converts each item into [`RateLimitedIO`].
-pub struct RateLimitedIncoming<I, IO> {
+pub struct RateLimitedIncoming<I, IO, CB> {
     incoming: I,
     max_ip_conncur: u64,
+    callbacks: CB,
     active_conn_map: Arc<Mutex<HashMap<IpAddr, u64>>>,
     _io: PhantomData<IO>,
 }
@@ -45,23 +52,34 @@ pub struct SharedRateLimitTable {
 
 pub const DEFAULT_MAX_IP_CONNCUR: u64 = 250;
 
-impl<I, IO> RateLimitedIncoming<I, IO>
+impl<I, IO, CB> RateLimitedIncoming<I, IO, CB>
 where
     I: Stream<Item = std::io::Result<IO>> + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Connected + Send + 'static,
+    CB: RatelimitedCallbacks,
 {
     /// Creates a new [`RateLimitedIncoming`] wrapper.
-    pub fn new(incoming: I, max_ip_conncur: u64, table: SharedRateLimitTable) -> Self {
+    pub fn new(
+        incoming: I,
+        max_ip_conncur: u64,
+        table: SharedRateLimitTable,
+        callbacks: CB,
+    ) -> Self {
         Self {
             incoming,
             max_ip_conncur: max_ip_conncur,
             _io: Default::default(),
             active_conn_map: Arc::clone(&table.inner),
+            callbacks,
         }
     }
 
-    pub fn with_default_rate_limit(incoming: I, table: SharedRateLimitTable) -> Self {
-        Self::new(incoming, DEFAULT_MAX_IP_CONNCUR, table)
+    pub fn with_default_rate_limit(
+        incoming: I,
+        table: SharedRateLimitTable,
+        callbacks: CB,
+    ) -> Self {
+        Self::new(incoming, DEFAULT_MAX_IP_CONNCUR, table, callbacks)
     }
 }
 
@@ -138,7 +156,7 @@ impl<IO> Drop for RateLimitedIO<IO> {
                 .entry(remote_peer_ip.ip())
                 .and_modify(|count| {
                     if *count > 0 {
-                        *count -= 1;
+                        *count = count.saturating_sub(1);
                     }
                 })
                 .or_insert(0);
@@ -171,11 +189,15 @@ where
     IO: Connected,
 {
     /// Creates a new [`RateLimitedIO`] and initializes per-peer connection accounting.
-    fn try_new(
+    fn try_new<CB>(
         io: IO,
         max_ip_conncur: u64,
         active_conn_map: Arc<Mutex<HashMap<IpAddr, u64>>>,
-    ) -> Result<Self, std::io::Error> {
+        callbacks: &CB,
+    ) -> Result<Self, std::io::Error>
+    where
+        CB: RatelimitedCallbacks,
+    {
         let info = &io.connect_info() as &dyn Any;
         let maybe_remote_peer_addr = extract_remote_peer_addr(info);
 
@@ -183,6 +205,7 @@ where
             let mut guard = active_conn_map.lock().unwrap();
             let curr_val = guard.get(&remote_peer_addr.ip()).cloned().unwrap_or(0);
             if curr_val >= max_ip_conncur {
+                callbacks.on_rate_limit_exceeded(Some(remote_peer_addr.ip()));
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::QuotaExceeded,
                     "connection limit exceeded for remote peer ip".to_string(),
@@ -190,7 +213,7 @@ where
             }
             guard
                 .entry(remote_peer_addr.ip())
-                .and_modify(|count| *count += 1)
+                .and_modify(|count| *count = count.checked_add(1).expect("should not overflow"))
                 .or_insert(1);
         }
 
@@ -203,10 +226,11 @@ where
     }
 }
 
-impl<I, IO> Stream for RateLimitedIncoming<I, IO>
+impl<I, IO, CB> Stream for RateLimitedIncoming<I, IO, CB>
 where
     I: Stream<Item = std::io::Result<IO>> + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Connected + Send + 'static,
+    CB: RatelimitedCallbacks + Unpin + Send + Sync + 'static,
 {
     type Item = std::io::Result<RateLimitedIO<IO>>;
     /// Polls for the next accepted connection and wraps it as [`RateLimitedIO`].
@@ -219,7 +243,12 @@ where
         self.incoming.poll_next_unpin(cx).map(|maybe| {
             maybe.map(|result| {
                 result.and_then(|io| {
-                    RateLimitedIO::try_new(io, max_ip_conncur, Arc::clone(&active_conn_map))
+                    RateLimitedIO::try_new(
+                        io,
+                        max_ip_conncur,
+                        Arc::clone(&active_conn_map),
+                        &self.callbacks,
+                    )
                 })
             })
         })
@@ -232,6 +261,13 @@ mod tests {
         super::*,
         std::{io, task::Poll},
     };
+
+    #[derive(Default)]
+    struct NoopCallbacks;
+
+    impl RatelimitedCallbacks for NoopCallbacks {
+        fn on_rate_limit_exceeded(&self, _remote_peer_ip: Option<IpAddr>) {}
+    }
 
     #[derive(Clone)]
     struct MockIo {
@@ -287,6 +323,7 @@ mod tests {
     fn rate_limited_io_enforces_per_ip_quota_and_releases_slot_on_drop() {
         let remote_addr: SocketAddr = "192.168.1.42:50051".parse().expect("valid socket addr");
         let active_conn_map = Arc::new(Mutex::new(HashMap::new()));
+        let callbacks = NoopCallbacks;
 
         let conn1 = RateLimitedIO::try_new(
             MockIo {
@@ -294,6 +331,7 @@ mod tests {
             },
             1,
             Arc::clone(&active_conn_map),
+            &callbacks,
         )
         .expect("first connection should be accepted");
 
@@ -303,6 +341,7 @@ mod tests {
             },
             1,
             Arc::clone(&active_conn_map),
+            &callbacks,
         )
         .err()
         .expect("second connection should be rejected at max=1");
@@ -326,6 +365,7 @@ mod tests {
             },
             1,
             Arc::clone(&active_conn_map),
+            &callbacks,
         )
         .expect("new connection should be accepted after drop");
     }

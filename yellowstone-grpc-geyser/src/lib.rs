@@ -4,6 +4,7 @@ pub mod grpc;
 pub mod metered;
 pub mod metrics;
 pub mod plugin;
+pub mod ratelimit;
 pub(crate) mod util;
 pub mod version;
 
