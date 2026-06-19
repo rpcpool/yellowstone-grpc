@@ -2,7 +2,7 @@ use {
     crate::{
         block_reconstruction::BlockMachineStorage,
         config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
-        metered::MeteredLayer,
+        metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
             subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
@@ -18,11 +18,12 @@ use {
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+        ratelimit::PrometheusRatelimitCallbacks,
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
     anyhow::Context as _,
+    bytesize::ByteSize,
     futures::Stream,
     log::{error, info},
     prost_types::Timestamp,
@@ -75,6 +76,10 @@ use {
     yellowstone_grpc_tools::server::{
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
         tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
+        tonic::{
+            metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+            ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
+        },
     },
 };
 
@@ -861,23 +866,25 @@ impl GrpcService {
         }
 
         // Spawn one server task per listener
+        let rate_limit_table = SharedRateLimitTable::default();
+        let ip_conncur = config.ip_conncur_rate_limit;
         for listener in listeners {
             let shutdown = shutdown_grpc.clone();
             let x_token = x_token.clone();
             let health_service = health_service.clone();
             let service = service.clone();
-
+            let rate_limit_table = rate_limit_table.clone();
             task_tracker.spawn(async move {
                 if let Err(e) = with_listener!(listener, |incoming| {
-                    let spy_incoming = SpyIncoming::new(
+                    let rate_limited_incoming = RateLimitedIncoming::new(
                         incoming,
-                        SpyIncomingConfig {
-                            traffic_reporting_threshold,
-                        },
+                        ip_conncur,
+                        rate_limit_table,
+                        PrometheusRatelimitCallbacks,
                     );
 
                     GrpcService::serve_listener(
-                        spy_incoming,
+                        rate_limited_incoming,
                         http2_adaptive_window,
                         http2_keepalive_interval,
                         http2_keepalive_timeout,
@@ -886,6 +893,7 @@ impl GrpcService {
                         x_token,
                         health_service,
                         service,
+                        traffic_reporting_threshold,
                         shutdown.clone(),
                     )
                     .await
@@ -1484,6 +1492,7 @@ impl GrpcService {
         x_token: Option<AsciiMetadataValue>,
         health_service: HealthServer<H>,
         service: GeyserServer<GrpcService>,
+        traffic_reporting_threshold: ByteSize,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()>
     where
@@ -1509,7 +1518,10 @@ impl GrpcService {
             builder = builder.initial_stream_window_size(sz);
         }
         builder
-            .layer(MeteredLayer::new())
+            .layer(MeteredBandwidthLayer::new(
+                PrometheusMeteredManager,
+                traffic_reporting_threshold,
+            ))
             .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
                 x_token,
             }))
