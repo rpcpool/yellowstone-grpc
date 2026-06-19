@@ -73,10 +73,6 @@ jobs:
         working-directory: yellowstone-grpc-client-nodejs
         run: npm run build:dev
 
-      - name: Install TypeScript example dependencies
-        working-directory: examples/typescript
-        run: npm install
-
       - name: Run tests
         working-directory: yellowstone-grpc-client-nodejs
         env:
@@ -163,10 +159,6 @@ jobs:
         working-directory: yellowstone-grpc-client-nodejs
         run: npm run build:dev
 
-      - name: Install TypeScript example dependencies
-        working-directory: examples/typescript
-        run: npm install
-
       - name: Run tests
         working-directory: yellowstone-grpc-client-nodejs
         env:
@@ -230,10 +222,6 @@ jobs:
         working-directory: yellowstone-grpc-client-nodejs
         run: npm run build:dev
 
-      - name: Install TypeScript example dependencies
-        working-directory: examples/typescript
-        run: npm install
-
       - name: Run tests
         working-directory: yellowstone-grpc-client-nodejs
         env:
@@ -296,10 +284,6 @@ jobs:
       - name: Build TypeScript SDK
         working-directory: yellowstone-grpc-client-nodejs
         run: npm run build:dev
-
-      - name: Install TypeScript example dependencies
-        working-directory: examples/typescript
-        run: npm install
 
       - name: Run tests
         working-directory: yellowstone-grpc-client-nodejs
