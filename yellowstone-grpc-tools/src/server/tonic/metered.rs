@@ -177,9 +177,6 @@ where
     MH: MeteredBandwidthHooks,
 {
     fn drop(self: Pin<&mut Self>) {
-        // This Drop impl is required to satisfy the !Unpin requirement of the
-        // pin projection in [`MeteredBandwidthBody`], but it should never actually be called
-        // since [`MeteredBandwidthBody`] is always pinned behind a future and service wrapper.
         let this = self.project();
         this.metered_hooks
             .on_emit_bytes(*this.cumulative_bytes, Instant::now(), SystemTime::now());

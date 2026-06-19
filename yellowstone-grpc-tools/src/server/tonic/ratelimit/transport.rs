@@ -120,7 +120,6 @@ impl<IO> AsyncWrite for RateLimitedIO<IO>
 where
     IO: AsyncWrite + Unpin,
 {
-    /// Writes to the wrapped IO and updates buffered traffic counters.
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -151,17 +150,12 @@ impl<IO> Drop for RateLimitedIO<IO> {
     fn drop(&mut self) {
         if let Some(remote_peer_ip) = &self.remote_peer {
             let mut guard = self.active_conn_map.lock().unwrap();
-
             let new_val = guard
-                .entry(remote_peer_ip.ip())
-                .and_modify(|count| {
-                    if *count > 0 {
-                        *count = count.saturating_sub(1);
-                    }
-                })
-                .or_insert(0);
+                .get_mut(&remote_peer_ip.ip())
+                .expect("should have an entry for the remote peer IP on drop");
+            let new_val = new_val.checked_sub(1).expect("should not underflow");
 
-            if new_val == &0 {
+            if new_val == 0 {
                 guard.remove(&remote_peer_ip.ip());
             }
         }
@@ -239,14 +233,13 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let max_ip_conncur = self.max_ip_conncur;
-        let active_conn_map = Arc::clone(&self.active_conn_map);
         self.incoming.poll_next_unpin(cx).map(|maybe| {
             maybe.map(|result| {
                 result.and_then(|io| {
                     RateLimitedIO::try_new(
                         io,
                         max_ip_conncur,
-                        Arc::clone(&active_conn_map),
+                        Arc::clone(&self.active_conn_map),
                         &self.callbacks,
                     )
                 })
