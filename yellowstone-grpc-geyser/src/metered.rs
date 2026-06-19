@@ -4,7 +4,9 @@ use {
         collections::HashMap,
         sync::{LazyLock, Mutex},
     },
-    yellowstone_grpc_tools::server::tonic::metered::{MeteredBandwidthHooks, MeteredBandwidthManager},
+    yellowstone_grpc_tools::server::tonic::metered::{
+        MeteredBandwidthHooks, MeteredBandwidthManager,
+    },
 };
 
 pub const X_SUBSCRIPTION_ID_HEADER: &str = "x-subscription-id";
@@ -69,6 +71,7 @@ impl MeteredBandwidthHooks for PrometheusMeteredHooks {
         _now: std::time::Instant,
         _system_now: std::time::SystemTime,
     ) {
+        metrics::add_total_traffic_sent(byte_count);
         metrics::add_grpc_service_outbound_bytes(&self.subscriber_id, &self.uri_path, byte_count);
     }
 }

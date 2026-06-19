@@ -146,11 +146,6 @@ lazy_static::lazy_static! {
         "Total traffic sent to subscriber by type (account_update, block_meta, etc)"
     ).unwrap();
 
-    static ref TRAFFIC_SENT_PER_REMOTE_IP: IntCounterVec = IntCounterVec::new(
-        Opts::new("traffic_sent_per_remote_ip_bytes", "Total traffic sent to subscriber by remote IP"),
-        &["remote_ip"]
-    ).unwrap();
-
     static ref GRPC_METHOD_CALL_COUNT: IntCounterVec = IntCounterVec::new(
         Opts::new("yellowstone_grpc_method_call_count", "Total number of calls to GetVersion gRPC method"),
         &["method"]
@@ -339,7 +334,6 @@ impl PrometheusService {
             register!(PRE_ENCODED_CACHE_MISS);
             register!(GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION);
             register!(TOTAL_TRAFFIC_SENT);
-            register!(TRAFFIC_SENT_PER_REMOTE_IP);
             register!(GRPC_METHOD_CALL_COUNT);
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
@@ -609,21 +603,6 @@ pub fn add_total_traffic_sent(bytes: u64) {
     TOTAL_TRAFFIC_SENT.inc_by(bytes);
 }
 
-pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .inc_by(bytes);
-}
-
-pub fn reset_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .reset();
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .remove_label_values(&[remote_ip.as_ref()])
-        .expect("remove_label_values");
-}
-
 pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
     remote_peer_sk_addr: S,
     size: u64,
@@ -659,7 +638,6 @@ pub fn reset_metrics() {
     GRPC_CLIENT_DISCONNECTS.reset();
     GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
     TOTAL_TRAFFIC_SENT.reset();
-    TRAFFIC_SENT_PER_REMOTE_IP.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.reset();
     GRPC_METHOD_CALL_COUNT.reset();

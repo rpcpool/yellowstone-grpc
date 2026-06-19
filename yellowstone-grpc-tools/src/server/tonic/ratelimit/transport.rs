@@ -35,7 +35,15 @@ pub struct RateLimitedIncoming<I, IO> {
     _io: PhantomData<IO>,
 }
 
-pub const DEFAULT_MAX_IP_CONNCUR: u64 = 400;
+///
+/// Shared state for tracking active connections per peer IP across all incoming streams and connections. The key is the peer IP and the value is the number of active connections from that IP.
+///
+#[derive(Debug, Clone, Default)]
+pub struct SharedRateLimitTable {
+    inner: Arc<Mutex<HashMap<IpAddr, u64>>>,
+}
+
+pub const DEFAULT_MAX_IP_CONNCUR: u64 = 250;
 
 impl<I, IO> RateLimitedIncoming<I, IO>
 where
@@ -43,13 +51,17 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Connected + Send + 'static,
 {
     /// Creates a new [`RateLimitedIncoming`] wrapper.
-    pub fn new(incoming: I, max_ip_conncur: u64) -> Self {
+    pub fn new(incoming: I, max_ip_conncur: u64, table: SharedRateLimitTable) -> Self {
         Self {
             incoming,
             max_ip_conncur: max_ip_conncur,
             _io: Default::default(),
-            active_conn_map: Default::default(),
+            active_conn_map: Arc::clone(&table.inner),
         }
+    }
+
+    pub fn with_default_rate_limit(incoming: I, table: SharedRateLimitTable) -> Self {
+        Self::new(incoming, DEFAULT_MAX_IP_CONNCUR, table)
     }
 }
 
