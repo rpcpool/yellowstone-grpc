@@ -1,37 +1,24 @@
 use {
     crate::{
-        block_reconstruction::BlockMachineStorage,
-        config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
-        metered::MeteredLayer,
-        metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
-        },
-        plugin::{
+        block_reconstruction::BlockMachineStorage, config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig}, metered::PrometheusMeteredManager, metrics::{
+            self, DebugClientMessage, GEYSER_BATCH_SIZE, incr_grpc_method_call_count, set_subscriber_queue_size, subscription_limit_exceeded_inc
+        }, plugin::{
             filter::{
-                encoder::encode_messages,
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateOneof},
-                name::FilterNames,
-                Filter,
+                Filter, encoder::encode_messages, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames
             },
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
-        },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
-        version::GrpcVersionInfo,
+        }, transport::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, SpyIncoming, SpyIncomingConfig}, util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel}, version::GrpcVersionInfo
     },
     anyhow::Context as _,
     futures::Stream,
     log::{error, info},
     prost_types::Timestamp,
     rustls::{
-        pki_types::{pem::PemObject, PrivateKeyDer},
-        ServerConfig,
+        ServerConfig, pki_types::{PrivateKeyDer, pem::PemObject}
     },
     smallvec::SmallVec,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_clock::{MAX_RECENT_BLOCKHASHES, Slot},
     std::{
         collections::HashMap,
         io,
@@ -40,8 +27,7 @@ use {
         path::PathBuf,
         pin::Pin,
         sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, LazyLock, Mutex as StdMutex,
+            Arc, LazyLock, Mutex as StdMutex, atomic::{AtomicU64, AtomicUsize, Ordering}
         },
         task::{Context, Poll},
         time::SystemTime,
@@ -49,20 +35,16 @@ use {
     tokio::{
         io::{AsyncRead, AsyncWrite},
         net::UnixListener,
-        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration},
+        sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot},
+        time::{Duration, sleep},
     },
     tokio_rustls::{rustls, TlsAcceptor},
     tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
-        metadata::AsciiMetadataValue,
-        service::interceptor,
-        transport::{
-            server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
-            CertificateDer,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
+        Request, Response, Result as TonicResult, Status, Streaming, metadata::AsciiMetadataValue, service::interceptor, transport::{
+            CertificateDer, server::{Connected, Server, TcpConnectInfo, TlsConnectInfo}
+        }
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
     yellowstone_grpc_proto::prelude::{
@@ -74,7 +56,8 @@ use {
     },
     yellowstone_grpc_tools::server::{
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
-        tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
+        tls::{HotResolvesServerCertUsingSni, TlsIncoming, build_sni_resolver_from_cert_dir},
+        tonic::metered::MeteredBandwidthLayer
     },
 };
 
@@ -1509,7 +1492,11 @@ impl GrpcService {
             builder = builder.initial_stream_window_size(sz);
         }
         builder
-            .layer(MeteredLayer::new())
+            // .layer(
+            //     MeteredBandwidthLayer::new(
+            //         PrometheusMeteredManager
+            //     )
+            // )
             .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
                 x_token,
             }))
