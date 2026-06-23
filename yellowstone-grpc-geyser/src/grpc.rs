@@ -1,8 +1,8 @@
 use {
     crate::{
         block_reconstruction::BlockMachineStorage,
-        config::{ConfigGrpc, GrpcAddress},
-        metered::MeteredLayer,
+        config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
             subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
@@ -18,41 +18,50 @@ use {
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+        ratelimit::PrometheusRatelimitCallbacks,
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
-    anyhow::Context,
+    anyhow::Context as _,
     bytesize::ByteSize,
+    futures::Stream,
     log::{error, info},
     prost_types::Timestamp,
+    rustls::{
+        pki_types::{pem::PemObject, PrivateKeyDer},
+        ServerConfig,
+    },
     smallvec::SmallVec,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
+        io,
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
+        pin::Pin,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc, LazyLock, Mutex as StdMutex,
         },
+        task::{Context, Poll},
         time::SystemTime,
     },
     tokio::{
-        fs,
+        io::{AsyncRead, AsyncWrite},
         net::UnixListener,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration},
     },
+    tokio_rustls::{rustls, TlsAcceptor},
     tokio_stream::wrappers::UnixListenerStream,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
         service::interceptor,
         transport::{
-            server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
-            Identity, ServerTlsConfig,
+            server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
+            CertificateDer,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
     },
@@ -63,6 +72,14 @@ use {
         GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
         PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest,
         SubscribeReplayInfoResponse, SubscribeRequest,
+    },
+    yellowstone_grpc_tools::server::{
+        tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
+        tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
+        tonic::{
+            metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+            ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
+        },
     },
 };
 
@@ -475,9 +492,43 @@ impl Drop for DeshredClientSession {
     }
 }
 
+struct AutoClosableUnixListenerStream {
+    path_to_remove: PathBuf,
+    listener: UnixListenerStream,
+}
+
+impl Stream for AutoClosableUnixListenerStream {
+    type Item = io::Result<tokio::net::UnixStream>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.listener).poll_next(cx) {
+            Poll::Ready(Some(Ok(stream))) => Poll::Ready(Some(Ok(stream))),
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for AutoClosableUnixListenerStream {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_file(&self.path_to_remove) {
+            error!(
+                "failed to remove Unix socket file {}: {}",
+                self.path_to_remove.display(),
+                err
+            );
+        } else {
+            info!("removed Unix socket file {}", self.path_to_remove.display());
+        }
+    }
+}
+
 enum Listener {
-    Tcp(TcpIncoming),
-    Unix(PathBuf, UnixListenerStream), // path needed to remove the socket file on exit
+    Tcp(TritonTcpIncoming),
+    Tls(TlsIncoming),
+    Unix(AutoClosableUnixListenerStream), // path needed to remove the socket file on exit
 }
 
 #[derive(Clone)]
@@ -514,9 +565,54 @@ pub struct GrpcService {
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
-    filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    filter_name_size_limit: usize,
+    filter_names_size_limit: usize,
+    filter_names_cleanup_interval: Duration,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TlsConfigLoadError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Rustls(#[from] rustls::Error),
+    #[error(transparent)]
+    PemError(#[from] rustls::pki_types::pem::Error),
+}
+
+///
+/// Loads TLS server configuration from the given `GrpcTlsConfig`. This is used for both the legacy `tls_config` field and the new `listen[].tls` field in the configuration. The `listen[].tls` field takes precedence over the legacy `tls_config` if both are set.
+///
+fn load_server_config_from_tls_config(
+    tls_config: &GrpcTlsConfig,
+) -> Result<ServerConfig, TlsConfigLoadError> {
+    match tls_config {
+        GrpcTlsConfig::IdentityPair { identity } => {
+            let cert_pem = std::fs::read(&identity.cert_path)?;
+            let key = std::fs::read(&identity.key_path)?;
+
+            let cert_der = CertificateDer::from_pem_slice(&cert_pem)?;
+            let key_der = PrivateKeyDer::from_pem_slice(&key)?;
+            let mut server_config = ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)?;
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
+            Ok(server_config)
+        }
+        GrpcTlsConfig::CertDir { cert_dir } => {
+            let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
+            let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+            let mut server_config = ServerConfig::builder()
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(hot_resolver));
+            // gRPC over TLS requires ALPN negotiation for HTTP/2.
+            server_config.alpn_protocols = vec![b"h2".to_vec()];
+            Ok(server_config)
+        }
+    }
 }
 
 impl GrpcService {
@@ -534,32 +630,147 @@ impl GrpcService {
     )> {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
-        for addr in &config.address.inner {
-            let listener = match addr {
-                GrpcAddress::Tcp(addr) => {
-                    let incoming = TcpIncoming::bind(*addr)?
-                        .with_nodelay(Some(true))
-                        .with_keepalive(Some(Duration::from_secs(20)));
-                    Listener::Tcp(incoming)
-                }
-                GrpcAddress::Unix { path, mode } => {
-                    if config.tls_config.is_some() {
-                        log::warn!(
-                            "TLS config is ignored for Unix domain socket: {}",
+
+        // This is the LEGACY way of configuring the listen address, which is still supported for backward compatibility but will be removed in the future. The new way is to use the `listen` field which supports multiple addresses and TLS configuration per address.
+        if let Some(addresses) = config.address.clone() {
+            log::warn!("The 'address' field is deprecated; please use the 'listen' field with an array of addresses instead");
+            if config.tls_config.is_some() && config.cert_dir.is_some() {
+                log::warn!("Both tls_config and cert_dir are set; cert_dir will take precedence and tls_config will be ignored");
+            }
+            let mut maybe_tls_server_config = if let Some(tls) = &config.tls_config {
+                let cert_pem = std::fs::read(&tls.cert_path)
+                    .context("failed to read TLS cert file")
+                    .unwrap();
+                let key = std::fs::read(&tls.key_path)
+                    .context("failed to read TLS key file")
+                    .unwrap();
+
+                let cert_der =
+                    CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
+                let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
+                let mut server_config = ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(vec![cert_der], key_der)?;
+                // gRPC over TLS requires ALPN negotiation for HTTP/2.
+                server_config.alpn_protocols = vec![b"h2".to_vec()];
+                Some(server_config)
+            } else {
+                None
+            };
+
+            // Cert-dir has precedence over tls_config if both are set.
+            // TODO: supports hot reload via sighub signal and watching cert_dir changes
+            if let Some(cert_dir) = &config.cert_dir {
+                let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
+                let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+                let mut server_config = ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_cert_resolver(Arc::new(hot_resolver));
+                // gRPC over TLS requires ALPN negotiation for HTTP/2.
+                server_config.alpn_protocols = vec![b"h2".to_vec()];
+                let _ = maybe_tls_server_config.replace(server_config);
+            }
+
+            log::warn!("The 'address' field is deprecated; please use the 'listen' field with an array of addresses instead");
+            for address in addresses {
+                match address {
+                    GrpcAddress::Tcp(addr) => {
+                        let incoming = TritonTcpIncoming::bind_with_config(
+                            addr,
+                            TcpConfiguration::default()
+                                .with_nodelay(Some(true))
+                                .with_keepalive(Some(Duration::from_secs(20))),
+                        )
+                        .await?;
+                        log::info!(
+                            "binding gRPC server to TCP socket: {}",
+                            incoming.local_addr()?
+                        );
+                        listeners.push(Listener::Tcp(incoming));
+                    }
+                    GrpcAddress::Unix { path, mode } => {
+                        if config.tls_config.is_some() || config.cert_dir.is_some() {
+                            log::warn!(
+                                "TLS config is ignored for Unix domain socket: {}",
+                                path.display()
+                            );
+                        }
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                return Err(e.into());
+                            }
+                        }
+                        log::info!(
+                            "binding gRPC server to Unix domain socket: {}",
                             path.display()
                         );
+                        let uds = UnixListener::bind(&path)?;
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
+                        let uds = UnixListenerStream::new(uds);
+                        let uds = AutoClosableUnixListenerStream {
+                            path_to_remove: path,
+                            listener: uds,
+                        };
+                        listeners.push(Listener::Unix(uds));
                     }
-                    if let Err(e) = std::fs::remove_file(path) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            return Err(e.into());
-                        }
-                    }
-                    let uds = UnixListener::bind(path)?;
-                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode))?;
-                    Listener::Unix(path.clone(), UnixListenerStream::new(uds))
                 }
-            };
-            listeners.push(listener);
+            }
+        }
+
+        if let Some(listen_configs) = config.listen.clone() {
+            for listen_config in listen_configs {
+                let address = listen_config.address;
+                let tls_config = listen_config.tls;
+                match address {
+                    GrpcAddress::Tcp(addr) => {
+                        let incoming = TritonTcpIncoming::bind_with_config(
+                            addr,
+                            TcpConfiguration::default()
+                                .with_nodelay(Some(true))
+                                .with_keepalive(Some(Duration::from_secs(20))),
+                        )
+                        .await?;
+                        log::info!(
+                            "binding gRPC server to TCP socket: {}",
+                            incoming.local_addr()?
+                        );
+                        let listener = if let Some(tls) = tls_config {
+                            let server_config = load_server_config_from_tls_config(&tls)
+                                .context("failed to load TLS server config")?;
+                            let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+                            Listener::Tls(TlsIncoming::new(incoming, tls_acceptor))
+                        } else {
+                            Listener::Tcp(incoming)
+                        };
+                        listeners.push(listener);
+                    }
+                    GrpcAddress::Unix { path, mode } => {
+                        if tls_config.is_some() {
+                            log::warn!(
+                                "TLS config is ignored for Unix domain socket: {}",
+                                path.display()
+                            );
+                        }
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                return Err(e.into());
+                            }
+                        }
+                        log::info!(
+                            "binding gRPC server to Unix domain socket: {}",
+                            path.display()
+                        );
+                        let uds = UnixListener::bind(&path)?;
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
+                        let uds = UnixListenerStream::new(uds);
+                        let uds = AutoClosableUnixListenerStream {
+                            path_to_remove: path,
+                            listener: uds,
+                        };
+                        listeners.push(Listener::Unix(uds));
+                    }
+                }
+            }
         }
 
         // Snapshot channel
@@ -595,21 +806,10 @@ impl GrpcService {
                 (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
             };
 
-        // Read TLS identity once (async, before per-listener loop)
-        let tls_identity = match &config.tls_config {
-            Some(tls) => {
-                let (cert, key) =
-                    tokio::try_join!(fs::read(&tls.cert_path), fs::read(&tls.key_path))
-                        .context("failed to load tls_config files")?;
-                Some(Identity::from_pem(cert, key))
-            }
-            None => None,
-        };
-
         // Capture traffic reporting threshold before config is moved
         let traffic_reporting_threshold = config
             .traffic_reporting_byte_threhsold
-            .unwrap_or_else(|| ByteSize::b(DEFAULT_TRAFFIC_REPORTING_THRESHOLD));
+            .unwrap_or(DEFAULT_TRAFFIC_REPORTING_THRESHOLD);
 
         // Save HTTP/2 settings (all Copy) for use inside spawned tasks
         let http2_adaptive_window = config.server_http2_adaptive_window;
@@ -617,12 +817,6 @@ impl GrpcService {
         let http2_keepalive_timeout = config.server_http2_keepalive_timeout;
         let initial_connection_window_size = config.server_initial_connection_window_size;
         let initial_stream_window_size = config.server_initial_stream_window_size;
-
-        let filter_names = Arc::new(Mutex::new(FilterNames::new(
-            config.filter_name_size_limit,
-            config.filter_names_size_limit,
-            config.filter_names_cleanup_interval,
-        )));
 
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
@@ -641,9 +835,11 @@ impl GrpcService {
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
-            filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            filter_name_size_limit: config.filter_name_size_limit,
+            filter_names_size_limit: config.filter_names_size_limit,
+            filter_names_cleanup_interval: config.filter_names_cleanup_interval,
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -708,31 +904,52 @@ impl GrpcService {
 
         let shutdown_grpc = service_cancellation_token.child_token();
 
+        // The most "elegant" way would be to implement Stream for Listener and a MixedIO type that can handle all three variants.
+        // However, that adds complexity in the IO implementa has every read/write would need an extra match-expression to dispatch to the correct underlying type.
+        // Having this ugly macros is the most efficient approach and makes the code shorter when calling `serve_listener`.
+        macro_rules! with_listener {
+            ($listener:expr, |$incoming:ident| $body:expr) => {{
+                match $listener {
+                    Listener::Tcp($incoming) => $body,
+                    Listener::Unix($incoming) => $body,
+                    Listener::Tls($incoming) => $body,
+                }
+            }};
+        }
+
         // Spawn one server task per listener
+        let rate_limit_table = SharedRateLimitTable::default();
+        let ip_conncur = config.ip_conncur_rate_limit;
         for listener in listeners {
             let shutdown = shutdown_grpc.clone();
-            let tls_identity = tls_identity.clone();
             let x_token = x_token.clone();
             let health_service = health_service.clone();
             let service = service.clone();
-
+            let rate_limit_table = rate_limit_table.clone();
             task_tracker.spawn(async move {
-                if let Err(e) = GrpcService::serve_listener(
-                    listener,
-                    tls_identity,
-                    http2_adaptive_window,
-                    http2_keepalive_interval,
-                    http2_keepalive_timeout,
-                    initial_connection_window_size,
-                    initial_stream_window_size,
-                    x_token,
-                    health_service,
-                    service,
-                    traffic_reporting_threshold,
-                    shutdown.clone(),
-                )
-                .await
-                {
+                if let Err(e) = with_listener!(listener, |incoming| {
+                    let rate_limited_incoming = RateLimitedIncoming::new(
+                        incoming,
+                        ip_conncur,
+                        rate_limit_table,
+                        PrometheusRatelimitCallbacks,
+                    );
+
+                    GrpcService::serve_listener(
+                        rate_limited_incoming,
+                        http2_adaptive_window,
+                        http2_keepalive_interval,
+                        http2_keepalive_timeout,
+                        initial_connection_window_size,
+                        initial_stream_window_size,
+                        x_token,
+                        health_service,
+                        service,
+                        traffic_reporting_threshold,
+                        shutdown.clone(),
+                    )
+                    .await
+                }) {
                     error!("gRPC listener failed: {e}");
                     shutdown.cancel();
                 }
@@ -1319,9 +1536,8 @@ impl GrpcService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn serve_listener<H>(
-        listener: Listener,
-        tls_identity: Option<Identity>,
+    async fn serve_listener<H, I, IO>(
+        incoming: I,
         http2_adaptive_window: Option<bool>,
         http2_keepalive_interval: Option<Duration>,
         http2_keepalive_timeout: Option<Duration>,
@@ -1334,18 +1550,11 @@ impl GrpcService {
         shutdown: CancellationToken,
     ) -> anyhow::Result<()>
     where
+        I: Stream<Item = io::Result<IO>> + Send + 'static,
+        IO: Connected + AsyncRead + AsyncWrite + Unpin + Send + 'static,
         H: tonic_health::pb::health_server::Health,
     {
         let mut builder = Server::builder();
-
-        // TLS only applies to TCP — UDS is local IPC, no encryption needed
-        if matches!(listener, Listener::Tcp(_)) {
-            if let Some(identity) = tls_identity {
-                builder = builder
-                    .tls_config(ServerTlsConfig::new().identity(identity))
-                    .context("failed to apply tls_config")?;
-            }
-        }
 
         if let Some(enabled) = http2_adaptive_window {
             builder = builder.http2_adaptive_window(Some(enabled));
@@ -1362,56 +1571,19 @@ impl GrpcService {
         if let Some(sz) = initial_stream_window_size {
             builder = builder.initial_stream_window_size(sz);
         }
-
-        let router = builder
-            .layer(MeteredLayer::new())
+        builder
+            .layer(MeteredBandwidthLayer::new(
+                PrometheusMeteredManager,
+                traffic_reporting_threshold,
+            ))
             .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
                 x_token,
             }))
             .add_service(health_service)
-            .add_service(service);
-
-        // Capture address before match consumes listener
-        let addr = match &listener {
-            Listener::Tcp(incoming) => incoming
-                .local_addr()
-                .map(|a| a.to_string())
-                .unwrap_or_else(|_| "unknown".to_owned()),
-            Listener::Unix(path, _) => format!("unix://{}", path.display()),
-        };
-
-        info!("gRPC server listening on {addr}");
-
-        let result = match listener {
-            Listener::Tcp(incoming) => {
-                let spy = SpyIncoming::new(
-                    incoming,
-                    SpyIncomingConfig {
-                        traffic_reporting_threshold,
-                    },
-                );
-                router
-                    .serve_with_incoming_shutdown(spy, shutdown.cancelled())
-                    .await
-                    .context("TCP listener error")
-            }
-            Listener::Unix(path, incoming) => {
-                let result = router
-                    .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
-                    .await
-                    .context("UDS listener error");
-
-                if let Err(e) = std::fs::remove_file(&path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        log::warn!("failed to remove socket file {}: {e}", path.display());
-                    }
-                }
-                result
-            }
-        };
-
-        info!("gRPC server on {addr} shut down with result: {result:?}");
-        result
+            .add_service(service)
+            .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+            .await
+            .map_err(Into::into)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1636,11 +1808,15 @@ impl Geyser for GrpcService {
             .unwrap_or_else(|| "".to_owned());
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
-        let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
+        let mut filter_names = FilterNames::new(
+            self.filter_name_size_limit,
+            self.filter_names_size_limit,
+            self.filter_names_cleanup_interval,
+        );
         self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
@@ -1650,7 +1826,6 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
                             if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
@@ -1760,7 +1935,11 @@ impl Geyser for GrpcService {
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
-        let filter_names = Arc::clone(&self.filter_names);
+        let mut filter_names = FilterNames::new(
+            self.filter_name_size_limit,
+            self.filter_names_size_limit,
+            self.filter_names_cleanup_interval,
+        );
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
@@ -1774,7 +1953,6 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
                             if let Err(error) = match DeshredFilter::new(&request, &config_filter_limits, &mut filter_names) {
@@ -2108,12 +2286,13 @@ mod tests {
                     SlotStatus,
                 },
             },
+            foldhash::{HashSet as FoldHashSet, HashSetExt as _},
             prost_types::Timestamp,
             solana_message::{legacy::Message as SolMessage, MessageHeader},
             solana_pubkey::Pubkey,
             solana_signature::Signature,
             solana_transaction::{versioned::VersionedTransaction, Transaction},
-            std::{collections::HashSet, sync::Arc, time::SystemTime},
+            std::{sync::Arc, time::SystemTime},
             tokio::sync::{broadcast, mpsc},
         };
 
@@ -2191,7 +2370,7 @@ mod tests {
                     signature,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
-                    static_account_keys: HashSet::new(),
+                    static_account_keys: FoldHashSet::new(),
                     loaded_writable_addresses: vec![],
                     loaded_readonly_addresses: vec![],
                     completed_data_set_starting_shred_index: 0,

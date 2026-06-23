@@ -23,6 +23,7 @@ yellowstone-block-machine = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-geyser = { workspace = true }
 
+solana-signature = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-commitment-config = { workspace = true }
 
