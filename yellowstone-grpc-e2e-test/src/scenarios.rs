@@ -3,6 +3,7 @@
 use {
     anyhow::{bail, ensure, Context, Result},
     solana_pubkey::Pubkey,
+    solana_signature::Signature,
     std::{
         collections::{HashMap, HashSet},
         str::FromStr,
@@ -11,9 +12,11 @@ use {
     tokio_stream::StreamExt,
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
     yellowstone_grpc_e2e_macros::test_helper,
+    yellowstone_grpc_geyser::plugin::message::CommitmentLevel,
     yellowstone_grpc_proto::geyser::{
-        subscribe_update::UpdateOneof, subscribe_update_deshred, SlotStatus,
-        SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
+        subscribe_request_filter_accounts_filter::Filter, subscribe_update::UpdateOneof,
+        subscribe_update_deshred, SlotStatus, SubscribeDeshredRequest, SubscribeRequest,
+        SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
         SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateBlock,
         SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateTransaction,
@@ -832,6 +835,157 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
         blockmeta.executed_transaction_count as usize == block.transaction.len(),
         "executed transaction count in block meta should match number of transaction updates received for the block"
     );
+
+    Ok(())
+}
+
+/// guarantees that subscribing with filters, the filters are correctly applied to account updates and the updates received match the filters specified in the subscription.
+#[test_helper(name = "filter-accounts")]
+pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    // These pubkeys are actively used in the network and will generate account updates when transactions are processed.
+    // Feel free to add more pubkeys to this list to increase the likelihood of receiving account updates during the test.
+    // They are HumdiFi markets, owned by HumidiFi's program, they are one of the most updated accounts in every block, allowing us to easily verify the filter
+    let accounts = vec![
+        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu".to_string(), // PENGU-USDC
+        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
+        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy".to_string(), // 2Z-USDC
+        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa".to_string(), // ZEC-USDC
+        "hKgG7iEDRFNsJSwLYqz8ETHuZwzh6qMMLow8VXa8pLm".to_string(),  // JUP-USDC
+        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
+        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH".to_string(), // WSOL-USDC
+    ];
+
+    const HUMIDIFI_POOL_SIZE: u64 = 1728; // HumidiFi markets have a fixed account data size of 1728 bytes, we will use this to verify the datasize filter works as expected
+    let owners = vec!["9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp".to_string()];
+
+    let subscription = SubscribeRequest {
+        accounts: HashMap::from([
+            (
+                "valid_filter".to_string(),
+                SubscribeRequestFilterAccounts {
+                    account: accounts.clone(),
+                    nonempty_txn_signature: Some(true),
+                    owner: owners.clone(),
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "invalid_filter_1".to_string(),
+                SubscribeRequestFilterAccounts {
+                    account: accounts.clone(),
+                    nonempty_txn_signature: Some(true),
+                    owner: owners.clone(),
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE + 1)), // HumidiFi markets have a fixed account data size of 1728 bytes, this filter should never match any updates
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "invalid_filter_2".to_string(),
+                SubscribeRequestFilterAccounts {
+                    account: accounts.clone(),
+                    nonempty_txn_signature: Some(false), // HumidiFi updates are not system programs therefore require a nonempty txn signature, this filter should never match any updates
+                    owner: owners.clone(),
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "invalid_filter_3".to_string(),
+                SubscribeRequestFilterAccounts {
+                    account: accounts.clone(),
+                    nonempty_txn_signature: Some(true),
+                    owner: vec!["11111111111111111111111111111111".to_string()], // HumidiFi market accounts are not owned by the system program, this filter should never match any updates
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ]),
+        commitment: Some(CommitmentLevel::Processed as i32),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    const MAX_UPDATES: usize = 15;
+
+    let mut count = 0;
+    while let Some(update) = stream.next().await {
+        if count >= MAX_UPDATES {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Account(account) => {
+                if update.filters.is_empty() {
+                    bail!("account update should have filters applied");
+                }
+
+                if !update.filters.iter().all(|f| f == "valid_filter") {
+                    bail!(
+                        "account update received a filter which should never come through {:?}",
+                        update.filters
+                    );
+                }
+
+                let slot = account.slot;
+
+                let Some(account) = &account.account else {
+                    bail!("account update should have account field");
+                };
+
+                let Ok(pubkey) = Pubkey::try_from(account.pubkey.as_slice()) else {
+                    bail!("invalid account pubkey bytes");
+                };
+
+                let Ok(owner) = Pubkey::try_from(account.owner.as_slice()) else {
+                    bail!("invalid account owner pubkey bytes");
+                };
+
+                let Some(signature_bytes) = &account.txn_signature else {
+                    bail!("account update should have txn signature when nonempty_txn_signature filter is applied");
+                };
+
+                let Ok(signature) = Signature::try_from(signature_bytes.as_slice()) else {
+                    bail!("invalid nonempty txn signature bytes");
+                };
+
+                ensure!(
+                    accounts.contains(&pubkey.to_string()),
+                    "received unexpected account update for pubkey {}",
+                    pubkey
+                );
+                ensure!(
+                    owners.contains(&owner.to_string()),
+                    "received unexpected account update for owner {}",
+                    owner
+                );
+
+                count += 1;
+                log::info!(
+                    "received account update for slot {slot}, signature {signature}, {count}/{MAX_UPDATES}"
+                );
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+            _ => continue,
+        }
+    }
 
     Ok(())
 }

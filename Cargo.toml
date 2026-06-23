@@ -21,6 +21,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
+foldhash = "0.2.0"
 affinity = "0.1.2"
 anyhow = "1.0.98"
 arc-swap = "1.0.0"

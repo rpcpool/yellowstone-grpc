@@ -7,7 +7,8 @@ use {
         any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
         it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
         it_should_support_replay, it_should_verifies_geyser_event_ordering_is_correct,
-        scenario_description, subscribe_should_only_returns_sysvarclock_account,
+        scenario_description, subscribe_should_filter_accounts,
+        subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
         subscribe_should_receive_full_blocks, test_subscribe_deshred, RunConfig,
     },
@@ -23,6 +24,7 @@ enum Scenario {
     AnyCommitment,
     TokenOwnerBalanceChanged,
     Ordering,
+    FilterAccounts,
 }
 
 impl Scenario {
@@ -36,6 +38,7 @@ impl Scenario {
             Self::AnyCommitment => "any-commitment",
             Self::TokenOwnerBalanceChanged => "token-owner-balance-changed",
             Self::Ordering => "event-ordering",
+            Self::FilterAccounts => "filter-accounts",
         }
     }
 
@@ -176,6 +179,7 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
                 it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(config).await
             }
             Scenario::Ordering => it_should_verifies_geyser_event_ordering_is_correct(config).await,
+            Scenario::FilterAccounts => subscribe_should_filter_accounts(config).await,
         }
     });
     let mut interval = time::interval(Duration::from_millis(120));
