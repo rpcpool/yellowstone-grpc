@@ -5,13 +5,13 @@ use {
         SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
+    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::Slot,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
-        collections::HashSet,
         ops::{Deref, DerefMut},
         sync::{Arc, OnceLock},
         time::SystemTime,
@@ -278,20 +278,20 @@ pub struct MessageTransactionInfo {
     pub transaction: confirmed_block::Transaction,
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
-    pub account_keys: HashSet<Pubkey>,
+    pub account_keys: FoldHashSet<Pubkey>,
     pub pre_encoded: OnceLock<Vec<u8>>,
     /// Per-tx cache of token-balance owners under `TokenAccountsMode::All`.
     /// Lazily built on first read; shared across all filters evaluating
     /// against this tx so the pre/post scan runs at most once per tx.
-    pub token_owners_all: OnceLock<HashSet<Pubkey>>,
+    pub token_owners_all: OnceLock<FoldHashSet<Pubkey>>,
     /// Per-tx cache of token-balance owners under
     /// `TokenAccountsMode::BalanceChanged`. Same laziness as above.
-    pub token_owners_changed: OnceLock<HashSet<Pubkey>>,
+    pub token_owners_changed: OnceLock<FoldHashSet<Pubkey>>,
 }
 
 impl MessageTransactionInfo {
     pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
-        let account_keys: HashSet<Pubkey> = info
+        let account_keys = info
             .transaction
             .message
             .static_account_keys() // Since V3, dynamic account are only available in `loaded_addresses`
@@ -334,7 +334,7 @@ impl MessageTransactionInfo {
                 .ok_or("transaction message should be defined")?,
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
-            account_keys: HashSet::new(),
+            account_keys: FoldHashSet::new(),
             pre_encoded: OnceLock::new(),
             token_owners_all: OnceLock::new(),
             token_owners_changed: OnceLock::new(),
@@ -342,7 +342,7 @@ impl MessageTransactionInfo {
     }
 
     pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
-        let mut account_keys = HashSet::new();
+        let mut account_keys = FoldHashSet::new();
 
         // static
         if let Some(pubkeys) = self

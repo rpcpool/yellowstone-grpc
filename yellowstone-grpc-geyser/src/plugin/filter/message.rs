@@ -13,6 +13,7 @@ use {
         buf::{Buf, BufMut},
         Bytes,
     },
+    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -25,7 +26,6 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
-        collections::HashSet,
         ops::{Deref, DerefMut},
         sync::{Arc, OnceLock},
         time::SystemTime,
@@ -289,7 +289,7 @@ impl FilteredUpdate {
                             ..confirmed_block::TransactionStatusMeta::default()
                         },
                         index: msg.index as usize,
-                        account_keys: HashSet::new(),
+                        account_keys: FoldHashSet::new(),
                         pre_encoded: OnceLock::new(),
                         token_owners_all: OnceLock::new(),
                         token_owners_changed: OnceLock::new(),
@@ -1055,6 +1055,7 @@ pub mod tests {
             },
         },
         bytes::Bytes,
+        foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost_011::Message as _,
         prost_types::Timestamp,
         solana_hash::Hash,
@@ -1063,7 +1064,7 @@ pub mod tests {
         solana_storage_proto::convert::generated,
         solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
         std::{
-            collections::{HashMap, HashSet},
+            collections::HashMap,
             fs,
             ops::Range,
             str::FromStr,
@@ -1228,7 +1229,7 @@ pub mod tests {
                             transaction: convert_to::create_transaction(&tx.transaction),
                             meta: convert_to::create_transaction_meta(&tx.meta),
                             index,
-                            account_keys: HashSet::new(),
+                            account_keys: FoldHashSet::new(),
                             pre_encoded: OnceLock::new(),
                             token_owners_all: OnceLock::new(),
                             token_owners_changed: OnceLock::new(),

@@ -22,7 +22,7 @@ bench = ["dep:prost_011", "dep:solana-storage-proto"]
 
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
-
+foldhash = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }

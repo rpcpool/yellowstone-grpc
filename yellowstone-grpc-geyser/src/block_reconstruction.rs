@@ -478,11 +478,12 @@ mod tests {
             MessageTransactionInfo, SlotStatus,
         },
         bytes::Bytes,
+        foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
         solana_signature::Signature,
-        std::{collections::HashSet, sync::OnceLock, time::SystemTime},
+        std::{sync::OnceLock, time::SystemTime},
         yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     };
 
@@ -517,7 +518,7 @@ mod tests {
                 transaction: Default::default(),
                 meta: Default::default(),
                 index: 0,
-                account_keys: HashSet::new(),
+                account_keys: FoldHashSet::new(),
                 pre_encoded: OnceLock::new(),
                 token_owners_all: OnceLock::new(),
                 token_owners_changed: OnceLock::new(),

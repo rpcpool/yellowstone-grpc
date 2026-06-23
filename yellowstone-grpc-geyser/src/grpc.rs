@@ -510,9 +510,11 @@ pub struct GrpcService {
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
-    filter_names: Arc<Mutex<FilterNames>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    filter_name_size_limit: usize,
+    filter_names_size_limit: usize,
+    filter_names_cleanup_interval: Duration,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -758,12 +760,6 @@ impl GrpcService {
         let initial_connection_window_size = config.server_initial_connection_window_size;
         let initial_stream_window_size = config.server_initial_stream_window_size;
 
-        let filter_names = Arc::new(Mutex::new(FilterNames::new(
-            config.filter_name_size_limit,
-            config.filter_names_size_limit,
-            config.filter_names_cleanup_interval,
-        )));
-
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -780,9 +776,11 @@ impl GrpcService {
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             debug_clients_tx,
-            filter_names,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            filter_name_size_limit: config.filter_name_size_limit,
+            filter_names_size_limit: config.filter_names_size_limit,
+            filter_names_cleanup_interval: config.filter_names_cleanup_interval,
         })
         .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
@@ -1640,11 +1638,15 @@ impl Geyser for GrpcService {
             .unwrap_or_else(|| "".to_owned());
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
-        let filter_names = Arc::clone(&self.filter_names);
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
+        let mut filter_names = FilterNames::new(
+            self.filter_name_size_limit,
+            self.filter_names_size_limit,
+            self.filter_names_cleanup_interval,
+        );
         self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
@@ -1654,7 +1656,6 @@ impl Geyser for GrpcService {
                     }
                     message = request.get_mut().message() => match message {
                         Ok(Some(request)) => {
-                            let mut filter_names = filter_names.lock().await;
                             filter_names.try_clean();
 
                             if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {

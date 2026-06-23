@@ -120,6 +120,7 @@ impl GeyserPlugin for Plugin {
             CRYPTO_PROVIDER_INIT.call_once(|| {
                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             });
+
             let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
             PrometheusService::spawn(
