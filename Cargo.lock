@@ -68,9 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f74c3ae25479515dad1d6dc74eab06d159fdb522cab459f177c0281c512568d8"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -83,9 +82,8 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8941f909c7d025262beaf893cd668e766439473bac80bbf9e18ec3a371bbdbe"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "log",
  "solana-clock",
@@ -99,9 +97,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70f0351397cb8be02408db564017e3b6acfcc50c0f11b548c3ace0f6f85b8d03"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.2.0",
@@ -227,9 +224,9 @@ checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
 name = "arrayvec"
-version = "0.7.6"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
 name = "ascii"
@@ -368,6 +365,12 @@ checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
@@ -534,9 +537,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1000,6 +1003,38 @@ dependencies = [
  "darling_core 0.23.0",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "defmt"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6e524506490a1953d237cb87b1cfc1e46f88c18f10a22dfe0f507dc6bfc7f7f"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a27770e9c8f719a79d8b638281f4d828f77d8fd61e0bd94451b9b85e576a0b"
+dependencies = [
+ "defmt-parser",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1894,10 +1929,11 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4603d3033e49e2b0e31229fcab20a5d40089c607d975cd9c80551dc69eed9102"
+checksum = "34f877a98676d2fb664698d74cc6a51ce6c484ce8c770f05d0108ec9090aeb46"
 dependencies = [
+ "defmt",
  "jiff-static",
  "log",
  "portable-atomic",
@@ -1907,9 +1943,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "782d32378dddf207193ac91cefb848ad41abb58195c95168e1291227a0832b47"
+checksum = "0666b5ab5ecaca213fc2a85b8c0083d9004e84ee2d5f9a7e0017aaf50986f25f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1991,9 +2027,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "maplit"
@@ -2064,7 +2100,7 @@ version = "3.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fbd9f9295f3ff5921e78a71222c3361a8216f7760b1a99a6ad4e8441de18bbb9"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "ctor",
  "futures",
  "futures-core",
@@ -2450,6 +2486,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-error-attr2"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "proc-macro-error2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
+dependencies = [
+ "proc-macro-error-attr2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2625,7 +2683,7 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "memchr",
  "unicase",
 ]
@@ -2650,9 +2708,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
@@ -2754,7 +2812,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
 ]
 
 [[package]]
@@ -2827,7 +2885,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -2836,9 +2894,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.40"
+version = "0.23.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
+checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -2919,7 +2977,7 @@ version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -3177,9 +3235,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d0e7e28288d81d8698b5bcd75cf0406a1c92fbc3cb178e6f0ae51fb94c0c859"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "Inflector",
  "base64",
@@ -3214,14 +3271,14 @@ dependencies = [
  "spl-token-interface",
  "spl-token-metadata-interface",
  "thiserror 2.0.18",
+ "wincode",
  "zstd",
 ]
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89d971a625a2008e802c596bf40392dcc4b5d1c2a6c9c76af11a7efed330fdff"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "base64",
  "bs58",
@@ -3493,7 +3550,7 @@ version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e0732294560e88ecdb2bbc656e67383e9f88c78ec09469cef172f0d28cd1bcd"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "solana-account-info",
  "solana-instruction",
  "solana-instruction-error",
@@ -3862,6 +3919,7 @@ dependencies = [
  "solana-hash",
  "solana-sdk-ids",
  "solana-sysvar-id",
+ "wincode",
 ]
 
 [[package]]
@@ -3875,6 +3933,7 @@ dependencies = [
  "serde_derive",
  "solana-sdk-ids",
  "solana-sysvar-id",
+ "wincode",
 ]
 
 [[package]]
@@ -3889,9 +3948,9 @@ dependencies = [
 
 [[package]]
 name = "solana-stake-interface"
-version = "3.1.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f49eb5c77484214c3484921e2cdda79d185373118b5458c1b2df0f1a04c3bc30"
+checksum = "19f34562cda7df74d85fcb1f7063d8cdec3e14f3d402aa3062605c116d8b8115"
 dependencies = [
  "num-traits",
  "serde",
@@ -3908,11 +3967,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824bf7d0365b3618220fa44b46e6aeae61b2f627cd7334b0f319288eb9a70396"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
- "bincode",
  "bs58",
  "prost",
  "protobuf-src",
@@ -3928,15 +3985,15 @@ dependencies = [
  "solana-transaction-context",
  "solana-transaction-error",
  "solana-transaction-status",
+ "thiserror 2.0.18",
  "tonic-prost-build",
  "wincode",
 ]
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4a7ba56f1c4bd69912ad3fc5cf66152a7b36cf2ce8a36bdc77ae3a854a5a36"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 
 [[package]]
 name = "solana-system-interface"
@@ -4035,9 +4092,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d1e190ec93b461e6f5b73b5b26c32ba8b716eff7f8355d037b8571f561c9402"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "bincode",
  "serde",
@@ -4066,9 +4122,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b599db3f9f7d96c867d4797b7e167940ae8d9a7fb813db296994a15e5efc12b3"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -4109,9 +4164,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "4.1.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5315d3b1e1eceb6970760c8e647876f98441c1bdcefb8d79149f9bf4b31105db"
+version = "4.2.0-alpha.0"
+source = "git+https://github.com/anza-xyz/agave?branch=master#35b4d2d7ca0f7fa95e5b04e9c9cfef39e1bb8c1b"
 dependencies = [
  "base64",
  "bincode",
@@ -4382,9 +4436,9 @@ dependencies = [
 
 [[package]]
 name = "spl-token-interface"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c564ac05a7c8d8b12e988a37d82695b5ba4db376d07ea98bc4882c81f96c7f3"
+checksum = "7143c4e676984047a400e2fbd7ac29a1659f2b1b52b897cfde19316b562e4589"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -4566,9 +4620,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.49"
+version = "0.3.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "711a53c2d47bbd818258c498c8dbfe186a2526c631495cfe7e078567f86b8469"
+checksum = "85c17d80feb7334b40c484e45ed1a5273dfd8bfda537c3be2e74a06a6686f327"
 dependencies = [
  "deranged",
  "libc",
@@ -4588,9 +4642,9 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "time-macros"
-version = "0.2.29"
+version = "0.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71c652a3727a9cbb9a02f707f530b618ce00d0ccd762009c8c23bd191df3c17d"
+checksum = "dcef1a61bdb119096e153208ec5cbec23944ce8bca13be5c7f60c634f7403935"
 dependencies = [
  "num-conv",
  "time-core",
@@ -5241,6 +5295,7 @@ version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66d967db7705dc29120bb6e8ce5b5a2e27734ed5976d1c904e95bd238d1c3c5a"
 dependencies = [
+ "bv",
  "pastey",
  "proc-macro2",
  "quote",
@@ -5507,7 +5562,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "14.0.0+solana.4.1.0.rc.1"
+version = "15.0.0+solana.4.2.0.alpha.2"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",

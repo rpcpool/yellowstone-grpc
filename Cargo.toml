@@ -91,25 +91,25 @@ vergen = "9.0.6"
 wincode = "0.5.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "=4.1.0-rc.1"
-solana-account-decoder = "=4.1.0-rc.1"
+agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", branch = "master" }
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "=4.1.0-rc.1", features = ["agave-unstable-api"] }
-solana-transaction-context = "=4.1.0-rc.1"
-solana-transaction-status = "=4.1.0-rc.1"
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", branch = "master", features = ["agave-unstable-api"] }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", branch = "master" }
 
 # Solana SDK
 solana-account = "4.3.0"
 solana-clock = "3.0.1"
-solana-commitment-config = "3.0.0"
-solana-hash = "4.3.0"
+solana-commitment-config = "3.1.0"
+solana-hash = "4.4.0"
 solana-keypair = "3.1.0"
 solana-message = "4.2.0"
 solana-pubkey = "4.2.0"
-solana-signature = "3.3.0"
+solana-signature = "3.4.0"
 solana-signer = "3.0.0"
 solana-transaction = "4.1.2"
-solana-transaction-error = "3.0.0"
+solana-transaction-error = "3.2.0"
 
 # Solana Misc
 spl-token-2022-interface = "2.1.0"
@@ -117,7 +117,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.0.0+solana.4.1.0.rc.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.0.0+solana.4.2.0.alpha.2" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 
@@ -130,3 +130,16 @@ collapsible_match = "allow"
 [profile.release]
 lto = true
 codegen-units = 1
+
+
+[patch.crates-io]
+agave-feature-set = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+agave-reserved-account-keys = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-account-decoder-client-types = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-svm-feature-set = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+solana-transaction-status-client-types = { git = "https://github.com/anza-xyz/agave", branch = "master" }
+agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", branch = "master" }
