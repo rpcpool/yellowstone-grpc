@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 12.3.0
-    "yellowstone-grpc-client", # 13.1.0
-    "yellowstone-grpc-client-nodejs/napi", # 0.2.0
-    "yellowstone-grpc-e2e-macros", # 0.1.0
-    "yellowstone-grpc-geyser", # 13.1.0
-    "yellowstone-grpc-proto", # 12.5.0
-    "yellowstone-grpc-e2e-test", # 0.1.0
+    "examples/rust",
+    "yellowstone-grpc-client",
+    "yellowstone-grpc-client-nodejs/napi",
+    "yellowstone-grpc-e2e-macros",
+    "yellowstone-grpc-geyser",
+    "yellowstone-grpc-proto",
+    "yellowstone-grpc-e2e-test",
     "yellowstone-grpc-tools"
 ]
 
@@ -124,7 +124,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.5" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.3.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
