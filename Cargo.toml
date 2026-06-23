@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "examples/rust", # 12.3.0
-    "yellowstone-grpc-client", # 13.1.0
-    "yellowstone-grpc-client-nodejs/napi", # 0.2.0
-    "yellowstone-grpc-e2e-macros", # 0.1.0
-    "yellowstone-grpc-geyser", # 13.1.0
-    "yellowstone-grpc-proto", # 12.4.0
-    "yellowstone-grpc-e2e-test", # 0.1.0
+    "examples/rust",
+    "yellowstone-grpc-client",
+    "yellowstone-grpc-client-nodejs/napi",
+    "yellowstone-grpc-e2e-macros",
+    "yellowstone-grpc-geyser",
+    "yellowstone-grpc-proto",
+    "yellowstone-grpc-e2e-test",
+    "yellowstone-grpc-tools"
 ]
 
 [workspace.package]
@@ -20,6 +21,7 @@ keywords = ["solana"]
 publish = false
 
 [workspace.dependencies]
+foldhash = "0.2.0"
 affinity = "0.1.2"
 anyhow = "1.0.98"
 arc-swap = "1.0.0"
@@ -64,6 +66,7 @@ parking_lot = "0.12"
 prometheus = "0.14.0"
 pin-project = "1.1.10"
 proc-macro2 = "1"
+pin-project-lite = "0.2.0"
 prost = "0.14.0"
 prost-types = "0.14.0"
 prost_011 = { package = "prost", version = "0.11.9" }
@@ -71,10 +74,11 @@ protoc-bin-vendored = "3.2.0"
 quote = "1"
 rand = "0.8"
 rayon = "1.11.0"
-rustls = "0.23"
+rustls = "0.23.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
 siphasher = "1"
+socket2 = "0.6.4"
 smallvec = "1.15.1"
 syn = { version = "2", features = ["full"] }
 thiserror = "2.0.16"
@@ -120,9 +124,15 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.2.5-triton-ex" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.3.0-triton-ext" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
+yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
+
+# tokio-grpc-tools
+tokio-rustls = "0.26.0"
+x509-parser = "0.18.0"
+
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"

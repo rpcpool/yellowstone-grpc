@@ -10,6 +10,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-06-23
+
+- yellowstone-grpc-geyser 13.3.0
+
+### Features
+
+- plugin: added `listen` configuration fields to replace `address` field that will become deprecated. [#773](https://github.com/rpcpool/yellowstone-grpc/pull/773)
+- plugin: supports `cert_dir` in geyser configuration [#773](https://github.com/rpcpool/yellowstone-grpc/pull/773), allowing you to load an HAPROXY-style certificate folder and do multi SNI certificate resolution for TLS connection.
+
+### Misc
+
+- plugin: Optimize filtering using `FoldHash` hash-based containers. [#774](https://github.com/rpcpool/yellowstone-grpc/pull/774)
+
+### Deprecated
+
+- plugin: `address` field in the `grpc` configuration. Use `listen` insteand.
+
 
 ## 2026-06-17
 

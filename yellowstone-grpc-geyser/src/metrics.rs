@@ -150,11 +150,6 @@ lazy_static::lazy_static! {
         "Total traffic sent to subscriber by type (account_update, block_meta, etc)"
     ).unwrap();
 
-    static ref TRAFFIC_SENT_PER_REMOTE_IP: IntCounterVec = IntCounterVec::new(
-        Opts::new("traffic_sent_per_remote_ip_bytes", "Total traffic sent to subscriber by remote IP"),
-        &["remote_ip"]
-    ).unwrap();
-
     static ref GRPC_METHOD_CALL_COUNT: IntCounterVec = IntCounterVec::new(
         Opts::new("yellowstone_grpc_method_call_count", "Total number of calls to GetVersion gRPC method"),
         &["method"]
@@ -187,6 +182,15 @@ lazy_static::lazy_static! {
 
     static ref GEYSER_UNTRACK_SLOT_EVENT_DROPPED: IntCounter = IntCounter::new(
         "geyser_untrack_slot_event_dropped_total", "Number of geyser event drop due to untrack slot"
+    ).unwrap();
+
+
+    static ref IP_CONNCUR_RATE_LIMIT_EXCEEDED: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_ip_conncur_rate_limit_exceeded_total",
+            "Number of incoming connections that exceeded the per-IP connection limit at the transport layer"
+        ),
+        &["remote_peer_ip"]
     ).unwrap();
 }
 
@@ -343,13 +347,13 @@ impl PrometheusService {
             register!(PRE_ENCODED_CACHE_MISS);
             register!(GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION);
             register!(TOTAL_TRAFFIC_SENT);
-            register!(TRAFFIC_SENT_PER_REMOTE_IP);
             register!(GRPC_METHOD_CALL_COUNT);
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
             register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
+            register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
 
             VERSION
                 .with_label_values(&[
@@ -469,6 +473,12 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn incr_ip_conncur_rate_limit_exceeded(remote_peer_ip: Option<String>) {
+    IP_CONNCUR_RATE_LIMIT_EXCEEDED
+        .with_label_values(&[remote_peer_ip.as_deref().unwrap_or("unknown")])
+        .inc();
 }
 
 pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
@@ -621,21 +631,6 @@ pub fn add_total_traffic_sent(bytes: u64) {
     TOTAL_TRAFFIC_SENT.inc_by(bytes);
 }
 
-pub fn add_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S, bytes: u64) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .inc_by(bytes);
-}
-
-pub fn reset_traffic_sent_per_remote_ip<S: AsRef<str>>(remote_ip: S) {
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .with_label_values(&[remote_ip.as_ref()])
-        .reset();
-    TRAFFIC_SENT_PER_REMOTE_IP
-        .remove_label_values(&[remote_ip.as_ref()])
-        .expect("remove_label_values");
-}
-
 pub fn set_grpc_concurrent_subscribe_per_tcp_connection<S: AsRef<str>>(
     remote_peer_sk_addr: S,
     size: u64,
@@ -671,7 +666,6 @@ pub fn reset_metrics() {
     GRPC_CLIENT_DISCONNECTS.reset();
     GRPC_CONCURRENT_SUBSCRIBE_PER_TCP_CONNECTION.reset();
     TOTAL_TRAFFIC_SENT.reset();
-    TRAFFIC_SENT_PER_REMOTE_IP.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.reset();
     GRPC_METHOD_CALL_COUNT.reset();
@@ -683,6 +677,8 @@ pub fn reset_metrics() {
     GEYSER_EVENT_DROPPED.reset();
     GEYSER_BLOCK_MISMATCH_TRANSACTION.reset();
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
+
+    IP_CONNCUR_RATE_LIMIT_EXCEEDED.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()

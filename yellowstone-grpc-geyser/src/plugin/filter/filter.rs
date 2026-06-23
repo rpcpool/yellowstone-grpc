@@ -20,6 +20,7 @@ use {
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
+    foldhash::{HashMap as FoldHashMap, HashMapExt, HashSet as FoldHashSet, HashSetExt},
     prost::encoding::{encode_key, encode_varint, WireType},
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
@@ -125,11 +126,11 @@ impl Default for Filter {
             slots: FilterSlots::default(),
             transactions: FilterTransactions {
                 filter_type: FilterTransactionsType::Transaction,
-                filters: HashMap::new(),
+                filters: Vec::new(),
             },
             transactions_status: FilterTransactions {
                 filter_type: FilterTransactionsType::TransactionStatus,
-                filters: HashMap::new(),
+                filters: Vec::new(),
             },
             entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
@@ -205,13 +206,13 @@ impl Filter {
     fn decode_pubkeys_into_set(
         pubkeys: &[String],
         limit: &HashSet<Pubkey>,
-    ) -> FilterResult<HashSet<Pubkey>> {
+    ) -> FilterResult<FoldHashSet<Pubkey>> {
         Self::decode_pubkeys(pubkeys, limit).collect::<FilterResult<_>>()
     }
 
     pub fn get_metrics(&self) -> [(&'static str, usize); 8] {
         [
-            ("accounts", self.accounts.filters.len()),
+            ("accounts", self.accounts.aggregates.len()),
             ("slots", self.slots.filters.len()),
             ("transactions", self.transactions.filters.len()),
             (
@@ -223,7 +224,7 @@ impl Filter {
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
                 "all",
-                self.accounts.filters.len()
+                self.accounts.aggregates.len()
                     + self.slots.filters.len()
                     + self.transactions.filters.len()
                     + self.transactions_status.filters.len()
@@ -266,16 +267,73 @@ impl Filter {
     }
 }
 
+// Collective representation of all the required conditions of a single account filter. This is used to determine if a filter should be included in the filtered updates.
+// A type of filtering condition is set to 'true' if the filter requires that condition to be satisfied. If a filter does not require a certain condition, it is set to 'false'.
+// The current filtering mechanism does not have an 'OR' condition. Everything listed inside of a single filter sent by the client has to be satisfied.
+#[derive(Debug, Clone)]
+struct FilterAccountAggregate {
+    pub filter_name: FilterName,
+    pub require_non_empty_txn_signature: bool,
+    pub require_account: bool,
+    pub require_cuckoo: bool,
+    pub require_owner: bool,
+    pub require_state_check: bool,
+}
+
+impl FilterAccountAggregate {
+    // Returns the filter name if all requirements are satisfied, otherwise returns None.
+    // This is used to determine if a filter should be included in the filtered updates.
+    // If a filter is not included, it means that the filter's requirements are not satisfied by the current message.
+    // If no filters are satisfied by the current message, then the update will not be sent to the client.
+    pub fn satisfied(&self, accounts_match_condition: &FilterAccountsMatch) -> Option<FilterName> {
+        if self.require_non_empty_txn_signature
+            && !accounts_match_condition
+                .nonempty_txn_signature
+                .contains(self.filter_name.as_ref())
+        {
+            return None;
+        }
+
+        let needs_pubkey = self.require_account || self.require_cuckoo;
+        if needs_pubkey
+            && (!accounts_match_condition
+                .account
+                .is_some_and(|account| account.contains(self.filter_name.as_ref()))
+                && !accounts_match_condition
+                    .cuckoo
+                    .contains(self.filter_name.as_ref()))
+        {
+            return None;
+        }
+
+        if self.require_owner
+            && !accounts_match_condition
+                .owner
+                .is_some_and(|owner| owner.contains(self.filter_name.as_ref()))
+        {
+            return None;
+        }
+
+        if self.require_state_check
+            && !accounts_match_condition
+                .data
+                .contains(self.filter_name.as_ref())
+        {
+            return None;
+        }
+
+        Some(self.filter_name.clone())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct FilterAccounts {
     nonempty_txn_signature: Vec<(FilterName, Option<bool>)>,
-    nonempty_txn_signature_required: HashSet<FilterName>,
-    account: HashMap<Pubkey, HashSet<FilterName>>,
-    account_required: HashSet<FilterName>,
-    account_cuckoo: HashMap<FilterName, Arc<CuckooFilter<[u8; 32]>>>,
-    owner: HashMap<Pubkey, HashSet<FilterName>>,
-    owner_required: HashSet<FilterName>,
-    filters: Vec<(FilterName, FilterAccountsState)>,
+    account: FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+    account_cuckoo: FoldHashMap<FilterName, Arc<CuckooFilter<[u8; 32]>>>,
+    owner: FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+    state_check: FoldHashMap<FilterName, FilterAccountsState>,
+    aggregates: Vec<FilterAccountAggregate>,
 }
 
 impl FilterAccounts {
@@ -286,15 +344,9 @@ impl FilterAccounts {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        let mut this = Self::default();
-        for (name, filter) in configs {
-            this.nonempty_txn_signature
-                .push((names.get(name)?, filter.nonempty_txn_signature));
-            if filter.nonempty_txn_signature.is_some() {
-                this.nonempty_txn_signature_required
-                    .insert(names.get(name)?);
-            }
+        let mut filter_accounts_result = Self::default();
 
+        for (name, filter) in configs {
             let has_filter_criteria = !filter.account.is_empty()
                 || !filter.owner.is_empty()
                 || filter.cuckoo_accounts_filter.is_some();
@@ -303,53 +355,72 @@ impl FilterAccounts {
             FilterLimits::check_pubkey_max(filter.account.len(), limits.account_max)?;
             FilterLimits::check_pubkey_max(filter.owner.len(), limits.owner_max)?;
 
+            let filter_name = names.get(name)?;
+
+            if filter.nonempty_txn_signature.is_some() {
+                filter_accounts_result
+                    .nonempty_txn_signature
+                    .push((filter_name.clone(), filter.nonempty_txn_signature));
+            }
+
             Self::set(
-                &mut this.account,
-                &mut this.account_required,
-                name,
-                names,
+                &mut filter_accounts_result.account,
+                filter_name.clone(),
                 Filter::decode_pubkeys(&filter.account, &limits.account_reject),
             )?;
 
             Self::set(
-                &mut this.owner,
-                &mut this.owner_required,
-                name,
-                names,
+                &mut filter_accounts_result.owner,
+                filter_name.clone(),
                 Filter::decode_pubkeys(&filter.owner, &limits.owner_reject),
             )?;
 
-            this.filters
-                .push((names.get(name)?, FilterAccountsState::new(&filter.filters)?));
+            let filter_accounts_state = FilterAccountsState::new(&filter.filters)?;
 
+            let require_state_check = !filter_accounts_state.is_empty();
+            if require_state_check {
+                filter_accounts_result
+                    .state_check
+                    .insert(filter_name.clone(), filter_accounts_state);
+            }
+
+            let mut require_cuckoo = false;
             if let Some(proto_cuckoo) = &filter.cuckoo_accounts_filter {
                 FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
                 let cuckoo = Arc::new(CuckooFilter::from(proto_cuckoo));
-                this.account_cuckoo.insert(names.get(name)?, cuckoo);
+                filter_accounts_result
+                    .account_cuckoo
+                    .insert(filter_name.clone(), cuckoo);
+                require_cuckoo = true;
             }
+
+            filter_accounts_result
+                .aggregates
+                .push(FilterAccountAggregate {
+                    filter_name: filter_name.clone(),
+                    require_non_empty_txn_signature: filter.nonempty_txn_signature.is_some(),
+                    require_account: !filter.account.is_empty(),
+                    require_cuckoo,
+                    require_owner: !filter.owner.is_empty(),
+                    require_state_check,
+                });
         }
 
-        Ok(this)
+        Ok(filter_accounts_result)
     }
 
     fn set(
-        map: &mut HashMap<Pubkey, HashSet<FilterName>>,
-        map_required: &mut HashSet<FilterName>,
-        name: &str,
-        names: &mut FilterNames,
+        map: &mut FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+        filter_name: FilterName,
         keys: impl Iterator<Item = FilterResult<Pubkey>>,
-    ) -> FilterResult<bool> {
-        let mut required = false;
+    ) -> FilterResult<()> {
         for maybe_key in keys {
-            if map.entry(maybe_key?).or_default().insert(names.get(name)?) {
-                required = true;
-            }
+            map.entry(maybe_key?)
+                .or_default()
+                .insert(filter_name.clone());
         }
 
-        if required {
-            map_required.insert(names.get(name)?);
-        }
-        Ok(required)
+        Ok(())
     }
 
     fn get_updates(
@@ -520,11 +591,11 @@ impl FilterAccountsLamports {
 #[derive(Debug)]
 struct FilterAccountsMatch<'a> {
     filter: &'a FilterAccounts,
-    nonempty_txn_signature: HashSet<&'a str>,
-    account: HashSet<&'a str>,
-    cuckoo: HashSet<&'a str>,
-    owner: HashSet<&'a str>,
-    data: HashSet<&'a str>,
+    nonempty_txn_signature: FoldHashSet<&'a str>,
+    account: Option<&'a FoldHashSet<FilterName>>,
+    cuckoo: FoldHashSet<&'a str>,
+    owner: Option<&'a FoldHashSet<FilterName>>,
+    data: FoldHashSet<&'a str>,
 }
 
 impl<'a> FilterAccountsMatch<'a> {
@@ -532,22 +603,10 @@ impl<'a> FilterAccountsMatch<'a> {
         Self {
             filter,
             nonempty_txn_signature: Default::default(),
-            account: Default::default(),
+            account: None,
             cuckoo: Default::default(),
-            owner: Default::default(),
+            owner: None,
             data: Default::default(),
-        }
-    }
-
-    fn extend(
-        set: &mut HashSet<&'a str>,
-        map: &'a HashMap<Pubkey, HashSet<FilterName>>,
-        key: &Pubkey,
-    ) {
-        if let Some(names) = map.get(key) {
-            for name in names {
-                set.insert(name.as_ref());
-            }
         }
     }
 
@@ -555,6 +614,11 @@ impl<'a> FilterAccountsMatch<'a> {
         for (name, filter) in self.filter.nonempty_txn_signature.iter() {
             if let Some(nonempty_txn_signature) = filter {
                 if *nonempty_txn_signature == txn_signature.is_some() {
+                    /* If the user has supplied a large list of filters, constantly growing the set can be expensive */
+                    if self.nonempty_txn_signature.is_empty() {
+                        self.nonempty_txn_signature
+                            .reserve(self.filter.nonempty_txn_signature.len());
+                    }
                     self.nonempty_txn_signature.insert(name.as_ref());
                 }
             }
@@ -562,25 +626,33 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_account(&mut self, pubkey: &Pubkey) {
-        Self::extend(&mut self.account, &self.filter.account, pubkey)
+        self.account = self.filter.account.get(pubkey)
     }
 
     fn match_cuckoo(&mut self, pubkey: &Pubkey) {
         let bytes = pubkey.to_bytes();
         for (name, cuckoo) in &self.filter.account_cuckoo {
             if cuckoo.contains(&bytes) {
+                /* If the user has supplied a large list of filters, constantly growing the set can be expensive */
+                if self.cuckoo.is_empty() {
+                    self.cuckoo.reserve(self.filter.account_cuckoo.len());
+                }
                 self.cuckoo.insert(name.as_ref());
             }
         }
     }
 
     fn match_owner(&mut self, pubkey: &Pubkey) {
-        Self::extend(&mut self.owner, &self.filter.owner, pubkey)
+        self.owner = self.filter.owner.get(pubkey)
     }
 
     fn match_data_lamports(&mut self, data: &[u8], lamports: u64) {
-        for (name, filter) in self.filter.filters.iter() {
-            if filter.is_match(data, lamports) {
+        for (name, account_state) in self.filter.state_check.iter() {
+            if account_state.is_match(data, lamports) {
+                /* If the user has supplied a large list of filters, constantly growing the set can be expensive */
+                if self.data.is_empty() {
+                    self.data.reserve(self.filter.state_check.len());
+                }
                 self.data.insert(name.as_ref());
             }
         }
@@ -588,35 +660,9 @@ impl<'a> FilterAccountsMatch<'a> {
 
     fn get_filters(&self) -> FilteredUpdateFilters {
         self.filter
-            .filters
+            .aggregates
             .iter()
-            .filter_map(|(filter_name, filter)| {
-                let name = filter_name.as_ref();
-                let af = &self.filter;
-
-                // If filter name in required but not in matched => return `false`
-                if af.nonempty_txn_signature_required.contains(name)
-                    && !self.nonempty_txn_signature.contains(name)
-                {
-                    return None;
-                }
-
-                let needs_pubkey =
-                    af.account_required.contains(name) || af.account_cuckoo.contains_key(name);
-                let has_pubkey = self.account.contains(name) || self.cuckoo.contains(name);
-                if needs_pubkey && !has_pubkey {
-                    return None;
-                }
-
-                if af.owner_required.contains(name) && !self.owner.contains(name) {
-                    return None;
-                }
-                if !filter.is_empty() && !self.data.contains(name) {
-                    return None;
-                }
-
-                Some(filter_name.clone())
-            })
+            .filter_map(|filter_aggregate| filter_aggregate.satisfied(self))
             .collect()
     }
 }
@@ -728,9 +774,9 @@ struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
-    account_include: HashSet<Pubkey>,
-    account_exclude: HashSet<Pubkey>,
-    account_required: HashSet<Pubkey>,
+    account_include: Vec<Pubkey>,
+    account_exclude: Vec<Pubkey>,
+    account_required: Vec<Pubkey>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -738,7 +784,7 @@ struct FilterTransactionsInner {
 #[derive(Debug, Clone)]
 struct FilterTransactions {
     filter_type: FilterTransactionsType,
-    filters: HashMap<FilterName, FilterTransactionsInner>,
+    filters: Vec<(FilterName, FilterTransactionsInner)>,
 }
 
 impl FilterTransactions {
@@ -750,7 +796,7 @@ impl FilterTransactions {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        let mut filters = HashMap::new();
+        let mut filters = HashMap::with_capacity(configs.len());
         for (name, filter) in configs {
             FilterLimits::check_any(
                 filter.vote.is_none()
@@ -789,15 +835,21 @@ impl FilterTransactions {
                     account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
                         &HashSet::new(),
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &HashSet::new(),
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -807,7 +859,7 @@ impl FilterTransactions {
         }
         Ok(Self {
             filter_type,
-            filters,
+            filters: filters.into_iter().collect(),
         })
     }
 
@@ -842,7 +894,7 @@ impl FilterTransactions {
                 // the pre/post scan runs at most once per (tx, mode) across
                 // all filters evaluating against this tx. A `None`
                 // configured mode skips the scan entirely.
-                let token_owners: Option<&HashSet<Pubkey>> =
+                let token_owners: Option<&FoldHashSet<Pubkey>> =
                     inner.token_accounts.map(|mode| match mode {
                         TokenAccountsMode::All => message
                             .transaction
@@ -858,6 +910,10 @@ impl FilterTransactions {
                         || token_owners.is_some_and(|set| set.contains(pubkey))
                 };
 
+                if !inner.account_required.iter().all(in_effective_set) {
+                    return None;
+                }
+
                 if !inner.account_include.is_empty()
                     && !inner.account_include.iter().any(in_effective_set)
                 {
@@ -865,10 +921,6 @@ impl FilterTransactions {
                 }
 
                 if inner.account_exclude.iter().any(in_effective_set) {
-                    return None;
-                }
-
-                if !inner.account_required.iter().all(in_effective_set) {
                     return None;
                 }
 
@@ -890,21 +942,31 @@ impl FilterTransactions {
 }
 
 /// Owners of every parseable pre OR post token balance on the tx.
-fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> HashSet<Pubkey> {
-    meta.pre_token_balances
+fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> FoldHashSet<Pubkey> {
+    let mut owners =
+        FoldHashSet::with_capacity(meta.pre_token_balances.len() + meta.post_token_balances.len());
+    for balance in meta
+        .pre_token_balances
         .iter()
         .chain(meta.post_token_balances.iter())
-        .filter_map(parse_token_balance_owner)
-        .collect()
+    {
+        if let Some(owner) = parse_token_balance_owner(balance) {
+            owners.insert(owner);
+        }
+    }
+    owners
 }
 
 /// Owners whose token balance changed (compared by `account_index`) between
 /// pre and post, OR whose account was closed (present in pre, missing in post).
-fn owners_with_changed_balance(meta: &confirmed_block::TransactionStatusMeta) -> HashSet<Pubkey> {
+fn owners_with_changed_balance(
+    meta: &confirmed_block::TransactionStatusMeta,
+) -> FoldHashSet<Pubkey> {
     let pre_by_index = index_pre_token_balances(&meta.pre_token_balances);
 
-    let mut changed: HashSet<Pubkey> = HashSet::new();
-    let mut seen_in_post: HashSet<u32> = HashSet::new();
+    let mut changed = FoldHashSet::new();
+    let mut seen_in_post = FoldHashSet::with_capacity(meta.post_token_balances.len());
+
     for bal in &meta.post_token_balances {
         let Some(pubkey) = parse_token_balance_owner(bal) else {
             continue;
@@ -931,8 +993,10 @@ fn owners_with_changed_balance(meta: &confirmed_block::TransactionStatusMeta) ->
 
 /// Index parseable pre-balances by `account_index`, carrying the owner
 /// pubkey and a borrowed amount string for comparison against post.
-fn index_pre_token_balances(pre: &[confirmed_block::TokenBalance]) -> HashMap<u32, (Pubkey, &str)> {
-    let mut by_index = HashMap::with_capacity(pre.len());
+fn index_pre_token_balances(
+    pre: &[confirmed_block::TokenBalance],
+) -> FoldHashMap<u32, (Pubkey, &str)> {
+    let mut by_index = FoldHashMap::with_capacity(pre.len());
     for bal in pre {
         if let Some(pubkey) = parse_token_balance_owner(bal) {
             by_index.insert(bal.account_index, (pubkey, token_balance_amount(bal)));
@@ -963,9 +1027,9 @@ fn token_balance_amount(balance: &confirmed_block::TokenBalance) -> &str {
 #[derive(Debug, Clone)]
 struct FilterDeshredTransactionsInner {
     vote: Option<bool>,
-    account_include: HashSet<Pubkey>,
-    account_exclude: HashSet<Pubkey>,
-    account_required: HashSet<Pubkey>,
+    account_include: FoldHashSet<Pubkey>,
+    account_exclude: FoldHashSet<Pubkey>,
+    account_required: FoldHashSet<Pubkey>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1209,7 +1273,7 @@ impl FilterEntries {
 
 #[derive(Debug, Clone)]
 struct FilterBlocksInner {
-    account_include: HashSet<Pubkey>,
+    account_include: FoldHashSet<Pubkey>,
     account_cuckoo: Option<Arc<CuckooFilter<[u8; 32]>>>,
     include_transactions: Option<bool>,
     include_accounts: Option<bool>,
@@ -1358,7 +1422,7 @@ impl FilterBlocksInner {
         false
     }
 
-    fn matches_any_in_set(&self, account_keys: &HashSet<Pubkey>) -> bool {
+    fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
         if self.account_include.is_empty() && self.account_cuckoo.is_none() {
             return true;
         }
