@@ -3769,6 +3769,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-message"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6435a6070b6c5898201aae845db328cf3bd3cebc17b55af9b43138da5ced4a85"
+dependencies = [
+ "lazy_static",
+ "solana-address 2.6.0",
+ "solana-hash 4.2.0",
+ "solana-instruction",
+ "solana-sanitize",
+ "solana-sdk-ids",
+ "solana-transaction-error",
+]
+
+[[package]]
 name = "solana-msg"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4092,7 +4107,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-hash 4.2.0",
  "solana-instruction",
- "solana-message",
+ "solana-message 3.1.0",
  "solana-pubkey 4.1.0",
  "solana-serde",
  "solana-signature",
@@ -4194,7 +4209,7 @@ dependencies = [
  "solana-hash 4.2.0",
  "solana-instruction",
  "solana-instruction-error",
- "solana-message",
+ "solana-message 3.1.0",
  "solana-sanitize",
  "solana-sdk-ids",
  "solana-short-vec",
@@ -4255,7 +4270,7 @@ dependencies = [
  "solana-instruction",
  "solana-loader-v2-interface",
  "solana-loader-v3-interface",
- "solana-message",
+ "solana-message 3.1.0",
  "solana-program-option",
  "solana-pubkey 4.1.0",
  "solana-reward-info",
@@ -4290,7 +4305,7 @@ dependencies = [
  "solana-account-decoder-client-types",
  "solana-commitment-config",
  "solana-instruction",
- "solana-message",
+ "solana-message 3.1.0",
  "solana-pubkey 4.1.0",
  "solana-reward-info",
  "solana-signature",
@@ -5899,7 +5914,7 @@ dependencies = [
  "solana-hash 4.2.0",
  "solana-keypair",
  "solana-logger",
- "solana-message",
+ "solana-message 4.0.0",
  "solana-pubkey 4.1.0",
  "solana-signature",
  "solana-signer",
