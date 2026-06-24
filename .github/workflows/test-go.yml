@@ -1,0 +1,141 @@
+---
+name: Go Client Test
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - 'yellowstone-grpc-client-go/**'
+      - 'examples/golang/**'
+      - 'yellowstone-grpc-proto/**'
+      - '.github/workflows/test-go.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'yellowstone-grpc-client-go/**'
+      - 'examples/golang/**'
+      - 'yellowstone-grpc-proto/**'
+      - '.github/workflows/test-go.yml'
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            yellowstone-grpc-client-go/go.sum
+            examples/golang/go.sum
+
+      - name: gofmt (SDK)
+        working-directory: yellowstone-grpc-client-go
+        run: |
+          diff="$(gofmt -l .)"
+          if [ -n "$diff" ]; then
+            echo "gofmt found unformatted files:" >&2
+            echo "$diff" >&2
+            exit 1
+          fi
+
+      - name: go vet (SDK)
+        working-directory: yellowstone-grpc-client-go
+        run: go vet ./...
+
+      - name: go test (SDK)
+        working-directory: yellowstone-grpc-client-go
+        run: go test -race -count=1 ./...
+
+      - name: go build (SDK)
+        working-directory: yellowstone-grpc-client-go
+        run: go build ./...
+
+      - name: gofmt (examples)
+        working-directory: examples/golang
+        run: |
+          diff="$(gofmt -l .)"
+          if [ -n "$diff" ]; then
+            echo "gofmt found unformatted files:" >&2
+            echo "$diff" >&2
+            exit 1
+          fi
+
+      - name: go vet (examples)
+        working-directory: examples/golang
+        run: go vet ./...
+
+      - name: go build (examples)
+        working-directory: examples/golang
+        run: go build -o grpc-client ./cmd/grpc-client
+
+      - name: Upload example binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: grpc-client-linux-amd64
+          path: examples/golang/grpc-client
+          if-no-files-found: error
+          retention-days: 7
+
+  example-smoke-test:
+    name: Example smoke test (live endpoint)
+    needs: test
+    runs-on: ubuntu-22.04
+    env:
+      TEST_ENDPOINT: ${{ secrets.TEST_ENDPOINT }}
+      TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for endpoint secret
+        id: gate
+        run: |
+          if [ -z "${TEST_ENDPOINT:-}" ]; then
+            echo "TEST_ENDPOINT secret is not set; skipping live smoke test."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download example binary
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: grpc-client-linux-amd64
+          path: examples/golang
+
+      - name: Run example against live endpoint
+        if: steps.gate.outputs.skip != 'true'
+        working-directory: examples/golang
+        run: |
+          set -uo pipefail
+          chmod +x ./grpc-client
+          out="$(mktemp)"
+          # timeout returns 124 when it kills the process; the client runs
+          # until killed, so we tolerate non-zero exit and assert on output.
+          timeout --preserve-status 20 ./grpc-client \
+            --endpoint "$TEST_ENDPOINT" \
+            --x-token "$TEST_TOKEN" \
+            --slots > "$out" 2>&1 || true
+          echo "--- example output (head) ---"
+          head -n 50 "$out" || true
+          echo "--- /example output ---"
+          updates="$(grep -c 'msg=update' "$out" || true)"
+          echo "update messages received: $updates"
+          if [ "$updates" -lt 1 ]; then
+            echo "Expected at least one slot update from the example; got $updates." >&2
+            exit 1
+          fi
