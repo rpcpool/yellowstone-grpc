@@ -31,7 +31,6 @@ use {
         pki_types::{pem::PemObject, PrivateKeyDer},
         ServerConfig,
     },
-    smallvec::SmallVec,
     solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
@@ -1029,7 +1028,7 @@ impl GrpcService {
     async fn geyser_loop(
         mut messages_rx: mpsc::UnboundedReceiver<Message>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-        block_reconstruction_tx: mpsc::UnboundedSender<Message>,
+        block_reconstruction_tx: mpsc::UnboundedSender<Arc<Vec<Message>>>,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
@@ -1037,8 +1036,7 @@ impl GrpcService {
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
         let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
-
-        let mut blockmeta_detected: SmallVec<[Message; 4]> = SmallVec::new();
+        let mut blockmeta_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
 
         loop {
             tokio::select! {
@@ -1051,17 +1049,17 @@ impl GrpcService {
                     metrics::message_queue_size_dec();
 
                     if matches!(&message, Message::BlockMeta(_)) {
-                        let _ = block_reconstruction_tx.send(message);
-                        continue;
+                        blockmeta_messages.push(message);
                     }
-
-                    processed_messages.push(message);
+                    else {
+                        processed_messages.push(message);
+                    }
 
                     while let Ok(message) = messages_rx.try_recv() {
                         metrics::message_queue_size_dec();
 
                         if matches!(&message, Message::BlockMeta(_)) {
-                            blockmeta_detected.push(message);
+                            blockmeta_messages.push(message);
                             continue;
                         }
 
@@ -1072,8 +1070,6 @@ impl GrpcService {
                     }
 
                     for message in processed_messages.iter() {
-                        let _ = block_reconstruction_tx.send(message.clone());
-
                         match message {
                             Message::Slot(slot_message) => {
                                 metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
@@ -1100,7 +1096,9 @@ impl GrpcService {
 
                     encode_messages(&processed_messages);
                     GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
-                    let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(processed_messages)));
+
+                    let processed_messages_arc = Arc::new(processed_messages);
+                    let _ = broadcast_tx.send((CommitmentLevel::Processed, processed_messages_arc.clone()));
                     processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
                     if !confirmed_messages.is_empty() {
@@ -1113,10 +1111,13 @@ impl GrpcService {
                         finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
                     }
 
+                    let _ = block_reconstruction_tx.send(processed_messages_arc);
+
                     // Make sure that blockmeta is always after all kind of other events so the block-machine sees every block
                     // updates.
-                    for blockmeta_message in blockmeta_detected.drain(..) {
-                        let _ = block_reconstruction_tx.send(blockmeta_message);
+                    if !blockmeta_messages.is_empty() {
+                        let _ = block_reconstruction_tx.send(Arc::new(blockmeta_messages));
+                        blockmeta_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
                     }
                 }
             }
@@ -1124,7 +1125,7 @@ impl GrpcService {
     }
 
     async fn block_reconstruction_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Message>,
+        mut messages_rx: mpsc::UnboundedReceiver<Arc<Vec<Message>>>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
@@ -1149,51 +1150,53 @@ impl GrpcService {
                         break;
                     };
 
-
-                    if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                        if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
-                            let _ = blocks_meta_tx.send(message.clone());
-                        }
-                    }
-
-                    block_machine.add(message);
-
-                    while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
-                        let commitment_level = match slot_update.commitment {
-                            solana_commitment_config::CommitmentLevel::Processed => CommitmentLevel::Processed,
-                            solana_commitment_config::CommitmentLevel::Confirmed => CommitmentLevel::Confirmed,
-                            solana_commitment_config::CommitmentLevel::Finalized => CommitmentLevel::Finalized,
-                        };
-                        // Processed must be sent differently, since processed geyser event were individually sent,
-                        // we only need to send Message::Block for block subscriber downstream.
-                        // While, confirmed,finalized must be sent in the two flavors: as a stream of individual events and block.
-                        if commitment_level != CommitmentLevel::Processed {
-                            let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
+                    for message in message.iter() {
+                        if let Some(blocks_meta_tx) = &blocks_meta_tx {
+                            if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
+                                let _ = blocks_meta_tx.send(message.clone());
+                            }
                         }
 
-                        let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                        let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
-                        let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
+                        block_machine.add(message.clone());
 
-                        let slot_message = Message::Slot(MessageSlot {
-                            slot: slot_update.slot,
-                            parent: slot_update.parent_slot,
-                            status: match slot_update.commitment {
-                                solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
-                                solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
-                                solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
-                            },
-                            dead_error: None,
-                            created_at: Timestamp::from(SystemTime::now())
-                        });
-                        let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
-                        for commitment_level in ALL_COMMITMENT_LEVELS {
-                            let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
+                        while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
+                            let commitment_level = match slot_update.commitment {
+                                solana_commitment_config::CommitmentLevel::Processed => CommitmentLevel::Processed,
+                                solana_commitment_config::CommitmentLevel::Confirmed => CommitmentLevel::Confirmed,
+                                solana_commitment_config::CommitmentLevel::Finalized => CommitmentLevel::Finalized,
+                            };
+                            // Processed must be sent differently, since processed geyser event were individually sent,
+                            // we only need to send Message::Block for block subscriber downstream.
+                            // While, confirmed,finalized must be sent in the two flavors: as a stream of individual events and block.
+                            if commitment_level != CommitmentLevel::Processed {
+                                let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
+                            }
+
+                            let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
+                            let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
+                            let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
+
+                            let slot_message = Message::Slot(MessageSlot {
+                                slot: slot_update.slot,
+                                parent: slot_update.parent_slot,
+                                status: match slot_update.commitment {
+                                    solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
+                                    solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                                    solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
+                                },
+                                dead_error: None,
+                                created_at: Timestamp::from(SystemTime::now())
+                            });
+                            let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
+                            for commitment_level in ALL_COMMITMENT_LEVELS {
+                                let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
+                            }
                         }
-                    }
-                    let min_replayable_slot = block_machine.min_replayable_slot();
-                    if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
-                        replay_first_available_slot.store(min_slot, Ordering::Relaxed);
+
+                        let min_replayable_slot = block_machine.min_replayable_slot();
+                        if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
+                            replay_first_available_slot.store(min_slot, Ordering::Relaxed);
+                        }
                     }
                 },
                 Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {

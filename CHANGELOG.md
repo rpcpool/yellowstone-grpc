@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-06-24
+
+- yellowstone-grpc-geyser 13.3.1
+
+### misc
+
+- plugin: optimized latency of block reconstruction and processed messages
+
 ## 2026-06-23
 
 - yellowstone-grpc-geyser 13.3.0
