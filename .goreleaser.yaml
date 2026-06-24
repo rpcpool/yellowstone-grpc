@@ -1,3 +1,4 @@
+---
 # .goreleaser.yaml for rpcpool/yellowstone-grpc
 #
 # This file must be committed to the root of the yellowstone-grpc source repo.
@@ -75,8 +76,8 @@ release:
     github:
         owner: rpcpool
         name: yellowstone-grpc
-    #disable: '{{ .Prerelease != "" }}'
-    draft: true # publish as draft release to begin with
+    # disable: '{{ .Prerelease != "" }}'
+    prerelease: auto # autodetect prerelase with codewords on tag
     header: |
         rust {{ .Env.RUST_VERSION }}
     extra_files:
