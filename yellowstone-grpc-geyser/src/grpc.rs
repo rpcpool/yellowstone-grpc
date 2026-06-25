@@ -994,9 +994,21 @@ impl GrpcService {
                     };
                     metrics::message_queue_size_dec();
 
-                    if matches!(&message, Message::BlockMeta(_)) {
-                        let _ = block_reconstruction_tx.send(message);
-                        continue;
+                    match &message {
+                        Message::BlockMeta(_) => {
+                            blockmeta_detected.push(message);
+                            continue;
+                        }
+                        Message::Slot(s) if matches!(s.status,
+                            SlotStatus::Processed |
+                            SlotStatus::Confirmed |
+                            SlotStatus::Finalized
+                        ) => {
+                            metrics::update_slot_plugin_status(s.status, s.slot);
+                            blockmeta_detected.push(message);
+                            continue;
+                        }
+                        _ => {}
                     }
 
                     processed_messages.push(message);
@@ -1004,9 +1016,21 @@ impl GrpcService {
                     while let Ok(message) = messages_rx.try_recv() {
                         metrics::message_queue_size_dec();
 
-                        if matches!(&message, Message::BlockMeta(_)) {
-                            blockmeta_detected.push(message);
-                            continue;
+                        match &message {
+                            Message::BlockMeta(_) => {
+                                blockmeta_detected.push(message);
+                                continue;
+                            }
+                            Message::Slot(s) if matches!(s.status,
+                                SlotStatus::Processed |
+                                SlotStatus::Confirmed |
+                                SlotStatus::Finalized
+                            ) => {
+                                metrics::update_slot_plugin_status(s.status, s.slot);
+                                blockmeta_detected.push(message);
+                                continue;
+                            }
+                            _ => {}
                         }
 
                         processed_messages.push(message);
