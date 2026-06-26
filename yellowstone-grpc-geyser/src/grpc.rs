@@ -1,7 +1,14 @@
 use {
     crate::{
+        auth::{
+            ConstantSubscriptionRepository, HttpSubscriptionRepository, SubscriptionInfo,
+            TrustedMetadataAuthenticator,
+        },
         block_reconstruction::BlockMachineStorage,
-        config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        config::{
+            AuthConfig::{self, TrustedMetadata},
+            ConfigGrpc, GrpcAddress, GrpcTlsConfig,
+        },
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
@@ -57,7 +64,7 @@ use {
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
-        service::interceptor,
+        service::{interceptor, LayerExt},
         transport::{
             server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
             CertificateDer,
@@ -76,6 +83,7 @@ use {
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
         tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
         tonic::{
+            auth::service::AuthLayer,
             metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
@@ -476,9 +484,9 @@ impl Drop for AutoClosableUnixListenerStream {
 }
 
 enum Listener {
-    Tcp(TritonTcpIncoming),
-    Tls(TlsIncoming),
-    Unix(AutoClosableUnixListenerStream), // path needed to remove the socket file on exit
+    Tcp(TritonTcpIncoming, Option<AuthConfig>),
+    Tls(TlsIncoming, Option<AuthConfig>),
+    Unix(AutoClosableUnixListenerStream, Option<AuthConfig>), // path needed to remove the socket file on exit
 }
 
 #[derive(Clone)]
@@ -634,7 +642,7 @@ impl GrpcService {
                             "binding gRPC server to TCP socket: {}",
                             incoming.local_addr()?
                         );
-                        listeners.push(Listener::Tcp(incoming));
+                        listeners.push(Listener::Tcp(incoming, None));
                     }
                     GrpcAddress::Unix { path, mode } => {
                         if config.tls_config.is_some() || config.cert_dir.is_some() {
@@ -659,7 +667,7 @@ impl GrpcService {
                             path_to_remove: path,
                             listener: uds,
                         };
-                        listeners.push(Listener::Unix(uds));
+                        listeners.push(Listener::Unix(uds, None));
                     }
                 }
             }
@@ -682,13 +690,14 @@ impl GrpcService {
                             "binding gRPC server to TCP socket: {}",
                             incoming.local_addr()?
                         );
+                        let auth = listen_config.auth.clone();
                         let listener = if let Some(tls) = tls_config {
                             let server_config = load_server_config_from_tls_config(&tls)
                                 .context("failed to load TLS server config")?;
                             let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
-                            Listener::Tls(TlsIncoming::new(incoming, tls_acceptor))
+                            Listener::Tls(TlsIncoming::new(incoming, tls_acceptor), auth)
                         } else {
-                            Listener::Tcp(incoming)
+                            Listener::Tcp(incoming, auth)
                         };
                         listeners.push(listener);
                     }
@@ -715,7 +724,7 @@ impl GrpcService {
                             path_to_remove: path,
                             listener: uds,
                         };
-                        listeners.push(Listener::Unix(uds));
+                        listeners.push(Listener::Unix(uds, listen_config.auth.clone()));
                     }
                 }
             }
@@ -841,11 +850,11 @@ impl GrpcService {
         // However, that adds complexity in the IO implementa has every read/write would need an extra match-expression to dispatch to the correct underlying type.
         // Having this ugly macros is the most efficient approach and makes the code shorter when calling `serve_listener`.
         macro_rules! with_listener {
-            ($listener:expr, |$incoming:ident| $body:expr) => {{
+            ($listener:expr, |$incoming:ident, $auth:ident| $body:expr) => {{
                 match $listener {
-                    Listener::Tcp($incoming) => $body,
-                    Listener::Unix($incoming) => $body,
-                    Listener::Tls($incoming) => $body,
+                    Listener::Tcp($incoming, $auth) => $body,
+                    Listener::Unix($incoming, $auth) => $body,
+                    Listener::Tls($incoming, $auth) => $body,
                 }
             }};
         }
@@ -860,7 +869,7 @@ impl GrpcService {
             let service = service.clone();
             let rate_limit_table = rate_limit_table.clone();
             task_tracker.spawn(async move {
-                if let Err(e) = with_listener!(listener, |incoming| {
+                if let Err(e) = with_listener!(listener, |incoming, auth| {
                     let rate_limited_incoming = RateLimitedIncoming::new(
                         incoming,
                         ip_conncur,
@@ -879,6 +888,7 @@ impl GrpcService {
                         health_service,
                         service,
                         traffic_reporting_threshold,
+                        auth,
                         shutdown.clone(),
                     )
                     .await
@@ -1510,6 +1520,7 @@ impl GrpcService {
         health_service: HealthServer<H>,
         service: GeyserServer<GrpcService>,
         traffic_reporting_threshold: ByteSize,
+        auth: Option<AuthConfig>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()>
     where
@@ -1534,19 +1545,81 @@ impl GrpcService {
         if let Some(sz) = initial_stream_window_size {
             builder = builder.initial_stream_window_size(sz);
         }
-        builder
-            .layer(MeteredBandwidthLayer::new(
-                PrometheusMeteredManager,
-                traffic_reporting_threshold,
-            ))
-            .layer(interceptor::InterceptorLayer::new(XTokenInterceptor {
-                x_token,
-            }))
-            .add_service(health_service)
-            .add_service(service)
-            .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
-            .await
-            .map_err(Into::into)
+
+        enum AuthLayerChoice {
+            Http(AuthLayer<HttpSubscriptionRepository>),
+            File(AuthLayer<ConstantSubscriptionRepository>),
+            Trusted(AuthLayer<TrustedMetadataAuthenticator>),
+        }
+        let maybe_auth_layer = match auth {
+            Some(AuthConfig::Http(http_auth_config)) => {
+                let repository = http_auth_config.build_repository();
+                let auth_layer = AuthLayer::new(
+                    repository,
+                    http_auth_config.max_concurrent_auth_requests.get(),
+                );
+                Some(AuthLayerChoice::Http(auth_layer))
+            }
+            Some(AuthConfig::File(file_auth_config)) => {
+                let repository = file_auth_config
+                    .build_repository()
+                    .context("Failed to build file-based auth repository")?;
+                let auth_layer = AuthLayer::new(
+                    repository,
+                    1_000_000, // Arbitrary large number, since file-based auth is not expected to be used in production
+                );
+                Some(AuthLayerChoice::File(auth_layer))
+            }
+            Some(TrustedMetadata) => {
+                let repository = TrustedMetadataAuthenticator::new([]);
+                let auth_layer = AuthLayer::new(
+                    repository,
+                    1_000_000, // Arbitrary large number, since trusted metadata auth is not expected to be used in production
+                );
+                Some(AuthLayerChoice::Trusted(auth_layer))
+            }
+            None => None,
+        };
+
+        // Having this ugly macros is the most efficient approach.
+        macro_rules! with_auth {
+            ($auth_layer:expr, |$layer:ident| $body:expr) => {{
+                match $auth_layer {
+                    AuthLayerChoice::Http($layer) => $body,
+                    AuthLayerChoice::File($layer) => $body,
+                    AuthLayerChoice::Trusted($layer) => $body,
+                }
+            }};
+        }
+
+        // Request -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
+        let builder = builder.add_service(health_service);
+        let geyser_service =
+            MeteredBandwidthLayer::new(PrometheusMeteredManager, traffic_reporting_threshold)
+                .named_layer(service);
+        let geyser_service = interceptor::InterceptorLayer::new(XTokenInterceptor {
+            x_token: x_token.clone(),
+        })
+        .named_layer(geyser_service);
+
+        if let Some(auth_layer) = maybe_auth_layer {
+            // The final wrapping order is: AuthLayer -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
+            // The AuthLayer is the outermost layer, so it can intercept and handle authentication before any other processing occurs.
+            with_auth!(auth_layer, |auth_layer| {
+                let geyser_service = auth_layer.named_layer(geyser_service);
+                builder
+                    .add_service(geyser_service)
+                    .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                    .await
+                    .map_err(Into::into)
+            })
+        } else {
+            builder
+                .add_service(geyser_service)
+                .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
+                .await
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -1563,10 +1636,17 @@ impl Geyser for GrpcService {
         incr_grpc_method_call_count("subscribe");
 
         let subscriber_id = request
-            .metadata()
-            .get("x-subscription-id")
-            .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-            .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()));
+            .extensions()
+            .get::<SubscriptionInfo>()
+            .cloned()
+            .map(|info| info.subscription_id)
+            .or_else(|| {
+                request
+                    .metadata()
+                    .get("x-subscription-id")
+                    .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+                    .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
+            });
 
         // Per-subscriber subscription limit: check and increment under a
         // single lock hold so no two calls can race past the limit.

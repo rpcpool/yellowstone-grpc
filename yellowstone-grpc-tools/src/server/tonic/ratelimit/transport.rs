@@ -67,7 +67,7 @@ where
     ) -> Self {
         Self {
             incoming,
-            max_ip_conncur: max_ip_conncur,
+            max_ip_conncur,
             _io: Default::default(),
             active_conn_map: Arc::clone(&table.inner),
             callbacks,
