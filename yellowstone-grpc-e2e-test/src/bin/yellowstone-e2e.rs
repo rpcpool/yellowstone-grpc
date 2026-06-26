@@ -10,7 +10,8 @@ use {
         scenario_description, subscribe_should_filter_accounts,
         subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
-        subscribe_should_receive_full_blocks, test_subscribe_deshred, RunConfig,
+        subscribe_should_receive_full_blocks, subscribe_should_receive_no_slot_duplicates,
+        test_subscribe_deshred, RunConfig,
     },
 };
 
@@ -25,6 +26,7 @@ enum Scenario {
     TokenOwnerBalanceChanged,
     Ordering,
     FilterAccounts,
+    SlotDuplicate,
 }
 
 impl Scenario {
@@ -39,6 +41,7 @@ impl Scenario {
             Self::TokenOwnerBalanceChanged => "token-owner-balance-changed",
             Self::Ordering => "event-ordering",
             Self::FilterAccounts => "filter-accounts",
+            Self::SlotDuplicate => "slot-duplicate",
         }
     }
 
@@ -180,6 +183,7 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
             }
             Scenario::Ordering => it_should_verifies_geyser_event_ordering_is_correct(config).await,
             Scenario::FilterAccounts => subscribe_should_filter_accounts(config).await,
+            Scenario::SlotDuplicate => subscribe_should_receive_no_slot_duplicates(config).await,
         }
     });
     let mut interval = time::interval(Duration::from_millis(120));
@@ -258,6 +262,8 @@ async fn run(cli: Cli) -> Result<()> {
                 Scenario::AnyCommitment,
                 Scenario::TokenOwnerBalanceChanged,
                 Scenario::Ordering,
+                Scenario::FilterAccounts,
+                Scenario::SlotDuplicate,
             ];
 
             for scenario in scenarios {
