@@ -1,5 +1,7 @@
 "updates":
-- "commit-message":
+- "allow":
+  - "dependency-name": "agave-plugin-version"
+  "commit-message":
     "prefix": "chore(deps):"
   "directory": "/"
   "labels":
