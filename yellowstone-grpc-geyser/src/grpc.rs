@@ -1,72 +1,32 @@
 use {
     crate::{
-        config::{ConfigGrpc, GrpcAddress},
-        metered::MeteredLayer,
-        metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
-        },
-        plugin::{
+        config::{ConfigGrpc, GrpcAddress}, metered::MeteredLayer, metrics::{
+            self, DebugClientMessage, GEYSER_BATCH_SIZE, incr_grpc_method_call_count, set_subscriber_queue_size, subscription_limit_exceeded_inc,
+        }, plugin::{
             filter::{
-                encoder::encode_messages,
-                limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
-                name::FilterNames,
-                DeshredFilter, Filter,
-            },
-            message::{
+                DeshredFilter, Filter, encoder::encode_messages, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof}, name::FilterNames,
+            }, message::{
                 CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageEntry,
                 MessageSlot, MessageTransactionInfo, SlotStatus,
-            },
-            proto::geyser_server::{Geyser, GeyserServer},
+            }, proto::geyser_server::{Geyser, GeyserServer}, shmem::decoder::ProstShmemDecoder,
+        }, transport::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, SpyIncoming, SpyIncomingConfig}, util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel}, version::GrpcVersionInfo,
+    }, anyhow::Context, bytesize::ByteSize, log::{error, info}, prost_types::Timestamp, smallvec::SmallVec, solana_clock::{MAX_RECENT_BLOCKHASHES, Slot}, solana_pubkey::Pubkey, std::{
+        collections::{BTreeMap, HashMap}, net::SocketAddr, os::unix::fs::PermissionsExt, path::PathBuf, sync::{
+            Arc, LazyLock, Mutex as StdMutex, atomic::{AtomicU64, AtomicUsize, Ordering},
+        }, time::SystemTime,
+    }, tokio::{
+        fs, net::UnixListener, sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot}, time::{Duration, sleep},
+    }, tokio_stream::wrappers::UnixListenerStream, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
+        Request, Response, Result as TonicResult, Status, Streaming, metadata::AsciiMetadataValue, service::interceptor, transport::{
+            Identity, ServerTlsConfig, server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
         },
-        transport::{SpyIncoming, SpyIncomingConfig, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
-        version::GrpcVersionInfo,
-    },
-    anyhow::Context,
-    bytesize::ByteSize,
-    log::{error, info},
-    prost_types::Timestamp,
-    smallvec::SmallVec,
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
-    solana_pubkey::Pubkey,
-    std::{
-        collections::{BTreeMap, HashMap},
-        net::SocketAddr,
-        os::unix::fs::PermissionsExt,
-        path::PathBuf,
-        sync::{
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, LazyLock, Mutex as StdMutex,
-        },
-        time::SystemTime,
-    },
-    tokio::{
-        fs,
-        net::UnixListener,
-        sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration},
-    },
-    tokio_stream::wrappers::UnixListenerStream,
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
-    tonic::{
-        metadata::AsciiMetadataValue,
-        service::interceptor,
-        transport::{
-            server::{Server, TcpConnectInfo, TcpIncoming, TlsConnectInfo},
-            Identity, ServerTlsConfig,
-        },
-        Request, Response, Result as TonicResult, Status, Streaming,
-    },
-    tonic_health::{pb::health_server::HealthServer, server::health_reporter},
-    yellowstone_grpc_proto::prelude::{
+    }, tonic_health::{pb::health_server::HealthServer, server::health_reporter}, yellowstone_grpc_proto::prelude::{
         CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
         GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
         GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
         PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest,
         SubscribeReplayInfoResponse, SubscribeRequest,
-    },
+    }, yellowstone_shmem_client::{ShmemClient, ClientError},
 };
 
 #[derive(Debug)]
@@ -589,14 +549,13 @@ impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
         config: ConfigGrpc,
+        client: ShmemClient<ProstShmemDecoder>,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) -> anyhow::Result<(
-        Option<crossbeam_channel::Sender<Box<Message>>>,
-        mpsc::UnboundedSender<Message>,
-    )> {
+    ) -> anyhow::Result<Option<crossbeam_channel::Sender<Box<Message>>>> {
+
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
         for addr in &config.address.inner {
@@ -718,9 +677,6 @@ impl GrpcService {
             service = service.send_compressed(encoding);
         }
 
-        // Run geyser message loop
-        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
-
         // Warn if replay buffer is too small for auto-reconnect
         if config.replay_stored_slots < 150 {
             log::warn!(
@@ -731,7 +687,7 @@ impl GrpcService {
 
         task_tracker.spawn(async move {
             Self::geyser_loop(
-                messages_rx,
+                client,
                 blocks_meta_tx,
                 broadcast_tx,
                 deshred_broadcast_tx,
@@ -742,22 +698,6 @@ impl GrpcService {
             .await;
         });
 
-        // Spawn shmem reader to feed messages_tx from the shmem ring.
-        // The plugin writes events to shmem; this task reads them and forwards
-        // to geyser_loop via the same channel it already consumes.
-        if let Some(shmem_path) = config.shmem_path.clone() {
-            let shmem_tx = messages_tx.clone();
-            task_tracker.spawn(async move {
-                if let Err(e) = crate::plugin::shmem::run_shmem_reader(
-                    std::path::Path::new(&shmem_path),
-                    shmem_tx,
-                )
-                .await
-                {
-                    error!("shmem reader failed: {e}");
-                }
-            });
-        }
 
         // Health check service
         let (health_reporter, health_service) = health_reporter();
@@ -802,12 +742,12 @@ impl GrpcService {
             });
         }
 
-        Ok((snapshot_tx, messages_tx))
+        Ok(snapshot_tx)
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn geyser_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Message>,
+        mut client: ShmemClient<ProstShmemDecoder>,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
@@ -829,28 +769,52 @@ impl GrpcService {
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
         let mut buffered_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
+        let wait_handle = client.wait_handle();
+
         loop {
             tokio::select! {
-                maybe = messages_rx.recv() => {
-                    let Some(message) = maybe else {
-                        info!("Geyser loop: messages channel closed");
-                        break;
-                    };
-                    metrics::message_queue_size_dec();
-                    let msgid = msgid_gen.next();
+                _ = {
+                    let wh = wait_handle.clone();
+                    tokio::task::spawn_blocking(move || wh.wait_for_data())
+                } => {
+                    // drain all available messages from conduit
+                    loop {
+                        match client.try_recv() {
+                            None => break,
+                            Some(Err(ClientError::Lagged(n))) => panic!("lapped by {n}"),
+                            Some(Err(ClientError::MidWrite)) => continue,
+                            Some(Err(ClientError::Decode(e))) => {
+                                log::warn!("decode error: {e}");
+                                continue;
+                            }
+                            Some(Err(ClientError::Io(e))) => panic!("io error: {e}"),
+                            Some(Ok(geyser_msg)) => {
+                                let ts = Timestamp::from(SystemTime::now());
 
-                    buffered_messages.push((msgid, message));
+                                let plugin_ts_ns = match &geyser_msg {
+                                   yellowstone_shmem_common::GeyserMessage::Account(a) => a.plugin_ts_ns,
+                                    _ => 0,
+                                };
 
-                    while let Ok(message) = messages_rx.try_recv() {
-                        metrics::message_queue_size_dec();
+                                let message = ProstShmemDecoder::to_dm_message(geyser_msg, ts)
+                                    .expect("conversion failed");
 
-                        let msgid = msgid_gen.next();
-                        buffered_messages.push((msgid, message));
+                                if plugin_ts_ns > 0 {
+                                    const NANOS_PER_SEC: i64 = 1_000_000_000;
+                                    let now_ns = ts.seconds * NANOS_PER_SEC + ts.nanos as i64;
+                                    metrics::observe_shmem_handover_latency_ns(now_ns - plugin_ts_ns);
+                                }
 
-                        if buffered_messages.len() >= PROCESSED_MESSAGES_MAX {
-                            break;
+                                let msgid = msgid_gen.next();
+                                buffered_messages.push((msgid, message));
+
+                                if buffered_messages.len() >= PROCESSED_MESSAGES_MAX {
+                                    break;
+                                }
+                            }
                         }
                     }
+
 
                     let batch_length = buffered_messages.len();
                     for (index, (msgid, message)) in buffered_messages.drain(..).enumerate() {

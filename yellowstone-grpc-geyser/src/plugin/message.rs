@@ -1,10 +1,4 @@
 use {
-    super::convert_to,
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
-        ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
-        ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
-    },
     bytes::Bytes,
     prost_types::Timestamp,
     solana_clock::Slot,
@@ -78,20 +72,6 @@ pub enum SlotStatus {
     Dead,
 }
 
-impl From<&GeyserSlotStatus> for SlotStatus {
-    fn from(status: &GeyserSlotStatus) -> Self {
-        match status {
-            GeyserSlotStatus::Processed => Self::Processed,
-            GeyserSlotStatus::Confirmed => Self::Confirmed,
-            GeyserSlotStatus::Rooted => Self::Finalized,
-            GeyserSlotStatus::FirstShredReceived => Self::FirstShredReceived,
-            GeyserSlotStatus::Completed => Self::Completed,
-            GeyserSlotStatus::CreatedBank => Self::CreatedBank,
-            GeyserSlotStatus::Dead(_error) => Self::Dead,
-        }
-    }
-}
-
 impl From<SlotStatusProto> for SlotStatus {
     fn from(status: SlotStatusProto) -> Self {
         match status {
@@ -155,20 +135,6 @@ pub struct MessageSlot {
 }
 
 impl MessageSlot {
-    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &GeyserSlotStatus) -> Self {
-        Self {
-            slot,
-            parent,
-            status: status.into(),
-            dead_error: if let GeyserSlotStatus::Dead(error) = status {
-                Some(error.clone())
-            } else {
-                None
-            },
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
-
     pub fn from_update_oneof(
         msg: &SubscribeUpdateSlot,
         created_at: Timestamp,
@@ -199,22 +165,6 @@ pub struct MessageAccountInfo {
 }
 
 impl MessageAccountInfo {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
-        let shared = info.data.to_vec();
-        let data = Bytes::from(shared);
-        Self {
-            pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
-            lamports: info.lamports,
-            owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
-            executable: info.executable,
-            rent_epoch: info.rent_epoch,
-            data,
-            write_version: info.write_version,
-            txn_signature: info.txn.map(|txn| *txn.signature()),
-            pre_encoded: OnceLock::new(),
-        }
-    }
-
     pub fn from_update_oneof(msg: SubscribeUpdateAccountInfo) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             pubkey: Pubkey::try_from(msg.pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
@@ -248,15 +198,6 @@ pub struct MessageAccount {
 }
 
 impl MessageAccount {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool) -> Self {
-        Self {
-            account: Arc::new(MessageAccountInfo::from_geyser(info)),
-            slot,
-            is_startup,
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
-
     pub fn from_update_oneof(
         msg: SubscribeUpdateAccount,
         created_at: Timestamp,
@@ -284,38 +225,6 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
-        let account_keys: HashSet<Pubkey> = info
-            .transaction
-            .message
-            .static_account_keys() // Since V3, dynamic account are only available in `loaded_addresses`
-            .iter()
-            .chain(
-                info.transaction_status_meta
-                    .loaded_addresses
-                    .writable
-                    .iter(),
-            )
-            .chain(
-                info.transaction_status_meta
-                    .loaded_addresses
-                    .readonly
-                    .iter(),
-            )
-            .copied()
-            .collect();
-
-        Self {
-            signature: *info.signature,
-            is_vote: info.is_vote,
-            transaction: convert_to::create_transaction(info.transaction),
-            meta: convert_to::create_transaction_meta(info.transaction_status_meta),
-            index: info.index,
-            account_keys,
-            pre_encoded: OnceLock::new(),
-        }
-    }
-
     pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             signature: Signature::try_from(msg.signature.as_slice())
@@ -376,14 +285,6 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot) -> Self {
-        Self {
-            transaction: Arc::new(MessageTransactionInfo::from_geyser(info)),
-            slot,
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
-
     pub fn from_update_oneof(
         msg: SubscribeUpdateTransaction,
         created_at: Timestamp,
@@ -412,59 +313,6 @@ pub struct MessageDeshredTransactionInfo {
 }
 
 impl MessageDeshredTransactionInfo {
-    pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
-        let static_account_keys: HashSet<Pubkey> = info
-            .transaction
-            .message
-            .static_account_keys()
-            .iter()
-            .copied()
-            .collect();
-
-        let (loaded_writable_addresses, loaded_readonly_addresses) = info
-            .loaded_addresses
-            .map(|la| (la.writable.clone(), la.readonly.clone()))
-            .unwrap_or_default();
-
-        Self {
-            signature: *info.signature,
-            is_vote: info.is_vote,
-            transaction: convert_to::create_transaction(info.transaction),
-            static_account_keys,
-            loaded_writable_addresses,
-            loaded_readonly_addresses,
-            completed_data_set_starting_shred_index: 0,
-            completed_data_set_ending_shred_index_exclusive: 0,
-        }
-    }
-
-    pub fn from_geyser_v2(info: &ReplicaDeshredTransactionInfoV2<'_>) -> Self {
-        let static_account_keys: HashSet<Pubkey> = info
-            .transaction
-            .message
-            .static_account_keys()
-            .iter()
-            .copied()
-            .collect();
-
-        let (loaded_writable_addresses, loaded_readonly_addresses) = info
-            .loaded_addresses
-            .map(|la| (la.writable.clone(), la.readonly.clone()))
-            .unwrap_or_default();
-
-        Self {
-            signature: *info.signature,
-            is_vote: info.is_vote,
-            transaction: convert_to::create_transaction(info.transaction),
-            static_account_keys,
-            loaded_writable_addresses,
-            loaded_readonly_addresses,
-            completed_data_set_starting_shred_index: info.completed_data_set_starting_shred_index,
-            completed_data_set_ending_shred_index_exclusive: info
-                .completed_data_set_ending_shred_index_exclusive,
-        }
-    }
-
     /// Returns all account keys (static + dynamically loaded from ALTs).
     pub fn all_account_keys(&self) -> impl Iterator<Item = &Pubkey> {
         self.static_account_keys
@@ -481,27 +329,6 @@ pub struct MessageDeshredTransaction {
     pub created_at: Timestamp,
 }
 
-impl MessageDeshredTransaction {
-    pub fn from_geyser_versioned(
-        transaction: ReplicaDeshredTransactionInfoVersions<'_>,
-        slot: Slot,
-    ) -> Self {
-        let info = match transaction {
-            ReplicaDeshredTransactionInfoVersions::V0_0_1(v1) => {
-                MessageDeshredTransactionInfo::from_geyser(v1)
-            }
-            ReplicaDeshredTransactionInfoVersions::V0_0_2(v2) => {
-                MessageDeshredTransactionInfo::from_geyser_v2(v2)
-            }
-        };
-        Self {
-            transaction: Arc::new(info),
-            slot,
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageEntry {
     pub slot: u64,
@@ -514,20 +341,6 @@ pub struct MessageEntry {
 }
 
 impl MessageEntry {
-    pub fn from_geyser(info: &ReplicaEntryInfoV2) -> Self {
-        Self {
-            slot: info.slot,
-            index: info.index,
-            num_hashes: info.num_hashes,
-            hash: Hash::new_from_array(<[u8; HASH_BYTES]>::try_from(info.hash).unwrap()),
-            executed_transaction_count: info.executed_transaction_count,
-            starting_transaction_index: info
-                .starting_transaction_index
-                .try_into()
-                .expect("failed convert usize to u64"),
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
 
     pub fn from_update_oneof(
         msg: &SubscribeUpdateEntry,
@@ -569,26 +382,6 @@ impl DerefMut for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>) -> Self {
-        Self {
-            block_meta: SubscribeUpdateBlockMeta {
-                parent_slot: info.parent_slot,
-                slot: info.slot,
-                parent_blockhash: info.parent_blockhash.to_string(),
-                blockhash: info.blockhash.to_string(),
-                rewards: Some(convert_to::create_rewards_obj(
-                    &info.rewards.rewards,
-                    info.rewards.num_partitions,
-                )),
-                block_time: info.block_time.map(convert_to::create_timestamp),
-                block_height: info.block_height.map(convert_to::create_block_height),
-                executed_transaction_count: info.executed_transaction_count,
-                entries_count: info.entry_count,
-            },
-            created_at: Timestamp::from(SystemTime::now()),
-        }
-    }
-
     pub const fn from_update_oneof(
         block_meta: SubscribeUpdateBlockMeta,
         created_at: Timestamp,

@@ -11,7 +11,11 @@ keywords = { workspace = true }
 publish = { workspace = true }
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "yellowstone-grpc"
+path = "src/main.rs"
 
 [[bin]]
 name = "config-check"

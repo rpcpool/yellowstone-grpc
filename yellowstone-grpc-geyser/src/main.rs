@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -8,17 +10,23 @@ use yellowstone_grpc_geyser::{
     grpc::GrpcService,
     metrics::PrometheusService,
 };
+use yellowstone_shmem_client::ShmemClient;
+use yellowstone_grpc_geyser::plugin::shmem::decoder::ProstShmemDecoder;
 
 fn main() -> anyhow::Result<()> {
     let config_path = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("usage: yellowstone-grpc-geyser <config.json>"))?;
+        .ok_or_else(|| anyhow::anyhow!("usage: yellowstone-grpc <config.json>"))?;
 
     let config = Config::load_from_file(&config_path)?;
 
     solana_logger::setup_with_default(&config.log.level);
+    log::info!("starting yellowstone-grpc server");
 
-    log::info!("starting yellowstone-grpc-geyser");
+    // Open conduit ring
+    let shmem_path = config.grpc.shmem_path.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
+    let client = ShmemClient::open(Path::new(shmem_path), ProstShmemDecoder)?;
 
     let mut builder = Builder::new_multi_thread();
     if let Some(worker_threads) = config.tokio.worker_threads {
@@ -44,16 +52,15 @@ fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-        let (_snapshot_tx, messages_tx) = GrpcService::create(
+        let _snapshot_tx = GrpcService::create(
             config.grpc,
+            client,
             config.debug_clients_http.then_some(debug_client_tx),
             false,
             cancellation_token.child_token(),
             task_tracker.clone(),
         )
         .await?;
-
-        let _keep_alive = messages_tx;
 
         let cancel = cancellation_token.clone();
         task_tracker.spawn(async move {
@@ -82,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         task_tracker.close();
         task_tracker.wait().await;
 
-        log::info!("yellowstone-grpc-geyser shutdown complete");
+        log::info!("yellowstone-grpc server shutdown complete");
         Ok::<_, anyhow::Error>(())
     })?;
 
