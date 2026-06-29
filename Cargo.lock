@@ -6424,6 +6424,7 @@ dependencies = [
  "bytesize 2.3.1",
  "futures",
  "http",
+ "http-body",
  "http-body-util",
  "hyper",
  "log",
