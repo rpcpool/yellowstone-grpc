@@ -1,6 +1,14 @@
 use {
     crate::metrics,
-    std::{collections::HashMap, net::IpAddr, time::Duration},
+    dashmap::DashMap,
+    std::{
+        net::IpAddr,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    },
     yellowstone_grpc_tools::server::{
         tonic::{interceptor::HttpInterceptor, ratelimit::transport::RatelimitedCallbacks},
         window::TokenBucketRateLimiter,
@@ -8,7 +16,7 @@ use {
 };
 
 pub const DEFAULT_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
-pub const DEFAULT_RATE_LIMIT_MAX_HITS: u64 = 1000;
+pub const DEFAULT_RATE_LIMIT_MAX_HITS_FALLBACK: u64 = 1000;
 pub const DEFAULT_METHOD_RATELIMIT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub const DEFAULT_METHOD_RATELIMIT_GC_TICK: usize = 1024;
 
@@ -24,22 +32,30 @@ impl RatelimitedCallbacks for PrometheusRatelimitCallbacks {
 struct MethodRatelimitKey {
     subscriber_id: String,
     method_name: String,
+    /// The ratelimit value used because if we want to support SIGHUP or other dynamic config reloads, we need to ensure that the key is unique per ratelimit value. Otherwise, if the ratelimit value changes for a given subscriber/method, we could end up with a stale limiter in the map that doesn't reflect the new ratelimit.
+    /// We expect ratelimit to not change often and not for all users at the same time, so this should be a reasonable tradeoff to avoid having to implement a more complex dynamic config reload mechanism.
+    ratelimit: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MethodWindowState {
     limiter: TokenBucketRateLimiter,
     last_seen: std::time::Instant,
 }
 
 #[derive(Debug)]
+struct SharedMethodRatelimiterState {
+    active_windows_map: DashMap<MethodRatelimitKey, MethodWindowState>,
+    request_counter: AtomicUsize,
+}
+
+#[derive(Debug, Clone)]
 pub struct MethodRatelimiter {
-    active_windows_map: HashMap<MethodRatelimitKey, MethodWindowState>,
+    shared: Arc<SharedMethodRatelimiterState>,
     window: Duration,
     max_hits_fallback: u64,
     idle_timeout: Duration,
     gc_tick: usize,
-    request_counter: usize,
 }
 
 impl MethodRatelimiter {
@@ -59,12 +75,14 @@ impl MethodRatelimiter {
         gc_tick: usize,
     ) -> Self {
         Self {
-            active_windows_map: HashMap::new(),
+            shared: Arc::new(SharedMethodRatelimiterState {
+                active_windows_map: DashMap::new(),
+                request_counter: AtomicUsize::new(0),
+            }),
             window,
             max_hits_fallback,
             idle_timeout,
             gc_tick,
-            request_counter: 0,
         }
     }
 
@@ -73,13 +91,23 @@ impl MethodRatelimiter {
             return;
         }
 
-        self.request_counter = self.request_counter.wrapping_add(1);
-        if self.request_counter % self.gc_tick != 0 {
+        let request_counter = self
+            .shared
+            .request_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        if !request_counter.is_multiple_of(self.gc_tick) {
             return;
         }
 
-        self.active_windows_map
+        self.shared
+            .active_windows_map
             .retain(|_, state| now.saturating_duration_since(state.last_seen) <= self.idle_timeout);
+    }
+
+    #[cfg(test)]
+    fn active_window_count(&self) -> usize {
+        self.shared.active_windows_map.len()
     }
 
     fn inner_call(
@@ -97,9 +125,21 @@ impl MethodRatelimiter {
         let window_key = MethodRatelimitKey {
             subscriber_id: subscription_info.subscription_id.clone(),
             method_name: request.uri().path().to_string(),
+            ratelimit: subscription_info
+                .ratelimits
+                .as_ref()
+                .and_then(|ratelimits| {
+                    ratelimits
+                        .methods
+                        .get(request.uri().path())
+                        .or(Some(&ratelimits.default))
+                })
+                .copied()
+                .unwrap_or(-1),
         };
 
-        let state = self
+        let mut state = self
+            .shared
             .active_windows_map
             .entry(window_key)
             .or_insert_with(|| {
@@ -136,7 +176,7 @@ impl MethodRatelimiter {
 
         decision
             .allowed
-            .then(|| ())
+            .then_some(())
             .ok_or_else(|| tonic::Status::resource_exhausted("rate limit exceeded"))?;
 
         Ok(request)
@@ -145,7 +185,10 @@ impl MethodRatelimiter {
 
 impl Default for MethodRatelimiter {
     fn default() -> Self {
-        Self::new(1000, Duration::from_secs(10))
+        Self::new(
+            DEFAULT_RATE_LIMIT_MAX_HITS_FALLBACK,
+            DEFAULT_RATE_LIMIT_WINDOW,
+        )
     }
 }
 
@@ -160,6 +203,7 @@ mod tests {
     use {
         super::*,
         crate::auth::{SubscriptionInfo, SubscriptionRateLimits},
+        std::collections::HashMap,
     };
 
     fn make_request(path: &str, subscription_info: Option<SubscriptionInfo>) -> http::Request<()> {
@@ -183,7 +227,7 @@ mod tests {
         let now = std::time::Instant::now();
         let result = limiter.inner_call(request, now);
         assert!(result.is_ok());
-        assert!(limiter.active_windows_map.is_empty());
+        assert_eq!(limiter.active_window_count(), 0);
     }
 
     #[test]
@@ -349,7 +393,7 @@ mod tests {
         assert!(limiter
             .inner_call(make_request("/geyser.Geyser/Subscribe", Some(sub_b)), t0)
             .is_ok());
-        assert_eq!(limiter.active_windows_map.len(), 2);
+        assert_eq!(limiter.active_window_count(), 2);
 
         // Only gc-b is refreshed; gc-a should be evicted as idle.
         assert!(limiter
@@ -368,7 +412,7 @@ mod tests {
             )
             .is_ok());
 
-        assert_eq!(limiter.active_windows_map.len(), 1);
+        assert_eq!(limiter.active_window_count(), 1);
     }
 
     #[test]
@@ -389,7 +433,7 @@ mod tests {
         assert!(limiter
             .inner_call(make_request("/geyser.Geyser/Subscribe", Some(sub)), t0)
             .is_ok());
-        assert_eq!(limiter.active_windows_map.len(), 1);
+        assert_eq!(limiter.active_window_count(), 1);
 
         // Even far in the future, entries remain when gc_tick == 0.
         assert!(limiter
@@ -398,6 +442,6 @@ mod tests {
                 t0 + Duration::from_secs(100)
             )
             .is_ok());
-        assert_eq!(limiter.active_windows_map.len(), 1);
+        assert_eq!(limiter.active_window_count(), 1);
     }
 }

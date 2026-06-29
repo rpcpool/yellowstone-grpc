@@ -23,7 +23,7 @@ hyper-util = { workspace = true }
 yellowstone-grpc-e2e-macros = { path = "../yellowstone-grpc-e2e-macros" }
 yellowstone-grpc-proto = { workspace = true }
 yellowstone-block-machine = { workspace = true }
-yellowstone-grpc-client = { path = "../yellowstone-grpc-client", features = ["test-tools"] }
+yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
 yellowstone-grpc-geyser = { workspace = true }
 
 solana-signature = { workspace = true }

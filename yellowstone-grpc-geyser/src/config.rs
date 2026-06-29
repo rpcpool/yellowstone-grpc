@@ -430,11 +430,23 @@ pub struct HttpBackedAuthConfig {
 
     #[serde(default = "HttpBackedAuthConfig::default_forwarded_headers")]
     pub forwarded_headers: Vec<String>,
+
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RatelimitConfig {
+    pub max_hits: u64,
+    pub window: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileBackedAuthConfig {
     pub subscription_resolver_path: PathBuf,
+
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
 }
 
 impl HttpBackedAuthConfig {
@@ -448,6 +460,12 @@ impl HttpBackedAuthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct TrustedMetadataAuthConfig {
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum AuthConfig {
     Http(HttpBackedAuthConfig),
@@ -455,7 +473,7 @@ pub enum AuthConfig {
     ///
     /// Trusts the `x-subscription-id` header and does not perform any authentication or authorization checks and apply default rate limits.
     #[serde(rename = "trusted-metadata")]
-    TrustedMetadata,
+    TrustedMetadata(TrustedMetadataAuthConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]

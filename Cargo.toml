@@ -36,6 +36,7 @@ clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
 dotenvy = "0.15.0"
+dashmap = "6.1.0"
 env_logger = "0.11.3"
 fastrand = "2.0"
 futures = "0.3.24"
@@ -125,7 +126,7 @@ spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.2.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.0.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
