@@ -19,9 +19,10 @@ use {
         task::{Context, Poll},
     },
     tonic::server::NamedService,
-    tower::Service,
+    tower::{Layer, Service},
 };
 
+#[derive(Clone)]
 pub struct HttpInterceptedService<S, I> {
     inner: S,
     interceptor: I,
@@ -31,6 +32,82 @@ pub struct HttpInterceptedService<S, I> {
 ///
 pub trait HttpInterceptor {
     fn call(&mut self, request: http::Request<()>) -> Result<http::Request<()>, tonic::Status>;
+}
+
+#[derive(Debug, Clone)]
+pub enum OptionalHttpInterceptor<I> {
+    Enabled(I),
+    Disabled,
+}
+
+impl<I> OptionalHttpInterceptor<I> {
+    pub fn from_option(interceptor: Option<I>) -> Self {
+        interceptor.map(Self::Enabled).unwrap_or(Self::Disabled)
+    }
+}
+
+impl<I> HttpInterceptor for OptionalHttpInterceptor<I>
+where
+    I: HttpInterceptor,
+{
+    fn call(&mut self, request: http::Request<()>) -> Result<http::Request<()>, tonic::Status> {
+        match self {
+            Self::Enabled(interceptor) => interceptor.call(request),
+            Self::Disabled => Ok(request),
+        }
+    }
+}
+
+pub struct HttpInterceptorLayer<IB> {
+    interceptor_builder: IB,
+}
+
+impl<IB> HttpInterceptorLayer<IB> {
+    pub fn new(interceptor_builder: IB) -> Self {
+        Self {
+            interceptor_builder,
+        }
+    }
+}
+
+impl<IB> From<IB> for HttpInterceptorLayer<IB>
+where
+    IB: HttpInterceptorFactory,
+{
+    fn from(interceptor_builder: IB) -> Self {
+        Self::new(interceptor_builder)
+    }
+}
+
+pub trait HttpInterceptorFactory {
+    type Interceptor: HttpInterceptor;
+    fn build(&self) -> Self::Interceptor;
+}
+
+impl<F, I> HttpInterceptorFactory for F
+where
+    F: Fn() -> I,
+    I: HttpInterceptor,
+{
+    type Interceptor = I;
+
+    fn build(&self) -> Self::Interceptor {
+        (self)()
+    }
+}
+
+impl<S, IF> Layer<S> for HttpInterceptorLayer<IF>
+where
+    IF: HttpInterceptorFactory,
+{
+    type Service = HttpInterceptedService<S, IF::Interceptor>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        HttpInterceptedService {
+            inner,
+            interceptor: self.interceptor_builder.build(),
+        }
+    }
 }
 
 impl<S, I, ReqBody, ResBody> Service<Request<ReqBody>> for HttpInterceptedService<S, I>

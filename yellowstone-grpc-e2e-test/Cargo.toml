@@ -17,10 +17,13 @@ log = { workspace = true }
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
+tower = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 yellowstone-grpc-e2e-macros = { path = "../yellowstone-grpc-e2e-macros" }
 yellowstone-grpc-proto = { workspace = true }
 yellowstone-block-machine = { workspace = true }
-yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
 yellowstone-grpc-geyser = { workspace = true }
 
 solana-signature = { workspace = true }
