@@ -57,7 +57,6 @@ tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { workspace = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
@@ -118,6 +117,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+yellowstone-conduit = { path = "../../yellowstone-conduit" }
 
 [lints]
 workspace = true

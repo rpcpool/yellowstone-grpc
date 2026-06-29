@@ -4,7 +4,6 @@ use {
         plugin::{filter::Filter, message::SlotStatus},
         version::VERSION as VERSION_INFO,
     },
-    agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
@@ -482,12 +481,6 @@ pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
         .inc();
-}
-
-pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
-    SLOT_STATUS
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
 }
 
 pub fn update_slot_plugin_status(status: SlotStatus, slot: u64) {

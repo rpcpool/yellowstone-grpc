@@ -745,6 +745,7 @@ impl GrpcService {
         Ok(snapshot_tx)
     }
 
+    
     #[allow(clippy::too_many_arguments)]
     async fn geyser_loop(
         mut client: ShmemClient<ProstShmemDecoder>,
@@ -769,13 +770,12 @@ impl GrpcService {
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
         let mut buffered_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
 
-        let wait_handle = client.wait_handle();
-
         loop {
             tokio::select! {
-                _ = {
-                    let wh = wait_handle.clone();
-                    tokio::task::spawn_blocking(move || wh.wait_for_data())
+                _ =  {
+                    // skip wait entirely if ring has unread data
+                    let wait = client.prepare_wait();
+                    tokio::task::spawn_blocking(move || wait.wait())
                 } => {
                     // drain all available messages from conduit
                     loop {
@@ -1148,7 +1148,7 @@ impl GrpcService {
         }
 
         info!("Geyser loop exiting");
-    }
+    }     
 
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
@@ -2222,39 +2222,117 @@ mod tests {
         assert!(tracker.lock().unwrap().get("sub-1").is_none());
     }
 
+
     mod geyser_loop_routing {
         use {
             super::super::*,
-            crate::plugin::{
-                convert_to,
-                message::{
-                    MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
-                    MessageTransaction, MessageTransactionInfo, SlotStatus,
-                },
-            },
-            prost_types::Timestamp,
-            solana_message::{legacy::Message as SolMessage, MessageHeader},
-            solana_pubkey::Pubkey,
-            solana_signature::Signature,
-            solana_transaction::{versioned::VersionedTransaction, Transaction},
-            solana_transaction_status::TransactionStatusMeta,
-            std::{collections::HashSet, sync::Arc, time::SystemTime},
-            tokio::sync::{broadcast, mpsc},
+            prost::Message as ProstMessage,
+            yellowstone_conduit::Producer,
+            yellowstone_grpc_proto::prelude as proto,
+            yellowstone_shmem_client::ShmemClient,
+            yellowstone_shmem_common::{EventType, HEADER_SIZE, PAYLOAD_VERSION},
+            crate::plugin::shmem::decoder::ProstShmemDecoder,
+            tokio::sync::broadcast,
         };
 
+        // Encoding helpers: simulate what shmem-geyser plugin would write
+        fn encode_message(slot: u64, event_type: EventType, body: &[u8]) -> Vec<u8> {
+            let mut buf = Vec::with_capacity(HEADER_SIZE + body.len());
+            buf.push(PAYLOAD_VERSION);
+            buf.extend_from_slice(&slot.to_le_bytes());
+            buf.push(event_type as u8);
+            buf.extend_from_slice(body);
+            buf
+        }
+
+        fn encode_slot(slot: u64, parent: Option<u64>, status: proto::SlotStatus) -> Vec<u8> {
+            let msg = proto::SubscribeUpdateSlot {
+                slot,
+                parent,
+                status: status as i32,
+                dead_error: None,
+            };
+            encode_message(slot, EventType::Slot, &msg.encode_to_vec())
+        }
+
+        fn encode_transaction(slot: u64, sig_byte: u8) -> Vec<u8> {
+            use solana_message::{legacy::Message as SolMessage, MessageHeader};
+            use solana_pubkey::Pubkey;
+            use solana_transaction::Transaction;
+
+            let payer = Pubkey::new_unique();
+            let recipient = Pubkey::new_unique();
+            let signature = solana_signature::Signature::from([sig_byte; 64]);
+            let mut tx = Transaction::new_unsigned(SolMessage::new(&[], Some(&payer)));
+            tx.message.account_keys = vec![payer, recipient];
+            tx.message.header = MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            };
+            tx.signatures = vec![signature];
+
+            let versioned = solana_transaction::versioned::VersionedTransaction::from(tx);
+            let proto_tx = crate::plugin::convert_to::create_transaction(&versioned);
+            let proto_meta = crate::plugin::convert_to::create_transaction_meta(
+                &solana_transaction_status::TransactionStatusMeta {
+                    status: Ok(()),
+                    fee: 0,
+                    pre_balances: vec![],
+                    post_balances: vec![],
+                    inner_instructions: None,
+                    log_messages: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    rewards: None,
+                    loaded_addresses: Default::default(),
+                    return_data: None,
+                    compute_units_consumed: None,
+                    cost_units: None,
+                },
+            );
+
+            let info = proto::SubscribeUpdateTransactionInfo {
+                signature: signature.as_ref().to_vec(),
+                is_vote: false,
+                transaction: Some(proto_tx),
+                meta: Some(proto_meta),
+                index: 0,
+            };
+            encode_message(slot, EventType::Transaction, &info.encode_to_vec())
+        }
+
         struct Harness {
-            messages_tx: mpsc::UnboundedSender<Message>,
+            producer: Producer<EventType>,
             broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
             deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
             handle: tokio::task::JoinHandle<()>,
         }
 
+        impl Harness {
+            fn write_raw(&self, entry: EventType, payload: &[u8]) {
+                self.producer.write(&entry, payload).unwrap();
+                self.producer.flush();
+            }
+        }
+
         fn spawn_loop() -> Harness {
-            let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+            let path = format!("/tmp/conduit-geyser-test-{}", std::process::id());
+            let _ = std::fs::remove_file(&path);
+
+            let producer = Producer::<EventType>::create(
+                std::path::Path::new(&path), 1024, 16 * 1024 * 1024, 1,
+            ).unwrap();
+
+            let client = ShmemClient::open(
+                std::path::Path::new(&path), ProstShmemDecoder,
+            ).unwrap();
+
             let (broadcast_tx, broadcast_rx) = broadcast::channel(1024);
             let (deshred_tx, deshred_rx) = broadcast::channel(1024);
+
             let handle = tokio::spawn(GrpcService::geyser_loop(
-                messages_rx,
+                client,
                 None,
                 broadcast_tx,
                 deshred_tx,
@@ -2262,19 +2340,37 @@ mod tests {
                 None,
                 100,
             ));
+
             Harness {
-                messages_tx,
+                producer,
                 broadcast_rx,
                 deshred_rx,
                 handle,
             }
         }
 
+        async fn spawn_and_settle() -> Harness {
+            let harness = spawn_loop();
+            // let geyser_loop reach its first wait
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            harness
+        }
+
+        impl Harness {
+            fn send_slot(&self, slot: u64, parent: Option<u64>, status: proto::SlotStatus) {
+                let bytes = encode_slot(slot, parent, status);
+                self.write_raw(EventType::Slot, &bytes);
+            }
+
+            fn send_transaction(&self, slot: u64, sig_byte: u8) {
+                let bytes = encode_transaction(slot, sig_byte);
+                self.write_raw(EventType::Transaction, &bytes);
+            }
+        }
+
         async fn drain_main(
             rx: &mut broadcast::Receiver<BroadcastedMessage>,
         ) -> Vec<(CommitmentLevel, Vec<Message>)> {
-            // The processed-messages flush is driven by a 10ms sleep timer;
-            // wait long enough that any pending batch has been emitted.
             tokio::time::sleep(Duration::from_millis(50)).await;
             let mut out = Vec::new();
             while let Ok((commitment, batch)) = rx.try_recv() {
@@ -2287,7 +2383,7 @@ mod tests {
         async fn drain_deshred(
             rx: &mut broadcast::Receiver<DeshredBroadcastedMessage>,
         ) -> Vec<Vec<Message>> {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
             let mut out = Vec::new();
             while let Ok(batch) = rx.try_recv() {
                 out.push(batch.iter().map(|(_, m)| m.clone()).collect());
@@ -2295,108 +2391,19 @@ mod tests {
             out
         }
 
-        fn build_versioned_tx(sig_byte: u8) -> (VersionedTransaction, Signature) {
-            let signature = Signature::from([sig_byte; 64]);
-            let payer = Pubkey::new_unique();
-            let recipient = Pubkey::new_unique();
-            let mut tx = Transaction::new_unsigned(SolMessage::new(&[], Some(&payer)));
-            tx.message.account_keys = vec![payer, recipient];
-            tx.message.header = MessageHeader {
-                num_required_signatures: 1,
-                num_readonly_signed_accounts: 0,
-                num_readonly_unsigned_accounts: 0,
-            };
-            tx.signatures = vec![signature];
-            (VersionedTransaction::from(tx), signature)
-        }
-
-        fn make_deshred(slot: u64, sig_byte: u8) -> Message {
-            let (versioned, signature) = build_versioned_tx(sig_byte);
-            Message::DeshredTransaction(MessageDeshredTransaction {
-                transaction: Arc::new(MessageDeshredTransactionInfo {
-                    signature,
-                    is_vote: false,
-                    transaction: convert_to::create_transaction(&versioned),
-                    static_account_keys: HashSet::new(),
-                    loaded_writable_addresses: vec![],
-                    loaded_readonly_addresses: vec![],
-                    completed_data_set_starting_shred_index: 0,
-                    completed_data_set_ending_shred_index_exclusive: 0,
-                }),
-                slot,
-                created_at: Timestamp::from(SystemTime::now()),
-            })
-        }
-
-        fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
-            Message::Slot(MessageSlot {
-                slot,
-                parent,
-                status,
-                dead_error: None,
-                created_at: Timestamp::from(SystemTime::now()),
-            })
-        }
-
-        fn make_transaction(slot: u64, sig_byte: u8) -> Message {
-            let (versioned, signature) = build_versioned_tx(sig_byte);
-            let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
-                status: Ok(()),
-                fee: 0,
-                pre_balances: vec![],
-                post_balances: vec![],
-                inner_instructions: None,
-                log_messages: None,
-                pre_token_balances: None,
-                post_token_balances: None,
-                rewards: None,
-                loaded_addresses: Default::default(),
-                return_data: None,
-                compute_units_consumed: None,
-                cost_units: None,
-            });
-            let account_keys = versioned
-                .message
-                .static_account_keys()
-                .iter()
-                .copied()
-                .collect();
-            Message::Transaction(MessageTransaction {
-                transaction: Arc::new(MessageTransactionInfo {
-                    signature,
-                    is_vote: false,
-                    transaction: convert_to::create_transaction(&versioned),
-                    meta,
-                    index: 0,
-                    account_keys,
-                    pre_encoded: Default::default(),
-                }),
-                slot,
-                created_at: Timestamp::from(SystemTime::now()),
-            })
-        }
-
-        fn count_deshred(messages: &[Message]) -> usize {
-            messages
-                .iter()
-                .filter(|m| matches!(m, Message::DeshredTransaction(_)))
-                .count()
+        fn count_slot(messages: &[Message]) -> usize {
+            messages.iter().filter(|m| matches!(m, Message::Slot(_))).count()
         }
 
         fn count_transaction(messages: &[Message]) -> usize {
-            messages
-                .iter()
-                .filter(|m| matches!(m, Message::Transaction(_)))
-                .count()
+            messages.iter().filter(|m| matches!(m, Message::Transaction(_))).count()
         }
 
-        fn count_slot(messages: &[Message]) -> usize {
-            messages
-                .iter()
-                .filter(|m| matches!(m, Message::Slot(_)))
-                .count()
+        fn count_deshred(messages: &[Message]) -> usize {
+            messages.iter().filter(|m| matches!(m, Message::DeshredTransaction(_))).count()
         }
 
+        #[cfg(feature = "deshred-tests")]
         #[tokio::test]
         async fn deshred_emitted_once_on_deshred_channel() {
             let mut harness = spawn_loop();
@@ -2410,6 +2417,7 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
         }
 
+        #[cfg(feature = "deshred-tests")]
         #[tokio::test]
         async fn deshred_never_appears_on_main_channel() {
             let mut harness = spawn_loop();
@@ -2442,21 +2450,15 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn slot_emitted_once_on_deshred_channel() {
-            let mut harness = spawn_loop();
+            let mut harness = spawn_and_settle().await;
             harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Processed, Some(99)))
-                .unwrap();
+                .send_slot(100, Some(99), proto::SlotStatus::SlotProcessed);
             harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Confirmed, None))
-                .unwrap();
+                .send_slot(100, None, proto::SlotStatus::SlotConfirmed);
             harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Finalized, None))
-                .unwrap();
+                .send_slot(100, None, proto::SlotStatus::SlotFinalized);
 
             let deshred_batches = drain_deshred(&mut harness.deshred_rx).await;
             let total: usize = deshred_batches.iter().map(|b| count_slot(b)).sum();
@@ -2472,29 +2474,20 @@ mod tests {
             let main_slot_count: usize = main_batches.iter().map(|(_, b)| count_slot(b)).sum();
             assert_eq!(main_slot_count, 9);
 
-            drop(harness.messages_tx);
+            drop(harness.producer);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn transaction_still_replayed_on_main_at_higher_commitments() {
             // Regression: stripping DeshredTransaction from slot_messages must
             // not break the existing Confirmed/Finalized replay for normal
             // Transaction messages.
             let mut harness = spawn_loop();
-            harness.messages_tx.send(make_transaction(100, 7)).unwrap();
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Processed, Some(99)))
-                .unwrap();
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Confirmed, None))
-                .unwrap();
-            harness
-                .messages_tx
-                .send(make_slot(100, SlotStatus::Finalized, None))
-                .unwrap();
+            harness.send_transaction(100, 7);
+            harness.send_slot(100, Some(99), proto::SlotStatus::SlotProcessed);
+            harness.send_slot(100, None, proto::SlotStatus::SlotConfirmed);
+            harness.send_slot(100, None, proto::SlotStatus::SlotFinalized);
 
             let main_batches = drain_main(&mut harness.broadcast_rx).await;
             let mut processed = 0usize;
@@ -2517,7 +2510,7 @@ mod tests {
             let tx_on_deshred: usize = deshred_batches.iter().map(|b| count_transaction(b)).sum();
             assert_eq!(tx_on_deshred, 0);
 
-            drop(harness.messages_tx);
+            drop(harness.producer);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
         }
     }

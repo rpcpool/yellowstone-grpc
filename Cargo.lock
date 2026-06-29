@@ -81,21 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agave-geyser-plugin-interface"
-version = "4.0.0"
-source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
-dependencies = [
- "log",
- "solana-clock",
- "solana-hash 4.2.0",
- "solana-message",
- "solana-signature",
- "solana-transaction",
- "solana-transaction-status",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "agave-reserved-account-keys"
 version = "4.0.0"
 source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
@@ -5625,7 +5610,6 @@ name = "yellowstone-grpc-geyser"
 version = "13.2.2-triton-ext"
 dependencies = [
  "affinity",
- "agave-geyser-plugin-interface",
  "anyhow",
  "base64",
  "bincode",
@@ -5686,6 +5670,7 @@ dependencies = [
  "tower-layer",
  "vergen",
  "yellowstone-block-machine",
+ "yellowstone-conduit",
  "yellowstone-grpc-proto",
  "yellowstone-shmem-client",
  "yellowstone-shmem-common",
@@ -5875,3 +5860,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "agave-geyser-plugin-interface"
+version = "4.0.0"
+source = "git+https://github.com/rpcpool/solana-public?tag=v4.0.0-triton-public#1a231b66d7d5ae3f7a782e12502aae5ad20656e7"
