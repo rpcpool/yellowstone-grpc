@@ -285,10 +285,7 @@ impl FilterAccountAggregate {
     // This is used to determine if a filter should be included in the filtered updates.
     // If a filter is not included, it means that the filter's requirements are not satisfied by the current message.
     // If no filters are satisfied by the current message, then the update will not be sent to the client.
-    pub fn satisfied(
-        &self,
-        accounts_match_condition: &FilterAccountsMatch,
-    ) -> Option<FilterName> {
+    pub fn satisfied(&self, accounts_match_condition: &FilterAccountsMatch) -> Option<FilterName> {
         if self.require_non_empty_txn_signature
             && !accounts_match_condition
                 .nonempty_txn_signature
