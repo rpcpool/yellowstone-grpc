@@ -989,3 +989,71 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
 
     Ok(())
 }
+
+/// guarantees that one slot message will be received for block + commitment level
+#[test_helper(name = "slot-duplicate")]
+pub async fn subscribe_should_receive_no_slot_duplicates(config: &RunConfig) -> Result<()> {
+    let do_test = async |config: &RunConfig, commitment_level: CommitmentLevel| -> Result<()> {
+        let mut client = new_client(config).await?;
+
+        let subscription = SubscribeRequest {
+            commitment: Some(commitment_level as i32),
+            slots: HashMap::from([(
+                "test".to_string(),
+                SubscribeRequestFilterSlots {
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let mut stream = client
+            .subscribe_once(subscription)
+            .await
+            .context("subscription should succeed")?;
+        const MAX_UPDATES: usize = 5;
+
+        let mut count = 0;
+        let mut slot_received = HashSet::new();
+
+        while let Some(update) = stream.next().await {
+            if count >= MAX_UPDATES {
+                break;
+            }
+            let update = update.context("stream should yield updates without error")?;
+            let Some(update_oneof) = update.update_oneof else {
+                continue;
+            };
+
+            match update_oneof {
+                UpdateOneof::Slot(slot_update) => {
+                    if slot_received.insert((slot_update.slot, slot_update.status)) {
+                        log::info!(
+                            "received slot update for slot {} with status {:?} {count}/{MAX_UPDATES}",
+                            slot_update.slot,
+                            slot_update.status
+                        );
+                        count += 1;
+                    } else {
+                        bail!(
+                            "received duplicate slot update for slot {} with status {:?} on commitment level subscription {:?}",
+                            slot_update.slot,
+                            slot_update.status,
+                            commitment_level
+                        );
+                    }
+                }
+                UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+                _ => continue,
+            }
+        }
+
+        Ok(())
+    };
+
+    do_test(config, CommitmentLevel::Finalized).await?;
+    do_test(config, CommitmentLevel::Confirmed).await?;
+    do_test(config, CommitmentLevel::Processed).await?;
+
+    Ok(())
+}

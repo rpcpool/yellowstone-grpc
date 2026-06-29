@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-06-26
+
+- yellowstone-grpc-geyser 13.3.1
+
+### Misc
+
+- plugin: Optimize geyser_loop and block_reconstruction_loop, fixed double Slot notifications, fixed Block messages being delayed [#793](https://github.com/rpcpool/yellowstone-grpc/pull/793)
+
 ## 2026-06-23
 
 - yellowstone-grpc-geyser 13.3.0
