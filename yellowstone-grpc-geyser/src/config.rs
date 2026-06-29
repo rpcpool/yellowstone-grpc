@@ -1,8 +1,5 @@
 use {
     crate::plugin::filter::limits::FilterLimits,
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPluginError, Result as PluginResult,
-    },
     bytesize::ByteSize,
     serde::{de, Deserialize, Deserializer},
     std::{
@@ -35,14 +32,12 @@ pub struct Config {
 }
 
 impl Config {
-    fn load_from_str(config: &str) -> PluginResult<Self> {
-        serde_json::from_str(config).map_err(|error| GeyserPluginError::ConfigFileReadError {
-            msg: error.to_string(),
-        })
+    fn load_from_str(config: &str) -> Result<Self, ConfigError> {
+        Ok(serde_json::from_str(config)?)
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(file: P) -> PluginResult<Self> {
-        let config = read_to_string(file).map_err(GeyserPluginError::ConfigFileOpenError)?;
+    pub fn load_from_file<P: AsRef<Path>>(file: P) -> Result<Self, ConfigError> {
+        let config = read_to_string(file)?;
         Self::load_from_str(&config)
     }
 }
@@ -264,6 +259,35 @@ impl<'de> Deserialize<'de> for GrpcAddresses {
     }
 }
 
+#[derive(Debug)]
+pub enum ConfigError {
+    Io(std::io::Error),
+    Parse(serde_json::Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "config file error: {e}"),
+            Self::Parse(e) => write!(f, "config parse error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for ConfigError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Parse(e)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
@@ -383,6 +407,13 @@ pub struct ConfigGrpc {
 
     #[serde(default)]
     pub listen: Option<Vec<ListenConfig>>,
+
+    /// Path to the yellowstone-shmem shared memory file.
+    /// When set, the grpc service reads geyser events from the shmem ring
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem`
+    #[serde(default)]
+    pub shmem_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

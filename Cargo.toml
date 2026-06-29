@@ -97,8 +97,8 @@ vergen = "9.0.6"
 wincode = "0.4.4"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "4.0.0"
-solana-account-decoder = "4.0.0"
+agave-geyser-plugin-interface = "~4.0.0-beta.2"
+solana-account-decoder = "~4.0.0-rc.0"
 solana-logger = "3.0.0"
 solana-storage-proto = { version = "4.0.0", features = ["agave-unstable-api"] }
 solana-transaction-context = "4.0.0"
