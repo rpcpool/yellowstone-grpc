@@ -1,13 +1,12 @@
-use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
-
+use foldhash::HashSet as FoldHashSet;
 use prost::Message as ProstMessage;
 use prost_types::Timestamp;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use yellowstone_grpc_proto::prelude as proto;
 use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
-use yellowstone_shmem_common::{EventType, GeyserMessage, SlotStatus};
+use yellowstone_shmem_common::{EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION};
 
 use crate::plugin::message::{
     Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
@@ -20,20 +19,30 @@ use crate::plugin::message::{
 pub struct ProstShmemDecoder;
 
 impl ShmemDecoder for ProstShmemDecoder {
-    fn decode(
-        &self,
-        slot: u64,
-        event_type: u8,
-        bytes: &[u8],
-    ) -> Result<GeyserMessage, DecodeError> {
+    fn decode(&self, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+        if bytes.len() < HEADER_SIZE {
+            return Err(DecodeError::DecodeError(format!(
+                "payload too short: {} < {HEADER_SIZE}", bytes.len()
+            )));
+        }
+        if bytes[0] != PAYLOAD_VERSION {
+            return Err(DecodeError::DecodeError(format!(
+                "version mismatch: got {}, expected {PAYLOAD_VERSION}", bytes[0]
+            )));
+        }
+        let slot = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
+        let event_type = bytes[9];
+        let body = &bytes[HEADER_SIZE..];
+
         let et = EventType::try_from(event_type)
             .map_err(|_| DecodeError::DecodeError(format!("unknown event_type: {event_type}")))?;
+
         match et {
-            EventType::Slot => decode_slot(bytes),
-            EventType::Account => decode_account(bytes),
-            EventType::Transaction => decode_transaction(slot, bytes),
-            EventType::Entry => decode_entry(bytes),
-            EventType::BlockMeta => decode_block_meta(bytes),
+            EventType::Slot => decode_slot(body),
+            EventType::Account => decode_account(body),
+            EventType::Transaction => decode_transaction(slot, body),
+            EventType::Entry => decode_entry(body),
+            EventType::BlockMeta => decode_block_meta(body),
         }
     }
 }
@@ -59,6 +68,15 @@ fn decode_slot(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 }
 
 pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+    // Minimum size: fixed fields with no data and always-present 64-byte sig slot.
+    const MIN_SIZE: usize = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + 8 + 1 + 8;
+    if bytes.len() < MIN_SIZE {
+        return Err(DecodeError::DecodeError(format!(
+            "decode_account: buffer too small: {} < {MIN_SIZE}",
+            bytes.len()
+        )));
+    }
+
     let mut o = 0usize;
 
     unsafe fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
@@ -79,12 +97,18 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
         v
     }
 
+    unsafe fn read_i64(bytes: &[u8], o: &mut usize) -> i64 {
+        let v = i64::from_le_bytes(bytes[*o..*o + 8].try_into().unwrap());
+        *o += 8;
+        v
+    }
+
     unsafe {
-        let pubkey        = read_bytes(bytes, &mut o, 32);
-        let lamports      = read_u64(bytes, &mut o);
-        let owner         = read_bytes(bytes, &mut o, 32);
-        let executable    = read_u8(bytes, &mut o) != 0;
-        let rent_epoch    = read_u64(bytes, &mut o);
+        let pubkey = read_bytes(bytes, &mut o, 32);
+        let lamports = read_u64(bytes, &mut o);
+        let owner = read_bytes(bytes, &mut o, 32);
+        let executable = read_u8(bytes, &mut o) != 0;
+        let rent_epoch = read_u64(bytes, &mut o);
         let write_version = read_u64(bytes, &mut o);
 
         let txn_signature = if read_u8(bytes, &mut o) != 0 {
@@ -95,9 +119,18 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
         };
 
         let data_len = read_u64(bytes, &mut o) as usize;
-        let data     = read_bytes(bytes, &mut o, data_len);
-        let slot     = read_u64(bytes, &mut o);
+        
+        if o + data_len > bytes.len() {
+            return Err(DecodeError::DecodeError(format!(
+                "decode_account: data_len {data_len} exceeds buffer length {}",
+                bytes.len()
+            )));
+        }
+
+        let data = read_bytes(bytes, &mut o, data_len);
+        let slot = read_u64(bytes, &mut o);
         let is_startup = read_u8(bytes, &mut o) != 0;
+        let plugin_ts_ns = read_i64(bytes, &mut o);
 
         Ok(GeyserMessage::Account(
             yellowstone_shmem_common::MessageAccount {
@@ -113,6 +146,7 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
                 },
                 slot,
                 is_startup,
+                plugin_ts_ns,
             },
         ))
     }
@@ -183,6 +217,11 @@ fn decode_block_meta(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 impl ProstShmemDecoder {
     /// Converts a decoded [`GeyserMessage`] into a dragons mouth [`Message`].
     pub fn to_dm_message(msg: GeyserMessage, created_at: Timestamp) -> Result<Message, String> {
+        let message = Self::convert(msg, created_at)?;
+        Ok(message)
+    }
+
+    fn convert(msg: GeyserMessage, created_at: Timestamp) -> Result<Message, String> {
         let now = created_at;
 
         match msg {
@@ -209,6 +248,11 @@ impl ProstShmemDecoder {
                     .transpose()
                     .map_err(|_| "invalid txn_signature")?;
 
+                let created_at = prost_types::Timestamp {
+                    seconds: a.plugin_ts_ns / 1_000_000_000,
+                    nanos: (a.plugin_ts_ns % 1_000_000_000) as i32,
+                };
+
                 Ok(Message::Account(MessageAccount {
                     account: Arc::new(MessageAccountInfo {
                         pubkey,
@@ -223,7 +267,7 @@ impl ProstShmemDecoder {
                     }),
                     slot: a.slot,
                     is_startup: a.is_startup,
-                    created_at: now,
+                    created_at,
                 }))
             }
 
@@ -237,7 +281,7 @@ impl ProstShmemDecoder {
                 let meta = proto::TransactionStatusMeta::decode(t.transaction.meta.as_slice())
                     .map_err(|e| format!("decode meta: {e}"))?;
 
-                let account_keys: HashSet<Pubkey> = t
+                let account_keys: FoldHashSet<Pubkey> = t
                     .transaction
                     .account_keys
                     .iter()
@@ -253,6 +297,8 @@ impl ProstShmemDecoder {
                         index: t.transaction.index,
                         account_keys,
                         pre_encoded: OnceLock::new(),
+                        token_owners_all: OnceLock::new(),
+                        token_owners_changed: OnceLock::new(),
                     }),
                     slot: t.slot,
                     created_at: now,

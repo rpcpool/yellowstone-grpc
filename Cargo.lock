@@ -2054,6 +2054,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "merlin"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5801,6 +5810,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "yellowstone-conduit"
+version = "0.1.0"
+source = "git+https://github.com/rpcpool/yellowstone-conduit.git?branch=main#179644a5c2ed19ac1ca5eb4896551988da6c0492"
+dependencies = [
+ "libc",
+ "memmap2",
+]
+
+[[package]]
 name = "yellowstone-grpc-client"
 version = "13.1.0"
 dependencies = [
@@ -5925,6 +5943,8 @@ dependencies = [
  "yellowstone-block-machine",
  "yellowstone-grpc-proto",
  "yellowstone-grpc-tools",
+ "yellowstone-shmem-client",
+ "yellowstone-shmem-common",
 ]
 
 [[package]]
@@ -6029,6 +6049,24 @@ dependencies = [
  "tonic",
  "tower-layer",
  "x509-parser",
+]
+
+[[package]]
+name = "yellowstone-shmem-client"
+version = "0.1.0"
+source = "git+https://github.com/rpcpool/yellowstone-shmem.git?branch=main#4e66b8d8785060f6839f843aea2db78fe8b90be6"
+dependencies = [
+ "futures",
+ "yellowstone-conduit",
+ "yellowstone-shmem-common",
+]
+
+[[package]]
+name = "yellowstone-shmem-common"
+version = "0.1.0"
+source = "git+https://github.com/rpcpool/yellowstone-shmem.git?branch=main#4e66b8d8785060f6839f843aea2db78fe8b90be6"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

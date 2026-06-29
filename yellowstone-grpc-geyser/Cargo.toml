@@ -11,7 +11,11 @@ keywords = { workspace = true }
 publish = { workspace = true }
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "yellowstone-grpc"
+path = "src/main.rs"
 
 [[bin]]
 name = "config-check"
@@ -48,7 +52,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "signal"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-rustls = { workspace = true, features = ["aws-lc-rs"] }
 tokio-stream = { workspace = true }
@@ -87,9 +91,8 @@ prost_011 = { workspace = true, optional = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-block-machine = { workspace = true, default-features = false }
 yellowstone-grpc-tools = { workspace = true }
-yellowstone-shmem-plugin = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-plugin" }
-yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
-yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
+yellowstone-shmem-client = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
+yellowstone-shmem-common = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity
@@ -99,10 +102,6 @@ affinity = { workspace = true }
 name = "encode"
 harness = false
 required-features = ["bench"]
-
-[[bench]]
-name = "codec"
-harness = false
 
 [build-dependencies]
 anyhow = { workspace = true }
