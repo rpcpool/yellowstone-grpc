@@ -9,7 +9,6 @@ use {
         str::FromStr,
         sync::Once,
     },
-    tokio::net::TcpStream,
     tokio_stream::StreamExt,
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
     yellowstone_grpc_e2e_macros::test_helper,
@@ -47,8 +46,6 @@ pub fn scenario_description(name: &str) -> Option<&'static str> {
 pub struct RunConfig {
     /// gRPC endpoint URI used by scenarios.
     pub endpoint: String,
-    /// Optional dial string used for custom connection handling.
-    pub dial: Option<String>,
     /// Optional x-token used for authenticated requests.
     pub x_token: Option<String>,
 }
@@ -76,28 +73,13 @@ async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
         .x_token(config.x_token.clone())
         .context("x-token should be valid ASCII metadata if provided")?;
 
-    let builder = builder
+    builder
         .max_decoding_message_size(100_000_000)
         .http2_adaptive_window(true)
-        .accept_compressed(yellowstone_grpc_proto::tonic::codec::CompressionEncoding::Zstd);
-
-    if let Some(dial) = config.dial.clone() {
-        builder
-            .connect_with_connector(tower::service_fn(move |_uri| {
-                let dial = dial.clone();
-                async move {
-                    let stream = TcpStream::connect(dial).await?;
-                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-                }
-            }))
-            .await
-            .context("client should build from endpoint, dial and token")
-    } else {
-        builder
-            .connect()
-            .await
-            .context("client should build from endpoint and token")
-    }
+        .accept_compressed(yellowstone_grpc_proto::tonic::codec::CompressionEncoding::Zstd)
+        .connect()
+        .await
+        .context("client should build from endpoint and token")
 }
 
 /// Subscribes to account updates and verifies only SysvarClock updates are returned.

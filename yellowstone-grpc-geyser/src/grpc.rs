@@ -6,7 +6,7 @@ use {
         },
         block_reconstruction::BlockMachineStorage,
         config::{
-            AuthConfig::{self},
+            AuthConfig::{self, TrustedMetadata},
             ConfigGrpc, GrpcAddress, GrpcTlsConfig,
         },
         metered::PrometheusMeteredManager,
@@ -25,7 +25,7 @@ use {
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
-        ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
+        ratelimit::PrometheusRatelimitCallbacks,
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -84,7 +84,6 @@ use {
         tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
         tonic::{
             auth::service::AuthLayer,
-            interceptor::{HttpInterceptorLayer, OptionalHttpInterceptor},
             metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
@@ -1547,14 +1546,6 @@ impl GrpcService {
             builder = builder.initial_stream_window_size(sz);
         }
 
-        let method_ratelimit_config = auth.as_ref().and_then(|auth_config| match auth_config {
-            AuthConfig::Http(http_auth_config) => http_auth_config.ratelimit.clone(),
-            AuthConfig::File(file_auth_config) => file_auth_config.ratelimit.clone(),
-            AuthConfig::TrustedMetadata(trusted_metadata_config) => {
-                trusted_metadata_config.ratelimit.clone()
-            }
-        });
-
         enum AuthLayerChoice {
             Http(AuthLayer<HttpSubscriptionRepository>),
             File(AuthLayer<ConstantSubscriptionRepository>),
@@ -1579,7 +1570,7 @@ impl GrpcService {
                 );
                 Some(AuthLayerChoice::File(auth_layer))
             }
-            Some(AuthConfig::TrustedMetadata(_trusted_metadata_config)) => {
+            Some(TrustedMetadata) => {
                 let repository = TrustedMetadataAuthenticator::new([]);
                 let auth_layer = AuthLayer::new(
                     repository,
@@ -1603,41 +1594,28 @@ impl GrpcService {
 
         // Request -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
         let builder = builder.add_service(health_service);
-
-        let metered_svc =
+        let geyser_service =
             MeteredBandwidthLayer::new(PrometheusMeteredManager, traffic_reporting_threshold)
                 .named_layer(service);
-
-        let http_intercepted_svc =
-            HttpInterceptorLayer::new({
-                let method_ratelimit_config = method_ratelimit_config.clone();
-                move || {
-                    OptionalHttpInterceptor::from_option(method_ratelimit_config.as_ref().map(
-                        |ratelimit| MethodRatelimiter::new(ratelimit.max_hits, ratelimit.window),
-                    ))
-                }
-            })
-            .named_layer(metered_svc);
-
-        let intercepted_svc = interceptor::InterceptorLayer::new(XTokenInterceptor {
+        let geyser_service = interceptor::InterceptorLayer::new(XTokenInterceptor {
             x_token: x_token.clone(),
         })
-        .named_layer(http_intercepted_svc);
+        .named_layer(geyser_service);
 
         if let Some(auth_layer) = maybe_auth_layer {
             // The final wrapping order is: AuthLayer -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
             // The AuthLayer is the outermost layer, so it can intercept and handle authentication before any other processing occurs.
             with_auth!(auth_layer, |auth_layer| {
-                let auth_svc = auth_layer.named_layer(intercepted_svc);
+                let geyser_service = auth_layer.named_layer(geyser_service);
                 builder
-                    .add_service(auth_svc)
+                    .add_service(geyser_service)
                     .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
                     .await
                     .map_err(Into::into)
             })
         } else {
             builder
-                .add_service(intercepted_svc)
+                .add_service(geyser_service)
                 .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
                 .await
                 .map_err(Into::into)
