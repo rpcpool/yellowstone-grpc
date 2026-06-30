@@ -22,10 +22,8 @@ hyper = { workspace = true }
 pin-project = { workspace = true }
 pin-project-lite = { workspace = true }
 tower-layer = { workspace = true }
-tower = { workspace = true, features = ["buffer"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tokio-rustls = { workspace = true }
 x509-parser = { workspace = true }

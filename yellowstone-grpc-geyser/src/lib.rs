@@ -1,12 +1,10 @@
-pub(crate) mod auth;
 mod block_reconstruction;
-mod cache_ext;
 pub mod config;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;
 pub mod plugin;
-pub(crate) mod ratelimit;
+pub mod ratelimit;
 pub(crate) mod util;
 pub mod version;
 

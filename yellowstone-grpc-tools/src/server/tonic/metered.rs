@@ -1,7 +1,7 @@
 use {
     bytes::Buf,
     bytesize::ByteSize,
-    http::{request::Parts, Request, Response},
+    http::{HeaderMap, Request, Response},
     hyper::body::{Frame, SizeHint},
     pin_project::{pin_project, pinned_drop},
     std::{
@@ -55,10 +55,10 @@ where
 {
     type Hooks = StackMeteredHooks<MM1::Hooks, MM2::Hooks>;
 
-    fn build_hooks(&self, parts: &Parts) -> Self::Hooks {
+    fn build_hooks(&self, header_map: &HeaderMap, uri_path: &str) -> Self::Hooks {
         StackMeteredHooks {
-            hooks1: self.manager1.build_hooks(parts),
-            hooks2: self.manager2.build_hooks(parts),
+            hooks1: self.manager1.build_hooks(header_map, uri_path),
+            hooks2: self.manager2.build_hooks(header_map, uri_path),
         }
     }
 }
@@ -82,11 +82,12 @@ pub trait MeteredBandwidthManager {
     /// Builds per-request hooks used to meter the response body.
     ///
     /// # Parameters
-    /// - `parts`: Incoming request parts, including headers and URI path.
+    /// - `header_map`: Incoming request headers.
+    /// - `uri_path`: Request URI path (for example, `/geyser.Geyser/Subscribe`).
     ///
     /// # Returns
     /// A hooks instance attached to the response body wrapper.
-    fn build_hooks(&self, parts: &Parts) -> Self::Hooks;
+    fn build_hooks(&self, header_map: &HeaderMap, uri_path: &str) -> Self::Hooks;
 
     fn stack<Next>(self, next: Next) -> StackMeteredBandwidthManager<Self, Next>
     where
@@ -101,7 +102,7 @@ pub trait MeteredBandwidthManager {
 ///
 /// The layer clones a shared manager and applies a [`MeteredService`] wrapper
 /// to each inner service instance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MeteredBandwidthLayer<MM> {
     metered_manager: Arc<MM>,
     traffic_reporting_threshold: ByteSize,
@@ -279,10 +280,9 @@ where
     /// The returned future will wrap successful responses with [`MeteredBody`]
     /// so byte emission can be observed frame by frame.
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
-        let (parts, body) = request.into_parts();
-
-        let hooks = self.metered_manager.build_hooks(&parts);
-        let request = Request::from_parts(parts, body);
+        let hooks = self
+            .metered_manager
+            .build_hooks(request.headers(), request.uri().path());
         let future = self.inner.call(request);
         MeteredBandwidthFuture {
             future,
@@ -331,9 +331,9 @@ mod tests {
     impl MeteredBandwidthManager for TestManager {
         type Hooks = TestHooks;
 
-        fn build_hooks(&self, parts: &Parts) -> Self::Hooks {
+        fn build_hooks(&self, _header_map: &HeaderMap, uri_path: &str) -> Self::Hooks {
             self.build_hooks_calls.fetch_add(1, Ordering::Relaxed);
-            *self.last_path.lock().expect("poisoned mutex") = Some(parts.uri.path().to_owned());
+            *self.last_path.lock().expect("poisoned mutex") = Some(uri_path.to_owned());
             TestHooks {
                 total_bytes: Arc::clone(&self.total_bytes),
             }
