@@ -1040,6 +1040,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1578,6 +1592,12 @@ checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
 dependencies = [
  "byteorder",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -6206,11 +6226,12 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.1.0"
+version = "13.2.0"
 dependencies = [
  "arc-swap",
  "bytes",
  "futures",
+ "hyper",
  "hyper-util",
  "log",
  "pin-project",
@@ -6276,6 +6297,7 @@ dependencies = [
  "clap",
  "criterion",
  "crossbeam-channel",
+ "dashmap",
  "foldhash 0.2.0",
  "futures",
  "git-version",
@@ -6344,6 +6366,8 @@ dependencies = [
  "clap",
  "dotenvy",
  "env_logger",
+ "hyper",
+ "hyper-util",
  "inventory",
  "log",
  "solana-commitment-config",
@@ -6351,6 +6375,7 @@ dependencies = [
  "solana-signature",
  "tokio",
  "tokio-stream",
+ "tower 0.4.13",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",
  "yellowstone-grpc-e2e-macros",
@@ -6424,6 +6449,7 @@ dependencies = [
  "bytesize 2.3.1",
  "futures",
  "http",
+ "http-body",
  "http-body-util",
  "hyper",
  "log",
