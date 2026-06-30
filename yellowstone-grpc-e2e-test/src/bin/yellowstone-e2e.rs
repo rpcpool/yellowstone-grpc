@@ -74,6 +74,10 @@ struct Cli {
     #[arg(long)]
     endpoint: Option<String>,
 
+    /// Dial string override (`host:port`). Takes precedence over dotenv and environment variables.
+    #[arg(long)]
+    dial: Option<String>,
+
     /// x-token override. Takes precedence over dotenv and environment variables.
     #[arg(long)]
     x_token: Option<String>,
@@ -158,6 +162,19 @@ fn resolve_x_token(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option
         .or_else(|| env::var("TEST_X_TOKEN").ok())
         .or_else(|| env::var("TEST_TOKEN").ok())
         .or_else(|| env::var("YELLOWSTONE_GRPC_X_TOKEN").ok())
+}
+
+fn resolve_dial(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<String> {
+    if let Some(dial) = &cli.dial {
+        return Some(dial.clone());
+    }
+
+    dotenv_values
+        .get("TEST_DIAL")
+        .cloned()
+        .or_else(|| dotenv_values.get("YELLOWSTONE_GRPC_DIAL").cloned())
+        .or_else(|| env::var("TEST_DIAL").ok())
+        .or_else(|| env::var("YELLOWSTONE_GRPC_DIAL").ok())
 }
 
 async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
@@ -247,8 +264,13 @@ async fn run(cli: Cli) -> Result<()> {
     let dotenv_values = load_dotenv(cli.dotenv.as_ref());
 
     let endpoint = resolve_endpoint(&cli, &dotenv_values).map_err(|msg| anyhow::anyhow!(msg))?;
+    let dial = resolve_dial(&cli, &dotenv_values);
     let x_token = resolve_x_token(&cli, &dotenv_values);
-    let run_config = RunConfig { endpoint, x_token };
+    let run_config = RunConfig {
+        endpoint,
+        dial,
+        x_token,
+    };
 
     match &cli.command {
         Commands::List => Ok(()),

@@ -6206,11 +6206,12 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.1.0"
+version = "13.2.0"
 dependencies = [
  "arc-swap",
  "bytes",
  "futures",
+ "hyper",
  "hyper-util",
  "log",
  "pin-project",
@@ -6344,6 +6345,8 @@ dependencies = [
  "clap",
  "dotenvy",
  "env_logger",
+ "hyper",
+ "hyper-util",
  "inventory",
  "log",
  "solana-commitment-config",
@@ -6351,6 +6354,7 @@ dependencies = [
  "solana-signature",
  "tokio",
  "tokio-stream",
+ "tower 0.4.13",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",
  "yellowstone-grpc-e2e-macros",
