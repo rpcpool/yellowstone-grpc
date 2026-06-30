@@ -46,8 +46,6 @@ pub use {
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
-#[cfg(feature = "test-tools")]
-use {hyper::rt, tower::Service};
 
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
@@ -643,36 +641,6 @@ impl GeyserGrpcBuilder {
 
     pub fn connect_lazy(self) -> GeyserGrpcBuilderResult<GeyserGrpcClient> {
         let channel = self.endpoint.connect_lazy();
-        self.build(channel)
-    }
-
-    #[cfg(feature = "test-tools")]
-    pub async fn connect_with_connector<C>(
-        self,
-        connector: C,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient>
-    where
-        C: Service<Uri> + Send + 'static,
-        C::Response: rt::Read + rt::Write + Send + Unpin,
-        C::Future: Send,
-        C::Error: std::error::Error + Send + Sync + 'static,
-    {
-        let channel = self.endpoint.connect_with_connector(connector).await?;
-        self.build(channel)
-    }
-
-    #[cfg(feature = "test-tools")]
-    pub fn connect_with_connector_lazy<C>(
-        self,
-        connector: C,
-    ) -> GeyserGrpcBuilderResult<GeyserGrpcClient>
-    where
-        C: Service<Uri> + Send + 'static,
-        C::Response: rt::Read + rt::Write + Send + Unpin,
-        C::Future: Send,
-        C::Error: std::error::Error + Send + Sync + 'static,
-    {
-        let channel = self.endpoint.connect_with_connector_lazy(connector);
         self.build(channel)
     }
 
