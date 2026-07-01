@@ -5812,7 +5812,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-conduit"
 version = "0.1.0"
-source = "git+https://github.com/rpcpool/yellowstone-conduit.git?branch=main#179644a5c2ed19ac1ca5eb4896551988da6c0492"
+source = "git+https://github.com/rpcpool/yellowstone-conduit.git?branch=main#41fca9a55b35369d13cedd4a597dd78497d79b5e"
 dependencies = [
  "libc",
  "memmap2",
@@ -5941,6 +5941,7 @@ dependencies = [
  "tower-layer",
  "vergen",
  "yellowstone-block-machine",
+ "yellowstone-conduit",
  "yellowstone-grpc-proto",
  "yellowstone-grpc-tools",
  "yellowstone-shmem-client",

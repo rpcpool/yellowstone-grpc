@@ -930,10 +930,13 @@ impl GrpcService {
             _ => false,
         };
 
+        let shutdown_wake = client.wait_handle();
+
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Geyser loop: shutting down");
+                    shutdown_wake.wake();
                     break;
                 }
                 _ = {
@@ -2005,5 +2008,454 @@ mod tests {
         }
         // drop fires but "UNKNOWN" was never in the tracker, so nothing changes
         assert!(tracker.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod shmem_tests {
+    use super::*;
+    use yellowstone_conduit::Producer;
+    use yellowstone_shmem_client::ShmemClient;
+    use yellowstone_shmem_common::{EventType, HEADER_SIZE, PAYLOAD_VERSION};
+    use yellowstone_grpc_proto::prost::Message as ProstMessage;
+    use yellowstone_grpc_proto::prelude as proto;
+    use crate::plugin::shmem::decoder::ProstShmemDecoder;
+
+    struct TestHarness {
+        _path: String,
+        handle: tokio::task::JoinHandle<()>,
+        cancel: CancellationToken,
+        broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
+        block_reconstruction_rx: mpsc::UnboundedReceiver<Arc<Vec<Message>>>,
+    }
+
+    impl TestHarness {
+        async fn new(path: &str) -> (Self, Producer<EventType>) {
+            let _ = std::fs::remove_file(path);
+
+            let producer = Producer::<EventType>::create(
+                std::path::Path::new(path),
+                16384,
+                64 * 1024 * 1024,
+                1,
+            )
+            .unwrap();
+
+            let client = ShmemClient::open(
+                std::path::Path::new(path),
+                ProstShmemDecoder,
+            )
+            .unwrap();
+
+            let (broadcast_tx, broadcast_rx) = broadcast::channel(256);
+            let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
+            let cancellation_token = CancellationToken::new();
+            let cancel = cancellation_token.clone();
+
+            let handle = tokio::spawn(async move {
+                GrpcService::geyser_loop(
+                    client,
+                    broadcast_tx,
+                    block_reconstruction_tx,
+                    cancellation_token,
+                )
+                .await;
+            });
+
+            let harness = Self {
+                _path: path.to_string(),
+                handle,
+                cancel,
+                broadcast_rx,
+                block_reconstruction_rx,
+            };
+
+            (harness, producer)
+        }
+
+        async fn shutdown(self) {
+            self.cancel.cancel();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                self.handle,
+            )
+            .await
+            .expect("geyser_loop did not exit")
+            .expect("geyser_loop panicked");
+            let _ = std::fs::remove_file(&self._path);
+        }
+
+        fn collect_broadcast(&mut self) -> Vec<(CommitmentLevel, Vec<Message>)> {
+            let mut results = Vec::new();
+            while let Ok((commitment, messages)) = self.broadcast_rx.try_recv() {
+                results.push((commitment, messages.iter().cloned().collect()));
+            }
+            results
+        }
+
+        fn collect_block_reconstruction(&mut self) -> Vec<Message> {
+            let mut results = Vec::new();
+            while let Ok(messages) = self.block_reconstruction_rx.try_recv() {
+                results.extend(messages.iter().cloned());
+            }
+            results
+        }
+    }
+
+    async fn write_and_settle<F>(f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let h = tokio::task::spawn_blocking(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            f();
+        });
+        h.await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    fn write_slot(
+        producer: &Producer<EventType>,
+        slot: u64,
+        parent: Option<u64>,
+        status: proto::SlotStatus,
+    ) {
+        let msg = proto::SubscribeUpdateSlot {
+            slot,
+            parent,
+            status: status as i32,
+            dead_error: None,
+        };
+        let body = msg.encode_to_vec();
+        let size = HEADER_SIZE + body.len();
+        producer
+            .write_with(&EventType::Slot, size, |buf| {
+                buf[0] = PAYLOAD_VERSION;
+                buf[1..9].copy_from_slice(&slot.to_le_bytes());
+                buf[9] = EventType::Slot as u8;
+                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
+            })
+            .expect("write slot failed");
+    }
+
+    fn write_entry(producer: &Producer<EventType>, slot: u64, index: u64) {
+        let msg = proto::SubscribeUpdateEntry {
+            slot,
+            index,
+            num_hashes: 100,
+            hash: vec![0u8; 32],
+            executed_transaction_count: 1,
+            starting_transaction_index: 0,
+        };
+        let body = msg.encode_to_vec();
+        let size = HEADER_SIZE + body.len();
+        producer
+            .write_with(&EventType::Entry, size, |buf| {
+                buf[0] = PAYLOAD_VERSION;
+                buf[1..9].copy_from_slice(&slot.to_le_bytes());
+                buf[9] = EventType::Entry as u8;
+                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
+            })
+            .expect("write entry failed");
+    }
+
+    fn write_block_meta(producer: &Producer<EventType>, slot: u64, parent_slot: u64) {
+        let msg = proto::SubscribeUpdateBlockMeta {
+            slot,
+            parent_slot,
+            parent_blockhash: "parent".into(),
+            blockhash: "block".into(),
+            rewards: None,
+            block_time: None,
+            block_height: None,
+            executed_transaction_count: 1,
+            entries_count: 1,
+        };
+        let body = msg.encode_to_vec();
+        let size = HEADER_SIZE + body.len();
+        producer
+            .write_with(&EventType::BlockMeta, size, |buf| {
+                buf[0] = PAYLOAD_VERSION;
+                buf[1..9].copy_from_slice(&slot.to_le_bytes());
+                buf[9] = EventType::BlockMeta as u8;
+                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
+            })
+            .expect("write block_meta failed");
+    }
+
+    fn write_account(
+        producer: &Producer<EventType>,
+        slot: u64,
+        pubkey: &[u8; 32],
+        lamports: u64,
+    ) {
+        let owner = [2u8; 32];
+        let data = vec![0xABu8; 32];
+        let body_size = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + data.len() + 8 + 1 + 8;
+        let size = HEADER_SIZE + body_size;
+        producer
+            .write_with(&EventType::Account, size, |buf| {
+                buf[0] = PAYLOAD_VERSION;
+                buf[1..9].copy_from_slice(&slot.to_le_bytes());
+                buf[9] = EventType::Account as u8;
+                let dst = &mut buf[HEADER_SIZE..];
+                let mut o = 0usize;
+                dst[o..o + 32].copy_from_slice(pubkey); o += 32;
+                dst[o..o + 8].copy_from_slice(&lamports.to_le_bytes()); o += 8;
+                dst[o..o + 32].copy_from_slice(&owner); o += 32;
+                dst[o] = 0; o += 1;
+                dst[o..o + 8].copy_from_slice(&u64::MAX.to_le_bytes()); o += 8;
+                dst[o..o + 8].copy_from_slice(&1u64.to_le_bytes()); o += 8;
+                dst[o] = 0; o += 1;
+                dst[o..o + 64].fill(0); o += 64;
+                dst[o..o + 8].copy_from_slice(&(data.len() as u64).to_le_bytes()); o += 8;
+                dst[o..o + data.len()].copy_from_slice(&data); o += data.len();
+                dst[o..o + 8].copy_from_slice(&slot.to_le_bytes()); o += 8;
+                dst[o] = 0; o += 1;
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as i64;
+                dst[o..o + 8].copy_from_slice(&ts.to_le_bytes());
+            })
+            .expect("write account failed");
+    }
+
+    fn write_transaction(
+        producer: &Producer<EventType>,
+        slot: u64,
+        signature: &[u8; 64],
+    ) {
+        let msg = proto::SubscribeUpdateTransactionInfo {
+            signature: signature.to_vec(),
+            is_vote: false,
+            transaction: Some(proto::Transaction {
+                signatures: vec![signature.to_vec()],
+                message: Some(proto::Message {
+                    header: Some(proto::MessageHeader {
+                        num_required_signatures: 1,
+                        num_readonly_signed_accounts: 0,
+                        num_readonly_unsigned_accounts: 0,
+                    }),
+                    account_keys: vec![vec![1u8; 32]],
+                    recent_blockhash: vec![0u8; 32],
+                    instructions: vec![],
+                    versioned: false,
+                    address_table_lookups: vec![],
+                }),
+            }),
+            meta: Some(proto::TransactionStatusMeta {
+                err: None,
+                fee: 5000,
+                pre_balances: vec![100],
+                post_balances: vec![95000],
+                inner_instructions: vec![],
+                inner_instructions_none: false,
+                log_messages: vec![],
+                log_messages_none: false,
+                pre_token_balances: vec![],
+                post_token_balances: vec![],
+                rewards: vec![],
+                loaded_writable_addresses: vec![],
+                loaded_readonly_addresses: vec![],
+                return_data: None,
+                return_data_none: false,
+                compute_units_consumed: Some(200),
+                cost_units: Some(0),
+            }),
+            index: 0,
+        };
+        let body = msg.encode_to_vec();
+        let size = HEADER_SIZE + body.len();
+        producer
+            .write_with(&EventType::Transaction, size, |buf| {
+                buf[0] = PAYLOAD_VERSION;
+                buf[1..9].copy_from_slice(&slot.to_le_bytes());
+                buf[9] = EventType::Transaction as u8;
+                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
+            })
+            .expect("write transaction failed");
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_lifecycle_slot_to_all_commitments() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-lifecycle").await;
+
+        write_and_settle(move || {
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotFirstShredReceived);
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCompleted);
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCreatedBank);
+        })
+        .await;
+
+        let broadcast = harness.collect_broadcast();
+
+        // lifecycle statuses go to Processed, Confirmed, and Finalized
+        for status in [SlotStatus::FirstShredReceived, SlotStatus::Completed, SlotStatus::CreatedBank] {
+            for commitment in [CommitmentLevel::Processed, CommitmentLevel::Confirmed, CommitmentLevel::Finalized] {
+                assert!(
+                    broadcast.iter().any(|(c, msgs)| {
+                        *c == commitment && msgs.iter().any(|m| {
+                            matches!(m, Message::Slot(s) if s.slot == 100 && s.status == status)
+                        })
+                    }),
+                    "expected {status:?} at {commitment:?}"
+                );
+            }
+        }
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_commitment_slot_to_block_reconstruction_only() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-commitment").await;
+
+        write_and_settle(move || {
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotProcessed);
+        })
+        .await;
+
+        let _broadcast = harness.collect_broadcast();
+        let block_recon = harness.collect_block_reconstruction();
+
+        // commitment status should NOT appear directly in broadcast as a slot message
+        // it goes through block_reconstruction_tx
+        assert!(
+            block_recon.iter().any(|m| {
+                matches!(m, Message::Slot(s) if s.slot == 100 && s.status == SlotStatus::Processed)
+            }),
+            "expected Processed slot in block reconstruction, got: {block_recon:?}"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_account_to_processed_broadcast() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-account").await;
+
+        let pubkey = [1u8; 32];
+        write_and_settle(move || {
+            write_account(&producer, 100, &pubkey, 5000);
+        })
+        .await;
+
+        let broadcast = harness.collect_broadcast();
+
+        assert!(
+            broadcast.iter().any(|(c, msgs)| {
+                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Account(_)))
+            }),
+            "expected account at Processed, got: {broadcast:?}"
+        );
+
+        // should not appear at Confirmed or Finalized
+        assert!(
+            !broadcast.iter().any(|(c, _)| *c == CommitmentLevel::Confirmed || *c == CommitmentLevel::Finalized),
+            "account should not broadcast at Confirmed/Finalized"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_entry_to_processed_broadcast() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-entry").await;
+
+        write_and_settle(move || {
+            write_entry(&producer, 100, 0);
+        })
+        .await;
+
+        let broadcast = harness.collect_broadcast();
+
+        assert!(
+            broadcast.iter().any(|(c, msgs)| {
+                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Entry(_)))
+            }),
+            "expected entry at Processed, got: {broadcast:?}"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_transaction_to_processed_broadcast() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-tx").await;
+
+        let sig = [7u8; 64];
+        write_and_settle(move || {
+            write_transaction(&producer, 100, &sig);
+        })
+        .await;
+
+        let broadcast = harness.collect_broadcast();
+
+        assert!(
+            broadcast.iter().any(|(c, msgs)| {
+                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Transaction(_)))
+            }),
+            "expected transaction at Processed, got: {broadcast:?}"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_block_meta_to_block_reconstruction() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-blockmeta").await;
+
+        write_and_settle(move || {
+            write_block_meta(&producer, 100, 99);
+        })
+        .await;
+
+        let block_recon = harness.collect_block_reconstruction();
+
+        assert!(
+            block_recon.iter().any(|m| matches!(m, Message::BlockMeta(_))),
+            "expected BlockMeta in block reconstruction, got: {block_recon:?}"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn geyser_loop_routes_mixed_batch_correctly() {
+        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-mixed").await;
+
+        let pubkey = [3u8; 32];
+        let sig = [4u8; 64];
+        write_and_settle(move || {
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotFirstShredReceived);
+            write_account(&producer, 100, &pubkey, 1000);
+            write_transaction(&producer, 100, &sig);
+            write_entry(&producer, 100, 0);
+            write_block_meta(&producer, 100, 99);
+            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotProcessed);
+        })
+        .await;
+
+        let broadcast = harness.collect_broadcast();
+        let block_recon = harness.collect_block_reconstruction();
+
+        // processed broadcast has: lifecycle slot, account, transaction, entry
+        let processed: Vec<&Message> = broadcast
+            .iter()
+            .filter(|(c, _)| *c == CommitmentLevel::Processed)
+            .flat_map(|(_, msgs)| msgs.iter())
+            .collect();
+
+        assert!(processed.iter().any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::FirstShredReceived)));
+        assert!(processed.iter().any(|m| matches!(m, Message::Account(_))));
+        assert!(processed.iter().any(|m| matches!(m, Message::Transaction(_))));
+        assert!(processed.iter().any(|m| matches!(m, Message::Entry(_))));
+
+        // block reconstruction has: Processed slot, BlockMeta
+        assert!(block_recon.iter().any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::Processed)));
+        assert!(block_recon.iter().any(|m| matches!(m, Message::BlockMeta(_))));
+
+        harness.shutdown().await;
     }
 }

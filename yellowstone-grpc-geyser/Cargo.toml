@@ -121,6 +121,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode", "blake3"] }
+yellowstone-conduit = { git = "https://github.com/rpcpool/yellowstone-conduit.git", branch = "main" }
 
 [lints]
 workspace = true
