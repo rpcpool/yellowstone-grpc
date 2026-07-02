@@ -23,6 +23,7 @@ bench = ["dep:solana-storage-proto"]
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 foldhash = { workspace = true }
+arc-swap = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bs58 = { workspace = true }
@@ -39,11 +40,13 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
+moka = { workspace = true, features = ["future"] }
 pin-project = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rayon = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -51,11 +54,13 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tokio-util = { workspace = true, features = ["rt"]}
 tokio-rustls = { workspace = true, features = ["aws-lc-rs"] }
 tokio-stream = { workspace = true }
+tower = { workspace = true }
 tower-layer = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
 wincode = { workspace = true }
+url = { workspace = true, features = ["serde"] }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }

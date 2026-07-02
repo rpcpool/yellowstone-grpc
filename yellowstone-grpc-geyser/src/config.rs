@@ -10,13 +10,18 @@ use {
         fmt,
         fs::read_to_string,
         net::SocketAddr,
+        num::NonZeroUsize,
         path::{Path, PathBuf},
         str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
     tonic::codec::CompressionEncoding,
+    url::Url,
 };
+
+pub const DEFAULT_TRITON_AUTH_MAX_CONCURRENT_REQUESTS: NonZeroUsize =
+    NonZeroUsize::new(1000).unwrap();
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -394,11 +399,71 @@ pub enum GrpcTlsConfig {
     CertDir { cert_dir: PathBuf },
 }
 
+///
+/// Configuration for HTTP-backed authentication for subscription requests.
+///
+/// Query a remote HTTP service to validate incoming subscription requests and retrieve associated metadata.
+///
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpBackedAuthConfig {
+    ///
+    /// The URL of the subscription resolver service.
+    /// The gRPC server will call this service to validate incoming subscription requests and retrieve associated metadata.
+    ///
+    pub subscription_resolver_url: Url,
+
+    ///
+    /// The TTL for caching subscription resolution results.
+    ///
+    /// By defaults, there is no caching and the gRPC server will call the subscription resolver for every incoming subscription request. Setting a TTL enables caching of resolver results, which can help reduce latency and load on the resolver service for frequently seen tokens and hosts.
+    #[serde(default, with = "humantime_serde")]
+    pub subscription_resolution_cache_ttl: Option<Duration>,
+
+    ///
+    /// The maximum number of concurrent authentication requests allowed to the subscription resolver service.
+    /// By default, it is set to 1000,
+    #[serde(
+        default = "HttpBackedAuthConfig::default_max_concurrent_auth_requests",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub max_concurrent_auth_requests: NonZeroUsize,
+
+    #[serde(default = "HttpBackedAuthConfig::default_forwarded_headers")]
+    pub forwarded_headers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileBackedAuthConfig {
+    pub subscription_resolver_path: PathBuf,
+}
+
+impl HttpBackedAuthConfig {
+    pub fn default_forwarded_headers() -> Vec<String> {
+        vec!["x-token".to_string()]
+    }
+
+    pub const fn default_max_concurrent_auth_requests() -> NonZeroUsize {
+        DEFAULT_TRITON_AUTH_MAX_CONCURRENT_REQUESTS
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum AuthConfig {
+    Http(HttpBackedAuthConfig),
+    File(FileBackedAuthConfig),
+    ///
+    /// Trusts the `x-subscription-id` header and does not perform any authentication or authorization checks and apply default rate limits.
+    #[serde(rename = "trusted-metadata")]
+    TrustedMetadata,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListenConfig {
     pub address: GrpcAddress,
     pub tls: Option<GrpcTlsConfig>,
+    pub auth: Option<AuthConfig>,
 }
 
 impl ConfigGrpc {

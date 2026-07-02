@@ -192,6 +192,16 @@ lazy_static::lazy_static! {
         ),
         &["remote_peer_ip"]
     ).unwrap();
+
+    static ref UNAUTHORIZED_COUNT: IntCounter = IntCounter::new(
+        "yellowstone_grpc_unauthorized_count_total",
+        "Number of unauthorized requests to the gRPC service"
+    ).unwrap();
+
+    static ref AUTHORIZED_COUNT: IntCounter = IntCounter::new(
+        "yellowstone_grpc_authorized_count_total",
+        "Number of authorized requests to the gRPC service"
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -354,6 +364,8 @@ impl PrometheusService {
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
             register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
             register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
+            register!(UNAUTHORIZED_COUNT);
+            register!(AUTHORIZED_COUNT);
 
             VERSION
                 .with_label_values(&[
@@ -479,6 +491,14 @@ pub fn incr_ip_conncur_rate_limit_exceeded(remote_peer_ip: Option<String>) {
     IP_CONNCUR_RATE_LIMIT_EXCEEDED
         .with_label_values(&[remote_peer_ip.as_deref().unwrap_or("unknown")])
         .inc();
+}
+
+pub fn incr_unauthorized_count() {
+    UNAUTHORIZED_COUNT.inc();
+}
+
+pub fn incr_authorized_count() {
+    AUTHORIZED_COUNT.inc();
 }
 
 pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
@@ -679,6 +699,8 @@ pub fn reset_metrics() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
 
     IP_CONNCUR_RATE_LIMIT_EXCEEDED.reset();
+    UNAUTHORIZED_COUNT.reset();
+    AUTHORIZED_COUNT.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()
