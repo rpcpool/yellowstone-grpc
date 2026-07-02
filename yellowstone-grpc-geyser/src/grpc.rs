@@ -5,10 +5,7 @@ use {
             TrustedMetadataAuthenticator,
         },
         block_reconstruction::BlockMachineStorage,
-        config::{
-            AuthConfig::{self},
-            ConfigGrpc, GrpcAddress, GrpcTlsConfig,
-        },
+        config::{AuthConfig, AuthKind, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, set_subscriber_queue_size,
@@ -1605,13 +1602,9 @@ impl GrpcService {
             builder = builder.initial_stream_window_size(sz);
         }
 
-        let method_ratelimit_config = auth.as_ref().and_then(|auth_config| match auth_config {
-            AuthConfig::Http(http_auth_config) => http_auth_config.ratelimit.clone(),
-            AuthConfig::File(file_auth_config) => file_auth_config.ratelimit.clone(),
-            AuthConfig::TrustedMetadata(trusted_metadata_config) => {
-                trusted_metadata_config.ratelimit.clone()
-            }
-        });
+        let method_ratelimit_config = auth
+            .as_ref()
+            .and_then(|auth_config| auth_config.ratelimit.clone());
 
         enum AuthLayerChoice {
             Http(AuthLayer<HttpSubscriptionRepository>),
@@ -1619,7 +1612,10 @@ impl GrpcService {
             Trusted(AuthLayer<TrustedMetadataAuthenticator>),
         }
         let maybe_auth_layer = match auth {
-            Some(AuthConfig::Http(http_auth_config)) => {
+            Some(AuthConfig {
+                kind: AuthKind::Http(http_auth_config),
+                ..
+            }) => {
                 let repository = http_auth_config.build_repository();
                 let auth_layer = AuthLayer::new(
                     repository,
@@ -1627,7 +1623,10 @@ impl GrpcService {
                 );
                 Some(AuthLayerChoice::Http(auth_layer))
             }
-            Some(AuthConfig::File(file_auth_config)) => {
+            Some(AuthConfig {
+                kind: AuthKind::File(file_auth_config),
+                ..
+            }) => {
                 let repository = file_auth_config
                     .build_repository()
                     .context("Failed to build file-based auth repository")?;
@@ -1637,7 +1636,10 @@ impl GrpcService {
                 );
                 Some(AuthLayerChoice::File(auth_layer))
             }
-            Some(AuthConfig::TrustedMetadata(_trusted_metadata_config)) => {
+            Some(AuthConfig {
+                kind: AuthKind::TrustedMetadata(_trusted_metadata_config),
+                ..
+            }) => {
                 let repository = TrustedMetadataAuthenticator::new([]);
                 let auth_layer = AuthLayer::new(
                     repository,
@@ -1666,10 +1668,16 @@ impl GrpcService {
             MeteredBandwidthLayer::new(PrometheusMeteredManager, traffic_reporting_threshold)
                 .named_layer(service);
 
-        let ratelimiter =
-            OptionalHttpInterceptor::from_option(method_ratelimit_config.as_ref().map(
-                |ratelimit| MethodRatelimiter::new(ratelimit.default_max_hits, ratelimit.window),
-            ));
+        let ratelimiter = OptionalHttpInterceptor::from_option(
+            method_ratelimit_config.as_ref().map(|ratelimit| {
+                log::info!(
+                    "Using default ratelimit of {} hits per {:?} for all subscribers and methods",
+                    ratelimit.default_max_hits,
+                    ratelimit.window
+                );
+                MethodRatelimiter::new(ratelimit.default_max_hits, ratelimit.window)
+            }),
+        );
         let http_intercepted_svc = HttpInterceptorLayer::new(ratelimiter).named_layer(metered_svc);
 
         let intercepted_svc = interceptor::InterceptorLayer::new(XTokenInterceptor {

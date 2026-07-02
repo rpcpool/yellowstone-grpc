@@ -430,9 +430,6 @@ pub struct HttpBackedAuthConfig {
 
     #[serde(default = "HttpBackedAuthConfig::default_forwarded_headers")]
     pub forwarded_headers: Vec<String>,
-
-    #[serde(default)]
-    pub ratelimit: Option<RatelimitConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -486,9 +483,6 @@ impl RatelimitConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileBackedAuthConfig {
     pub subscription_resolver_path: PathBuf,
-
-    #[serde(default)]
-    pub ratelimit: Option<RatelimitConfig>,
 }
 
 impl HttpBackedAuthConfig {
@@ -503,13 +497,20 @@ impl HttpBackedAuthConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TrustedMetadataAuthConfig {
+    // Reserved for trusted-metadata-specific options.
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    #[serde(flatten)]
+    pub kind: AuthKind,
     #[serde(default)]
     pub ratelimit: Option<RatelimitConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum AuthConfig {
+pub enum AuthKind {
     Http(HttpBackedAuthConfig),
     File(FileBackedAuthConfig),
     ///

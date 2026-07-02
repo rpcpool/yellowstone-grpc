@@ -1,7 +1,9 @@
 use {
     crate::metrics,
     dashmap::DashMap,
+    http::uri::PathAndQuery,
     std::{
+        hash::{Hash, Hasher},
         net::IpAddr,
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -28,10 +30,47 @@ impl RatelimitedCallbacks for PrometheusRatelimitCallbacks {
     }
 }
 
+///
+/// Wrapper type around the shared-type [`http::uri::PathAndQuery`].
+/// It's useful to only compare the path portion of the URI, and ignore the query portion.
+///
+/// [`http::uri::PathAndQuery`] is cheap to clone as its internal data types uses `Bytes`,
+/// instead of using `String` we can avoid unnecessary allocations when comparing the path portion of the URI.
+///
+#[derive(Debug, Clone)]
+pub struct PathName(PathAndQuery);
+
+impl From<&PathAndQuery> for PathName {
+    fn from(path_and_query: &PathAndQuery) -> Self {
+        // We can safely clone the `PathAndQuery` as it uses `Bytes` internally, which is cheap to clone.
+        PathName(path_and_query.clone())
+    }
+}
+
+impl PartialEq for PathName {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.path() == other.0.path()
+    }
+}
+
+impl Eq for PathName {}
+
+impl AsRef<str> for PathName {
+    fn as_ref(&self) -> &str {
+        self.0.path()
+    }
+}
+
+impl Hash for PathName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.path().hash(state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MethodRatelimitKey {
     subscriber_id: String,
-    method_name: String,
+    method_name: PathName,
     /// The ratelimit value used because if we want to support SIGHUP or other dynamic config reloads, we need to ensure that the key is unique per ratelimit value. Otherwise, if the ratelimit value changes for a given subscriber/method, we could end up with a stale limiter in the map that doesn't reflect the new ratelimit.
     /// We expect ratelimit to not change often and not for all users at the same time, so this should be a reasonable tradeoff to avoid having to implement a more complex dynamic config reload mechanism.
     ratelimit: i32,
@@ -119,12 +158,20 @@ impl MethodRatelimiter {
 
         let Some(subscription_info) = request.extensions().get::<crate::auth::SubscriptionInfo>()
         else {
+            log::info!(
+                "No subscription info found in request extensions, skipping rate limiting logic"
+            );
+            return Ok(request);
+        };
+
+        let Some(method_name) = request.uri().path_and_query().map(PathName::from) else {
+            log::info!("No path and query found in request URI, skipping rate limiting logic");
             return Ok(request);
         };
 
         let window_key = MethodRatelimitKey {
             subscriber_id: subscription_info.subscription_id.clone(),
-            method_name: request.uri().path().to_string(),
+            method_name,
             ratelimit: subscription_info
                 .ratelimits
                 .as_ref()
@@ -139,55 +186,34 @@ impl MethodRatelimiter {
         };
 
         if window_key.ratelimit < 0 {
+            log::info!(
+                "No rate limit for subscriber {} and method {}, skipping rate limiting logic",
+                subscription_info.subscription_id,
+                request.uri().path(),
+            );
             // No limit for this subscriber/method, so we can skip the rate limiting logic.
             return Ok(request);
         }
+        let ratelimit = window_key.ratelimit;
 
-        let result = self
+        assert!(
+            ratelimit > 0,
+            "ratelimit must be positive, got {} for subscriber {} and method {}",
+            ratelimit,
+            subscription_info.subscription_id,
+            request.uri().path(),
+        );
+        let mut state = self
             .shared
             .active_windows_map
             .entry(window_key)
-            .or_try_insert_with(|| {
-                let limiter = subscription_info
-                    .ratelimits
-                    .as_ref()
-                    .and_then(|ratelimits| {
-                        ratelimits
-                            .methods
-                            .get(request.uri().path())
-                            .or(Some(&ratelimits.default))
-                    })
-                    .and_then(|ratelimit| {
-                        if *ratelimit < 0 {
-                            None
-                        } else {
-                            let casted_ratelimit = *ratelimit as u64;
-                            Some(TokenBucketRateLimiter::new(casted_ratelimit, self.window))
-                        }
-                    })
-                    .or_else(|| {
-                        if self.max_hits_fallback < 0 {
-                            return None;
-                        }
-
-                        // Fallback to the interceptor's default ratelimit if no ratelimit is specified for this subscriber/method.
-
-                        Some(TokenBucketRateLimiter::new(
-                            self.max_hits_fallback as u64,
-                            self.window,
-                        ))
-                    })
-                    .ok_or(())?;
-
-                Ok::<_, ()>(MethodWindowState {
+            .or_insert_with(|| {
+                let limiter = TokenBucketRateLimiter::new(ratelimit as u64, self.window);
+                MethodWindowState {
                     limiter,
                     last_seen: now,
-                })
+                }
             });
-
-        let Ok(mut state) = result else {
-            return Ok(request);
-        };
 
         let decision = state.limiter.check_at(now);
         state.last_seen = now;
@@ -197,6 +223,11 @@ impl MethodRatelimiter {
             .then_some(())
             .ok_or_else(|| tonic::Status::resource_exhausted("rate limit exceeded"))
             .inspect_err(|_| {
+                log::warn!(
+                    "rate limit exceeded for subscriber {} and method {}",
+                    subscription_info.subscription_id,
+                    request.uri().path(),
+                );
                 crate::metrics::incr_method_ratelimited_count(
                     &subscription_info.subscription_id,
                     request.uri().path(),

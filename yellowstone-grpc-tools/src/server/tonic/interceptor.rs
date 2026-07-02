@@ -68,32 +68,6 @@ impl<I> HttpInterceptorLayer<I> {
     }
 }
 
-impl<I> From<I> for HttpInterceptorLayer<I>
-where
-    I: HttpInterceptorFactory,
-{
-    fn from(interceptor: I) -> Self {
-        Self::new(interceptor)
-    }
-}
-
-pub trait HttpInterceptorFactory {
-    type Interceptor: HttpInterceptor;
-    fn build(&self) -> Self::Interceptor;
-}
-
-impl<F, I> HttpInterceptorFactory for F
-where
-    F: Fn() -> I,
-    I: HttpInterceptor,
-{
-    type Interceptor = I;
-
-    fn build(&self) -> Self::Interceptor {
-        (self)()
-    }
-}
-
 impl<S, I> Layer<S> for HttpInterceptorLayer<I>
 where
     I: Clone,
