@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-02
+
+- yellowstone-grpc-geyser 14.0.0
+- yellowstone-grpc-client 13.2.0
+
+### Features
+
+- Implementation of `SubscribeDeshred` transaction [#801](https://github.com/rpcpool/yellowstone-grpc/pull/801/changes/5bfc22fe9e158db4053e5e456b2bb7d25ef657b4)
+- Implements feature-gated `GeyserGrpcBuilder::connect_with_connector` (enabled via `test-tools` feature flag) [#800](https://github.com/rpcpool/yellowstone-grpc/pull/800)
+
+### Breakings
+
+- The `yellowstone-grpc-geyser` plugin compiles to target agava `v4.1.0` using `1.95` rust toolchain.
+
 ## 2026-06-26
 
 - yellowstone-grpc-geyser 13.3.1
@@ -58,16 +72,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - client: auto-reconnect now quarantines replayed slots and compares blockhashes to handle the equivocation problem, preventing silent data loss when reconnecting to a node with different block content for the same slot.
-
-## [Triton Extension Patches]
-
-## 2026-06-10
-
-- 13.2.2-triton-ext.1
-
-### misc
-
-- deshred messages are sent directly to the target broadcast channel, avoiding unnecessary hop on geyser_loop
 
 ## 2026-06-03
 
