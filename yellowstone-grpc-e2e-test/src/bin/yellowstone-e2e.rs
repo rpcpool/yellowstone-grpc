@@ -79,7 +79,7 @@ struct Cli {
     #[arg(long)]
     endpoint: Option<String>,
 
-    /// Dial string override (`host:port`). Takes precedence over dotenv and environment variables.
+    /// Dial string override. Takes precedence over dotenv and environment variables.
     #[arg(long)]
     dial: Option<String>,
 

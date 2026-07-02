@@ -202,6 +202,14 @@ lazy_static::lazy_static! {
         "yellowstone_grpc_authorized_count_total",
         "Number of authorized requests to the gRPC service"
     ).unwrap();
+
+    static ref METHOD_RATELIMITED_COUNT: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_method_ratelimited_count_total",
+            "Number of requests that were rate limited by the method ratelimiter"
+        ),
+        &["subscriber_id", "method"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -366,6 +374,7 @@ impl PrometheusService {
             register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
             register!(UNAUTHORIZED_COUNT);
             register!(AUTHORIZED_COUNT);
+            register!(METHOD_RATELIMITED_COUNT);
 
             VERSION
                 .with_label_values(&[
@@ -499,6 +508,15 @@ pub fn incr_unauthorized_count() {
 
 pub fn incr_authorized_count() {
     AUTHORIZED_COUNT.inc();
+}
+
+pub fn incr_method_ratelimited_count<S1: AsRef<str>, S2: AsRef<str>>(
+    subscriber_id: S1,
+    method: S2,
+) {
+    METHOD_RATELIMITED_COUNT
+        .with_label_values(&[subscriber_id.as_ref(), method.as_ref()])
+        .inc();
 }
 
 pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
@@ -701,6 +719,7 @@ pub fn reset_metrics() {
     IP_CONNCUR_RATE_LIMIT_EXCEEDED.reset();
     UNAUTHORIZED_COUNT.reset();
     AUTHORIZED_COUNT.reset();
+    METHOD_RATELIMITED_COUNT.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()
