@@ -66,6 +66,7 @@ impl From<WasmUiTransactionEncoding> for UiTransactionEncoding {
 }
 
 #[napi]
+#[allow(dead_code)]
 pub fn encode_tx(
   data: &[u8],
   encoding: WasmUiTransactionEncoding,
@@ -144,6 +145,7 @@ pub fn encode_tx(
 }
 
 #[napi]
+#[allow(dead_code)]
 pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
   let tx_error = wincode::deserialize::<TransactionErrorSolana>(&err).map_err(|error| {
     napi_error_with_cause(

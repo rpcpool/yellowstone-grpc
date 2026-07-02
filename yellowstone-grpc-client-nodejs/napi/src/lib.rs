@@ -110,6 +110,7 @@ fn strip_autoreconnect_filter(update: &mut SubscribeUpdate) -> bool {
 #[napi]
 struct DuplexStream {
   /// Read side consumed by `read()`. Each protobuf payload is delivered exactly once.
+  #[allow(dead_code)]
   readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
   /// Write side used by `write_raw()`. Requests are forwarded to gRPC task.
   ///
@@ -123,6 +124,7 @@ struct DuplexStream {
   /// Terminal worker error captured from gRPC send/recv failures.
   ///
   /// `read()` surfaces this to JS once the update channel is closed.
+  #[allow(dead_code)]
   terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   /// Set once JS has started destroying this stream.
   is_closing: Arc<AtomicBool>,
@@ -271,6 +273,7 @@ impl DuplexStream {
   ///
   /// Retrieve one encoded `SubscribeUpdate` payload from the worker.
   #[napi]
+  #[allow(dead_code)]
   pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Option<Buffer>>> {
     let readable = self.readable.clone();
     let terminal_error = self.terminal_error.clone();
@@ -495,6 +498,7 @@ impl DuplexStreamDeshred {
 
   /// Retrieve one encoded `SubscribeUpdateDeshred` payload.
   #[napi]
+  #[allow(dead_code)]
   pub fn read<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, Option<Buffer>>> {
     let readable = self.readable.clone();
     let terminal_error = self.terminal_error.clone();
