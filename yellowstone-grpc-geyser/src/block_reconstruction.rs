@@ -334,7 +334,7 @@ impl BlockMachineStorage {
                 executed_transaction_count: block_meta.executed_transaction_count,
             });
             let _ = self.state.process_replay_event(block_summary);
-        };
+        }
     }
 
     fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {

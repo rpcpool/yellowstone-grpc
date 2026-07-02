@@ -61,6 +61,10 @@ lazy_static::lazy_static! {
         "message_queue_size", "Size of geyser message queue"
     ).unwrap();
 
+    static ref DESHRED_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "deshred_queue_size", "Size of deshred message queue"
+    ).unwrap();
+
     static ref CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
         "connections_total", "Total number of connections to gRPC service"
     ).unwrap();
@@ -540,8 +544,16 @@ pub fn message_queue_size_inc() {
     MESSAGE_QUEUE_SIZE.inc()
 }
 
+pub fn deshred_queue_size_inc(amount: i64) {
+    DESHRED_QUEUE_SIZE.add(amount);
+}
+
 pub fn message_queue_size_dec() {
     MESSAGE_QUEUE_SIZE.dec()
+}
+
+pub fn deshred_queue_size_dec() {
+    DESHRED_QUEUE_SIZE.dec()
 }
 
 pub fn connections_total_inc() {

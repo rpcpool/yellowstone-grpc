@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-02
+
+- yellowstone-grpc-geyser 14.0.0
+- yellowstone-grpc-client 13.2.0
+
+### Features
+
+- Implementation of `SubscribeDeshred` transaction [#801](https://github.com/rpcpool/yellowstone-grpc/pull/801/changes/5bfc22fe9e158db4053e5e456b2bb7d25ef657b4)
+- Implements feature-gated `GeyserGrpcBuilder::connect_with_connector` (enabled via `test-tools` feature flag) [#800](https://github.com/rpcpool/yellowstone-grpc/pull/800)
+
+### Breakings
+
+- The `yellowstone-grpc-geyser` plugin compiles to target agava `v4.1.0` using `1.95` rust toolchain.
+
 ## 2026-06-26
 
 - yellowstone-grpc-geyser 13.3.1
@@ -122,6 +136,15 @@ Referenced PR(s) :[747](https://github.com/rpcpool/yellowstone-grpc/pull/747)
 
 - client: auto-reconnect stream for yellowstone-grpc-client ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
 - geyser: set replay_stored_slots default to 150, added startup warning for low values ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
+
+## [Triton Extension Patches]
+
+### `deshred-transaction`
+
+- geyser, client, proto: add deshred transaction subscription support with loaded addresses (ALT) via separate `SubscribeDeshred` RPC endpoint (`SubscribeUpdateDeshred` response type, `FilteredUpdateDeshred` server-side encoding, client methods, example CLI command with loaded address output, filtering on static and dynamically loaded account keys via `account_include`, `account_exclude`, `account_required`)
+- geyser: add deshred filter tests (vote, account_include with static/loaded keys, account_exclude, account_required, pong generation)
+- deps: update solana/agave git dependencies to v3.1.8 (`v3.1-triton-public`)
+- deps: add `[patch.crates-io]` for triton fork compatibility
 
 ## 2026-04-10
 

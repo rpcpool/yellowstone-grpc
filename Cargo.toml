@@ -27,12 +27,11 @@ anyhow = "1.0.103"
 arc-swap = "1.0.0"
 backoff = "0.4.0"
 base64 = "0.22.1"
-bincode = "1.3.3"
 bs58 = "0.5.1"
 bytes = "1.10.1"
 bytesize = "2.0.0"
 cargo-lock = "11.0.0"
-chrono = "0.4.26"
+chrono = "0.4.45"
 clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
@@ -70,10 +69,9 @@ proc-macro2 = "1"
 pin-project-lite = "0.2.0"
 prost = "0.14.0"
 prost-types = "0.14.0"
-prost_011 = { package = "prost", version = "0.11.9" }
 protoc-bin-vendored = "3.2.0"
 quote = "1"
-rand = "0.8"
+rand = "0.10.1"
 rayon = "1.11.0"
 reqwest = { version = "0.13.0" }
 rustls = "0.23.0"
@@ -87,7 +85,7 @@ thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-stream = "0.1.17"
 tokio-util = "0.7.0"
-tower = "0.4"
+tower = "0.5.0"
 tower-layer = "0.3.3"
 tonic = "0.14.0"
 tonic-build = "0.14.0"
@@ -97,29 +95,29 @@ tonic-health = "0.14.0"
 url = "2.5.0"
 uuid = "1"
 vergen = "9.0.6"
-wincode = "0.4.4"
+wincode = "0.5.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "4.0.0"
-solana-account-decoder = "4.0.0"
+agave-geyser-plugin-interface = "4.1.0"
+solana-account-decoder = "4.1.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "4.0.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "4.0.0"
-solana-transaction-status = "4.0.0"
+solana-storage-proto = { version = "4.1.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "4.1.0"
+solana-transaction-status = "4.1.0"
 
 # Solana SDK
-solana-account = "3.4.0"
-solana-clock = "3.0.1"
+solana-account = "4.0.0"
+solana-clock = "3.0.0"
 solana-commitment-config = "3.0.0"
-solana-hash = "4.2.0"
-solana-instruction-error = "2.2.0"
-solana-keypair = "3.1.0"
-solana-message = "3.1.0"
-solana-pubkey = "4.1.0"
-solana-signature = "3.3.0"
+solana-hash = "4.3.0"
+solana-keypair = "3.0.0"
+solana-message = "4.1.0"
+solana-pubkey = "4.0.0"
+solana-signature = "3.0.0"
 solana-signer = "3.0.0"
-solana-transaction = "3.1.0"
-solana-transaction-error = "3.0.0"
+solana-transaction = "4.0.0"
+# We need to pin this to 3.2.0 because introduce a breaking changing in 3.3.0 which prevents compilation of solana-storage-proto.
+solana-transaction-error = "=3.2.0"
 
 # Solana Misc
 spl-token-2022-interface = "2.1.0"
@@ -127,7 +125,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "13.3.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.0.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
@@ -141,6 +139,7 @@ x509-parser = "0.18.0"
 clone_on_ref_ptr = "deny"
 missing_const_for_fn = "deny"
 trivially_copy_pass_by_ref = "deny"
+collapsible_match = "allow"
 
 [profile.release]
 lto = true

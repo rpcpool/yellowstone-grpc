@@ -15,7 +15,6 @@ name = "client"
 [dependencies]
 anyhow = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
-bincode = { workspace = true }
 bs58 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

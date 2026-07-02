@@ -28,7 +28,6 @@ uuid = { workspace = true, features = ["v4"] }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 prost = { workspace = true }
-prost_011 = { workspace = true }
 bs58 = { workspace = true, features = ["alloc"] }
 fastrand = { workspace = true }
 lazy_static = { workspace = true }
@@ -36,8 +35,6 @@ prost-types = { workspace = true }
 solana-storage-proto = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true, features = ["wincode"] }
-# Keep solana-transaction-error/wincode on a compatible transitive wincode line.
-solana-instruction-error = { workspace = true }
 solana-pubkey = { workspace = true }
 home = { workspace = true }
 

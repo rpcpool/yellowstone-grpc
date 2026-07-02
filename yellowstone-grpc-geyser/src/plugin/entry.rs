@@ -6,15 +6,15 @@ use {
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
-                MessageTransaction,
+                Message, MessageAccount, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
+                MessageSlot, MessageTransaction,
             },
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     solana_pubkey::Pubkey,
     std::{
@@ -27,7 +27,7 @@ use {
     },
     tokio::{
         runtime::{Builder, Runtime},
-        sync::mpsc,
+        sync::{broadcast, mpsc},
     },
     tokio_rustls::rustls,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
@@ -40,6 +40,7 @@ pub struct PluginInner {
     snapshot_channel_closed: AtomicBool,
     filter_limits: FilterLimits,
     grpc_channel: mpsc::UnboundedSender<Message>,
+    deshred_channel: broadcast::Sender<Message>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
 }
@@ -48,6 +49,12 @@ impl PluginInner {
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(message).is_ok() {
             metrics::message_queue_size_inc();
+        }
+    }
+
+    fn send_deshred_message(&self, message: Message) {
+        if let Ok(count) = self.deshred_channel.send(message) {
+            metrics::deshred_queue_size_inc(count as i64);
         }
     }
 }
@@ -132,7 +139,7 @@ impl GeyserPlugin for Plugin {
             .await
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-            let (snapshot_channel, grpc_channel) = GrpcService::create(
+            let (snapshot_channel, grpc_channel, deshred_channel) = GrpcService::create(
                 config.grpc,
                 config.debug_clients_http.then_some(debug_client_tx),
                 is_reload,
@@ -141,10 +148,10 @@ impl GeyserPlugin for Plugin {
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel, deshred_channel))
         });
 
-        let (snapshot_channel, grpc_channel) = match result {
+        let (snapshot_channel, grpc_channel, deshred_channel) = match result {
             Ok(val) => val,
             Err(e) => {
                 log::error!("failed to start plugin services: {e}");
@@ -160,6 +167,7 @@ impl GeyserPlugin for Plugin {
             snapshot_channel_closed: AtomicBool::new(false),
             filter_limits,
             grpc_channel,
+            deshred_channel,
             plugin_cancellation_token,
             plugin_task_tracker,
         });
@@ -251,7 +259,8 @@ impl GeyserPlugin for Plugin {
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
             let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
-            inner.send_message(message);
+            inner.send_message(message.clone());
+            inner.send_deshred_message(message);
             metrics::update_slot_status(status, slot);
             Ok(())
         })
@@ -319,6 +328,21 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    fn notify_deshred_transaction(
+        &self,
+        transaction: ReplicaDeshredTransactionInfoVersions,
+        slot: u64,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message = Message::DeshredTransaction(
+                MessageDeshredTransaction::from_geyser_versioned(transaction, slot),
+            );
+            inner.send_deshred_message(message);
+
+            Ok(())
+        })
+    }
+
     fn account_data_notifications_enabled(&self) -> bool {
         true
     }
@@ -332,6 +356,10 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }
 }

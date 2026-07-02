@@ -389,7 +389,7 @@ impl<T> From<&CuckooFilter<T, YellowstoneHasherBuilder>> for ProtoCuckooFilter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, rand::RngExt};
 
     #[test]
     fn empty_filter_contains_nothing() {
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn false_positive_rate_small() {
-        use rand::{rngs::StdRng, Rng, SeedableRng};
+        use rand::{rngs::StdRng, SeedableRng};
 
         const N: usize = 10_000;
         const PROBES: usize = 100_000;
@@ -863,7 +863,7 @@ mod tests {
 
         let mut inserted = Vec::with_capacity(N);
         for _ in 0..N {
-            let key: [u8; 32] = rng.gen();
+            let key: [u8; 32] = rng.random();
             filter.insert(&key).unwrap();
             inserted.push(key);
         }
@@ -878,7 +878,7 @@ mod tests {
         let mut false_positives = 0;
         let mut probed = 0;
         while probed < PROBES {
-            let key: [u8; 32] = rng.gen();
+            let key: [u8; 32] = rng.random();
             if inserted_set.contains(&key) {
                 continue; // skip collisions with real insertions
             }
@@ -899,7 +899,7 @@ mod tests {
     #[test]
     #[ignore] // gated due to CI: cargo test --release -- --ignored false_positive_rate_at_scale
     fn false_positive_rate_at_scale() {
-        use rand::{rngs::StdRng, Rng, SeedableRng};
+        use rand::{rngs::StdRng, SeedableRng};
 
         const N: usize = 2_000_000;
         const PROBES: usize = 200_000; // 10% of N, keeps runtime reasonable
@@ -910,7 +910,7 @@ mod tests {
         // inserting 2M items; skip storing them all, use a Bloom-style second filter
         // for cheap dedup, or just accept tiny probability of probe collision
         for _ in 0..N {
-            let key: [u8; 32] = rng.gen();
+            let key: [u8; 32] = rng.random();
             filter.insert(&key).unwrap();
         }
 
@@ -918,7 +918,7 @@ mod tests {
         let mut probe_rng = StdRng::seed_from_u64(0xF00DFACE);
         let mut false_positives = 0;
         for _ in 0..PROBES {
-            let key: [u8; 32] = probe_rng.gen();
+            let key: [u8; 32] = probe_rng.random();
             if filter.contains(&key) {
                 false_positives += 1;
             }
@@ -936,7 +936,7 @@ mod tests {
     fn colliding_items_both_insert_and_contain() {
         // find two distinct [u8; 32] values that hash to the same (primary_bucket, fingerprint).
         // brute force until we find a pair. deterministic seed so test is reproducible.
-        use rand::{rngs::StdRng, Rng, SeedableRng};
+        use rand::{rngs::StdRng, SeedableRng};
 
         const CAPACITY: usize = 1024;
         let mut rng = StdRng::seed_from_u64(42);
@@ -946,7 +946,7 @@ mod tests {
         // easiest path is to search until two items collide at the API level)
         let mut seen: std::collections::HashMap<(u64, u16), [u8; 32]> = Default::default();
         let (key_a, key_b) = loop {
-            let key: [u8; 32] = rng.gen();
+            let key: [u8; 32] = rng.random();
             // replicate the exact hash used internally
             let h = seeded_hash_for_test(&key);
             let fp = fingerprint_for_test(h);
