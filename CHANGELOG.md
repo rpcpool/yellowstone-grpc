@@ -10,6 +10,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-03
+
+- yellowstone-grpc-geyser 14.1.0
+
+### Fixes
+
+- missing Confirmed/Finalized message when `replay_capacity` was set to 0 [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+
+### Features
+
+- in-plugin authentication resolution [#795](https://github.com/rpcpool/yellowstone-grpc/pull/795)
+
 ## 2026-07-02
 
 - yellowstone-grpc-geyser 14.0.0
