@@ -14,7 +14,7 @@ publish = { workspace = true }
 crate-type = ["rlib"]
 
 [[bin]]
-name = "yellowstone-grpc"
+name = "yellowstone-grpc-geyser"
 path = "src/main.rs"
 
 [[bin]]
@@ -91,8 +91,8 @@ prost_011 = { workspace = true, optional = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-block-machine = { workspace = true, default-features = false }
 yellowstone-grpc-tools = { workspace = true }
-yellowstone-shmem-client = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
-yellowstone-shmem-common = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
+yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
+yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity

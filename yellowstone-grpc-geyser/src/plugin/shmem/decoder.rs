@@ -32,6 +32,7 @@ impl ShmemDecoder for ProstShmemDecoder {
         }
         let slot = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
         let event_type = bytes[9];
+        let plugin_ts_ns = i64::from_le_bytes(bytes[10..18].try_into().unwrap());
         let body = &bytes[HEADER_SIZE..];
 
         let et = EventType::try_from(event_type)
@@ -39,7 +40,7 @@ impl ShmemDecoder for ProstShmemDecoder {
 
         match et {
             EventType::Slot => decode_slot(body),
-            EventType::Account => decode_account(body),
+            EventType::Account => decode_account(body, plugin_ts_ns),
             EventType::Transaction => decode_transaction(slot, body),
             EventType::Entry => decode_entry(body),
             EventType::BlockMeta => decode_block_meta(body),
@@ -67,9 +68,9 @@ fn decode_slot(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     }))
 }
 
-pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
+fn decode_account(bytes: &[u8], created_at_ns: i64) -> Result<GeyserMessage, DecodeError> {
     // Minimum size: fixed fields with no data and always-present 64-byte sig slot.
-    const MIN_SIZE: usize = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + 8 + 1 + 8;
+    const MIN_SIZE: usize = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + 8;
     if bytes.len() < MIN_SIZE {
         return Err(DecodeError::DecodeError(format!(
             "decode_account: buffer too small: {} < {MIN_SIZE}",
@@ -94,12 +95,6 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
     unsafe fn read_bytes(bytes: &[u8], o: &mut usize, len: usize) -> Vec<u8> {
         let v = bytes[*o..*o + len].to_vec();
         *o += len;
-        v
-    }
-
-    unsafe fn read_i64(bytes: &[u8], o: &mut usize) -> i64 {
-        let v = i64::from_le_bytes(bytes[*o..*o + 8].try_into().unwrap());
-        *o += 8;
         v
     }
 
@@ -129,8 +124,6 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 
         let data = read_bytes(bytes, &mut o, data_len);
         let slot = read_u64(bytes, &mut o);
-        let is_startup = read_u8(bytes, &mut o) != 0;
-        let plugin_ts_ns = read_i64(bytes, &mut o);
 
         Ok(GeyserMessage::Account(
             yellowstone_shmem_common::MessageAccount {
@@ -145,8 +138,7 @@ pub fn decode_account(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
                     txn_signature,
                 },
                 slot,
-                is_startup,
-                plugin_ts_ns,
+                created_at_ns
             },
         ))
     }
@@ -249,8 +241,8 @@ impl ProstShmemDecoder {
                     .map_err(|_| "invalid txn_signature")?;
 
                 let created_at = prost_types::Timestamp {
-                    seconds: a.plugin_ts_ns / 1_000_000_000,
-                    nanos: (a.plugin_ts_ns % 1_000_000_000) as i32,
+                    seconds: a.created_at_ns / 1_000_000_000,
+                    nanos: (a.created_at_ns % 1_000_000_000) as i32,
                 };
 
                 Ok(Message::Account(MessageAccount {
@@ -266,7 +258,7 @@ impl ProstShmemDecoder {
                         pre_encoded: OnceLock::new(),
                     }),
                     slot: a.slot,
-                    is_startup: a.is_startup,
+                    is_startup: false, // hardcode so as not to break proto
                     created_at,
                 }))
             }

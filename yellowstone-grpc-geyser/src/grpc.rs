@@ -933,6 +933,9 @@ impl GrpcService {
         let shutdown_wake = client.wait_handle();
 
         loop {
+            log::info!("geyser_loop: entering select, writer_head={}, tail={}", 
+                client.writer_head(), client.tail());
+                
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Geyser loop: shutting down");
@@ -963,6 +966,16 @@ impl GrpcService {
                             }
                         };
 
+                        log::info!("msg type={} slot={}", match &message {
+                            Message::Slot(_) => "slot",
+                            Message::Account(_) => "account",
+                            Message::Transaction(_) => "tx",
+                            Message::Entry(_) => "entry",
+                            Message::BlockMeta(_) => "blockmeta",
+                            Message::Block(_) => "block",
+                        }, message.get_slot());
+
+
                         if is_block_reconstruction_message(&message) {
                             block_reconstruction_messages.push(message);
                         } else {
@@ -971,6 +984,10 @@ impl GrpcService {
                                 break;
                             }
                         }
+                    }
+
+                    if processed_messages.is_empty() && block_reconstruction_messages.is_empty() {
+                        continue;
                     }
 
                     for message in processed_messages.iter() {
