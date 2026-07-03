@@ -33,7 +33,7 @@
   ],
   "homepage": "https://triton.one",
   "dependencies": {
-    "@bufbuild/protobuf": "=2.10.2",
+    "@bufbuild/protobuf": "=2.12.1",
     "@solana/rpc-api": "=5.1.0",
     "@solana/addresses": "=5.1.0",
     "@solana/rpc-types": "=5.1.0"
