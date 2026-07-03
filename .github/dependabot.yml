@@ -13,13 +13,4 @@
     "interval": "weekly"
     "time": "04:00"
     "timezone": "UTC"
-- "commit-message":
-    "prefix": "chore(deps):"
-  "directory": "/yellowstone-grpc-client-nodejs"
-  "labels":
-  - "dependencies"
-  "open-pull-requests-limit": 5
-  "package-ecosystem": "npm"
-  "schedule":
-    "interval": "daily"
 "version": 2
