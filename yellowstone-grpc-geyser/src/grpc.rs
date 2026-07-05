@@ -932,15 +932,33 @@ impl GrpcService {
 
         let shutdown_wake = client.wait_handle();
 
-        loop {
-            log::info!("geyser_loop: entering select, writer_head={}, tail={}", 
-                client.writer_head(), client.tail());
-                
+        let mut accounts: u64 = 0;
+        let mut transactions: u64 = 0;
+        let mut slots: u64 = 0;
+        let mut entries: u64 = 0;
+        let mut block_meta: u64 = 0;
+        let mut lagged: u64 = 0;
+
+        let mut health_interval = tokio::time::interval(Duration::from_secs(10));
+
+        loop {    
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Geyser loop: shutting down");
                     shutdown_wake.wake();
                     break;
+                }
+                _ = health_interval.tick() => {
+                    let head = client.writer_head();
+                    let tail = client.tail();
+                    log::info!(
+                        "shmem health: head={} tail={} gap={} | accounts={} tx={} slots={} entries={} blockmeta={} lagged={}",
+                        head, tail, head.saturating_sub(tail),
+                        accounts, transactions, slots, entries, block_meta, lagged,
+                    );
+                    // reset counters
+                    accounts = 0; transactions = 0; slots = 0;
+                    entries = 0; block_meta = 0; lagged = 0;
                 }
                 _ = {
                 let wait = client.prepare_wait();
@@ -966,14 +984,14 @@ impl GrpcService {
                             }
                         };
 
-                        log::info!("msg type={} slot={}", match &message {
-                            Message::Slot(_) => "slot",
-                            Message::Account(_) => "account",
-                            Message::Transaction(_) => "tx",
-                            Message::Entry(_) => "entry",
-                            Message::BlockMeta(_) => "blockmeta",
-                            Message::Block(_) => "block",
-                        }, message.get_slot());
+                        match &message {
+                            Message::Account(_) => accounts += 1,
+                            Message::Transaction(_) => transactions += 1,
+                            Message::Slot(_) => slots += 1,
+                            Message::Entry(_) => entries += 1,
+                            Message::BlockMeta(_) => block_meta += 1,
+                            _ => {}
+                        }
 
 
                         if is_block_reconstruction_message(&message) {
