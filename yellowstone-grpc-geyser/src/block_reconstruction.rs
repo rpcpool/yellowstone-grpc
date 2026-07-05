@@ -212,13 +212,52 @@ pub struct ReplayedSlot<'frozen_block> {
     pub slot_status_messages: Vec<SlotCommitmentStatusUpdate>,
 }
 
+impl<'frozen_block> ReplayedSlot<'frozen_block> {
+    /// Converts a replayed slot into the message sequence a subscriber expects.
+    pub fn to_messages(&self) -> Vec<Message> {
+        // Invariant: slot status messages carry their original parent_slot.
+        // Invariant: content arrives before commitment signal.
+        let mut messages = Vec::new();
+
+        // Block content
+        messages.extend(self.frozen_block.messages().iter().cloned());
+
+        // Block + BlockMeta
+        messages.push(Message::Block(Arc::new(
+            self.frozen_block.get_message_block(),
+        )));
+        messages.push(Message::BlockMeta(self.frozen_block.get_block_meta()));
+
+        // Slot status which comes last, so subscribers see content before commitment signal
+        for s in &self.slot_status_messages {
+            messages.push(Message::Slot(MessageSlot {
+                slot: s.slot,
+                parent: s.parent_slot,
+                status: match s.commitment {
+                    CommitmentLevel::Processed => SlotStatus::Processed,
+                    CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                    CommitmentLevel::Finalized => SlotStatus::Finalized,
+                },
+                dead_error: None,
+                created_at: prost_types::Timestamp::from(std::time::SystemTime::now()),
+            }));
+        }
+
+        messages
+    }
+}
+
 impl<'storage> Iterator for ReplayIter<'storage> {
     type Item = ReplayedSlot<'storage>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let (slot, block) = self.iter.next()?;
-            let progression = self.storage.slot_commitment_progression_map.get(slot)?;
+
+            let Some(progression) = self.storage.slot_commitment_progression_map.get(slot) else {
+                continue;
+            };
+
             let commitment_level = progression.max_commitment;
             if cmp_commitment_level(commitment_level, self.min_commitment)
                 == std::cmp::Ordering::Less
@@ -247,13 +286,30 @@ impl BlockMachineStorage {
         }
     }
 
+    /// Removes all keyed references to a slot: processing state, pending blockmeta,
+    /// frozen block, and commitment progression. All removals are O(1) or O(log n)
+    /// map lookups.
+    ///
+    /// Does NOT scan `ready_queue`. `ready_queue` is an unkeyed sequential buffer;
+    /// cleaning it requires an O(n) linear scan which is a fundamentally different
+    /// cost model. Callers that prune a slot which may still have unconsumed
+    /// ready_queue entries will have to call `ready_queue.retain(...)` separately.
     fn prune_slot(&mut self, slot: u64) {
         self.processing_slots.remove(&slot);
         self.pending_blockmeta.remove(&slot);
         self.replayed_slot.remove(&slot);
         self.slot_commitment_progression_map.remove(&slot);
+
+        // min_slot is a cache over replayed_slot's minimum key and directly on hot path.
+        // invalidation lives here, not at call sites, because the mutation that can
+        // stale the cache is the remove above. Guarded: O(1) comparison in the common
+        // case, O(log n) BTreeMap query only when the actual minimum was removed.
+        if self.min_slot == Some(slot) {
+            self.min_slot = self.replayed_slot.keys().next().copied();
+        }
     }
 
+    /// Full slot cleanup for cases where the slot may be recreated (BankReset).
     fn slot_reset(&mut self, slot: u64) {
         self.prune_slot(slot);
         self.ready_queue
@@ -350,6 +406,10 @@ impl BlockMachineStorage {
             metrics::incr_geyser_untrack_slot_event_dropped();
             return;
         }
+        // Slot already frozen and sealed. Late data is stale, not an error.
+        if self.replayed_slot.contains_key(&slot) {
+            return;
+        }
         let slot_buf = self.processing_slots.entry(slot).or_default();
         slot_buf.add_event(block_data);
         self.try_seal(slot);
@@ -361,7 +421,6 @@ impl BlockMachineStorage {
                 self.prune_slot(oldest_slot);
             }
         }
-        self.min_slot = self.replayed_slot.keys().min().copied();
         self.state.gc(None);
     }
 
@@ -411,10 +470,18 @@ impl BlockMachineStorage {
                 }
             }
             BlockStateMachineOutput::ForksDetected(fork_detected) => {
+                // Forked slot is terminal but may have unconsumed entries in ready_queue
+                // from a SlotStatus output that arrived earlier in the same drain cycle.
+                // prune_slot alone misses ready_queue (by design, see its doc).
                 self.prune_slot(fork_detected.slot);
+                self.ready_queue
+                    .retain(|(_, block)| block.block_meta.slot != fork_detected.slot);
             }
             BlockStateMachineOutput::DeadSlotDetected(dead_block_detected) => {
+                // Same as ForksDetected: terminal, but ready_queue may hold stale entries.
                 self.prune_slot(dead_block_detected.slot);
+                self.ready_queue
+                    .retain(|(_, block)| block.block_meta.slot != dead_block_detected.slot);
             }
             BlockStateMachineOutput::BankCreated(_) => {}
             BlockStateMachineOutput::BankReset(slot) => {
@@ -426,7 +493,11 @@ impl BlockMachineStorage {
     pub fn add(&mut self, message: Message) {
         match message {
             Message::Slot(message_slot) => {
-                let _ = self.on_message_slot(message_slot);
+                // Symmetric with handle_block_data which increments the same metric
+                // when is_slot_tracked returns false.
+                if self.on_message_slot(message_slot).is_err() {
+                    metrics::incr_geyser_untrack_slot_event_dropped();
+                }
             }
             Message::Account(message_account) => {
                 self.handle_block_data(Message::Account(message_account));
@@ -931,5 +1002,196 @@ mod tests {
             /* Last message is explicitly sent as BlockMeta, its no longer implicit inside of original_messages */
             assert_eq!(entry_count, 2);
         }
+    }
+
+    #[test]
+    fn replay_iter_skips_slot_with_missing_progression_instead_of_terminating() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Drive slots 1 and 2 to processed
+        drive_slot_to_processed(&mut storage, 1, None);
+        drive_slot_to_processed(&mut storage, 2, Some(1));
+        // Drain ready queue
+        while storage.pop_ready_block().is_some() {}
+
+        // Corrupt: remove slot 1's progression entry
+        storage.slot_commitment_progression_map.remove(&1);
+
+        // Replay from slot 1 so slot 2 should still be yielded
+        let replayed: Vec<_> = storage
+            .replay_from_slot(1, CommitmentLevel::Processed)
+            .collect();
+
+        assert_eq!(
+            replayed.len(),
+            1,
+            "slot 2 must survive slot 1's missing progression"
+        );
+        assert_eq!(replayed[0].frozen_block.block_meta.slot, 2);
+    }
+
+    #[test]
+    fn replayed_slot_into_messages_preserves_parent_and_ordering() {
+        let pubkey = Pubkey::new_unique();
+        let mut slot = ProcessingSlot::default();
+        slot.add_event(make_account_msg(1, pubkey, 5));
+        slot.add_event(make_transaction_msg(1));
+        slot.add_event(make_entry_msg(1, 0));
+        slot.blockmeta = Some(make_block_meta_arc(1, 0));
+
+        let frozen = slot.seal();
+        let parent = Some(0);
+
+        let replayed = ReplayedSlot {
+            frozen_block: &frozen,
+            slot_status_messages: vec![
+                SlotCommitmentStatusUpdate {
+                    slot: 1,
+                    parent_slot: parent,
+                    commitment: solana_commitment_config::CommitmentLevel::Processed,
+                },
+                SlotCommitmentStatusUpdate {
+                    slot: 1,
+                    parent_slot: parent,
+                    commitment: solana_commitment_config::CommitmentLevel::Confirmed,
+                },
+            ],
+        };
+
+        let messages = replayed.to_messages();
+
+        // parent_slot preserved, not None
+        let slot_msgs: Vec<_> = messages
+            .iter()
+            .filter_map(|m| {
+                if let Message::Slot(s) = m {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(slot_msgs.len(), 2);
+        for s in &slot_msgs {
+            assert_eq!(s.parent, parent, "parent_slot must not be discarded");
+        }
+
+        // Block and BlockMeta present
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Block(_))),
+            "replay must include Message::Block"
+        );
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::BlockMeta(_))),
+            "replay must include Message::BlockMeta"
+        );
+
+        // Content before Block/BlockMeta before slot status
+        let last_block_pos = messages
+            .iter()
+            .rposition(|m| matches!(m, Message::Block(_) | Message::BlockMeta(_)))
+            .unwrap();
+        let first_slot_pos = messages
+            .iter()
+            .position(|m| matches!(m, Message::Slot(_)))
+            .unwrap();
+        assert!(
+            last_block_pos < first_slot_pos,
+            "Block/BlockMeta must arrive before slot status"
+        );
+    }
+
+    #[test]
+    fn forked_slot_removed_from_ready_queue() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Two slots sharing the same parent -> fork candidates
+        drive_slot_to_processed(&mut storage, 1, Some(0));
+        drive_slot_to_processed(&mut storage, 2, Some(0));
+
+        // Don't drain ready_queue — both slots' Processed entries are pending
+
+        // Finalize slot 1 -> state machine roots slot 1, detects slot 2 as fork
+        storage.add(make_slot_msg(1, Some(0), SlotStatus::Confirmed));
+        storage.add(make_slot_msg(1, Some(0), SlotStatus::Finalized));
+
+        // Drain and collect
+        let mut slots_seen = Vec::new();
+        while let Some((_, frozen)) = storage.pop_ready_block() {
+            slots_seen.push(frozen.block_meta.slot);
+        }
+
+        // Slot 2 must not appear because it was forked
+        assert!(
+            !slots_seen.contains(&2),
+            "forked slot must be removed from ready_queue"
+        );
+    }
+
+    #[test]
+    fn commitment_before_freeze_is_not_lost() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Begin slot lifecycle
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+
+        // Send Processed BEFORE blockmeta — block not yet frozen
+        storage.add(make_slot_msg(1, None, SlotStatus::Processed));
+
+        // Now send block data + blockmeta — triggers freeze
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_block_meta_msg(1, 0));
+
+        // Processed should still be deliverable
+        let ready = storage.pop_ready_block();
+        assert!(
+            ready.is_some(),
+            "commitment arriving before freeze must not be lost"
+        );
+        let (status, _) = ready.unwrap();
+        assert_eq!(status.commitment, CommitmentLevel::Processed);
+    }
+
+    #[test]
+    fn min_slot_updated_after_prune() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        drive_slot_to_processed(&mut storage, 1, None);
+        drive_slot_to_processed(&mut storage, 2, Some(1));
+        while storage.pop_ready_block().is_some() {}
+
+        assert_eq!(storage.min_replayable_slot(), Some(1));
+
+        // Prune slot 1 directly (simulates what ForksDetected/DeadSlotDetected do)
+        storage.prune_slot(1);
+
+        // min_slot must reflect the actual minimum in replayed_slot
+        assert_eq!(
+            storage.min_replayable_slot(),
+            Some(2),
+            "min_slot must update after pruning the minimum slot"
+        );
+    }
+
+    #[test]
+    fn late_block_data_after_freeze_does_not_create_phantom_processing_slot() {
+        let mut storage = BlockMachineStorage::new(10);
+        let pubkey = Pubkey::new_unique();
+
+        drive_slot_to_processed(&mut storage, 1, None);
+        while storage.pop_ready_block().is_some() {}
+
+        // Slot 1 is frozen. processing_slots should not have it.
+        assert!(!storage.processing_slots.contains_key(&1));
+
+        // Late block data arrives for the already-frozen slot
+        storage.add(make_account_msg(1, pubkey, 10));
+
+        // Must not create a phantom entry
+        assert!(
+            !storage.processing_slots.contains_key(&1),
+            "late block data for a frozen slot must not create a phantom ProcessingSlot"
+        );
     }
 }
