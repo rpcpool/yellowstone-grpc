@@ -1,7 +1,7 @@
 use {
     futures::stream::{Stream, StreamExt},
     std::{
-        collections::{HashMap, HashSet, VecDeque},
+        collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
         task::Poll,
     },
     tonic::Status,
@@ -217,6 +217,7 @@ impl Dedupable for SubscribeUpdateDeshred {
 impl DedupState {
     /// Creates dedup state with a custom retained slot window size.
     pub fn with_slot_retention(slot_retention: usize) -> Self {
+        assert!(slot_retention > 0, "slot_retention must be > 0");
         Self {
             slot_retention,
             ..Default::default()
@@ -224,10 +225,15 @@ impl DedupState {
     }
 
     fn slot_mut(&mut self, slot: u64) -> &mut SlotState {
-        if !self.inflight.contains_key(&slot) && !self.sealed.contains_key(&slot) {
-            self.slot_order.push_back(slot);
+        match self.inflight.entry(slot) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                if !self.sealed.contains_key(&slot) {
+                    self.slot_order.push_back(slot);
+                }
+                e.insert(SlotState::default())
+            }
         }
-        self.inflight.entry(slot).or_default()
     }
 
     /// Classify a message for the dedup/quarantine layer
@@ -309,7 +315,7 @@ impl DedupState {
     }
 
     /// Keeps tracked slots bounded to the retention window.
-    pub fn prune(&mut self) {
+    pub(crate) fn prune(&mut self) {
         while self.slot_order.len() > self.slot_retention {
             match self.slot_order.pop_front() {
                 Some(slot) => {

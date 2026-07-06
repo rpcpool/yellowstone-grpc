@@ -23,11 +23,6 @@ use {
     },
 };
 
-/// Number of slots behind the last block_meta to checkpoint.
-/// Conservative buffer to account for late-arriving events
-/// and out-of-order delivery within a slot.
-const CHECKPOINT_SLOT_BUFFER: u64 = 2;
-
 pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
 
 type ConnectFuture<S> =
@@ -169,6 +164,27 @@ impl Default for Backoff {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ReplayPolicy {
+    FromCheckpoint { checkpoint_buffer: u64 },
+    Fresh,
+}
+
+impl Default for ReplayPolicy {
+    fn default() -> Self {
+        Self::FromCheckpoint {
+            checkpoint_buffer: Self::DEFAULT_CHECKPOINT_BUFFER,
+        }
+    }
+}
+
+impl ReplayPolicy {
+    /// Number of slots behind the last block_meta to checkpoint.
+    /// Conservative buffer to account for late-arriving events
+    /// and out-of-order delivery within a slot.
+    const DEFAULT_CHECKPOINT_BUFFER: u64 = 2;
+}
+
 /// Connector trait used by AutoReconnect to create new subscribe streams.
 pub trait GrpcConnector: Clone + Send + Sync + 'static {
     type Stream: Stream<Item = Result<SubscribeUpdate, Status>> + Unpin + Send + 'static;
@@ -226,13 +242,13 @@ impl Default for TonicGeyserClientOptions {
 impl TonicGrpcConnector {
     pub const fn new(
         endpoint: Endpoint,
-        config: ReconnectConfig,
+        backoff: Backoff,
         x_token: Option<AsciiMetadataValue>,
         options: TonicGeyserClientOptions,
         request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     ) -> Self {
         Self {
-            backoff: config.backoff,
+            backoff,
             request_sink,
             endpoint,
             x_token,
@@ -286,8 +302,7 @@ impl GrpcConnector for TonicGrpcConnector {
                     x_request_snapshot,
                 };
 
-                let mut geyser =
-                    GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
+                let mut geyser = GeyserClient::with_interceptor(channel, interceptor);
                 if let Some(encoding) = send_compressed {
                     geyser = geyser.send_compressed(encoding);
                 }
@@ -348,10 +363,11 @@ impl GrpcConnector for TonicGrpcConnector {
 /// the user's current filters, not the stale initial ones.
 pub struct AutoReconnect<GrpcStream, Connector> {
     request: Arc<ArcSwap<SubscribeRequest>>,
+    replay_policy: ReplayPolicy,
+    slot_retention: usize,
     last_checkpoint: Option<u64>,
     stop: bool,
     connector: Connector,
-    backoff: Backoff,
     inner_stream: Option<DedupStream<GrpcStream>>,
     pending_connecting_task: Option<ConnectFuture<GrpcStream>>,
 }
@@ -365,23 +381,27 @@ where
         stream: DedupStream<S>,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,
-        backoff: Backoff,
+        config: ReconnectConfig,
     ) -> Self {
         Self {
             request,
+            replay_policy: config.replay_policy,
+            slot_retention: config.slot_retention,
             last_checkpoint: None,
             inner_stream: Some(stream),
             pending_connecting_task: None,
             stop: false,
             connector,
-            backoff,
         }
     }
 
-    fn make_connection_future(&self, dedup_state: DedupState) -> ConnectFuture<S> {
+    fn make_connection_future(
+        &self,
+        from_slot: Option<u64>,
+        dedup_state: DedupState,
+    ) -> ConnectFuture<S> {
         let connector = self.connector.clone();
         let request = self.request.load_full();
-        let from_slot = self.last_checkpoint;
         let fut = async move {
             let stream = connector.connect(request, from_slot).await?;
             Ok(DedupStream::new(stream, dedup_state))
@@ -413,15 +433,19 @@ where
             if let Some(mut stream) = me.inner_stream.take() {
                 match Pin::new(&mut stream).poll_next(cx) {
                     Poll::Ready(Some(Ok(mut msg))) => {
-                        if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
-                            if let Some(slot) = extract_slot(&msg) {
-                                // checkpoint a few slots behind the last fully built slot.
-                                // block_meta can arrive late and events within a slot
-                                // arrive in random order, replaying from a couple slots
-                                // back guarantees we don't miss data. dedup handles
-                                // the duplicates this creates.
-                                me.last_checkpoint =
-                                    Some(slot.saturating_sub(CHECKPOINT_SLOT_BUFFER));
+                        if let ReplayPolicy::FromCheckpoint { checkpoint_buffer } =
+                            &me.replay_policy
+                        {
+                            if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
+                                if let Some(slot) = extract_slot(&msg) {
+                                    // checkpoint a few slots behind the last fully built slot.
+                                    // block_meta can arrive late and events within a slot
+                                    // arrive in random order, replaying from a couple slots
+                                    // back guarantees we don't miss data. dedup handles
+                                    // the duplicates this creates.
+                                    me.last_checkpoint =
+                                        Some(slot.saturating_sub(*checkpoint_buffer));
+                                }
                             }
                         }
 
@@ -446,23 +470,30 @@ where
                         // If the server's replay buffer has moved past our checkpoint,
                         // clear it so the next reconnect starts from "now" instead of
                         // looping forever on an unavailable slot.
-                        if status.code() == Code::OutOfRange {
+                        let (from_slot, dedup_state) = if status.code() == Code::OutOfRange {
                             me.last_checkpoint = None;
-                        }
-
-                        if me.backoff.max_retries == 0 {
-                            me.stop = true;
-                            return Poll::Ready(Some(Err(status)));
-                        }
+                            (None, DedupState::with_slot_retention(me.slot_retention))
+                        } else {
+                            match &me.replay_policy {
+                                ReplayPolicy::FromCheckpoint { .. } => {
+                                    let mut state = stream.state;
+                                    state.prepare_for_replay();
+                                    (me.last_checkpoint, state)
+                                }
+                                // Fresh: discard dedup state, reconnect from "now".
+                                ReplayPolicy::Fresh => {
+                                    (None, DedupState::with_slot_retention(me.slot_retention))
+                                }
+                            }
+                        };
 
                         log::warn!(
                             "stream error: {status}. starting reconnect from slot {:?}",
-                            me.last_checkpoint
+                            from_slot
                         );
 
-                        let mut dedup_state = stream.state;
-                        dedup_state.prepare_for_replay();
-                        me.pending_connecting_task = Some(me.make_connection_future(dedup_state));
+                        me.pending_connecting_task =
+                            Some(me.make_connection_future(from_slot, dedup_state));
                     }
                     Poll::Ready(Some(Err(e))) => {
                         me.stop = true;
@@ -558,6 +589,7 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
 mod tests {
     use {
         super::*,
+        crate::dedup::DEFAULT_SLOT_RETENTION,
         futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
@@ -638,8 +670,12 @@ mod tests {
         }
     }
 
-    fn backoff_with_retries(max_retries: u32) -> Backoff {
-        Backoff::new(Duration::from_millis(0), 1.0, max_retries)
+    fn reconnect_config(max_retries: u32) -> ReconnectConfig {
+        ReconnectConfig {
+            backoff: Backoff::new(Duration::from_millis(1), 1.0, max_retries),
+            replay_policy: ReplayPolicy::default(), // from checkpoint
+            slot_retention: DEFAULT_SLOT_RETENTION,
+        }
     }
 
     fn request_state(request: SubscribeRequest) -> Arc<ArcSwap<SubscribeRequest>> {
@@ -873,7 +909,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
         let next = auto.next().await;
@@ -885,24 +921,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_autoreconnect_no_reconnect_when_max_retries_zero() {
+    async fn test_autoreconnect_connector_failure_stops_stream() {
+        // When the connector exhausts retries and fails, the stream stops.
+        // (Replaces test_autoreconnect_no_reconnect_when_max_retries_zero:
+        // the old max_retries==0 bail was removed; AutoReconnect always
+        // attempts reconnect, connector failure is what stops it.)
         let initial = stream::iter(vec![Err(Status::unavailable("disconnect"))]).boxed();
-        let connector = MockGrpcConnector::new(vec![]);
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(None),
+            result: Err(GeyserGrpcClientError::TonicStatus(Status::internal(
+                "connect failed",
+            ))),
+        }]);
 
         let mut auto = AutoReconnect::new(
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(0),
+            reconnect_config(1),
         );
 
-        let first = auto.next().await.expect("expected one item");
-        assert!(first.is_err());
-        assert_eq!(
-            first.expect_err("expected recoverable error").code(),
-            Code::Unavailable
-        );
-        assert_eq!(connector.calls().len(), 0);
+        let result = auto.next().await.expect("expected one item");
+        assert!(result.is_err());
+        // Connector failure is wrapped as Status::internal by AutoReconnect
+        assert_eq!(result.expect_err("expected error").code(), Code::Internal);
+
+        // Stream should end
+        assert!(auto.next().await.is_none());
     }
 
     #[test]
@@ -953,7 +998,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
         auto.last_checkpoint = Some(77);
 
@@ -977,8 +1022,8 @@ mod tests {
         let connector = MockGrpcConnector::new(vec![ConnectPlan {
             expected_from_slot: None,
             result: Ok(vec![
-                Ok(make_slot_msg(100, 0)), // duplicate — should be filtered
-                Ok(make_slot_msg(101, 0)), // new — should pass through
+                Ok(make_slot_msg(100, 0)), // duplicate, should be filtered
+                Ok(make_slot_msg(101, 0)), // new, should pass through
             ]),
         }]);
 
@@ -986,7 +1031,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
         let msg1 = auto
@@ -1015,7 +1060,7 @@ mod tests {
         .boxed();
 
         let connector = MockGrpcConnector::new(vec![ConnectPlan {
-            expected_from_slot: Some(Some(100 - CHECKPOINT_SLOT_BUFFER)),
+            expected_from_slot: Some(Some(100 - ReplayPolicy::DEFAULT_CHECKPOINT_BUFFER)),
             result: Ok(vec![Ok(make_slot_msg(105, 0))]),
         }]);
 
@@ -1023,7 +1068,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
         let msg1 = auto
@@ -1039,7 +1084,10 @@ mod tests {
             .expect("expected item")
             .expect("expected ok");
         assert_eq!(extract_slot(&msg2), Some(105));
-        assert_eq!(connector.calls(), vec![Some(100 - CHECKPOINT_SLOT_BUFFER)]);
+        assert_eq!(
+            connector.calls(),
+            vec![Some(100 - ReplayPolicy::DEFAULT_CHECKPOINT_BUFFER)]
+        );
     }
 
     #[tokio::test]
@@ -1052,7 +1100,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
         let result = auto.next().await.expect("expected item");
@@ -1095,7 +1143,7 @@ mod tests {
         .boxed();
 
         let connector = MockGrpcConnector::new(vec![ConnectPlan {
-            expected_from_slot: Some(None), // <-- checkpoint should be None
+            expected_from_slot: Some(None), // checkpoint should be None
             result: Ok(vec![Ok(make_slot_msg(101, 0))]),
         }]);
 
@@ -1103,7 +1151,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
         // Consume account message
@@ -1137,7 +1185,7 @@ mod tests {
         .boxed();
 
         let connector = MockGrpcConnector::new(vec![ConnectPlan {
-            expected_from_slot: Some(Some(98)), // 100 - CHECKPOINT_SLOT_BUFFER (2)
+            expected_from_slot: Some(Some(98)), // 100 - DEFAULT_CHECKPOINT_BUFFER (2)
             result: Ok(vec![Ok(make_slot_msg(101, 0))]),
         }]);
 
@@ -1145,10 +1193,10 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+            reconnect_config(1),
         );
 
-        // Consume block_meta — should set checkpoint
+        // Consume block_meta, should set checkpoint
         let _ = auto.next().await;
 
         // Reconnect happens
@@ -1185,7 +1233,7 @@ mod tests {
             DedupStream::new(initial, DedupState::default()),
             connector.clone(),
             request_state(SubscribeRequest::default()),
-            backoff_with_retries(2), // 2 retries allowed
+            reconnect_config(2), // 2 retries allowed
         );
 
         // Should get error after retries exhausted
