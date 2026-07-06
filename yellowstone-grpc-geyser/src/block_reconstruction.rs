@@ -219,7 +219,9 @@ impl<'storage> Iterator for ReplayIter<'storage> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let (slot, block) = self.iter.next()?;
-            let progression = self.storage.slot_commitment_progression_map.get(slot)?;
+            let Some(progression) = self.storage.slot_commitment_progression_map.get(slot) else {
+                continue;
+            };
             let commitment_level = progression.max_commitment;
             if cmp_commitment_level(commitment_level, self.min_commitment)
                 == std::cmp::Ordering::Less
@@ -264,7 +266,11 @@ impl BlockMachineStorage {
         }
     }
 
-    fn prune_slot(&mut self, slot: u64) {
+    fn refresh_min_slot(&mut self) {
+        self.min_slot = self.replayed_slot.keys().next().copied();
+    }
+
+    fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool) {
         self.processing_slots.remove(&slot);
         self.pending_blockmeta.remove(&slot);
         self.replayed_slot.remove(&slot);
@@ -274,10 +280,13 @@ impl BlockMachineStorage {
                     self.num_buffered_finalized_slot.saturating_sub(1);
             }
         }
+        if refresh_min_slot {
+            self.refresh_min_slot();
+        }
     }
 
     fn slot_reset(&mut self, slot: u64) {
-        self.prune_slot(slot);
+        self.prune_slot(slot, true);
         self.ready_queue
             .retain(|(_, block)| block.block_meta.slot != slot);
     }
@@ -372,6 +381,16 @@ impl BlockMachineStorage {
             metrics::incr_geyser_untrack_slot_event_dropped();
             return;
         }
+        // Technically, once a block is sealed and put in the replay queue, we should not NEVER
+        // receive any more block data for that slot.
+        // We still add this line of code to be extra cautious!
+        if self.replayed_slot.contains_key(&slot) {
+            log::error!(
+                "UNEXPECTED: Received block data for slot {} that is already sealed and in the replay queue. Dropping the message.",
+                slot
+            );
+            return;
+        }
         let slot_buf = self.processing_slots.entry(slot).or_default();
         slot_buf.add_event(block_data);
         self.try_seal(slot);
@@ -382,10 +401,12 @@ impl BlockMachineStorage {
             && self.num_buffered_finalized_slot > MINIMUM_FINALIZED_SLOT_TO_BUFFER
         {
             if let Some((&oldest_slot, _)) = self.replayed_slot.iter().next() {
-                self.prune_slot(oldest_slot);
+                // refresh_min_slot is set to false, since we don't want to refresh the min_slot on every prune, but only after the loop is done.
+                self.prune_slot(oldest_slot, false);
             }
         }
-        self.min_slot = self.replayed_slot.keys().min().copied();
+
+        self.refresh_min_slot();
         self.state.gc(None);
     }
 
@@ -460,10 +481,10 @@ impl BlockMachineStorage {
                 }
             }
             BlockStateMachineOutput::ForksDetected(fork_detected) => {
-                self.prune_slot(fork_detected.slot);
+                self.prune_slot(fork_detected.slot, true);
             }
             BlockStateMachineOutput::DeadSlotDetected(dead_block_detected) => {
-                self.prune_slot(dead_block_detected.slot);
+                self.prune_slot(dead_block_detected.slot, true);
             }
             BlockStateMachineOutput::BankCreated(_) => {}
             BlockStateMachineOutput::BankReset(slot) => {
@@ -475,7 +496,11 @@ impl BlockMachineStorage {
     pub fn add(&mut self, message: Message) {
         match message {
             Message::Slot(message_slot) => {
-                let _ = self.on_message_slot(message_slot);
+                if self.on_message_slot(message_slot).is_err() {
+                    // Symmetric with handle_block_data which increments the same metric
+                    // when is_slot_tracked returns false.
+                    metrics::incr_geyser_untrack_slot_event_dropped();
+                }
             }
             Message::Account(message_account) => {
                 self.handle_block_data(Message::Account(message_account));
