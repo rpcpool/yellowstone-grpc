@@ -17,10 +17,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - missing Confirmed/Finalized message when `replay_capacity` was set to 0 [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+- missing `parent` value field in `SubscribeSlotUpdate` [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+- fixed some edge cases in block reconstruction where bank-reset or forks detection did not properly refresh min slot.
+- added new e2e tests in `yellowstone-grpc-e2e-tools` around message ordering guarantees.
+- fixed missing `BlockMeta` in `confirmed/finalized` subscription
 
 ### Features
 
 - in-plugin authentication resolution [#795](https://github.com/rpcpool/yellowstone-grpc/pull/795)
+
+### Related PRs
+
+- [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+    - imports changes from [#810](https://github.com/rpcpool/yellowstone-grpc/pull/810)
 
 ## 2026-07-02
 
