@@ -7,7 +7,8 @@ use {
         any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
         it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
         it_should_support_replay, it_should_verifies_geyser_event_ordering_is_correct,
-        scenario_description, subscribe_should_filter_accounts,
+        it_should_verify_replay_ordering_matches_live_path, scenario_description,
+        slot_status_should_have_parent, subscribe_should_filter_accounts,
         subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
         subscribe_should_receive_full_blocks, subscribe_should_receive_no_slot_duplicates,
@@ -27,6 +28,8 @@ enum Scenario {
     Ordering,
     FilterAccounts,
     SlotDuplicate,
+    ReplayOrdering,
+    SlotStatusParentPresent,
 }
 
 impl Scenario {
@@ -42,6 +45,8 @@ impl Scenario {
             Self::Ordering => "event-ordering",
             Self::FilterAccounts => "filter-accounts",
             Self::SlotDuplicate => "slot-duplicate",
+            Self::ReplayOrdering => "replay-ordering",
+            Self::SlotStatusParentPresent => "slot-status-parent-present",
         }
     }
 
@@ -201,6 +206,10 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
             Scenario::Ordering => it_should_verifies_geyser_event_ordering_is_correct(config).await,
             Scenario::FilterAccounts => subscribe_should_filter_accounts(config).await,
             Scenario::SlotDuplicate => subscribe_should_receive_no_slot_duplicates(config).await,
+            Scenario::ReplayOrdering => {
+                it_should_verify_replay_ordering_matches_live_path(config).await
+            }
+            Scenario::SlotStatusParentPresent => slot_status_should_have_parent(config).await,
         }
     });
     let mut interval = time::interval(Duration::from_millis(120));
@@ -253,6 +262,7 @@ async fn run(cli: Cli) -> Result<()> {
             Scenario::Deshred,
             Scenario::AnyCommitment,
             Scenario::TokenOwnerBalanceChanged,
+            Scenario::ReplayOrdering,
         ];
 
         for scenario in scenarios {
@@ -286,6 +296,8 @@ async fn run(cli: Cli) -> Result<()> {
                 Scenario::Ordering,
                 Scenario::FilterAccounts,
                 Scenario::SlotDuplicate,
+                Scenario::ReplayOrdering,
+                Scenario::SlotStatusParentPresent,
             ];
 
             for scenario in scenarios {

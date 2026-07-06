@@ -1241,13 +1241,13 @@ impl GrpcService {
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     for replayed_slot in replayed_slot_iter {
-                        let xs = replayed_slot
+                        let slot_messages = replayed_slot
                             .slot_status_messages
                             .iter()
                             .map(|s| {
                                 Message::Slot(MessageSlot {
                                     slot: s.slot,
-                                    parent: None,
+                                    parent: s.parent_slot,
                                     status: match s.commitment {
                                         solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
                                         solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
@@ -1257,8 +1257,12 @@ impl GrpcService {
                                     created_at: Timestamp::from(SystemTime::now())
                                 })
                             });
-                        replayed_messages.extend(xs);
+                        // 1st Put data (account/txn/entries)
                         replayed_messages.extend(replayed_slot.frozen_block.messages().iter().cloned());
+                        // 2nd Put block summary
+                        replayed_messages.push(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta()));
+                        // 3rd Put slot status
+                        replayed_messages.extend(slot_messages);
                     }
                     let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
                 }

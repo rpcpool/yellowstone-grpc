@@ -186,6 +186,7 @@ pub struct BlockMachineStorage {
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBlock>)>,
     state: BlocksStateMachine,
     min_slot: Option<u64>,
+    num_buffered_finalized_slot: usize,
 }
 
 pub struct ReplayIter<'storage> {
@@ -218,7 +219,9 @@ impl<'storage> Iterator for ReplayIter<'storage> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let (slot, block) = self.iter.next()?;
-            let progression = self.storage.slot_commitment_progression_map.get(slot)?;
+            let Some(progression) = self.storage.slot_commitment_progression_map.get(slot) else {
+                continue;
+            };
             let commitment_level = progression.max_commitment;
             if cmp_commitment_level(commitment_level, self.min_commitment)
                 == std::cmp::Ordering::Less
@@ -233,6 +236,21 @@ impl<'storage> Iterator for ReplayIter<'storage> {
     }
 }
 
+///
+/// As blocks are frozen, they are added to the `replayed_slot` map.
+///
+/// This map has a maximum capacity, and when that capacity is exceeded, the oldest slots are pruned.
+///
+/// The [`MINIMUM_FINALIZED_SLOT_TO_BUFFER`] constant makes sure we have enough finalized slot in our state to avoid pruning slots
+/// that are still in the process of being finalized, which could lead to missing finalized/confirmed messages for those slots.
+///
+/// See [`BlockMachineStorage::gc`] for more details.
+///
+///
+/// We used to do this in prior to version v13.2.0 of the plugin (before the reconstruction refactor)
+///
+pub const MINIMUM_FINALIZED_SLOT_TO_BUFFER: usize = 10;
+
 impl BlockMachineStorage {
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
@@ -244,18 +262,31 @@ impl BlockMachineStorage {
             ready_queue: VecDeque::new(),
             state: BlocksStateMachine::default(),
             min_slot: None,
+            num_buffered_finalized_slot: 0,
         }
     }
 
-    fn prune_slot(&mut self, slot: u64) {
+    fn refresh_min_slot(&mut self) {
+        self.min_slot = self.replayed_slot.keys().next().copied();
+    }
+
+    fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool) {
         self.processing_slots.remove(&slot);
         self.pending_blockmeta.remove(&slot);
         self.replayed_slot.remove(&slot);
-        self.slot_commitment_progression_map.remove(&slot);
+        if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
+            if progression.max_commitment == CommitmentLevel::Finalized {
+                self.num_buffered_finalized_slot =
+                    self.num_buffered_finalized_slot.saturating_sub(1);
+            }
+        }
+        if refresh_min_slot {
+            self.refresh_min_slot();
+        }
     }
 
     fn slot_reset(&mut self, slot: u64) {
-        self.prune_slot(slot);
+        self.prune_slot(slot, true);
         self.ready_queue
             .retain(|(_, block)| block.block_meta.slot != slot);
     }
@@ -350,18 +381,32 @@ impl BlockMachineStorage {
             metrics::incr_geyser_untrack_slot_event_dropped();
             return;
         }
+        // Technically, once a block is sealed and put in the replay queue, we should not NEVER
+        // receive any more block data for that slot.
+        // We still add this line of code to be extra cautious!
+        if self.replayed_slot.contains_key(&slot) {
+            log::error!(
+                "UNEXPECTED: Received block data for slot {} that is already sealed and in the replay queue. Dropping the message.",
+                slot
+            );
+            return;
+        }
         let slot_buf = self.processing_slots.entry(slot).or_default();
         slot_buf.add_event(block_data);
         self.try_seal(slot);
     }
 
     fn gc(&mut self) {
-        while self.replayed_slot.len() > self.replayed_capacity {
+        while self.replayed_slot.len() > self.replayed_capacity
+            && self.num_buffered_finalized_slot > MINIMUM_FINALIZED_SLOT_TO_BUFFER
+        {
             if let Some((&oldest_slot, _)) = self.replayed_slot.iter().next() {
-                self.prune_slot(oldest_slot);
+                // refresh_min_slot is set to false, since we don't want to refresh the min_slot on every prune, but only after the loop is done.
+                self.prune_slot(oldest_slot, false);
             }
         }
-        self.min_slot = self.replayed_slot.keys().min().copied();
+
+        self.refresh_min_slot();
         self.state.gc(None);
     }
 
@@ -383,9 +428,24 @@ impl BlockMachineStorage {
                 self.slot_commitment_progression_map
                     .entry(slot)
                     .and_modify(|progression| {
-                        progression
+                        // Make sure its not there already
+                        if !progression
                             .commitment
-                            .push(slot_commitment_status_update.clone());
+                            .iter()
+                            .any(|s| s.commitment == slot_commitment_status_update.commitment)
+                        {
+                            progression
+                                .commitment
+                                .push(slot_commitment_status_update.clone());
+
+                            if matches!(
+                                slot_commitment_status_update.commitment,
+                                CommitmentLevel::Finalized
+                            ) {
+                                self.num_buffered_finalized_slot += 1;
+                            }
+                        }
+
                         if cmp_commitment_level(
                             slot_commitment_status_update.commitment,
                             progression.max_commitment,
@@ -394,27 +454,37 @@ impl BlockMachineStorage {
                             progression.max_commitment = slot_commitment_status_update.commitment;
                         }
                     })
-                    .or_insert_with(|| SlotProgression {
-                        commitment: vec![slot_commitment_status_update.clone()],
-                        max_commitment: slot_commitment_status_update.commitment,
+                    .or_insert_with(|| {
+                        if matches!(
+                            slot_commitment_status_update.commitment,
+                            CommitmentLevel::Finalized
+                        ) {
+                            self.num_buffered_finalized_slot += 1;
+                        }
+
+                        SlotProgression {
+                            commitment: vec![slot_commitment_status_update.clone()],
+                            max_commitment: slot_commitment_status_update.commitment,
+                        }
                     });
 
                 let commitment_level = slot_commitment_status_update.commitment;
-                if matches!(commitment_level, CommitmentLevel::Finalized) {
-                    // Only gc on finalized, that should be enough.
-                    self.gc();
-                }
 
                 if let Some(frozen_block) = self.replayed_slot.get(&slot) {
                     self.ready_queue
                         .push_back((slot_commitment_status_update, Arc::clone(frozen_block)));
                 }
+
+                if matches!(commitment_level, CommitmentLevel::Finalized) {
+                    // Only gc on finalized, that should be enough.
+                    self.gc();
+                }
             }
             BlockStateMachineOutput::ForksDetected(fork_detected) => {
-                self.prune_slot(fork_detected.slot);
+                self.prune_slot(fork_detected.slot, true);
             }
             BlockStateMachineOutput::DeadSlotDetected(dead_block_detected) => {
-                self.prune_slot(dead_block_detected.slot);
+                self.prune_slot(dead_block_detected.slot, true);
             }
             BlockStateMachineOutput::BankCreated(_) => {}
             BlockStateMachineOutput::BankReset(slot) => {
@@ -426,7 +496,11 @@ impl BlockMachineStorage {
     pub fn add(&mut self, message: Message) {
         match message {
             Message::Slot(message_slot) => {
-                let _ = self.on_message_slot(message_slot);
+                if self.on_message_slot(message_slot).is_err() {
+                    // Symmetric with handle_block_data which increments the same metric
+                    // when is_slot_tracked returns false.
+                    metrics::incr_geyser_untrack_slot_event_dropped();
+                }
             }
             Message::Account(message_account) => {
                 self.handle_block_data(Message::Account(message_account));
@@ -931,5 +1005,23 @@ mod tests {
             /* Last message is explicitly sent as BlockMeta, its no longer implicit inside of original_messages */
             assert_eq!(entry_count, 2);
         }
+    }
+
+    #[test]
+    fn block_machine_should_yield_all_block_and_commitment_when_replayed_capacity_set_to_zero() {
+        let mut storage = BlockMachineStorage::new(0);
+        drive_slot_to_processed(&mut storage, 1, None);
+        storage.add(make_slot_msg(1, None, SlotStatus::Confirmed));
+        storage.add(make_slot_msg(1, None, SlotStatus::Finalized));
+
+        // Drain the ready queue
+        let (actual, _block) = storage.pop_ready_block().unwrap();
+        assert!(actual.commitment == CommitmentLevel::Processed);
+
+        let (actual, _block) = storage.pop_ready_block().unwrap();
+        assert!(actual.commitment == CommitmentLevel::Confirmed);
+
+        let (actual, _block) = storage.pop_ready_block().unwrap();
+        assert!(actual.commitment == CommitmentLevel::Finalized);
     }
 }
