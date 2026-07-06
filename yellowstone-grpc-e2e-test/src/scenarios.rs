@@ -344,6 +344,7 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
             },
         )]),
         accounts: HashMap::from([("test".to_string(), account_filter)]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
         from_slot: Some(from_slot),
         ..Default::default()
     };
@@ -360,9 +361,11 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         from_slot
     );
     let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    let mut block_visited = HashSet::new();
+    let mut block_meta_received = HashSet::new();
     let mut slot_status_received = HashMap::new();
     while let Some(update) = stream.next().await {
-        if count >= MAX_UPDATES {
+        if remaining_slot_to_visit.is_empty() {
             break;
         }
         let update = update.context("stream should yield updates without error")?;
@@ -373,6 +376,14 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         match update_oneof {
             UpdateOneof::Slot(slot) => {
                 slot_status_received.insert(slot.slot, slot.status());
+                ensure!(
+                    slot.parent.is_some(), 
+                    "slot update should have parent slot for replayed slots"
+                );
+                if block_visited.contains(&slot.slot) {
+                    count += 1;
+                }
+                remaining_slot_to_visit.retain(|s| *s != slot.slot);
             }
             UpdateOneof::Account(subscribe_update_account) => {
                 let account = subscribe_update_account
@@ -384,11 +395,28 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
                     actual_pubkey == sysvar_clock_pubkey,
                     "received unexpected pubkey"
                 );
-                count += 1;
-                remaining_slot_to_visit.retain(|&slot| slot != subscribe_update_account.slot);
+                block_visited.insert(subscribe_update_account.slot);
+
+                ensure!(
+                    !block_meta_received.contains(&subscribe_update_account.slot),
+                    "block meta should always be last to arrive for a slot, after all account updates have been received"
+                );
+
+                ensure!(
+                    !slot_status_received.contains_key(&subscribe_update_account.slot),
+                    "slot status should always be last to arrive for a slot, after all account updates have been received"
+                );
+
                 log::info!(
                     "received account update for slot {} {count}/{MAX_UPDATES}",
                     subscribe_update_account.slot
+                );
+            }
+            UpdateOneof::BlockMeta(ev) => {
+                block_meta_received.insert(ev.slot);
+                ensure!(
+                    !slot_status_received.contains_key(&ev.slot),
+                    "slot status should always be last to arrive for a slot, after all block meta updates have been received"
                 );
             }
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
