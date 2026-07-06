@@ -1181,9 +1181,11 @@ pub async fn it_should_verify_replay_ordering_matches_live_path(config: &RunConf
                 // BlockMeta is the last content message before slot status.
                 // Validate ordering for this slot if we have all phases.
                 let ordering = slot_orderings.get(&ev.slot).unwrap();
-                if let (Some(last_data), Some(block), Some(blockmeta)) =
-                    (ordering.last_data_seq, ordering.block_seq, ordering.blockmeta_seq)
-                {
+                if let (Some(last_data), Some(block), Some(blockmeta)) = (
+                    ordering.last_data_seq,
+                    ordering.block_seq,
+                    ordering.blockmeta_seq,
+                ) {
                     ensure!(
                         last_data < block,
                         "slot {}: block data (seq {last_data}) must arrive before Block (seq {block})",

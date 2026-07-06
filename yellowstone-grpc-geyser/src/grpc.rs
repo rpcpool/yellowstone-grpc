@@ -1247,7 +1247,7 @@ impl GrpcService {
                             .map(|s| {
                                 Message::Slot(MessageSlot {
                                     slot: s.slot,
-                                    parent: None,
+                                    parent: s.parent_slot,
                                     status: match s.commitment {
                                         solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
                                         solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
