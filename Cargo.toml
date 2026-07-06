@@ -98,12 +98,12 @@ vergen = "9.0.6"
 wincode = "0.5.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "4.1.0"
-solana-account-decoder = "4.1.0"
+agave-geyser-plugin-interface = "=4.1.0"
+solana-account-decoder = "=4.1.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "4.1.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "4.1.0"
-solana-transaction-status = "4.1.0"
+solana-storage-proto = { version = "=4.1.0", features = ["agave-unstable-api"] }
+solana-transaction-context = "=4.1.0"
+solana-transaction-status = "=4.1.0"
 
 # Solana SDK
 solana-account = "4.0.0"
@@ -125,7 +125,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.1.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.1.0-rc1" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
