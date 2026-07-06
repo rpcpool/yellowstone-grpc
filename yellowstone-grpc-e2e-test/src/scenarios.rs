@@ -1075,3 +1075,157 @@ pub async fn subscribe_should_receive_no_slot_duplicates(config: &RunConfig) -> 
 
     Ok(())
 }
+
+/// Verifies replay message ordering matches the live broadcast path:
+/// block data (Account/Transaction/Entry) before Block before BlockMeta before slot status.
+#[test_helper(name = "replay-ordering")]
+pub async fn it_should_verify_replay_ordering_matches_live_path(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    let resp = client.get_slot(None).await.context("get_slot")?;
+    let tip = resp.slot;
+    let from_slot = tip.saturating_sub(10);
+
+    let subscription = SubscribeRequest {
+        slots: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterSlots {
+                interslot_updates: Some(true),
+                ..Default::default()
+            },
+        )]),
+        blocks: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterBlocks {
+                include_accounts: Some(true),
+                include_transactions: Some(true),
+                include_entries: Some(true),
+                ..Default::default()
+            },
+        )]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        accounts: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![],
+                ..Default::default()
+            },
+        )]),
+        transactions: HashMap::from([("test".to_string(), Default::default())]),
+        entry: HashMap::from([("test".to_string(), Default::default())]),
+        from_slot: Some(from_slot),
+        commitment: Some(1),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+
+    log::info!(
+        "current tip slot is {}, subscribing from slot {}",
+        tip,
+        from_slot
+    );
+
+    // Track message ordering per slot
+    #[derive(Default)]
+    struct SlotOrdering {
+        last_data_seq: Option<usize>,
+        block_seq: Option<usize>,
+        blockmeta_seq: Option<usize>,
+        first_status_seq: Option<usize>,
+    }
+
+    let mut slot_orderings: HashMap<u64, SlotOrdering> = HashMap::new();
+    let mut seq: usize = 0;
+    let mut validated_slots = 0usize;
+    const TARGET_VALIDATED_SLOTS: usize = 3;
+
+    while let Some(update) = stream.next().await {
+        if validated_slots >= TARGET_VALIDATED_SLOTS {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Account(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                ordering.last_data_seq = Some(seq);
+                seq += 1;
+            }
+            UpdateOneof::Transaction(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                ordering.last_data_seq = Some(seq);
+                seq += 1;
+            }
+            UpdateOneof::Entry(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                ordering.last_data_seq = Some(seq);
+                seq += 1;
+            }
+            UpdateOneof::Block(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                ordering.block_seq = Some(seq);
+                seq += 1;
+            }
+            UpdateOneof::BlockMeta(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                ordering.blockmeta_seq = Some(seq);
+                seq += 1;
+
+                // BlockMeta is the last content message before slot status.
+                // Validate ordering for this slot if we have all phases.
+                let ordering = slot_orderings.get(&ev.slot).unwrap();
+                if let (Some(last_data), Some(block), Some(blockmeta)) =
+                    (ordering.last_data_seq, ordering.block_seq, ordering.blockmeta_seq)
+                {
+                    ensure!(
+                        last_data < block,
+                        "slot {}: block data (seq {last_data}) must arrive before Block (seq {block})",
+                        ev.slot
+                    );
+                    ensure!(
+                        block < blockmeta,
+                        "slot {}: Block (seq {block}) must arrive before BlockMeta (seq {blockmeta})",
+                        ev.slot
+                    );
+                    validated_slots += 1;
+                    log::info!(
+                        "slot {}: ordering verified {validated_slots}/{TARGET_VALIDATED_SLOTS}",
+                        ev.slot
+                    );
+                }
+            }
+            UpdateOneof::Slot(ev) => {
+                let ordering = slot_orderings.entry(ev.slot).or_default();
+                if ordering.first_status_seq.is_none() {
+                    ordering.first_status_seq = Some(seq);
+
+                    // If we already have blockmeta, verify status comes after
+                    if let Some(blockmeta) = ordering.blockmeta_seq {
+                        ensure!(
+                            blockmeta < seq,
+                            "slot {}: BlockMeta (seq {blockmeta}) must arrive before slot status (seq {seq})",
+                            ev.slot
+                        );
+                    }
+                }
+                seq += 1;
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+            _ => continue,
+        }
+    }
+
+    ensure!(
+        validated_slots >= TARGET_VALIDATED_SLOTS,
+        "should have validated ordering for at least {TARGET_VALIDATED_SLOTS} slots, got {validated_slots}"
+    );
+
+    Ok(())
+}
