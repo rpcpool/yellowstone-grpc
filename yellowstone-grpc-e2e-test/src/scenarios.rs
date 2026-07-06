@@ -377,7 +377,7 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
             UpdateOneof::Slot(slot) => {
                 slot_status_received.insert(slot.slot, slot.status());
                 ensure!(
-                    slot.parent.is_some(), 
+                    slot.parent.is_some(),
                     "slot update should have parent slot for replayed slots"
                 );
                 if block_visited.contains(&slot.slot) {
@@ -1256,6 +1256,67 @@ pub async fn it_should_verify_replay_ordering_matches_live_path(config: &RunConf
         validated_slots >= TARGET_VALIDATED_SLOTS,
         "should have validated ordering for at least {TARGET_VALIDATED_SLOTS} slots, got {validated_slots}"
     );
+
+    Ok(())
+}
+
+/// Verifies that slot status updates have a parent slot when applicable.
+#[test_helper(name = "slot-status-parent-present")]
+pub async fn slot_status_should_have_parent(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    let subscription = SubscribeRequest {
+        slots: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterSlots {
+                interslot_updates: Some(false),
+                ..Default::default()
+            },
+        )]),
+        commitment: Some(0),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+
+    let mut slot_progression: HashMap<u64, Vec<_>> = HashMap::new();
+
+    const ALL_COMMITMENT: [SlotStatus; 3] = [
+        SlotStatus::SlotProcessed,
+        SlotStatus::SlotConfirmed,
+        SlotStatus::SlotFinalized,
+    ];
+    // 64 first slot should have gone through at least one finalized slot
+    const MAX_SLOTS: usize = 500;
+    while let Some(update) = stream.next().await {
+        if slot_progression.len() >= MAX_SLOTS {
+            bail!(
+                "should have received updates for at least {MAX_SLOTS} slots, got {}",
+                slot_progression.len()
+            )
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(UpdateOneof::Slot(ev)) = update.update_oneof else {
+            continue;
+        };
+
+        let slot = ev.slot;
+        ensure!(
+            ev.parent.is_some(),
+            "slot {} with status {:?} should have a parent slot",
+            slot,
+            ev.status()
+        );
+        let status_so_far = slot_progression.entry(slot).or_default();
+        status_so_far.push(ev.status());
+        // We stop the test once we have received all commitment levels for a slot, since we only need to verify that the parent is present for each commitment level.
+        if ALL_COMMITMENT.iter().all(|c| status_so_far.contains(c)) {
+            break;
+        }
+    }
 
     Ok(())
 }
