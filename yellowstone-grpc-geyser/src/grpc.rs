@@ -1241,7 +1241,7 @@ impl GrpcService {
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     for replayed_slot in replayed_slot_iter {
-                        replayed_messages.extend(replayed_slot.to_messages());
+                        replayed_slot.extend_messages(&mut replayed_messages);
                     }
 
                     let _ = tx.send(ReplayedResponse::Messages(replayed_messages));

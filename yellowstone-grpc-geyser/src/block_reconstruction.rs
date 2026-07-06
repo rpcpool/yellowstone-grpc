@@ -213,24 +213,24 @@ pub struct ReplayedSlot<'frozen_block> {
 }
 
 impl<'frozen_block> ReplayedSlot<'frozen_block> {
-    /// Converts a replayed slot into the message sequence a subscriber expects.
-    pub fn to_messages(&self) -> Vec<Message> {
+    /// Extends the caller's buffer with the message sequence a subscriber expects.
+    /// Ordering matches the live broadcast path in block_reconstruction_loop.
+    pub fn extend_messages(&self, out: &mut Vec<Message>) {
         // Invariant: slot status messages carry their original parent_slot.
         // Invariant: content arrives before commitment signal.
-        let mut messages = Vec::new();
 
         // Block content
-        messages.extend(self.frozen_block.messages().iter().cloned());
+        out.extend(self.frozen_block.messages().iter().cloned());
 
         // Block + BlockMeta
-        messages.push(Message::Block(Arc::new(
+        out.push(Message::Block(Arc::new(
             self.frozen_block.get_message_block(),
         )));
-        messages.push(Message::BlockMeta(self.frozen_block.get_block_meta()));
+        out.push(Message::BlockMeta(self.frozen_block.get_block_meta()));
 
         // Slot status which comes last, so subscribers see content before commitment signal
         for s in &self.slot_status_messages {
-            messages.push(Message::Slot(MessageSlot {
+            out.push(Message::Slot(MessageSlot {
                 slot: s.slot,
                 parent: s.parent_slot,
                 status: match s.commitment {
@@ -242,8 +242,6 @@ impl<'frozen_block> ReplayedSlot<'frozen_block> {
                 created_at: prost_types::Timestamp::from(std::time::SystemTime::now()),
             }));
         }
-
-        messages
     }
 }
 
@@ -1058,7 +1056,8 @@ mod tests {
             ],
         };
 
-        let messages = replayed.to_messages();
+        let mut messages = Vec::new();
+        replayed.extend_messages(&mut messages);
 
         // parent_slot preserved, not None
         let slot_msgs: Vec<_> = messages
