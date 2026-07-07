@@ -959,6 +959,13 @@ impl GrpcService {
                     // reset counters
                     accounts = 0; transactions = 0; slots = 0;
                     entries = 0; block_meta = 0; lagged = 0;
+
+                    if !client.check_region() {
+                        panic!(
+                            "shmem: region was re-created — producer restarted. \
+                            Consumer must rejoin."
+                        );
+                    }
                 }
                 _ = {
                 let wait = client.prepare_wait();
