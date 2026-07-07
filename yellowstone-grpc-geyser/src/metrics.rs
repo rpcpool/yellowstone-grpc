@@ -1,7 +1,10 @@
 use {
     crate::{
         config::ConfigPrometheus,
-        plugin::{filter::Filter, message::SlotStatus},
+        plugin::{
+            filter::{Filter, FilterComplexityProfile},
+            message::SlotStatus,
+        },
         version::VERSION as VERSION_INFO,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
@@ -17,8 +20,8 @@ use {
     },
     log::{debug, error, info},
     prometheus::{
-        Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
-        TextEncoder,
+        Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
+        Opts, Registry, TextEncoder,
     },
     solana_clock::Slot,
     std::{
@@ -210,6 +213,102 @@ lazy_static::lazy_static! {
         ),
         &["subscriber_id", "method"]
     ).unwrap();
+
+    static ref FILTER_COMPLEXITY_ACCOUNTS_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_accounts_size",
+            "Distribution of account_include size per account filter"
+        ).buckets(vec![0.0, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 50000.0, 100000.0, 2500000.0, 5000000.0, 1000000.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_OWNERS_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_owners_size",
+            "Distribution of owner_include size per account filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_ACCOUNTS_INCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_accounts_include_size",
+            "Distribution of account_include size per transaction filter"
+        ).buckets(vec![0.0, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 50000.0, 100000.0, 2500000.0, 5000000.0, 1000000.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_ACCOUNTS_EXCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_accounts_exclude_size",
+            "Distribution of account_exclude size per transaction filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_ACCOUNTS_REQUIRED_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_accounts_required_size",
+            "Distribution of account_required size per transaction filter"
+        ).buckets(vec![0.0, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 50000.0, 100000.0, 2500000.0, 5000000.0, 1000000.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_TOKEN_MODE_ENABLED: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_token_mode_enabled",
+            "Whether token-account expansion is enabled (0/1) per transaction filter"
+        ).buckets(vec![0.0, 1.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_INCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_status_accounts_include_size",
+            "Distribution of account_include size per transaction-status filter"
+        ).buckets(vec![0.0, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 50000.0, 100000.0, 2500000.0, 5000000.0, 1000000.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_EXCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_status_accounts_exclude_size",
+            "Distribution of account_exclude size per transaction-status filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_REQUIRED_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_status_accounts_required_size",
+            "Distribution of account_required size per transaction-status filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_TX_STATUS_TOKEN_MODE_ENABLED: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_tx_status_token_mode_enabled",
+            "Whether token-account expansion is enabled (0/1) per transaction-status filter"
+        ).buckets(vec![0.0, 1.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_BLOCKS_INCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_blocks_include_size",
+            "Distribution of include complexity per block filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0]),
+        &["subscriber_id"]
+    ).unwrap();
+
+    static ref FILTER_COMPLEXITY_BLOCKS_EXCLUDE_SIZE: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "yellowstone_grpc_filter_complexity_blocks_exclude_size",
+            "Distribution of exclude complexity per block filter"
+        ).buckets(vec![0.0, 1.0, 2.0, 4.0, 8.0, 16.0]),
+        &["subscriber_id"]
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -376,6 +475,19 @@ impl PrometheusService {
             register!(AUTHORIZED_COUNT);
             register!(METHOD_RATELIMITED_COUNT);
 
+            register!(FILTER_COMPLEXITY_ACCOUNTS_SIZE);
+            register!(FILTER_COMPLEXITY_OWNERS_SIZE);
+            register!(FILTER_COMPLEXITY_TX_ACCOUNTS_INCLUDE_SIZE);
+            register!(FILTER_COMPLEXITY_TX_ACCOUNTS_EXCLUDE_SIZE);
+            register!(FILTER_COMPLEXITY_TX_ACCOUNTS_REQUIRED_SIZE);
+            register!(FILTER_COMPLEXITY_TX_TOKEN_MODE_ENABLED);
+            register!(FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_INCLUDE_SIZE);
+            register!(FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_EXCLUDE_SIZE);
+            register!(FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_REQUIRED_SIZE);
+            register!(FILTER_COMPLEXITY_TX_STATUS_TOKEN_MODE_ENABLED);
+            register!(FILTER_COMPLEXITY_BLOCKS_INCLUDE_SIZE);
+            register!(FILTER_COMPLEXITY_BLOCKS_EXCLUDE_SIZE);
+
             VERSION
                 .with_label_values(&[
                     VERSION_INFO.buildts,
@@ -494,6 +606,64 @@ fn not_found_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(BodyEmpty::new().boxed())
+}
+
+pub fn observe_filter_complexity(subscriber_id: &str, observation: &FilterComplexityProfile) {
+    for score in &observation.accounts {
+        FILTER_COMPLEXITY_ACCOUNTS_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_size as f64);
+        FILTER_COMPLEXITY_OWNERS_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.owners_size as f64);
+    }
+
+    for score in &observation.transactions {
+        FILTER_COMPLEXITY_TX_ACCOUNTS_INCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_include_size as f64);
+        FILTER_COMPLEXITY_TX_ACCOUNTS_EXCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_exclude_size as f64);
+        FILTER_COMPLEXITY_TX_ACCOUNTS_REQUIRED_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_required_size as f64);
+        FILTER_COMPLEXITY_TX_TOKEN_MODE_ENABLED
+            .with_label_values(&[subscriber_id])
+            .observe(if score.token_accounts_enabled {
+                1.0
+            } else {
+                0.0
+            });
+    }
+
+    for score in &observation.transaction_status {
+        FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_INCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_include_size as f64);
+        FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_EXCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_exclude_size as f64);
+        FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_REQUIRED_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.accounts_required_size as f64);
+        FILTER_COMPLEXITY_TX_STATUS_TOKEN_MODE_ENABLED
+            .with_label_values(&[subscriber_id])
+            .observe(if score.token_accounts_enabled {
+                1.0
+            } else {
+                0.0
+            });
+    }
+
+    for score in &observation.blocks {
+        FILTER_COMPLEXITY_BLOCKS_INCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.include_size as f64);
+        FILTER_COMPLEXITY_BLOCKS_EXCLUDE_SIZE
+            .with_label_values(&[subscriber_id])
+            .observe(score.exclude_size as f64);
+    }
 }
 
 pub fn incr_ip_conncur_rate_limit_exceeded(remote_peer_ip: Option<String>) {
@@ -720,6 +890,18 @@ pub fn reset_metrics() {
     UNAUTHORIZED_COUNT.reset();
     AUTHORIZED_COUNT.reset();
     METHOD_RATELIMITED_COUNT.reset();
+    FILTER_COMPLEXITY_ACCOUNTS_SIZE.reset();
+    FILTER_COMPLEXITY_OWNERS_SIZE.reset();
+    FILTER_COMPLEXITY_TX_ACCOUNTS_INCLUDE_SIZE.reset();
+    FILTER_COMPLEXITY_TX_ACCOUNTS_EXCLUDE_SIZE.reset();
+    FILTER_COMPLEXITY_TX_ACCOUNTS_REQUIRED_SIZE.reset();
+    FILTER_COMPLEXITY_TX_TOKEN_MODE_ENABLED.reset();
+    FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_INCLUDE_SIZE.reset();
+    FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_EXCLUDE_SIZE.reset();
+    FILTER_COMPLEXITY_TX_STATUS_ACCOUNTS_REQUIRED_SIZE.reset();
+    FILTER_COMPLEXITY_TX_STATUS_TOKEN_MODE_ENABLED.reset();
+    FILTER_COMPLEXITY_BLOCKS_INCLUDE_SIZE.reset();
+    FILTER_COMPLEXITY_BLOCKS_EXCLUDE_SIZE.reset();
     // Note: VERSION and GEYSER_ACCOUNT_UPDATE_RECEIVED are intentionally not reset
     // - VERSION contains build info set once on startup
     // - GEYSER_ACCOUNT_UPDATE_RECEIVED is a Histogram which doesn't support reset()
