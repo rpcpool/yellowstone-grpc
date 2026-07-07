@@ -10,8 +10,10 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+futures = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 dotenvy = { workspace = true }
+humantime-serde = { workspace = true }
 inventory = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
@@ -23,9 +25,11 @@ hyper-util = { workspace = true }
 yellowstone-grpc-e2e-macros = { path = "../yellowstone-grpc-e2e-macros" }
 yellowstone-grpc-proto = { workspace = true }
 yellowstone-block-machine = { workspace = true }
-yellowstone-grpc-client = { path = "../yellowstone-grpc-client", features = ["test-tools"] }
+yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
 yellowstone-grpc-geyser = { workspace = true }
 
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
 solana-signature = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-commitment-config = { workspace = true }

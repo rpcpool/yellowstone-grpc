@@ -433,6 +433,54 @@ pub struct HttpBackedAuthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RatelimitConfig {
+    ///
+    /// The maximum number of hits allowed within the specified time window.
+    /// A negative value indicates that there is no limit, and all requests will be allowed.
+    ///
+    #[serde(
+        default = "RatelimitConfig::default_max_hits",
+        deserialize_with = "deserialize_int_str"
+    )]
+    pub default_max_hits: i32,
+
+    ///
+    /// Window duration for the rate limit. The number of hits is counted within this time window.
+    ///
+    /// On the server, this is a rolling window using token buckets.
+    ///
+    /// # Rolling window details
+    ///
+    ///
+    /// Suppose you allow 1000 request within a 10 seconds rolling window,
+    /// every second we refill 100 tokens to the bucket.
+    ///
+    /// If a client sends 1000 requests before the first second, the bucket will be empty and the next request will be rejected.
+    /// It must wait for the next second to get 100 tokens refilled, and then it can send 100 requests before the next second, and so on.
+    #[serde(default = "RatelimitConfig::default_window", with = "humantime_serde")]
+    pub window: Duration,
+}
+
+impl Default for RatelimitConfig {
+    fn default() -> Self {
+        Self {
+            default_max_hits: 1000,
+            window: Duration::from_secs(10),
+        }
+    }
+}
+
+impl RatelimitConfig {
+    pub const fn default_max_hits() -> i32 {
+        1000
+    }
+
+    pub const fn default_window() -> Duration {
+        Duration::from_secs(10)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct FileBackedAuthConfig {
     pub subscription_resolver_path: PathBuf,
 }
@@ -448,14 +496,27 @@ impl HttpBackedAuthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct TrustedMetadataAuthConfig {
+    // Reserved for trusted-metadata-specific options.
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    #[serde(flatten)]
+    pub kind: AuthKind,
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum AuthConfig {
+pub enum AuthKind {
     Http(HttpBackedAuthConfig),
     File(FileBackedAuthConfig),
     ///
     /// Trusts the `x-subscription-id` header and does not perform any authentication or authorization checks and apply default rate limits.
     #[serde(rename = "trusted-metadata")]
-    TrustedMetadata,
+    TrustedMetadata(TrustedMetadataAuthConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
