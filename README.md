@@ -229,6 +229,44 @@ Example `/etc/yellowstone/subscriptions.json`:
 }
 ```
 
+#### Billing monitoring (`listen[].auth.billing`)
+
+Billing monitoring is configured under `listen[].auth.billing`.
+
+Currently supported mode:
+
+- `type: "http"`
+
+```json
+{
+   "auth": {
+      "type": "http",
+      "subscription_resolver_url": "http://127.0.0.1:8080/",
+      "billing": {
+         "type": "http",
+         "billing_endpoint_url": "http://127.0.0.1:8081/billing",
+         "report_interval": "5s"
+      }
+   }
+}
+```
+
+Notes:
+
+- Billing monitoring is optional.
+- `report_interval` defaults to `5s` if omitted.
+- Billing events are sent as NDJSON (`application/x-ndjson` style payload): one JSON event per line.
+- Event `code` is one of:
+  - `bandwidth`: metered bytes per request path and subscription
+  - `requests`: method call counts per request path and subscription
+
+Example NDJSON payload:
+
+```ndjson
+{"code":"bandwidth","subscription_id":"sub-1","method":"/geyser.Geyser/Subscribe","quantity":8192}
+{"code":"requests","subscription_id":"sub-1","method":"/geyser.Geyser/Subscribe","quantity":1}
+```
+
 #### Full `listen` example
 
 ```json
