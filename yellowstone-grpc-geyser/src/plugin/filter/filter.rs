@@ -142,6 +142,55 @@ impl Default for Filter {
     }
 }
 
+/// Statistic snapshot for one account filter definition.
+///
+/// Counts represent how many account/owner keys were configured in that
+/// filter, not how many runtime matches occurred.
+#[derive(Debug, Clone)]
+pub struct AccountFilterStats {
+    /// Number of configured account pubkeys in this filter.
+    pub accounts_len: usize,
+    /// Number of configured owner pubkeys in this filter.
+    pub owners_len: usize,
+}
+
+/// Statistic snapshot for one transaction (or transaction status) filter.
+#[derive(Debug, Clone)]
+pub struct TxnFilterStats {
+    /// Number of pubkeys in `account_include`.
+    pub accounts_include_len: usize,
+    /// Number of pubkeys in `account_exclude`.
+    pub accounts_exclude_len: usize,
+    /// Number of pubkeys in `account_required`.
+    pub accounts_required_len: usize,
+    /// Whether token-account expansion is enabled for this filter.
+    pub token_accounts_enabled: bool,
+}
+
+/// Statistic snapshot for one block filter.
+#[derive(Debug, Clone)]
+pub struct BlocksFilterStats {
+    /// Number of inclusion conditions enabled on this filter.
+    pub include_len: usize,
+    /// Number of explicit exclusion toggles on this filter.
+    pub exclude_len: usize,
+}
+
+/// Aggregate statistics view across all filter groups.
+///
+/// This is intended for diagnostics/telemetry and should not drive business logic decisions.
+#[derive(Clone, Debug)]
+pub struct FilterStats {
+    /// Per-account-filter complexity entries.
+    pub accounts: Vec<AccountFilterStats>,
+    /// Per-transaction-filter complexity entries.
+    pub transactions: Vec<TxnFilterStats>,
+    /// Per-transaction-status-filter complexity entries.
+    pub transaction_status: Vec<TxnFilterStats>,
+    /// Per-block-filter complexity entries.
+    pub blocks: Vec<BlocksFilterStats>,
+}
+
 impl Filter {
     pub fn new(
         config: &SubscribeRequest,
@@ -173,6 +222,110 @@ impl Filter {
             )?,
             ping: config.ping.as_ref().map(|msg| msg.id),
         })
+    }
+
+    /// Build a static statistics snapshot of the currently parsed filter.
+    ///
+    /// The returned values are derived from configured filter criteria only.
+    /// They do not depend on live traffic and are safe to call for logging,
+    /// metrics, and debugging.
+    pub fn get_filter_stats(&self) -> FilterStats {
+        // `accounts.account` is indexed by pubkey -> set(filter_name).
+        // For complexity we need the inverse shape (filter_name -> count(pubkeys)),
+        // so we accumulate how many pubkeys point to each filter.
+        let mut account_pubkey_hits = HashMap::new();
+        for filter_names in self.accounts.account.values() {
+            for filter_name in filter_names {
+                *account_pubkey_hits
+                    .entry(filter_name.clone())
+                    .or_insert(0usize) += 1;
+            }
+        }
+
+        // Same inversion for owner constraints: owner pubkey -> set(filter_name)
+        // becomes per-filter owner count.
+        let mut owner_pubkey_hits = HashMap::new();
+        for filter_names in self.accounts.owner.values() {
+            for filter_name in filter_names {
+                *owner_pubkey_hits
+                    .entry(filter_name.clone())
+                    .or_insert(0usize) += 1;
+            }
+        }
+
+        // We iterate `aggregates` as the canonical list of account filters.
+        // Reason: an account filter can exist without account/owner pubkeys
+        // (for example only state checks or nonempty_txn_signature), and those
+        // filters would be missing if we iterated only account/owner maps.
+        let accounts = self
+            .accounts
+            .aggregates
+            .iter()
+            .map(|aggregate| AccountFilterStats {
+                accounts_len: account_pubkey_hits
+                    .get(&aggregate.filter_name)
+                    .copied()
+                    .unwrap_or(0),
+                owners_len: owner_pubkey_hits
+                    .get(&aggregate.filter_name)
+                    .copied()
+                    .unwrap_or(0),
+            })
+            .collect();
+
+        // Transaction filter complexity is direct: one observation per parsed
+        // filter with sizes of include/exclude/required lists plus token mode.
+        let transactions = self
+            .transactions
+            .filters
+            .iter()
+            .map(|(_name, inner)| TxnFilterStats {
+                accounts_include_len: inner.account_include.len(),
+                accounts_exclude_len: inner.account_exclude.len(),
+                accounts_required_len: inner.account_required.len(),
+                token_accounts_enabled: inner.token_accounts.is_some(),
+            })
+            .collect();
+
+        // Same logic for transaction-status filters.
+        let transaction_status = self
+            .transactions_status
+            .filters
+            .iter()
+            .map(|(_name, inner)| TxnFilterStats {
+                accounts_include_len: inner.account_include.len(),
+                accounts_exclude_len: inner.account_exclude.len(),
+                accounts_required_len: inner.account_required.len(),
+                token_accounts_enabled: inner.token_accounts.is_some(),
+            })
+            .collect();
+
+        // Block filters have both selector lists and include/exclude toggles.
+        // We summarize these as simple counts so logs/metrics can compare
+        // relative complexity without serializing full filter internals.
+        let blocks = self
+            .blocks
+            .filters
+            .values()
+            .map(|inner| BlocksFilterStats {
+                include_len: inner.account_include.len()
+                    + usize::from(inner.account_cuckoo.is_some())
+                    + usize::from(matches!(inner.include_transactions, None | Some(true)))
+                    + usize::from(inner.include_accounts == Some(true))
+                    + usize::from(inner.include_entries == Some(true)),
+                exclude_len: usize::from(inner.include_transactions == Some(false))
+                    + usize::from(inner.include_accounts == Some(false))
+                    + usize::from(inner.include_entries == Some(false)),
+            })
+            .collect();
+
+        // Return a full snapshot grouped by filter category.
+        FilterStats {
+            accounts,
+            transactions,
+            transaction_status,
+            blocks,
+        }
     }
 
     fn decode_commitment(commitment: Option<i32>) -> FilterResult<CommitmentLevel> {
