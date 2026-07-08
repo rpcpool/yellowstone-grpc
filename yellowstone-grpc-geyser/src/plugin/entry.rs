@@ -128,9 +128,11 @@ impl GeyserPlugin for Plugin {
                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             });
 
+            let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
             PrometheusService::spawn(
                 config.prometheus,
+                config.debug_clients_http.then_some(debug_client_rx),
                 prometheus_cancellation_token,
                 prometheus_task_tracker,
             )
@@ -139,6 +141,7 @@ impl GeyserPlugin for Plugin {
 
             let (snapshot_channel, grpc_channel, deshred_channel) = GrpcService::create(
                 config.grpc,
+                config.debug_clients_http.then_some(debug_client_tx),
                 is_reload,
                 grpc_cancellation_token,
                 grpc_task_tracker,
