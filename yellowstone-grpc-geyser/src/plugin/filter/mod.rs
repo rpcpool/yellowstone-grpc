@@ -5,4 +5,6 @@ pub mod limits;
 pub mod message;
 pub mod name;
 
-pub use filter::{DeshredFilter, Filter, FilterAccountsDataSlice, FilterError, FilterResult};
+pub use filter::{
+    DeshredFilter, Filter, FilterAccountsDataSlice, FilterError, FilterResult, FilterStats,
+};
