@@ -6,6 +6,5 @@ pub mod message;
 pub mod name;
 
 pub use filter::{
-    DeshredFilter, Filter, FilterAccountsDataSlice, FilterComplexityProfile, FilterError,
-    FilterResult,
+    DeshredFilter, Filter, FilterAccountsDataSlice, FilterError, FilterResult, FilterStats,
 };

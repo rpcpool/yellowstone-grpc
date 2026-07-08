@@ -10,6 +10,27 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-08
+
+- yellowstone-grpc-geyser 14.2.0
+
+### Features
+
+- Added `yellowstone_grpc_geyser_filter_stats`, a filter-complexity histogram metric labeled by `subscriber_id`, filter `type`, and `condition`.
+- Added per-group `len` observations for filter-complexity metrics (`accounts`, `transactions`, `transaction_status`, and `blocks`).
+
+### Fixes
+
+- Fixed a subscription-tracking edge case where counter updates could leak if execution failed before `ClientSession` creation.
+- Reworked subscription tracking to use an owned RAII permit with `Drop`, making acquire/release semantics explicit and safer.
+
+### Breaking
+
+- Renamed Prometheus metric prefixes from `yellowstone_grpc_*` to `yellowstone_grpc_geyser_*`.
+- Removed `/debug_clients` endpoint from the auxiliary sidecar server.
+- Changed client-loop logs to include subscriber context for improved monitoring and troubleshooting.
+- Changed `yellowstone_grpc_geyser_subscriber_queue_size` from `IntGaugeVec` to `HistogramVec` to better represent multiple concurrent subscriptions per subscriber.
+
 ## 2026-07-03
 
 - yellowstone-grpc-geyser 14.1.0

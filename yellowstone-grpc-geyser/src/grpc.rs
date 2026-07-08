@@ -8,8 +8,8 @@ use {
         config::{AuthConfig, AuthKind, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         metered::PrometheusMeteredManager,
         metrics::{
-            self, incr_grpc_method_call_count, set_subscriber_queue_size,
-            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
+            self, incr_grpc_method_call_count, observe_subscriber_queue_size,
+            subscription_limit_exceeded_inc, GEYSER_BATCH_SIZE,
         },
         plugin::{
             filter::{
@@ -39,13 +39,13 @@ use {
     std::{
         collections::HashMap,
         io,
-        net::SocketAddr,
+        num::NonZeroUsize,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         pin::Pin,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, LazyLock, Mutex as StdMutex,
+            Arc, Mutex as StdMutex,
         },
         task::{Context, Poll},
         time::SystemTime,
@@ -63,7 +63,7 @@ use {
         metadata::AsciiMetadataValue,
         service::{interceptor, LayerExt},
         transport::{
-            server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
+            server::{Connected, Server},
             CertificateDer,
         },
         Request, Response, Result as TonicResult, Status, Streaming,
@@ -304,7 +304,7 @@ impl BlockMetaStorage {
     }
 }
 
-pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
+type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 
 /// Messages broadcast on the deshred channel. Deshred is a pre-execution
 /// stream and has no commitment level: each message is emitted exactly
@@ -316,13 +316,82 @@ pub enum ReplayedResponse {
     Lagged(Slot),
 }
 
-pub type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
+type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
-type SubscriptionTracker = Arc<StdMutex<HashMap<String, usize>>>;
+///
+/// Tracks the number of active subscriptions per subscriber ID. When a new subscription is created, it increments the count for that subscriber ID. When the subscription is dropped, it decrements the count. If the count exceeds the configured limit,
+/// it returns an error when trying to create a new subscription.
+#[derive(Clone)]
+struct SubscriptionTracker {
+    counters: Arc<StdMutex<HashMap<String, usize>>>,
+    subscription_limit: NonZeroUsize,
+}
 
-static CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR: LazyLock<
-    StdMutex<HashMap<SocketAddr, usize>>,
-> = LazyLock::new(|| StdMutex::new(HashMap::new()));
+impl SubscriptionTracker {
+    fn new(subscription_limit: NonZeroUsize) -> Self {
+        Self {
+            counters: Arc::new(StdMutex::new(HashMap::new())),
+            subscription_limit,
+        }
+    }
+}
+///
+/// A permit that is owned by a subscriber. When the permit is dropped,
+/// it decrements the subscription count for the subscriber in the SubscriptionTracker.
+struct SubscriptionOwnedPermit {
+    inner: Option<SubscriptionTracker>,
+    key: String,
+}
+
+impl Drop for SubscriptionOwnedPermit {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            let mut tracker = inner
+                .counters
+                .lock()
+                .expect("subscription_tracker mutex poisoned");
+            if let Some(count) = tracker.get_mut(&self.key) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    metrics::remove_grpc_concurrent_subscribe_per_subscriber_id(&self.key);
+                    tracker.remove(&self.key);
+                } else {
+                    metrics::set_grpc_concurrent_subscribe_per_subscriber_id(
+                        &self.key,
+                        *count as u64,
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl SubscriptionTracker {
+    ///
+    /// Attempts to insert a new subscription for the given subscriber ID.
+    /// If the subscription limit is exceeded, it returns an error.
+    ///
+    /// Otherwise, it increments the count and returns a [`SubscriptionOwnedPermit`] that will decrement the count when dropped.
+    ///
+    pub fn try_insert(&self, subscriber_id: String) -> Result<SubscriptionOwnedPermit, ()> {
+        let mut tracker = self
+            .counters
+            .lock()
+            .map_err(|_| ())
+            .expect("subscription_tracker mutex poisoned");
+        let count = tracker.entry(subscriber_id.clone()).or_insert(0);
+        if *count >= self.subscription_limit.get() {
+            return Err(());
+        }
+        *count = count.saturating_add(1);
+        metrics::set_grpc_concurrent_subscribe_per_subscriber_id(&subscriber_id, *count as u64);
+        let permit = SubscriptionOwnedPermit {
+            inner: Some(self.clone()),
+            key: subscriber_id,
+        };
+        Ok(permit)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
@@ -337,11 +406,10 @@ struct ClientSession {
     subscriber_id: String,
     endpoint: String,
     filter: Filter,
-    debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     cancellation_token: CancellationToken,
     disconnect_reason: &'static str,
-    maybe_remote_peer_sk_addr: Option<SocketAddr>,
-    subscription_tracker: SubscriptionTracker,
+    /// Must own it so that when the session is dropped, the subscription count is decremented.
+    _subscription_permit: Option<SubscriptionOwnedPermit>,
 }
 
 impl ClientSession {
@@ -349,102 +417,35 @@ impl ClientSession {
         id: usize,
         subscriber_id: Option<String>,
         endpoint: String,
-        maybe_remote_peer_sk_addr: Option<SocketAddr>,
-        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
-        subscription_tracker: SubscriptionTracker,
+        subscription_permit: Option<SubscriptionOwnedPermit>,
     ) -> Self {
         let filter = Filter::default();
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
-        if let Some(remote_peer_sk_addr) = maybe_remote_peer_sk_addr {
-            let mut subscriptions_per_remote_addr =
-                CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR
-                    .lock()
-                    .expect("CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR mutex poisoned");
-            let count = subscriptions_per_remote_addr
-                .entry(remote_peer_sk_addr)
-                .and_modify(|count| *count += 1)
-                .or_insert(1);
-            metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
-                remote_peer_sk_addr.to_string(),
-                *count as u64,
-            );
-        }
         metrics::update_subscriptions(&endpoint, None, Some(&filter));
-        DebugClientMessage::maybe_send(&debug_client_tx, || DebugClientMessage::UpdateFilter {
-            id,
-            filter: Box::new(filter.clone()),
-        });
         info!("client #{id} ({subscriber_id}): new");
         Self {
             id,
             subscriber_id,
             endpoint,
             filter,
-            debug_client_tx,
             cancellation_token,
             disconnect_reason: "unknown",
-            maybe_remote_peer_sk_addr,
-            subscription_tracker,
+            _subscription_permit: subscription_permit,
         }
     }
 
     fn set_filter(&mut self, new_filter: Filter) {
         metrics::update_subscriptions(&self.endpoint, Some(&self.filter), Some(&new_filter));
-        DebugClientMessage::maybe_send(&self.debug_client_tx, || {
-            DebugClientMessage::UpdateFilter {
-                id: self.id,
-                filter: Box::new(new_filter.clone()),
-            }
-        });
         self.filter = new_filter;
     }
 }
 
 impl Drop for ClientSession {
     fn drop(&mut self) {
-        {
-            let mut tracker = self
-                .subscription_tracker
-                .lock()
-                .expect("subscription_tracker mutex poisoned");
-            if let Some(count) = tracker.get_mut(&self.subscriber_id) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    tracker.remove(&self.subscriber_id);
-                }
-            }
-        }
-        if let Some(remote_peer_sk_addr) = self.maybe_remote_peer_sk_addr {
-            let mut subscriptions_per_remote_addr =
-                CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR
-                    .lock()
-                    .expect("CONCURRENT_SUBSCRIPTIONS_PER_REMOTE_PEER_SK_ADDR mutex poisoned");
-            if let Some(count) = subscriptions_per_remote_addr.get_mut(&remote_peer_sk_addr) {
-                if *count > 1 {
-                    *count -= 1;
-                    metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
-                        remote_peer_sk_addr.to_string(),
-                        *count as u64,
-                    );
-                } else {
-                    subscriptions_per_remote_addr.remove(&remote_peer_sk_addr);
-                    metrics::set_grpc_concurrent_subscribe_per_tcp_connection(
-                        remote_peer_sk_addr.to_string(),
-                        0,
-                    );
-                    metrics::remove_grpc_concurrent_subscribe_per_tcp_connection(
-                        remote_peer_sk_addr.to_string(),
-                    );
-                }
-            }
-        }
-        set_subscriber_queue_size(&self.subscriber_id, 0);
+        observe_subscriber_queue_size(&self.subscriber_id, 0, "normal");
         metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
         metrics::update_subscriptions(&self.endpoint, Some(&self.filter), None);
-        DebugClientMessage::maybe_send(&self.debug_client_tx, || DebugClientMessage::Removed {
-            id: self.id,
-        });
         info!(
             "client #{} ({}): removed ({})",
             self.id, self.subscriber_id, self.disconnect_reason
@@ -457,17 +458,17 @@ struct DeshredClientSession {
     id: usize,
     subscriber_id: String,
     filter: DeshredFilter,
-    debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     cancellation_token: CancellationToken,
     disconnect_reason: &'static str,
+    _subscription_permit: Option<SubscriptionOwnedPermit>,
 }
 
 impl DeshredClientSession {
     fn new(
         id: usize,
         subscriber_id: Option<String>,
-        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
+        subscription_permit: Option<SubscriptionOwnedPermit>,
     ) -> Self {
         let subscriber_id = subscriber_id.unwrap_or("UNKNOWN".to_owned());
         info!("deshred client #{id} ({subscriber_id}): new");
@@ -475,20 +476,17 @@ impl DeshredClientSession {
             id,
             subscriber_id,
             filter: DeshredFilter::default(),
-            debug_client_tx,
             cancellation_token,
             disconnect_reason: "unknown",
+            _subscription_permit: subscription_permit,
         }
     }
 }
 
 impl Drop for DeshredClientSession {
     fn drop(&mut self) {
-        set_subscriber_queue_size(&self.subscriber_id, 0);
+        observe_subscriber_queue_size(&self.subscriber_id, 0, "deshred");
         metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
-        DebugClientMessage::maybe_send(&self.debug_client_tx, || DebugClientMessage::Removed {
-            id: self.id,
-        });
         info!(
             "deshred client #{} ({}): removed ({})",
             self.id, self.subscriber_id, self.disconnect_reason
@@ -554,12 +552,12 @@ impl interceptor::Interceptor for XTokenInterceptor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
-    subscription_limit: usize,
+    subscription_limit: NonZeroUsize,
     subscription_limit_enforce: bool,
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
@@ -569,7 +567,6 @@ pub struct GrpcService {
     deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
-    debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
     filter_name_size_limit: usize,
@@ -624,7 +621,6 @@ impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create(
         config: ConfigGrpc,
-        debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
@@ -832,7 +828,7 @@ impl GrpcService {
             config_filter_limits: Arc::new(config.filter_limits),
             subscription_limit: config.subscription_limit,
             subscription_limit_enforce: config.subscription_limit_enforce,
-            subscription_tracker: Arc::new(StdMutex::new(HashMap::new())),
+            subscription_tracker: SubscriptionTracker::new(config.subscription_limit),
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
@@ -840,7 +836,6 @@ impl GrpcService {
             deshred_broadcast_tx: deshred_broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
-            debug_clients_tx,
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
             filter_name_size_limit: config.filter_name_size_limit,
@@ -1317,7 +1312,7 @@ impl GrpcService {
         }
 
         'outer: loop {
-            set_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size());
+            observe_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size(), "normal");
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -1454,17 +1449,6 @@ impl GrpcService {
                                         break 'outer;
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    if commitment == CommitmentLevel::Processed && session.debug_client_tx.is_some() {
-                        for message in messages.iter() {
-                            if let Message::Slot(slot_message) = &message {
-                                DebugClientMessage::maybe_send(&session.debug_client_tx, || DebugClientMessage::UpdateSlot {
-                                    id: session.id,
-                                    slot: slot_message.slot
-                                });
                             }
                         }
                     }
@@ -1694,28 +1678,23 @@ impl GrpcService {
 
     #[allow(clippy::too_many_arguments)]
     async fn deshred_client_loop(
-        id: usize,
-        subscriber_id: Option<String>,
+        mut session: DeshredClientSession,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
-        debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
-        let mut session = DeshredClientSession::new(
-            id,
-            subscriber_id,
-            debug_client_tx,
-            cancellation_token.clone(),
-        );
-
         'outer: loop {
-            set_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size());
+            observe_subscriber_queue_size(
+                &session.subscriber_id,
+                stream_tx.queue_size(),
+                "deshred",
+            );
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    info!("deshred client #{id}: cancelled");
+                    info!("deshred client #{}/{}: cancelled", session.subscriber_id, session.id);
                     let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
                     session.disconnect_reason = "server_shutdown";
                     break 'outer;
@@ -1738,7 +1717,7 @@ impl GrpcService {
                     match message {
                         Some(Some(filter_new)) => {
                             session.filter = filter_new;
-                            info!("deshred client #{id}: filter updated");
+                            info!("deshred client #{}/{}: filter updated", session.subscriber_id, session.id);
                         }
                         Some(None) => {
                             session.disconnect_reason = "client_disconnect";
@@ -1758,7 +1737,7 @@ impl GrpcService {
                             break 'outer;
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            info!("deshred client #{id}: lagged to receive deshred messages");
+                            info!("deshred client #{}/{}: lagged to receive deshred messages", session.subscriber_id, session.id);
                             session.disconnect_reason = "client_broadcast_lag";
                             task_tracker.spawn(async move {
                                 let _ = stream_tx.send(Err(Status::internal("lagged to receive deshred messages"))).await;
@@ -1775,7 +1754,7 @@ impl GrpcService {
                                 metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                             }
                             Err(mpsc::error::TrySendError::Full(_)) => {
-                                error!("deshred client #{id}: lagged to send an update");
+                                error!("deshred client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_channel_full";
                                 task_tracker.spawn(async move {
                                     let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
@@ -1783,7 +1762,7 @@ impl GrpcService {
                                 break 'outer;
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => {
-                                error!("deshred client #{id}: stream closed");
+                                error!("deshred client #{}/{}: stream closed", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_closed";
                                 break 'outer;
                             }
@@ -1793,6 +1772,10 @@ impl GrpcService {
             }
         }
         // session Drop handles: queue_size(0), disconnect metric, debug removal, cancel, log
+    }
+
+    fn next_subscribe_seq_id(&self) -> usize {
+        self.subscribe_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -1820,21 +1803,10 @@ impl Geyser for GrpcService {
                     .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
             });
 
-        // Per-subscriber subscription limit: check and increment under a
-        // single lock hold so no two calls can race past the limit.
-        // Cleanup (decrement) is handled by `ClientSession::drop()`.
-        // When subscriber_id is None (no x-subscription-id header and no
-        // remote address) we skip the limit check entirely rather than
-        // grouping all unidentified clients into a shared bucket.
-        if let Some(id) = subscriber_id.as_deref() {
-            if self.subscription_limit > 0 {
-                let mut tracker = self
-                    .subscription_tracker
-                    .lock()
-                    .expect("subscription_tracker mutex poisoned");
-                let count = tracker.entry(id.to_owned()).or_insert(0);
-
-                if *count >= self.subscription_limit {
+        let subscription_permit = if let Some(id) = subscriber_id.as_deref() {
+            match self.subscription_tracker.try_insert(id.to_owned()) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
                     subscription_limit_exceeded_inc(id);
                     if self.subscription_limit_enforce {
                         return Err(Status::resource_exhausted(
@@ -1842,26 +1814,17 @@ impl Geyser for GrpcService {
                         ));
                     }
                     info!(
-                        "subscriber {id:?} over limit ({count}/{}), not enforcing",
+                        "subscriber {id:?} over limit, not enforcing (limit: {})",
                         self.subscription_limit
                     );
+                    None
                 }
-                *count += 1;
             }
-        }
+        } else {
+            None
+        };
 
-        let maybe_remote_peer_sk_addr = request
-            .extensions()
-            .get::<TcpConnectInfo>()
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<TlsConnectInfo<TcpConnectInfo>>()
-                    .map(|tls_info| tls_info.get_ref())
-            })
-            .and_then(|info| info.remote_addr());
-
-        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.next_subscribe_seq_id();
         let client_cancellation_token = self.cancellation_token.child_token();
         if client_cancellation_token.is_cancelled() {
             return Err(Status::unavailable("server is shutting down"));
@@ -1954,7 +1917,7 @@ impl Geyser for GrpcService {
                                         }
                                         continue;
                                     }
-                                    let complexity_score = filter.get_complexity_profile();
+                                    let complexity_score = filter.get_filter_stats();
                                     metrics::observe_filter_complexity(&subscriber_id, &complexity_score);
                                     match incoming_client_tx.send(Some((request.from_slot, filter))) {
                                         Ok(()) => Ok(()),
@@ -1991,10 +1954,8 @@ impl Geyser for GrpcService {
             id,
             subscriber_id.clone(),
             endpoint.clone(),
-            maybe_remote_peer_sk_addr,
-            self.debug_clients_tx.clone(),
             client_cancellation_token,
-            Arc::clone(&self.subscription_tracker),
+            subscription_permit,
         );
         self.task_tracker.spawn(Self::client_loop(
             client_session,
@@ -2014,7 +1975,42 @@ impl Geyser for GrpcService {
         mut request: Request<Streaming<SubscribeDeshredRequest>>,
     ) -> TonicResult<Response<Self::SubscribeDeshredStream>> {
         incr_grpc_method_call_count("subscribe_deshred");
-        let id = self.subscribe_id.fetch_add(1, Ordering::Relaxed);
+
+        let subscriber_id = request
+            .extensions()
+            .get::<SubscriptionInfo>()
+            .cloned()
+            .map(|info| info.subscription_id)
+            .or_else(|| {
+                request
+                    .metadata()
+                    .get("x-subscription-id")
+                    .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+                    .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
+            });
+
+        let subscription_permit = if let Some(id) = subscriber_id.as_deref() {
+            match self.subscription_tracker.try_insert(id.to_owned()) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    subscription_limit_exceeded_inc(id);
+                    if self.subscription_limit_enforce {
+                        return Err(Status::resource_exhausted(
+                            "max subscription limit exceeded",
+                        ));
+                    }
+                    info!(
+                        "subscriber {id:?} over limit, not enforcing (limit: {})",
+                        self.subscription_limit
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let id = self.next_subscribe_seq_id();
 
         let client_cancellation_token = self.cancellation_token.child_token();
         if client_cancellation_token.is_cancelled() {
@@ -2115,13 +2111,17 @@ impl Geyser for GrpcService {
             }
         });
 
-        self.task_tracker.spawn(Self::deshred_client_loop(
+        let session = DeshredClientSession::new(
             id,
-            subscriber_id,
+            subscriber_id.clone(),
+            client_cancellation_token.clone(),
+            subscription_permit,
+        );
+        self.task_tracker.spawn(Self::deshred_client_loop(
+            session,
             stream_tx,
             client_rx,
             self.deshred_broadcast_tx.subscribe(),
-            self.debug_clients_tx.clone(),
             client_cancellation_token,
             self.task_tracker.clone(),
         ));
@@ -2293,7 +2293,6 @@ mod tests {
     async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
-        let st: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
         let (broadcast_tx, _) = broadcast::channel::<BroadcastedMessage>(16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
@@ -2308,15 +2307,7 @@ mod tests {
             incoming_ct,
         ));
 
-        let session = ClientSession::new(
-            0,
-            Some("test".into()),
-            "test".into(),
-            None,
-            None,
-            ct.clone(),
-            Arc::clone(&st),
-        );
+        let session = ClientSession::new(0, Some("test".into()), "test".into(), ct.clone(), None);
 
         let handle = tokio::spawn(GrpcService::client_loop(
             session,
@@ -2359,46 +2350,43 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscription_tracker_decrements_on_session_drop() {
-        let tracker: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
+        let tracker = SubscriptionTracker::new(NonZeroUsize::new(10).unwrap());
 
-        // simulate what subscribe() does: increment under lock
-        {
-            let mut map = tracker.lock().unwrap();
-            *map.entry("sub-1".to_owned()).or_insert(0) += 1;
-            *map.entry("sub-1".to_owned()).or_insert(0) += 1;
-        }
-        assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 2);
+        // simulate what subscribe() does: acquire two permits
+        let _permit_a = tracker.try_insert("sub-1".to_owned()).unwrap();
+        let _permit_b = tracker.try_insert("sub-1".to_owned()).unwrap();
+        assert_eq!(*tracker.counters.lock().unwrap().get("sub-1").unwrap(), 2);
 
         // create a session (mirrors what client_loop does)
         {
+            let permit = tracker.try_insert("sub-1".to_owned()).unwrap();
             let _session = ClientSession::new(
                 0,
                 Some("sub-1".into()),
                 "".into(),
-                None,
-                None,
                 CancellationToken::new(),
-                Arc::clone(&tracker),
+                Some(permit),
             );
-            // session alive: count unchanged
-            assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 2);
+            // session alive: count includes the session permit
+            assert_eq!(*tracker.counters.lock().unwrap().get("sub-1").unwrap(), 3);
         }
-        // session dropped: count decremented
-        assert_eq!(*tracker.lock().unwrap().get("sub-1").unwrap(), 1);
+        // session dropped: count decremented by one
+        assert_eq!(*tracker.counters.lock().unwrap().get("sub-1").unwrap(), 2);
 
         // second drop removes the entry entirely
         {
+            drop(_permit_a);
+            drop(_permit_b);
+            let permit = tracker.try_insert("sub-1".to_owned()).unwrap();
             let _session = ClientSession::new(
                 1,
                 Some("sub-1".into()),
                 "".into(),
-                None,
-                None,
                 CancellationToken::new(),
-                Arc::clone(&tracker),
+                Some(permit),
             );
         }
-        assert!(tracker.lock().unwrap().get("sub-1").is_none());
+        assert!(tracker.counters.lock().unwrap().get("sub-1").is_none());
     }
 
     mod geyser_loop_routing {
@@ -2575,23 +2563,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscription_tracker_skips_unidentified_subscribers() {
-        let tracker: SubscriptionTracker = Arc::new(StdMutex::new(HashMap::new()));
-
         // subscriber_id=None resolves to "UNKNOWN" inside ClientSession,
         // but subscribe() skips the limit check entirely for None.
         // The tracker should remain empty since no increment happened.
         {
-            let _session = ClientSession::new(
-                0,
-                None,
-                "".into(),
-                None,
-                None,
-                CancellationToken::new(),
-                Arc::clone(&tracker),
-            );
+            let _session = ClientSession::new(0, None, "".into(), CancellationToken::new(), None);
         }
-        // drop fires but "UNKNOWN" was never in the tracker, so nothing changes
-        assert!(tracker.lock().unwrap().is_empty());
     }
 }

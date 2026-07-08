@@ -36,6 +36,7 @@ pub struct Config {
     pub prometheus: Option<ConfigPrometheus>,
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
+    #[deprecated(note = "This option is deprecated and will be removed in future versions.")]
     pub debug_clients_http: bool,
 }
 
@@ -317,7 +318,7 @@ pub struct ConfigGrpc {
         default = "ConfigGrpc::subscription_limit_default",
         deserialize_with = "deserialize_int_str"
     )]
-    pub subscription_limit: usize,
+    pub subscription_limit: NonZeroUsize,
     /// When false (default), exceeding the subscription limit only logs
     /// and emits metrics without rejecting the connection. Set to true
     /// to start rejecting with RESOURCE_EX2AUSTED.
@@ -552,8 +553,8 @@ impl ConfigGrpc {
         Semaphore::MAX_PERMITS
     }
 
-    const fn subscription_limit_default() -> usize {
-        1000
+    const fn subscription_limit_default() -> NonZeroUsize {
+        NonZeroUsize::new(1000).unwrap()
     }
 
     const fn default_filter_name_size_limit() -> usize {

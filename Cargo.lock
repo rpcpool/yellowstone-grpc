@@ -6299,7 +6299,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "14.1.0"
+version = "14.2.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
