@@ -142,54 +142,53 @@ impl Default for Filter {
     }
 }
 
-/// Complexity snapshot for one account filter definition.
+/// Statistic snapshot for one account filter definition.
 ///
 /// Counts represent how many account/owner keys were configured in that
 /// filter, not how many runtime matches occurred.
 #[derive(Debug, Clone)]
-pub struct AccountFilterComplexityScore {
+pub struct AccountFilterStats {
     /// Number of configured account pubkeys in this filter.
-    pub accounts_size: usize,
+    pub accounts_len: usize,
     /// Number of configured owner pubkeys in this filter.
-    pub owners_size: usize,
+    pub owners_len: usize,
 }
 
-/// Complexity snapshot for one transaction (or transaction status) filter.
+/// Statistic snapshot for one transaction (or transaction status) filter.
 #[derive(Debug, Clone)]
-pub struct TxnFilterComplexityScore {
+pub struct TxnFilterStats {
     /// Number of pubkeys in `account_include`.
-    pub accounts_include_size: usize,
+    pub accounts_include_len: usize,
     /// Number of pubkeys in `account_exclude`.
-    pub accounts_exclude_size: usize,
+    pub accounts_exclude_len: usize,
     /// Number of pubkeys in `account_required`.
-    pub accounts_required_size: usize,
+    pub accounts_required_len: usize,
     /// Whether token-account expansion is enabled for this filter.
     pub token_accounts_enabled: bool,
 }
 
-/// Complexity snapshot for one block filter.
+/// Statistic snapshot for one block filter.
 #[derive(Debug, Clone)]
-pub struct BlocksFilterComplexityScore {
+pub struct BlocksFilterStats {
     /// Number of inclusion conditions enabled on this filter.
-    pub include_size: usize,
+    pub include_len: usize,
     /// Number of explicit exclusion toggles on this filter.
-    pub exclude_size: usize,
+    pub exclude_len: usize,
 }
 
-/// Aggregate complexity view across all filter groups.
+/// Aggregate statistics view across all filter groups.
 ///
-/// This is intended for diagnostics/telemetry and should not drive business
-/// logic decisions.
+/// This is intended for diagnostics/telemetry and should not drive business logic decisions.
 #[derive(Clone, Debug)]
-pub struct FilterComplexityProfile {
+pub struct FilterStats {
     /// Per-account-filter complexity entries.
-    pub accounts: Vec<AccountFilterComplexityScore>,
+    pub accounts: Vec<AccountFilterStats>,
     /// Per-transaction-filter complexity entries.
-    pub transactions: Vec<TxnFilterComplexityScore>,
+    pub transactions: Vec<TxnFilterStats>,
     /// Per-transaction-status-filter complexity entries.
-    pub transaction_status: Vec<TxnFilterComplexityScore>,
+    pub transaction_status: Vec<TxnFilterStats>,
     /// Per-block-filter complexity entries.
-    pub blocks: Vec<BlocksFilterComplexityScore>,
+    pub blocks: Vec<BlocksFilterStats>,
 }
 
 impl Filter {
@@ -225,12 +224,12 @@ impl Filter {
         })
     }
 
-    /// Build a static complexity snapshot of the currently parsed filter.
+    /// Build a static statistics snapshot of the currently parsed filter.
     ///
     /// The returned values are derived from configured filter criteria only.
     /// They do not depend on live traffic and are safe to call for logging,
     /// metrics, and debugging.
-    pub fn get_complexity_profile(&self) -> FilterComplexityProfile {
+    pub fn get_filter_stats(&self) -> FilterStats {
         // `accounts.account` is indexed by pubkey -> set(filter_name).
         // For complexity we need the inverse shape (filter_name -> count(pubkeys)),
         // so we accumulate how many pubkeys point to each filter.
@@ -262,12 +261,12 @@ impl Filter {
             .accounts
             .aggregates
             .iter()
-            .map(|aggregate| AccountFilterComplexityScore {
-                accounts_size: account_pubkey_hits
+            .map(|aggregate| AccountFilterStats {
+                accounts_len: account_pubkey_hits
                     .get(&aggregate.filter_name)
                     .copied()
                     .unwrap_or(0),
-                owners_size: owner_pubkey_hits
+                owners_len: owner_pubkey_hits
                     .get(&aggregate.filter_name)
                     .copied()
                     .unwrap_or(0),
@@ -280,10 +279,10 @@ impl Filter {
             .transactions
             .filters
             .iter()
-            .map(|(_name, inner)| TxnFilterComplexityScore {
-                accounts_include_size: inner.account_include.len(),
-                accounts_exclude_size: inner.account_exclude.len(),
-                accounts_required_size: inner.account_required.len(),
+            .map(|(_name, inner)| TxnFilterStats {
+                accounts_include_len: inner.account_include.len(),
+                accounts_exclude_len: inner.account_exclude.len(),
+                accounts_required_len: inner.account_required.len(),
                 token_accounts_enabled: inner.token_accounts.is_some(),
             })
             .collect();
@@ -293,10 +292,10 @@ impl Filter {
             .transactions_status
             .filters
             .iter()
-            .map(|(_name, inner)| TxnFilterComplexityScore {
-                accounts_include_size: inner.account_include.len(),
-                accounts_exclude_size: inner.account_exclude.len(),
-                accounts_required_size: inner.account_required.len(),
+            .map(|(_name, inner)| TxnFilterStats {
+                accounts_include_len: inner.account_include.len(),
+                accounts_exclude_len: inner.account_exclude.len(),
+                accounts_required_len: inner.account_required.len(),
                 token_accounts_enabled: inner.token_accounts.is_some(),
             })
             .collect();
@@ -308,20 +307,20 @@ impl Filter {
             .blocks
             .filters
             .values()
-            .map(|inner| BlocksFilterComplexityScore {
-                include_size: inner.account_include.len()
+            .map(|inner| BlocksFilterStats {
+                include_len: inner.account_include.len()
                     + usize::from(inner.account_cuckoo.is_some())
                     + usize::from(matches!(inner.include_transactions, None | Some(true)))
                     + usize::from(inner.include_accounts == Some(true))
                     + usize::from(inner.include_entries == Some(true)),
-                exclude_size: usize::from(inner.include_transactions == Some(false))
+                exclude_len: usize::from(inner.include_transactions == Some(false))
                     + usize::from(inner.include_accounts == Some(false))
                     + usize::from(inner.include_entries == Some(false)),
             })
             .collect();
 
         // Return a full snapshot grouped by filter category.
-        FilterComplexityProfile {
+        FilterStats {
             accounts,
             transactions,
             transaction_status,

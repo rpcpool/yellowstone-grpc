@@ -10,6 +10,26 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-08
+
+- yellowstone-grpc-geyser 14.2.0
+
+### Features
+
+- Added new set of `yellowstone_grpc_filter_stats` metrics to monitor the size and complexity of a filters.
+
+### Fixes
+
+- Added proper subscription tracking for deshred subscription: no ratelimiting was imposed.
+- Fixed a subtil bug where updating the subscription tracker counter maps could leak a decrement if the future/thread panic before `ClientSession` is created. Now subscription tracking acquision and release is done via proper RAII struct that implements `Drop`.
+
+### Breaking
+
+- Prefixed all prometheus metrics with `yellowstone_grpc` to set a convention that is what we found in OTel metrics framework.
+- Removed `/debug_clients` endpoint from the auxiliary sidecar server.
+- Change the client loop logs to include subscription for better monitoring/troubleshooting.
+- Changed `yellowstone_grpc_subscriber_queue_size` from `IntGaugeVec` to `HistogramVec` since many subscription may exists for the same subscriber at the same time.
+
 ## 2026-07-03
 
 - yellowstone-grpc-geyser 14.1.0
