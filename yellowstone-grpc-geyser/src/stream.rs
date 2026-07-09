@@ -1,8 +1,7 @@
 use futures::Stream;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-
-use crate::plugin::message::Message;
 
 pub enum TryRecv<T> {
     Item(T),
@@ -17,30 +16,32 @@ pub trait PollReceiver {
     fn try_recv(&mut self) -> TryRecv<Self::Item>;
 }
 
-pub trait BatchInto {
-    fn batch_into(self, batch: &mut Vec<Message>);
+pub trait BatchInto<Out> {
+    fn batch_into(self, batch: &mut Vec<Out>);
 }
 
-pub struct GeyserStream<R> {
+pub struct GeyserStream<R, Out> {
     receiver: R,
     batch_capacity: usize,
+    _out: PhantomData<fn() -> Out>,
 }
 
-impl<R> GeyserStream<R> {
+impl<R, Out> GeyserStream<R, Out> {
     pub fn new(receiver: R, batch_capacity: usize) -> Self {
         Self {
             receiver,
             batch_capacity,
+            _out: PhantomData,
         }
     }
 }
 
-impl<R> Stream for GeyserStream<R>
+impl<R, Out> Stream for GeyserStream<R, Out>
 where
     R: PollReceiver + Unpin,
-    R::Item: BatchInto,
+    R::Item: BatchInto<Out>,
 {
-    type Item = Vec<Message>;
+    type Item = Vec<Out>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let message = match Pin::new(&mut self.receiver).poll_recv(cx) {
@@ -60,12 +61,6 @@ where
         }
 
         Poll::Ready(Some(batch_messages))
-    }
-}
-
-impl BatchInto for Message {
-    fn batch_into(self, batch: &mut Vec<Message>) {
-        batch.push(self);
     }
 }
 
