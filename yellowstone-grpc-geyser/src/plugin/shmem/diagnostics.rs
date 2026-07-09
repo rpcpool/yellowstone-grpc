@@ -1,6 +1,6 @@
+use crate::plugin::{message::Message, shmem::ProstShmemDecoder};
 use std::time::Duration;
 use yellowstone_shmem_client::ShmemClient;
-use crate::plugin::{message::Message, shmem::ProstShmemDecoder};
 
 pub struct ShmemHealthReporter {
     accounts: u64,
@@ -42,7 +42,9 @@ impl ShmemHealthReporter {
 
     #[inline]
     pub fn observe(&mut self, message: &Message) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         match message {
             Message::Account(_) => self.accounts += 1,
             Message::Transaction(_) => self.transactions += 1,
@@ -55,12 +57,16 @@ impl ShmemHealthReporter {
 
     #[inline]
     pub fn observe_lagged(&mut self, n: u64) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         self.lagged += n;
     }
 
     pub fn report(&mut self, client: &ShmemClient<ProstShmemDecoder>) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         let head = client.writer_head();
         let tail = client.tail();
         log::info!(

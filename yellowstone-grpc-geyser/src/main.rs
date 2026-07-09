@@ -7,13 +7,9 @@ use tokio_rustls::rustls;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use yellowstone_grpc_geyser::{
-    config::Config,
-    grpc::GrpcService,
-    metrics::PrometheusService,
-};
-use yellowstone_shmem_client::ShmemClient;
 use yellowstone_grpc_geyser::plugin::shmem::decoder::ProstShmemDecoder;
+use yellowstone_grpc_geyser::{config::Config, grpc::GrpcService, metrics::PrometheusService};
+use yellowstone_shmem_client::ShmemClient;
 
 fn main() -> anyhow::Result<()> {
     let config_path = std::env::args()
@@ -26,7 +22,10 @@ fn main() -> anyhow::Result<()> {
     log::info!("starting yellowstone-grpc server");
 
     // Open conduit ring
-    let shmem_path = config.grpc.shmem_path.as_ref()
+    let shmem_path = config
+        .grpc
+        .shmem_path
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
     let client = ShmemClient::open(Path::new(shmem_path), ProstShmemDecoder)?;
 
@@ -63,7 +62,6 @@ fn main() -> anyhow::Result<()> {
             config.grpc,
             client,
             config.debug_clients_http.then_some(debug_client_tx),
-            false,
             cancellation_token.child_token(),
             task_tracker.clone(),
         )
@@ -74,8 +72,8 @@ fn main() -> anyhow::Result<()> {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm = signal(SignalKind::terminate())
-                    .expect("failed to register SIGTERM handler");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                         log::info!("received SIGINT, shutting down");

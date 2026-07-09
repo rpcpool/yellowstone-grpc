@@ -5812,7 +5812,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-conduit"
 version = "0.1.1"
-source = "git+https://github.com/rpcpool/yellowstone-conduit.git?branch=main#092ebdb69a9ce8f6f0ec2e5c1f3dc1c071e629b0"
+source = "git+https://github.com/rpcpool/yellowstone-conduit.git?branch=main#1799a8f2d39bf325d53b1fd76cde77d0e4448644"
 dependencies = [
  "libc",
  "memmap2",
@@ -6057,6 +6057,7 @@ name = "yellowstone-shmem-client"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "log",
  "yellowstone-conduit",
  "yellowstone-shmem-common",
 ]

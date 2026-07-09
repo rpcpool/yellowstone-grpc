@@ -1,12 +1,20 @@
-use std::sync::{Arc, OnceLock};
 use foldhash::HashSet as FoldHashSet;
 use prost::Message as ProstMessage;
 use prost_types::Timestamp;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
+use std::{
+    sync::{Arc, OnceLock},
+    time::SystemTime,
+};
 use yellowstone_grpc_proto::prelude as proto;
-use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
-use yellowstone_shmem_common::{EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION};
+use yellowstone_shmem_client::{
+    codec::{DecodeError, ShmemDecoder},
+    SnapshotAccount,
+};
+use yellowstone_shmem_common::{
+    EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION,
+};
 
 use crate::plugin::message::{
     Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
@@ -22,12 +30,14 @@ impl ShmemDecoder for ProstShmemDecoder {
     fn decode(&self, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
         if bytes.len() < HEADER_SIZE {
             return Err(DecodeError::DecodeError(format!(
-                "payload too short: {} < {HEADER_SIZE}", bytes.len()
+                "payload too short: {} < {HEADER_SIZE}",
+                bytes.len()
             )));
         }
         if bytes[0] != PAYLOAD_VERSION {
             return Err(DecodeError::DecodeError(format!(
-                "version mismatch: got {}, expected {PAYLOAD_VERSION}", bytes[0]
+                "version mismatch: got {}, expected {PAYLOAD_VERSION}",
+                bytes[0]
             )));
         }
         let slot = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
@@ -114,7 +124,7 @@ fn decode_account(bytes: &[u8], created_at_ns: i64) -> Result<GeyserMessage, Dec
         };
 
         let data_len = read_u64(bytes, &mut o) as usize;
-        
+
         if o + data_len > bytes.len() {
             return Err(DecodeError::DecodeError(format!(
                 "decode_account: data_len {data_len} exceeds buffer length {}",
@@ -138,7 +148,7 @@ fn decode_account(bytes: &[u8], created_at_ns: i64) -> Result<GeyserMessage, Dec
                     txn_signature,
                 },
                 slot,
-                created_at_ns
+                created_at_ns,
             },
         ))
     }
@@ -349,4 +359,28 @@ const fn convert_slot_status(status: &SlotStatus) -> crate::plugin::message::Slo
         SlotStatus::CreatedBank => DmSlotStatus::CreatedBank,
         SlotStatus::Dead(_e) => DmSlotStatus::Dead,
     }
+}
+
+/// Converts a raw [`SnapshotAccount`] from the mmap region
+/// into a dragons-mouth [`Message`] for client delivery.
+pub fn snapshot_account_to_message(account: SnapshotAccount) -> Result<Message, &'static str> {
+    let pubkey = Pubkey::try_from(account.pubkey.as_slice()).map_err(|_| "invalid pubkey")?;
+    let owner = Pubkey::try_from(account.owner.as_slice()).map_err(|_| "invalid owner")?;
+
+    Ok(Message::Account(MessageAccount {
+        account: Arc::new(MessageAccountInfo {
+            pubkey,
+            lamports: account.lamports,
+            owner,
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: account.data.into(),
+            write_version: account.write_version,
+            txn_signature: None,
+            pre_encoded: OnceLock::new(),
+        }),
+        slot: account.slot,
+        is_startup: true,
+        created_at: Timestamp::from(SystemTime::now()),
+    }))
 }

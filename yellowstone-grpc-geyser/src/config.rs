@@ -415,6 +415,13 @@ pub struct ConfigGrpc {
     #[serde(default)]
     pub shmem_path: Option<String>,
 
+    /// Path to the shmem geyser plugin snapshot mmap file.
+    /// When set, the grpc service reads snapshot from the from the mmap file
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem-snapshot`
+    #[serde(default)]
+    pub shmem_snapshot_path: Option<String>,
+
     /// Interval in seconds between shmem health reports.
     /// Set to 0 to disable diagnostics entirely.
     #[serde(default = "ConfigGrpc::default_shmem_health_interval_secs")]

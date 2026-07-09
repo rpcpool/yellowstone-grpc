@@ -1,35 +1,87 @@
 use {
     crate::{
-        block_reconstruction::BlockMachineStorage, config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig}, metered::PrometheusMeteredManager, metrics::{
-            self, DebugClientMessage, GEYSER_BATCH_SIZE, incr_grpc_method_call_count, set_subscriber_queue_size, subscription_limit_exceeded_inc,
-        }, plugin::{
-            filter::{
-                Filter, encoder::encode_messages, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames,
-            }, message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus}, proto::geyser_server::{Geyser, GeyserServer}, shmem::{ProstShmemDecoder, ShmemHealthReporter},
-        }, ratelimit::PrometheusRatelimitCallbacks, util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel}, version::GrpcVersionInfo,
-    }, anyhow::Context as _, bytesize::ByteSize, futures::Stream, log::{error, info}, prost_types::Timestamp, rustls::{
-        ServerConfig, pki_types::{PrivateKeyDer, pem::PemObject},
-    }, solana_clock::{MAX_RECENT_BLOCKHASHES, Slot}, std::{
-        collections::HashMap, io, net::SocketAddr, os::unix::fs::PermissionsExt, path::PathBuf, pin::Pin, sync::{
-            Arc, LazyLock, Mutex as StdMutex, atomic::{AtomicU64, AtomicUsize, Ordering},
-        }, task::{Context, Poll}, time::SystemTime,
-    }, tokio::{
-        io::{AsyncRead, AsyncWrite}, net::UnixListener, sync::{Mutex, RwLock, Semaphore, broadcast, mpsc, oneshot}, time::{Duration, sleep},
-    }, tokio_rustls::{TlsAcceptor, rustls}, tokio_stream::wrappers::UnixListenerStream, tokio_util::{sync::CancellationToken, task::TaskTracker}, tonic::{
-        Request, Response, Result as TonicResult, Status, Streaming, metadata::AsciiMetadataValue, service::interceptor, transport::{
-            CertificateDer, server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
+        block_reconstruction::BlockMachineStorage,
+        config::{ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        metered::PrometheusMeteredManager,
+        metrics::{
+            self, incr_grpc_method_call_count, set_subscriber_queue_size,
+            subscription_limit_exceeded_inc, DebugClientMessage, GEYSER_BATCH_SIZE,
         },
-    }, tonic_health::{pb::health_server::HealthServer, server::health_reporter}, yellowstone_grpc_proto::prelude::{
+        plugin::{
+            filter::{
+                encoder::encode_messages,
+                limits::FilterLimits,
+                message::{FilteredUpdate, FilteredUpdateOneof},
+                name::FilterNames,
+                Filter,
+            },
+            message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
+            proto::geyser_server::{Geyser, GeyserServer},
+            shmem::{decoder::snapshot_account_to_message, ProstShmemDecoder, ShmemHealthReporter},
+        },
+        ratelimit::PrometheusRatelimitCallbacks,
+        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        version::GrpcVersionInfo,
+    },
+    anyhow::Context as _,
+    bytesize::ByteSize,
+    futures::Stream,
+    log::{error, info},
+    prost_types::Timestamp,
+    rustls::{
+        pki_types::{pem::PemObject, PrivateKeyDer},
+        ServerConfig,
+    },
+    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    std::{
+        collections::HashMap,
+        io,
+        net::SocketAddr,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+        pin::Pin,
+        sync::{
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+            Arc, LazyLock, Mutex as StdMutex,
+        },
+        task::{Context, Poll},
+        time::SystemTime,
+    },
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        net::UnixListener,
+        sync::{broadcast, mpsc, oneshot, RwLock, Semaphore},
+        time::Duration,
+    },
+    tokio_rustls::{rustls, TlsAcceptor},
+    tokio_stream::wrappers::UnixListenerStream,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    tonic::{
+        metadata::AsciiMetadataValue,
+        service::interceptor,
+        transport::{
+            server::{Connected, Server, TcpConnectInfo, TlsConnectInfo},
+            CertificateDer,
+        },
+        Request, Response, Result as TonicResult, Status, Streaming,
+    },
+    tonic_health::{pb::health_server::HealthServer, server::health_reporter},
+    yellowstone_grpc_proto::prelude::{
         CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
         GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
         GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
         PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest,
         SubscribeReplayInfoResponse, SubscribeRequest,
-    }, yellowstone_grpc_tools::server::{
-        tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming}, tls::{HotResolvesServerCertUsingSni, TlsIncoming, build_sni_resolver_from_cert_dir}, tonic::{
-            metered::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, MeteredBandwidthLayer}, ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
+    },
+    yellowstone_grpc_tools::server::{
+        tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
+        tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
+        tonic::{
+            metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+            ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
-    }, yellowstone_shmem_client::{ClientError, ShmemClient},
+    },
+    yellowstone_shmem_client::{ClientError, ShmemClient, SnapshotReader},
 };
 
 #[derive(Debug)]
@@ -459,7 +511,7 @@ pub struct GrpcService {
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
     subscribe_id: Arc<AtomicUsize>,
-    snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
+    snapshot_reader: Option<Arc<SnapshotReader>>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -520,10 +572,9 @@ impl GrpcService {
         config: ConfigGrpc,
         client: ShmemClient<ProstShmemDecoder>,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
-        is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) -> anyhow::Result<Option<crossbeam_channel::Sender<Box<Message>>>> {
+    ) -> anyhow::Result<()> {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
 
@@ -669,13 +720,24 @@ impl GrpcService {
             }
         }
 
-        // Snapshot channel
-        let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
-            Some(cap) if !is_reload => {
-                let (tx, rx) = crossbeam_channel::bounded(cap);
-                (Some(tx), Some(rx))
+        // Snapshot reader from shmem region
+        let snapshot_reader = if let Some(shmem_snapshot_path) = &config.shmem_snapshot_path {
+            match SnapshotReader::open(Path::new(shmem_snapshot_path)) {
+                Ok(reader) => {
+                    log::info!(
+                        "snapshot available: {} entries from {}",
+                        reader.entry_count(),
+                        shmem_snapshot_path
+                    );
+                    Some(Arc::new(reader))
+                }
+                Err(e) => {
+                    log::warn!("snapshot not available: {e}");
+                    None
+                }
             }
-            _ => (None, None),
+        } else {
+            None
         };
 
         // Blocks meta storage
@@ -723,7 +785,7 @@ impl GrpcService {
             subscription_tracker: Arc::new(StdMutex::new(HashMap::new())),
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
-            snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
+            snapshot_reader,
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
@@ -771,7 +833,14 @@ impl GrpcService {
         let geyser_cancellation_token = service_cancellation_token.child_token();
 
         task_tracker.spawn(async move {
-            Self::geyser_loop(client, broadcast_tx, block_reconstruction_tx, geyser_cancellation_token, shmem_health_interval_secs).await;
+            Self::geyser_loop(
+                client,
+                broadcast_tx,
+                block_reconstruction_tx,
+                geyser_cancellation_token,
+                shmem_health_interval_secs,
+            )
+            .await;
         });
 
         // Health check service
@@ -838,7 +907,7 @@ impl GrpcService {
             });
         }
 
-        Ok(snapshot_tx)
+        Ok(())
     }
 
     /// Core message routing loop that reconstructs Solana blocks from raw Geyser plugin events
@@ -935,8 +1004,7 @@ impl GrpcService {
         let shutdown_wake = client.wait_handle();
         let mut health = ShmemHealthReporter::new(health_interval_secs);
 
-
-        loop {    
+        loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Geyser loop: shutting down");
@@ -1195,7 +1263,7 @@ impl GrpcService {
         endpoint: String,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
-        mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
+        snapshot_reader: Option<Arc<SnapshotReader>>,
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -1215,14 +1283,14 @@ impl GrpcService {
         );
         let cancellation_token = session.cancellation_token.clone();
 
-        if let Some(snapshot_rx) = snapshot_rx.take() {
+        if let Some(reader) = snapshot_reader {
             info!("client #{id}: snapshot requested");
             let result = Self::client_loop_snapshot(
                 id,
                 &session.endpoint,
                 stream_tx.clone(),
                 &mut client_rx,
-                snapshot_rx,
+                &reader,
                 &mut session.filter,
                 cancellation_token.clone(),
             )
@@ -1402,12 +1470,18 @@ impl GrpcService {
         }
     }
 
+    /// Streams snapshot accounts to a client from the mmap'd snapshot region.
+    ///
+    /// Waits for the client's filter before iterating. Each entry is
+    /// read from the mmap, converted to a Message, filtered, and streamed.
+    /// Only matching entries allocate so non-matches are skipped at the
+    /// fixed-field level.
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
-        snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
+        snapshot_reader: &SnapshotReader,
         filter: &mut Filter,
         cancellation_token: CancellationToken,
     ) -> Result<(), ClientSnapshotReplayError> {
@@ -1448,33 +1522,30 @@ impl GrpcService {
             }
         }
 
-        loop {
+        // Iterate the mmap directly, convert and filter per entry
+        for account in snapshot_reader.iter() {
             if cancellation_token.is_cancelled() {
                 info!("client #{id}: cancelled");
                 return Err(ClientSnapshotReplayError::Cancelled);
             }
-            let message = match snapshot_rx.try_recv() {
-                Ok(message) => {
-                    metrics::message_queue_size_dec();
-                    message
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => {
-                    sleep(Duration::from_millis(1)).await;
+
+            let message = match snapshot_account_to_message(account) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    log::error!("client #{id}: snapshot conversion error: {e}");
                     continue;
-                }
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    info!("client #{id}: end of startup");
-                    break;
                 }
             };
 
-            for message in filter.get_updates(&message, None) {
-                if stream_tx.send(Ok(message)).await.is_err() {
+            for update in filter.get_updates(&message, None) {
+                if stream_tx.send(Ok(update)).await.is_err() {
                     error!("client #{id}: stream closed");
                     return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
                 }
             }
         }
+
+        info!("client #{id}: snapshot complete");
 
         Ok(())
     }
@@ -1597,13 +1668,13 @@ impl Geyser for GrpcService {
         }
 
         let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
-        let snapshot_rx = if x_request_snapshot {
-            self.snapshot_rx.lock().await.take()
+        let snapshot_reader = if x_request_snapshot {
+            self.snapshot_reader.clone()
         } else {
             None
         };
 
-        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_rx.is_some() {
+        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_reader.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
             self.config_channel_capacity
@@ -1717,7 +1788,7 @@ impl Geyser for GrpcService {
             endpoint,
             stream_tx,
             client_rx,
-            snapshot_rx,
+            snapshot_reader,
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),
@@ -2034,12 +2105,12 @@ mod tests {
 #[cfg(test)]
 mod shmem_tests {
     use super::*;
+    use crate::plugin::shmem::decoder::ProstShmemDecoder;
     use yellowstone_conduit::Producer;
+    use yellowstone_grpc_proto::prelude as proto;
+    use yellowstone_grpc_proto::prost::Message as ProstMessage;
     use yellowstone_shmem_client::ShmemClient;
     use yellowstone_shmem_common::{EventType, HEADER_SIZE, PAYLOAD_VERSION};
-    use yellowstone_grpc_proto::prost::Message as ProstMessage;
-    use yellowstone_grpc_proto::prelude as proto;
-    use crate::plugin::shmem::decoder::ProstShmemDecoder;
 
     struct TestHarness {
         _path: String,
@@ -2061,11 +2132,7 @@ mod shmem_tests {
             )
             .unwrap();
 
-            let client = ShmemClient::open(
-                std::path::Path::new(path),
-                ProstShmemDecoder,
-            )
-            .unwrap();
+            let client = ShmemClient::open(std::path::Path::new(path), ProstShmemDecoder).unwrap();
 
             let (broadcast_tx, broadcast_rx) = broadcast::channel(256);
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
@@ -2096,13 +2163,10 @@ mod shmem_tests {
 
         async fn shutdown(self) {
             self.cancel.cancel();
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                self.handle,
-            )
-            .await
-            .expect("geyser_loop did not exit")
-            .expect("geyser_loop panicked");
+            tokio::time::timeout(std::time::Duration::from_secs(2), self.handle)
+                .await
+                .expect("geyser_loop did not exit")
+                .expect("geyser_loop panicked");
             let _ = std::fs::remove_file(&self._path);
         }
 
@@ -2204,12 +2268,7 @@ mod shmem_tests {
             .expect("write block_meta failed");
     }
 
-    fn write_account(
-        producer: &Producer<EventType>,
-        slot: u64,
-        pubkey: &[u8; 32],
-        lamports: u64,
-    ) {
+    fn write_account(producer: &Producer<EventType>, slot: u64, pubkey: &[u8; 32], lamports: u64) {
         let owner = [2u8; 32];
         let data = vec![0xABu8; 32];
         let body_size = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + data.len() + 8 + 1 + 8;
@@ -2221,18 +2280,30 @@ mod shmem_tests {
                 buf[9] = EventType::Account as u8;
                 let dst = &mut buf[HEADER_SIZE..];
                 let mut o = 0usize;
-                dst[o..o + 32].copy_from_slice(pubkey); o += 32;
-                dst[o..o + 8].copy_from_slice(&lamports.to_le_bytes()); o += 8;
-                dst[o..o + 32].copy_from_slice(&owner); o += 32;
-                dst[o] = 0; o += 1;
-                dst[o..o + 8].copy_from_slice(&u64::MAX.to_le_bytes()); o += 8;
-                dst[o..o + 8].copy_from_slice(&1u64.to_le_bytes()); o += 8;
-                dst[o] = 0; o += 1;
-                dst[o..o + 64].fill(0); o += 64;
-                dst[o..o + 8].copy_from_slice(&(data.len() as u64).to_le_bytes()); o += 8;
-                dst[o..o + data.len()].copy_from_slice(&data); o += data.len();
-                dst[o..o + 8].copy_from_slice(&slot.to_le_bytes()); o += 8;
-                dst[o] = 0; o += 1;
+                dst[o..o + 32].copy_from_slice(pubkey);
+                o += 32;
+                dst[o..o + 8].copy_from_slice(&lamports.to_le_bytes());
+                o += 8;
+                dst[o..o + 32].copy_from_slice(&owner);
+                o += 32;
+                dst[o] = 0;
+                o += 1;
+                dst[o..o + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+                o += 8;
+                dst[o..o + 8].copy_from_slice(&1u64.to_le_bytes());
+                o += 8;
+                dst[o] = 0;
+                o += 1;
+                dst[o..o + 64].fill(0);
+                o += 64;
+                dst[o..o + 8].copy_from_slice(&(data.len() as u64).to_le_bytes());
+                o += 8;
+                dst[o..o + data.len()].copy_from_slice(&data);
+                o += data.len();
+                dst[o..o + 8].copy_from_slice(&slot.to_le_bytes());
+                o += 8;
+                dst[o] = 0;
+                o += 1;
                 let ts = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -2242,11 +2313,7 @@ mod shmem_tests {
             .expect("write account failed");
     }
 
-    fn write_transaction(
-        producer: &Producer<EventType>,
-        slot: u64,
-        signature: &[u8; 64],
-    ) {
+    fn write_transaction(producer: &Producer<EventType>, slot: u64, signature: &[u8; 64]) {
         let msg = proto::SubscribeUpdateTransactionInfo {
             signature: signature.to_vec(),
             is_vote: false,
@@ -2303,7 +2370,12 @@ mod shmem_tests {
         let (mut harness, producer) = TestHarness::new("/tmp/test-gl-lifecycle").await;
 
         write_and_settle(move || {
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotFirstShredReceived);
+            write_slot(
+                &producer,
+                100,
+                Some(99),
+                proto::SlotStatus::SlotFirstShredReceived,
+            );
             write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCompleted);
             write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCreatedBank);
         })
@@ -2312,8 +2384,16 @@ mod shmem_tests {
         let broadcast = harness.collect_broadcast();
 
         // lifecycle statuses go to Processed, Confirmed, and Finalized
-        for status in [SlotStatus::FirstShredReceived, SlotStatus::Completed, SlotStatus::CreatedBank] {
-            for commitment in [CommitmentLevel::Processed, CommitmentLevel::Confirmed, CommitmentLevel::Finalized] {
+        for status in [
+            SlotStatus::FirstShredReceived,
+            SlotStatus::Completed,
+            SlotStatus::CreatedBank,
+        ] {
+            for commitment in [
+                CommitmentLevel::Processed,
+                CommitmentLevel::Confirmed,
+                CommitmentLevel::Finalized,
+            ] {
                 assert!(
                     broadcast.iter().any(|(c, msgs)| {
                         *c == commitment && msgs.iter().any(|m| {
@@ -2366,14 +2446,17 @@ mod shmem_tests {
 
         assert!(
             broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Account(_)))
+                *c == CommitmentLevel::Processed
+                    && msgs.iter().any(|m| matches!(m, Message::Account(_)))
             }),
             "expected account at Processed, got: {broadcast:?}"
         );
 
         // should not appear at Confirmed or Finalized
         assert!(
-            !broadcast.iter().any(|(c, _)| *c == CommitmentLevel::Confirmed || *c == CommitmentLevel::Finalized),
+            !broadcast
+                .iter()
+                .any(|(c, _)| *c == CommitmentLevel::Confirmed || *c == CommitmentLevel::Finalized),
             "account should not broadcast at Confirmed/Finalized"
         );
 
@@ -2393,7 +2476,8 @@ mod shmem_tests {
 
         assert!(
             broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Entry(_)))
+                *c == CommitmentLevel::Processed
+                    && msgs.iter().any(|m| matches!(m, Message::Entry(_)))
             }),
             "expected entry at Processed, got: {broadcast:?}"
         );
@@ -2415,7 +2499,8 @@ mod shmem_tests {
 
         assert!(
             broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed && msgs.iter().any(|m| matches!(m, Message::Transaction(_)))
+                *c == CommitmentLevel::Processed
+                    && msgs.iter().any(|m| matches!(m, Message::Transaction(_)))
             }),
             "expected transaction at Processed, got: {broadcast:?}"
         );
@@ -2435,7 +2520,9 @@ mod shmem_tests {
         let block_recon = harness.collect_block_reconstruction();
 
         assert!(
-            block_recon.iter().any(|m| matches!(m, Message::BlockMeta(_))),
+            block_recon
+                .iter()
+                .any(|m| matches!(m, Message::BlockMeta(_))),
             "expected BlockMeta in block reconstruction, got: {block_recon:?}"
         );
 
@@ -2449,7 +2536,12 @@ mod shmem_tests {
         let pubkey = [3u8; 32];
         let sig = [4u8; 64];
         write_and_settle(move || {
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotFirstShredReceived);
+            write_slot(
+                &producer,
+                100,
+                Some(99),
+                proto::SlotStatus::SlotFirstShredReceived,
+            );
             write_account(&producer, 100, &pubkey, 1000);
             write_transaction(&producer, 100, &sig);
             write_entry(&producer, 100, 0);
@@ -2468,14 +2560,22 @@ mod shmem_tests {
             .flat_map(|(_, msgs)| msgs.iter())
             .collect();
 
-        assert!(processed.iter().any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::FirstShredReceived)));
+        assert!(processed
+            .iter()
+            .any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::FirstShredReceived)));
         assert!(processed.iter().any(|m| matches!(m, Message::Account(_))));
-        assert!(processed.iter().any(|m| matches!(m, Message::Transaction(_))));
+        assert!(processed
+            .iter()
+            .any(|m| matches!(m, Message::Transaction(_))));
         assert!(processed.iter().any(|m| matches!(m, Message::Entry(_))));
 
         // block reconstruction has: Processed slot, BlockMeta
-        assert!(block_recon.iter().any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::Processed)));
-        assert!(block_recon.iter().any(|m| matches!(m, Message::BlockMeta(_))));
+        assert!(block_recon
+            .iter()
+            .any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::Processed)));
+        assert!(block_recon
+            .iter()
+            .any(|m| matches!(m, Message::BlockMeta(_))));
 
         harness.shutdown().await;
     }
