@@ -414,6 +414,11 @@ pub struct ConfigGrpc {
     /// Example: `/dev/shm/yellowstone-shmem`
     #[serde(default)]
     pub shmem_path: Option<String>,
+
+    /// Interval in seconds between shmem health reports.
+    /// Set to 0 to disable diagnostics entirely.
+    #[serde(default = "ConfigGrpc::default_shmem_health_interval_secs")]
+    pub shmem_health_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -475,6 +480,10 @@ impl ConfigGrpc {
 
     const fn default_replay_stored_slots() -> u64 {
         150
+    }
+
+    fn default_shmem_health_interval_secs() -> u64 {
+        10
     }
 }
 

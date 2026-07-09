@@ -5,7 +5,7 @@ use {
         }, plugin::{
             filter::{
                 Filter, encoder::encode_messages, limits::FilterLimits, message::{FilteredUpdate, FilteredUpdateOneof}, name::FilterNames,
-            }, message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus}, proto::geyser_server::{Geyser, GeyserServer}, shmem::ProstShmemDecoder,
+            }, message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus}, proto::geyser_server::{Geyser, GeyserServer}, shmem::{ProstShmemDecoder, ShmemHealthReporter},
         }, ratelimit::PrometheusRatelimitCallbacks, util::stream::{LoadAwareReceiver, LoadAwareSender, load_aware_channel}, version::GrpcVersionInfo,
     }, anyhow::Context as _, bytesize::ByteSize, futures::Stream, log::{error, info}, prost_types::Timestamp, rustls::{
         ServerConfig, pki_types::{PrivateKeyDer, pem::PemObject},
@@ -29,7 +29,7 @@ use {
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming}, tls::{HotResolvesServerCertUsingSni, TlsIncoming, build_sni_resolver_from_cert_dir}, tonic::{
             metered::{DEFAULT_TRAFFIC_REPORTING_THRESHOLD, MeteredBandwidthLayer}, ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
-    }, yellowstone_shmem_client::{ShmemClient, ClientError},
+    }, yellowstone_shmem_client::{ClientError, ShmemClient},
 };
 
 #[derive(Debug)]
@@ -741,6 +741,7 @@ impl GrpcService {
         for encoding in config.compression.send {
             service = service.send_compressed(encoding);
         }
+        let shmem_health_interval_secs = config.shmem_health_interval_secs;
 
         let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
 
@@ -770,7 +771,7 @@ impl GrpcService {
         let geyser_cancellation_token = service_cancellation_token.child_token();
 
         task_tracker.spawn(async move {
-            Self::geyser_loop(client, broadcast_tx, block_reconstruction_tx, geyser_cancellation_token).await;
+            Self::geyser_loop(client, broadcast_tx, block_reconstruction_tx, geyser_cancellation_token, shmem_health_interval_secs).await;
         });
 
         // Health check service
@@ -912,6 +913,7 @@ impl GrpcService {
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         block_reconstruction_tx: mpsc::UnboundedSender<Arc<Vec<Message>>>,
         cancellation_token: CancellationToken,
+        health_interval_secs: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
         const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
@@ -931,15 +933,8 @@ impl GrpcService {
         };
 
         let shutdown_wake = client.wait_handle();
+        let mut health = ShmemHealthReporter::new(health_interval_secs);
 
-        let mut accounts: u64 = 0;
-        let mut transactions: u64 = 0;
-        let mut slots: u64 = 0;
-        let mut entries: u64 = 0;
-        let mut block_meta: u64 = 0;
-        let mut lagged: u64 = 0;
-
-        let mut health_interval = tokio::time::interval(Duration::from_secs(10));
 
         loop {    
             tokio::select! {
@@ -948,22 +943,12 @@ impl GrpcService {
                     shutdown_wake.wake();
                     break;
                 }
-                _ = health_interval.tick() => {
-                    let head = client.writer_head();
-                    let tail = client.tail();
-                    log::info!(
-                        "shmem health: head={} tail={} gap={} | accounts={} tx={} slots={} entries={} blockmeta={} lagged={}",
-                        head, tail, head.saturating_sub(tail),
-                        accounts, transactions, slots, entries, block_meta, lagged,
-                    );
-                    // reset counters
-                    accounts = 0; transactions = 0; slots = 0;
-                    entries = 0; block_meta = 0; lagged = 0;
+                _ = health.interval.tick() => {
+                    health.report(&client);
 
                     if !client.check_region() {
                         panic!(
-                            "shmem: region was re-created — producer restarted. \
-                            Consumer must rejoin."
+                            "shmem: region was re-created. Consumer must rejoin."
                         );
                     }
                 }
@@ -981,6 +966,7 @@ impl GrpcService {
                                 }
                             },
                             Err(ClientError::Lagged(n)) => {
+                                health.observe_lagged(n);
                                 log::warn!("shmem reader lagged, lost {n} entries");
                                 continue;
                             }
@@ -991,15 +977,7 @@ impl GrpcService {
                             }
                         };
 
-                        match &message {
-                            Message::Account(_) => accounts += 1,
-                            Message::Transaction(_) => transactions += 1,
-                            Message::Slot(_) => slots += 1,
-                            Message::Entry(_) => entries += 1,
-                            Message::BlockMeta(_) => block_meta += 1,
-                            _ => {}
-                        }
-
+                        health.observe(&message);
 
                         if is_block_reconstruction_message(&message) {
                             block_reconstruction_messages.push(message);
@@ -2100,6 +2078,7 @@ mod shmem_tests {
                     broadcast_tx,
                     block_reconstruction_tx,
                     cancellation_token,
+                    0, // disable health reporting
                 )
                 .await;
             });
