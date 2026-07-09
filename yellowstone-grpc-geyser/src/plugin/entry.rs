@@ -1,6 +1,7 @@
 use {
     crate::{
         config::Config,
+        file_watcher::FileWatcher,
         grpc::GrpcService,
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
@@ -43,6 +44,7 @@ pub struct PluginInner {
     deshred_channel: broadcast::Sender<Message>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
+    file_watcher: Arc<FileWatcher>,
 }
 
 impl PluginInner {
@@ -121,13 +123,17 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
+        let file_watcher = crate::file_watcher::FileWatcher::new().map_err(|error| {
+            GeyserPluginError::Custom(format!("failed to create file watcher: {error:?}").into())
+        })?;
+        let file_watcher = Arc::new(file_watcher);
+        let geyser_svc_file_watcher = Arc::clone(&file_watcher);
         let result = runtime.block_on(async move {
             static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
             CRYPTO_PROVIDER_INIT.call_once(|| {
                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             });
-
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
             PrometheusService::spawn(
                 config.prometheus,
@@ -142,6 +148,7 @@ impl GeyserPlugin for Plugin {
                 is_reload,
                 grpc_cancellation_token,
                 grpc_task_tracker,
+                geyser_svc_file_watcher,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
@@ -167,6 +174,7 @@ impl GeyserPlugin for Plugin {
             deshred_channel,
             plugin_cancellation_token,
             plugin_task_tracker,
+            file_watcher,
         });
 
         Ok(())
@@ -178,6 +186,7 @@ impl GeyserPlugin for Plugin {
             log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
             inner.plugin_cancellation_token.cancel();
             inner.plugin_task_tracker.close();
+            drop(inner.file_watcher);
             drop(inner.grpc_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();

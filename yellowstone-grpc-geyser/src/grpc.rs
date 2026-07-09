@@ -6,6 +6,7 @@ use {
         },
         block_reconstruction::BlockMachineStorage,
         config::{AuthConfig, AuthKind, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, observe_subscriber_queue_size,
@@ -78,7 +79,10 @@ use {
     },
     yellowstone_grpc_tools::server::{
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
-        tls::{build_sni_resolver_from_cert_dir, HotResolvesServerCertUsingSni, TlsIncoming},
+        tls::{
+            build_identity_certified_key, build_sni_resolver_from_cert_dir,
+            HotResolvesServerCertUsingIdentity, HotResolvesServerCertUsingSni, TlsIncoming,
+        },
         tonic::{
             auth::service::AuthLayer,
             interceptor::{HttpInterceptorLayer, OptionalHttpInterceptor},
@@ -582,6 +586,8 @@ pub enum TlsConfigLoadError {
     Rustls(#[from] rustls::Error),
     #[error(transparent)]
     PemError(#[from] rustls::pki_types::pem::Error),
+    #[error(transparent)]
+    Notify(#[from] notify::Error),
 }
 
 ///
@@ -589,29 +595,119 @@ pub enum TlsConfigLoadError {
 ///
 fn load_server_config_from_tls_config(
     tls_config: &GrpcTlsConfig,
+    file_watcher: &FileWatcher,
 ) -> Result<ServerConfig, TlsConfigLoadError> {
     match tls_config {
-        GrpcTlsConfig::IdentityPair { identity } => {
-            let cert_pem = std::fs::read(&identity.cert_path)?;
-            let key = std::fs::read(&identity.key_path)?;
-
-            let cert_der = CertificateDer::from_pem_slice(&cert_pem)?;
-            let key_der = PrivateKeyDer::from_pem_slice(&key)?;
+        GrpcTlsConfig::IdentityPair {
+            identity,
+            watch_file,
+        } => {
+            let certified_key =
+                build_identity_certified_key(&identity.cert_path, &identity.key_path)?;
+            let hot_resolver = Arc::new(HotResolvesServerCertUsingIdentity::from(certified_key));
             let mut server_config = ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(vec![cert_der], key_der)?;
+                .with_cert_resolver(
+                    Arc::clone(&hot_resolver) as Arc<dyn rustls::server::ResolvesServerCert>
+                );
             // gRPC over TLS requires ALPN negotiation for HTTP/2.
             server_config.alpn_protocols = vec![b"h2".to_vec()];
+
+            if *watch_file {
+                let watched_identity = identity.clone();
+                let cert_reload_identity = watched_identity.clone();
+                let cert_hot_resolver = Arc::clone(&hot_resolver);
+                let cert_path = identity.cert_path.clone();
+                file_watcher
+                    .watch_file(cert_path.clone(), move |_ev| {
+                        if let Err(e) = build_identity_certified_key(
+                            &cert_reload_identity.cert_path,
+                            &cert_reload_identity.key_path,
+                        )
+                        .map(|key| cert_hot_resolver.swap(key))
+                        {
+                            log::error!(
+                                "failed to reload TLS IdentityPair from cert={} key={}: {}",
+                                cert_reload_identity.cert_path,
+                                cert_reload_identity.key_path,
+                                e
+                            );
+                        } else {
+                            log::info!(
+                                "successfully reloaded TLS IdentityPair from cert={} key={}",
+                                cert_reload_identity.cert_path,
+                                cert_reload_identity.key_path
+                            );
+                        }
+                    })?
+                    .forget();
+
+                let key_reload_identity = watched_identity;
+                let key_hot_resolver = Arc::clone(&hot_resolver);
+                let key_path = identity.key_path.clone();
+                file_watcher
+                    .watch_file(key_path.clone(), move |_ev| {
+                        if let Err(e) = build_identity_certified_key(
+                            &key_reload_identity.cert_path,
+                            &key_reload_identity.key_path,
+                        )
+                        .map(|key| key_hot_resolver.swap(key))
+                        {
+                            log::error!(
+                                "failed to reload TLS IdentityPair from cert={} key={}: {}",
+                                key_reload_identity.cert_path,
+                                key_reload_identity.key_path,
+                                e
+                            );
+                        } else {
+                            log::info!(
+                                "successfully reloaded TLS IdentityPair from cert={} key={}",
+                                key_reload_identity.cert_path,
+                                key_reload_identity.key_path
+                            );
+                        }
+                    })?
+                    .forget();
+            }
+
             Ok(server_config)
         }
-        GrpcTlsConfig::CertDir { cert_dir } => {
+        GrpcTlsConfig::CertDir {
+            cert_dir,
+            watch_file,
+        } => {
             let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
-            let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+            let hot_resolver = Arc::new(HotResolvesServerCertUsingSni::from(resolver));
             let mut server_config = ServerConfig::builder()
                 .with_no_client_auth()
-                .with_cert_resolver(Arc::new(hot_resolver));
+                .with_cert_resolver(
+                    Arc::clone(&hot_resolver) as Arc<dyn rustls::server::ResolvesServerCert>
+                );
             // gRPC over TLS requires ALPN negotiation for HTTP/2.
             server_config.alpn_protocols = vec![b"h2".to_vec()];
+
+            if *watch_file {
+                let watched_cert_dir = cert_dir.clone();
+                file_watcher
+                    .watch_folder(watched_cert_dir.clone(), true, move |_ev| {
+                        if let Err(e) = build_sni_resolver_from_cert_dir(watched_cert_dir.clone())
+                            .map(|resolver| hot_resolver.swap(resolver))
+                        {
+                            log::error!(
+                                "failed to reload TLS certs from {}: {}",
+                                watched_cert_dir.display(),
+                                e
+                            );
+                        } else {
+                            log::info!(
+                                "successfully reloaded TLS certs from {}",
+                                watched_cert_dir.display()
+                            );
+                        }
+                    })?
+                    .forget();
+            }
+
             Ok(server_config)
         }
     }
@@ -624,6 +720,7 @@ impl GrpcService {
         is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        file_watcher: Arc<FileWatcher>,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         mpsc::UnboundedSender<Message>,
@@ -660,13 +757,17 @@ impl GrpcService {
             };
 
             // Cert-dir has precedence over tls_config if both are set.
-            // TODO: supports hot reload via sighub signal and watching cert_dir changes
             if let Some(cert_dir) = &config.cert_dir {
                 let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
                 let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
+                let hot_resolver = Arc::new(hot_resolver);
+
+                let dyn_resolver =
+                    Arc::clone(&hot_resolver) as Arc<dyn rustls::server::ResolvesServerCert>;
+
                 let mut server_config = ServerConfig::builder()
                     .with_no_client_auth()
-                    .with_cert_resolver(Arc::new(hot_resolver));
+                    .with_cert_resolver(dyn_resolver);
                 // gRPC over TLS requires ALPN negotiation for HTTP/2.
                 server_config.alpn_protocols = vec![b"h2".to_vec()];
                 let _ = maybe_tls_server_config.replace(server_config);
@@ -737,8 +838,9 @@ impl GrpcService {
                         );
                         let auth = listen_config.auth.clone();
                         let listener = if let Some(tls) = tls_config {
-                            let server_config = load_server_config_from_tls_config(&tls)
-                                .context("failed to load TLS server config")?;
+                            let server_config =
+                                load_server_config_from_tls_config(&tls, &file_watcher)
+                                    .context("failed to load TLS server config")?;
                             let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
                             Listener::Tls(TlsIncoming::new(incoming, tls_acceptor), auth)
                         } else {
@@ -923,22 +1025,28 @@ impl GrpcService {
                         rate_limit_table,
                         PrometheusRatelimitCallbacks,
                     );
-
-                    GrpcService::serve_listener(
-                        rate_limited_incoming,
-                        http2_adaptive_window,
-                        http2_keepalive_interval,
-                        http2_keepalive_timeout,
-                        initial_connection_window_size,
-                        initial_stream_window_size,
-                        x_token,
+                    match GrpcService::build_service(
                         health_service,
+                        x_token.clone(),
                         service,
                         traffic_reporting_threshold,
                         auth,
-                        shutdown.clone(),
-                    )
-                    .await
+                    ) {
+                        Ok(built_service) => {
+                            GrpcService::serve_listener(
+                                rate_limited_incoming,
+                                http2_adaptive_window,
+                                http2_keepalive_interval,
+                                http2_keepalive_timeout,
+                                initial_connection_window_size,
+                                initial_stream_window_size,
+                                built_service,
+                                shutdown.clone(),
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }) {
                     error!("gRPC listener failed: {e}");
                     shutdown.cancel();
@@ -1536,43 +1644,16 @@ impl GrpcService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn serve_listener<H, I, IO>(
-        incoming: I,
-        http2_adaptive_window: Option<bool>,
-        http2_keepalive_interval: Option<Duration>,
-        http2_keepalive_timeout: Option<Duration>,
-        initial_connection_window_size: Option<u32>,
-        initial_stream_window_size: Option<u32>,
-        x_token: Option<AsciiMetadataValue>,
+    fn build_service<H>(
         health_service: HealthServer<H>,
+        x_token: Option<AsciiMetadataValue>,
         service: GeyserServer<GrpcService>,
         traffic_reporting_threshold: ByteSize,
         auth: Option<AuthConfig>,
-        shutdown: CancellationToken,
-    ) -> anyhow::Result<()>
+    ) -> anyhow::Result<tonic::service::Routes>
     where
-        I: Stream<Item = io::Result<IO>> + Send + 'static,
-        IO: Connected + AsyncRead + AsyncWrite + Unpin + Send + 'static,
         H: tonic_health::pb::health_server::Health,
     {
-        let mut builder = Server::builder();
-
-        if let Some(enabled) = http2_adaptive_window {
-            builder = builder.http2_adaptive_window(Some(enabled));
-        }
-        if let Some(interval) = http2_keepalive_interval {
-            builder = builder.http2_keepalive_interval(Some(interval));
-        }
-        if let Some(timeout) = http2_keepalive_timeout {
-            builder = builder.http2_keepalive_timeout(Some(timeout));
-        }
-        if let Some(sz) = initial_connection_window_size {
-            builder = builder.initial_connection_window_size(sz);
-        }
-        if let Some(sz) = initial_stream_window_size {
-            builder = builder.initial_stream_window_size(sz);
-        }
-
         let method_ratelimit_config = auth
             .as_ref()
             .and_then(|auth_config| auth_config.ratelimit.clone());
@@ -1633,7 +1714,6 @@ impl GrpcService {
         }
 
         // Request -> InterceptorLayer -> RateLimiter -> MeteredBandwidthLayer -> GeyserService
-        let builder = builder.add_service(health_service);
 
         let metered_svc =
             MeteredBandwidthLayer::new(PrometheusMeteredManager, traffic_reporting_threshold)
@@ -1656,24 +1736,60 @@ impl GrpcService {
         })
         .named_layer(http_intercepted_svc);
 
+        let mut routes = tonic::service::Routes::builder();
+        routes.add_service(health_service);
+
         if let Some(auth_layer) = maybe_auth_layer {
             // The final wrapping order is: AuthLayer -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
             // The AuthLayer is the outermost layer, so it can intercept and handle authentication before any other processing occurs.
             with_auth!(auth_layer, |auth_layer| {
                 let auth_svc = auth_layer.named_layer(intercepted_svc);
-                builder
-                    .add_service(auth_svc)
-                    .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
-                    .await
-                    .map_err(Into::into)
+                routes.add_service(auth_svc);
+                Ok(routes.routes().prepare())
             })
         } else {
-            builder
-                .add_service(intercepted_svc)
-                .serve_with_incoming_shutdown(incoming, shutdown.cancelled())
-                .await
-                .map_err(Into::into)
+            routes.add_service(intercepted_svc);
+            Ok(routes.routes().prepare())
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn serve_listener<I, IO>(
+        incoming: I,
+        http2_adaptive_window: Option<bool>,
+        http2_keepalive_interval: Option<Duration>,
+        http2_keepalive_timeout: Option<Duration>,
+        initial_connection_window_size: Option<u32>,
+        initial_stream_window_size: Option<u32>,
+        service: tonic::service::Routes,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()>
+    where
+        I: Stream<Item = io::Result<IO>> + Send + 'static,
+        IO: Connected + AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut builder = Server::builder();
+
+        if let Some(enabled) = http2_adaptive_window {
+            builder = builder.http2_adaptive_window(Some(enabled));
+        }
+        if let Some(interval) = http2_keepalive_interval {
+            builder = builder.http2_keepalive_interval(Some(interval));
+        }
+        if let Some(timeout) = http2_keepalive_timeout {
+            builder = builder.http2_keepalive_timeout(Some(timeout));
+        }
+        if let Some(sz) = initial_connection_window_size {
+            builder = builder.initial_connection_window_size(sz);
+        }
+        if let Some(sz) = initial_stream_window_size {
+            builder = builder.initial_stream_window_size(sz);
+        }
+
+        builder
+            .serve_with_incoming_shutdown(service, incoming, shutdown.cancelled())
+            .await
+            .map_err(Into::into)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1847,17 +1963,18 @@ impl Geyser for GrpcService {
         let ping_stream_tx = stream_tx.clone();
         let ping_cancellation_token = client_cancellation_token.clone();
         let ping_client_cancel = client_cancellation_token.clone();
+        let ping_subscriber_id = subscriber_id.clone();
         self.task_tracker.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 tokio::select! {
                     _ = ping_cancellation_token.cancelled() => {
-                        info!("client #{id}: ping cancelled");
+                        info!("client #{ping_subscriber_id:?}/{id}: ping cancelled");
                         break;
                     }
                     _ = interval.tick() => {
                         let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
-                        log::info!("client #{id}: sending ping");
+                        log::info!("client #{ping_subscriber_id:?}/{id}: sending ping");
                         if ping_stream_tx.send(Ok(msg)).await.is_err() {
                             //
                             // It's really important to send cancel ping for one edge-case where someone
@@ -1868,13 +1985,13 @@ impl Geyser for GrpcService {
                             // By sending a ping every 10 seconds, we can detect if the client is still alive and if it's not,
                             // we can cancel the client loop.
                             ping_client_cancel.cancel();
-                            info!("detected dead client #{id}");
+                            info!("detected dead client #{ping_subscriber_id:?}/{id}");
                             break;
                         }
                     }
                 }
             }
-            info!("client #{id}: ping task exiting");
+            info!("client #{ping_subscriber_id:?}/{id}: ping task exiting");
         });
 
         let endpoint = request

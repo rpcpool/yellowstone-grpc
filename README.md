@@ -77,6 +77,20 @@ You can configure TLS in two ways:
 }
 ```
 
+Both forms accept an optional `watch_file` flag (default `false`). When `true`, the server watches the relevant path(s) on disk and hot-swaps the served certificate in place, without dropping existing connections or requiring a restart:
+
+- Identity pair: watches `cert_path` and `key_path` individually and rebuilds the identity when either changes.
+- Certificate directory: watches `cert_dir` recursively and rebuilds the SNI resolver when any file under it changes.
+
+```json
+{
+   "tls": {
+      "cert_dir": "/etc/yellowstone/certs",
+      "watch_file": true
+   }
+}
+```
+
 Notes:
 
 - TLS is ignored for Unix domain sockets.
@@ -236,7 +250,8 @@ Example `/etc/yellowstone/subscriptions.json`:
                "identity": {
                   "cert_path": "/etc/yellowstone/tls/server.crt",
                   "key_path": "/etc/yellowstone/tls/server.key"
-               }
+               },
+               "watch_file": true
             },
             "auth": {
                "type": "trusted-metadata"

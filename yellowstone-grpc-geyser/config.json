@@ -8,11 +8,15 @@
     "affinity": "0-1,12-13"
   },
   "grpc": {
-    "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
+    "listen": [
+      {
+        "address": "0.0.0.0:10000",
+        "tls": {
+          "cert_dir": "/etc/yellowstone/certs",
+          "watch_file": true
+        }
+      }
+    ],
     "compression": {
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]

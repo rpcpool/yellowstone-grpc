@@ -2,6 +2,7 @@ pub(crate) mod auth;
 mod block_reconstruction;
 mod cache_ext;
 pub mod config;
+pub(crate) mod file_watcher;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;

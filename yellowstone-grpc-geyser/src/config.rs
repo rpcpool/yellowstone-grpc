@@ -395,9 +395,17 @@ pub struct ConfigGrpc {
 #[serde(untagged)]
 pub enum GrpcTlsConfig {
     /// A pair of private-key and cert file paths
-    IdentityPair { identity: TlsIdentityPair },
+    IdentityPair {
+        identity: TlsIdentityPair,
+        #[serde(default)]
+        watch_file: bool,
+    },
     /// HAPROXY-like cert directory with `*.pem` files containing the certs and private keys.
-    CertDir { cert_dir: PathBuf },
+    CertDir {
+        cert_dir: PathBuf,
+        #[serde(default)]
+        watch_file: bool,
+    },
 }
 
 ///
@@ -431,6 +439,9 @@ pub struct HttpBackedAuthConfig {
 
     #[serde(default = "HttpBackedAuthConfig::default_forwarded_headers")]
     pub forwarded_headers: Vec<String>,
+
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -465,8 +476,8 @@ pub struct RatelimitConfig {
 impl Default for RatelimitConfig {
     fn default() -> Self {
         Self {
-            default_max_hits: 1000,
-            window: Duration::from_secs(10),
+            default_max_hits: RatelimitConfig::default_max_hits(),
+            window: RatelimitConfig::default_window(),
         }
     }
 }
@@ -484,6 +495,9 @@ impl RatelimitConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileBackedAuthConfig {
     pub subscription_resolver_path: PathBuf,
+
+    #[serde(default)]
+    pub ratelimit: Option<RatelimitConfig>,
 }
 
 impl HttpBackedAuthConfig {
@@ -505,8 +519,14 @@ pub struct TrustedMetadataAuthConfig {
 pub struct AuthConfig {
     #[serde(flatten)]
     pub kind: AuthKind,
-    #[serde(default)]
+    #[serde(default = "AuthConfig::default_ratelimit")]
     pub ratelimit: Option<RatelimitConfig>,
+}
+
+impl AuthConfig {
+    pub fn default_ratelimit() -> Option<RatelimitConfig> {
+        Some(RatelimitConfig::default())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
