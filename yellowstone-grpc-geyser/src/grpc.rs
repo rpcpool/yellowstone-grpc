@@ -31,7 +31,7 @@ use {
     },
     anyhow::Context as _,
     bytesize::ByteSize,
-    futures::Stream,
+    futures::{Stream, StreamExt},
     log::{error, info},
     prost_types::Timestamp,
     rustls::{
