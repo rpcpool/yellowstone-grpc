@@ -25,7 +25,7 @@ use {
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
-        stream::{BatchInto, GeyserStream, PollReceiver},
+        stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -64,11 +64,15 @@ use {
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
+        ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         service::{interceptor, LayerExt},
+        stream::{BatchInto, GeyserStream, PollReceiver},
         transport::{
             server::{Connected, Server},
             CertificateDer,
         },
+        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        version::GrpcVersionInfo,
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
@@ -717,20 +721,19 @@ fn load_server_config_from_tls_config(
 
 impl GrpcService {
     #[allow(clippy::type_complexity)]
-    pub async fn create<R>(
+    pub async fn create<St>(
         config: ConfigGrpc,
         is_reload: bool,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
         file_watcher: Arc<FileWatcher>,
-        messages_rx: R,
+        messages_rx: St,
     ) -> anyhow::Result<(
         Option<crossbeam_channel::Sender<Box<Message>>>,
         broadcast::Sender<DeshredBroadcastedMessage>,
     )>
     where
-        R: PollReceiver + Unpin + Send + 'static,
-        R::Item: BatchInto<Message>,
+        St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
@@ -972,7 +975,7 @@ impl GrpcService {
             let broadcast_tx = broadcast_tx.clone();
             task_tracker.spawn(async move {
                 Self::block_reconstruction_loop(
-                    block_reconstruction_rx,
+                    BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                     blocks_meta_tx,
                     broadcast_tx,
                     replay_stored_slots_rx,
@@ -1128,39 +1131,48 @@ impl GrpcService {
     /// - `replay_stored_slots_rx`: services replay requests from newly-connected subscribers.
     ///   `replay_first_available_slot` is updated after every batch to reflect the oldest slot
     ///   still available in the replay buffer, and is exposed via `subscribe_first_available_slot`.
-    async fn geyser_loop<R>(
-        messages_rx: R,
+    async fn geyser_loop<St>(
+        mut messages_rx: St,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         block_reconstruction_tx: mpsc::UnboundedSender<Arc<Vec<Message>>>,
     ) where
-        R: PollReceiver + Unpin,
-        R::Item: BatchInto<Message>,
+        St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
-        let mut stream = GeyserStream::new(messages_rx, 32);
+        let mut batch = Vec::with_capacity(32);
         loop {
-            let message_batch_maybe = stream.next().await;
-            let Some(message_batch) = message_batch_maybe else {
+            batch.clear();
+            let batch_size_maybe = messages_rx.next_batch(&mut batch).await;
+            let Some(batch_size) = batch_size_maybe else {
                 info!("Geyser loop: messages channel closed");
                 break;
             };
 
-            encode_messages(&message_batch);
-            GEYSER_BATCH_SIZE.observe(message_batch.len() as f64);
+            if batch_size == 0 {
+                continue;
+            }
 
-            let message_batch_arc = Arc::new(message_batch);
+            encode_messages(&batch);
+            GEYSER_BATCH_SIZE.observe(batch.len() as f64);
+
+            let mut out = Vec::with_capacity(batch.capacity());
+            std::mem::swap(&mut out, &mut batch);
+
+            let message_batch_arc = Arc::new(out);
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
             let _ = block_reconstruction_tx.send(message_batch_arc);
         }
     }
 
-    async fn block_reconstruction_loop(
-        mut messages_rx: mpsc::UnboundedReceiver<Arc<Vec<Message>>>,
+    async fn block_reconstruction_loop<St>(
+        mut messages_rx: St,
         blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
-    ) {
+    ) where
+        St: BatchStream<Item = Arc<Vec<Message>>> + Unpin + Send + 'static,
+    {
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
@@ -1176,19 +1188,10 @@ impl GrpcService {
 
         loop {
             tokio::select! {
-                maybe = messages_rx.recv() => {
-                    let Some(messages) = maybe else {
-                        info!("Geyser loop: messages channel closed");
+                maybe = messages_rx.next_batch(&mut buffered_messages) => {
+                    if maybe.is_none() {
+                        info!("Block reconstruction loop: messages channel closed");
                         break;
-                    };
-
-                    buffered_messages.push(messages);
-
-                    while let Ok(messages) = messages_rx.try_recv() {
-                        buffered_messages.push(messages);
-                        if buffered_messages.len() >= BUFFERED_MESSAGES_CAPACITY {
-                            break;
-                        }
                     }
 
                     for messages in buffered_messages.drain(..) {
@@ -2452,12 +2455,15 @@ mod tests {
     mod geyser_loop_routing {
         use {
             super::super::*,
-            crate::plugin::{
-                convert_to,
-                message::{
-                    MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
-                    SlotStatus,
+            crate::{
+                plugin::{
+                    convert_to,
+                    message::{
+                        MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
+                        SlotStatus,
+                    },
                 },
+                stream::tokio::{BatchStreamReceiver, BatchStreamUnboundedReceiver},
             },
             foldhash::{HashSet as FoldHashSet, HashSetExt as _},
             prost_types::Timestamp,
@@ -2484,6 +2490,7 @@ mod tests {
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_tx, broadcast_rx) = broadcast::channel(1024);
             let (deshred_tx, deshred_rx) = broadcast::channel(1024);
+            let messages_rx = BatchStreamUnboundedReceiver::new(messages_rx);
             let handle = {
                 let broadcast_tx = broadcast_tx.clone();
                 tokio::spawn(GrpcService::geyser_loop(
@@ -2493,7 +2500,7 @@ mod tests {
                 ))
             };
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
-                block_reconstruction_rx,
+                BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                 None,
                 broadcast_tx,
                 None,

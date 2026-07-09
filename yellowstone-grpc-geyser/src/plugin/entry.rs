@@ -11,6 +11,7 @@ use {
                 MessageSlot, MessageTransaction,
             },
         },
+        stream::tokio::BatchStreamUnboundedReceiver,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -144,13 +145,14 @@ impl GeyserPlugin for Plugin {
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
             let (grpc_channel_tx, grpc_channel_receiver) = mpsc::unbounded_channel();
+            let grpc_channel_rx = BatchStreamUnboundedReceiver::new(grpc_channel_receiver);
             let (snapshot_channel, deshred_channel) = GrpcService::create(
                 config.grpc,
                 is_reload,
                 grpc_cancellation_token,
                 grpc_task_tracker,
                 geyser_svc_file_watcher,
-                grpc_channel_receiver,
+                grpc_channel_rx,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
