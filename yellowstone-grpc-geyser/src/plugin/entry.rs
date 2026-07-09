@@ -143,16 +143,18 @@ impl GeyserPlugin for Plugin {
             .await
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-            let (snapshot_channel, grpc_channel, deshred_channel) = GrpcService::create(
+            let (grpc_channel_tx, grpc_channel_receiver) = mpsc::unbounded_channel();
+            let (snapshot_channel, deshred_channel) = GrpcService::create(
                 config.grpc,
                 is_reload,
                 grpc_cancellation_token,
                 grpc_task_tracker,
                 geyser_svc_file_watcher,
+                grpc_channel_receiver,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel, deshred_channel))
+            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel_tx, deshred_channel))
         });
 
         let (snapshot_channel, grpc_channel, deshred_channel) = match result {
