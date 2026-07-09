@@ -1,7 +1,11 @@
-use futures::Stream;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use {
+    futures::Stream,
+    std::{
+        marker::PhantomData,
+        pin::Pin,
+        task::{Context, Poll},
+    },
+};
 
 pub enum TryRecv<T> {
     Item(T),
