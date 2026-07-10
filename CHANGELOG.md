@@ -18,6 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - Added `yellowstone_grpc_geyser_filter_stats`, a filter-complexity histogram metric labeled by `subscriber_id`, filter `type`, and `condition`.
 - Added per-group `len` observations for filter-complexity metrics (`accounts`, `transactions`, `transaction_status`, and `blocks`).
+- Added `watch_file` option in configuration for `GrpcTlsConfig` to automatically hot-swap server certificate(s) [#816](https://github.com/rpcpool/yellowstone-grpc/pull/816/changes#diff-3844993256ceeb4ce89d37c67a6be13a8193b0cd2bdbd9bc7a380cb1908cc8fe)
 
 ### Fixes
 

@@ -99,6 +99,7 @@ url = "2.5.0"
 uuid = "1"
 vergen = "9.0.6"
 wincode = "0.5.0"
+notify = "8.2.0"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "4.1.0"

@@ -171,6 +171,104 @@ impl ResolvesServerCert for HotResolvesServerCertUsingSni {
     }
 }
 
+/// A resolver for a single identity cert/key pair that can be hot-swapped at runtime.
+pub struct HotResolvesServerCertUsingIdentity {
+    inner: Arc<ArcSwap<CertifiedKey>>,
+}
+
+impl HotResolvesServerCertUsingIdentity {
+    pub fn new(initial_certified_key: CertifiedKey) -> Self {
+        Self {
+            inner: Arc::new(ArcSwap::from_pointee(initial_certified_key)),
+        }
+    }
+
+    pub fn swap(&self, new_certified_key: CertifiedKey) {
+        self.inner.store(Arc::new(new_certified_key));
+    }
+}
+
+impl From<CertifiedKey> for HotResolvesServerCertUsingIdentity {
+    fn from(certified_key: CertifiedKey) -> Self {
+        Self::new(certified_key)
+    }
+}
+
+impl fmt::Debug for HotResolvesServerCertUsingIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl ResolvesServerCert for HotResolvesServerCertUsingIdentity {
+    fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.inner.load_full())
+    }
+}
+
+/// Builds a single-cert identity from a cert PEM path and private key PEM path.
+pub fn build_identity_certified_key<C, K>(
+    cert_path: C,
+    key_path: K,
+) -> Result<CertifiedKey, io::Error>
+where
+    C: AsRef<Path>,
+    K: AsRef<Path>,
+{
+    let cert_path = cert_path.as_ref();
+    let key_path = key_path.as_ref();
+
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|err| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to open identity cert PEM file {}: {err}",
+                    cert_path.display()
+                ),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse identity certificate in {}: {err}",
+                    cert_path.display()
+                ),
+            )
+        })?;
+
+    if certs.is_empty() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("no certificates found in {}", cert_path.display()),
+        ));
+    }
+
+    let key = PrivateKeyDer::from_pem_file(key_path).map_err(|err| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "failed to parse identity key in {}: {err}",
+                key_path.display()
+            ),
+        )
+    })?;
+
+    let signing_key = any_supported_type(&key).map_err(|err| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "failed to parse identity signing key in {}: {err}",
+                key_path.display()
+            ),
+        )
+    })?;
+
+    Ok(CertifiedKey::new(certs, signing_key))
+}
+
 ///
 /// Builds an [`SniResolver`] by loading all PEM files in the given directory.
 ///
