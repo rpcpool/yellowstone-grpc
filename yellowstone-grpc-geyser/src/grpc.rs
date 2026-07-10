@@ -25,7 +25,7 @@ use {
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
-        stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt},
+        stream::{tokio::BatchStreamUnboundedReceiver, BatchInto, BatchStream, BatchStreamExt},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -311,6 +311,15 @@ impl BlockMetaStorage {
             .unwrap_or(false);
 
         Ok(Response::new(IsBlockhashValidResponse { valid, slot }))
+    }
+}
+
+type BlockReconstructionMessage = Arc<Vec<Message>>;
+
+impl BatchInto<BlockReconstructionMessage> for BlockReconstructionMessage {
+    fn batch_into(self, batch: &mut Vec<BlockReconstructionMessage>, count: &mut usize) {
+        batch.push(self);
+        *count += 1;
     }
 }
 
@@ -1138,28 +1147,26 @@ impl GrpcService {
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
-        let mut batch = Vec::with_capacity(32);
+        let mut message_batch = Vec::with_capacity(32);
         loop {
-            batch.clear();
-            let batch_size_maybe = messages_rx.next_batch(&mut batch).await;
-            let Some(batch_size) = batch_size_maybe else {
+            let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
+            let Some(_) = batch_size_maybe else {
                 info!("Geyser loop: messages channel closed");
                 break;
             };
 
-            if batch_size == 0 {
+            if message_batch.len() == 0 {
                 continue;
             }
 
-            encode_messages(&batch);
-            GEYSER_BATCH_SIZE.observe(batch.len() as f64);
+            encode_messages(&message_batch);
+            GEYSER_BATCH_SIZE.observe(message_batch.len() as f64);
 
-            let mut out = Vec::with_capacity(batch.capacity());
-            std::mem::swap(&mut out, &mut batch);
-
-            let message_batch_arc = Arc::new(out);
+            let message_batch_arc = Arc::new(message_batch);
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
             let _ = block_reconstruction_tx.send(message_batch_arc);
+
+            message_batch = Vec::with_capacity(32);
         }
     }
 
@@ -2463,7 +2470,7 @@ mod tests {
                         SlotStatus,
                     },
                 },
-                stream::tokio::{BatchStreamReceiver, BatchStreamUnboundedReceiver},
+                stream::tokio::BatchStreamUnboundedReceiver,
             },
             foldhash::{HashSet as FoldHashSet, HashSetExt as _},
             prost_types::Timestamp,

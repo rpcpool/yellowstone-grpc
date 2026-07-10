@@ -691,8 +691,9 @@ pub enum Message {
 }
 
 impl BatchInto<Message> for Message {
-    fn batch_into(self, batch: &mut Vec<Message>) {
+    fn batch_into(self, batch: &mut Vec<Message>, count: &mut usize) {
         batch.push(self);
+        *count += 1;
     }
 }
 
