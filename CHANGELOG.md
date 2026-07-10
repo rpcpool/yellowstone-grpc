@@ -33,6 +33,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 - Changed client-loop logs to include subscriber context for improved monitoring and troubleshooting.
 - Changed `yellowstone_grpc_geyser_subscriber_queue_size` from `IntGaugeVec` to `HistogramVec` to better represent multiple concurrent subscriptions per subscriber.
 
+### Misc
+- Introduced a stream which feeds data into the geyser and block reconstruction loops
+- Optimizes the geyser_loop processed message feed by moving block reconstruction, block meta and slot messages to a 1hop channel send instead of running through geyser_loop
+
 ## 2026-07-03
 
 - yellowstone-grpc-geyser 14.1.0

@@ -21,7 +21,6 @@ default = []
 bench = ["dep:solana-storage-proto"]
 
 [dependencies]
-tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 foldhash = { workspace = true }
 arc-swap = { workspace = true }
 anyhow = { workspace = true }

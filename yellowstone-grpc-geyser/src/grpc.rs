@@ -31,7 +31,7 @@ use {
     },
     anyhow::Context as _,
     bytesize::ByteSize,
-    futures::{Stream, StreamExt},
+    futures::Stream,
     log::{error, info},
     prost_types::Timestamp,
     rustls::{
@@ -64,15 +64,11 @@ use {
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
-        ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         service::{interceptor, LayerExt},
-        stream::{BatchInto, GeyserStream, PollReceiver},
         transport::{
             server::{Connected, Server},
             CertificateDer,
         },
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
-        version::GrpcVersionInfo,
         Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
@@ -314,7 +310,11 @@ impl BlockMetaStorage {
     }
 }
 
-type BlockReconstructionMessage = Arc<Vec<Message>>;
+#[derive(Clone)]
+pub enum BlockReconstructionMessage {
+    Single(Message),
+    Batch(Arc<Vec<Message>>),
+}
 
 impl BatchInto<BlockReconstructionMessage> for BlockReconstructionMessage {
     fn batch_into(self, batch: &mut Vec<BlockReconstructionMessage>, count: &mut usize) {
@@ -323,7 +323,7 @@ impl BatchInto<BlockReconstructionMessage> for BlockReconstructionMessage {
     }
 }
 
-type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
+pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 
 /// Messages broadcast on the deshred channel. Deshred is a pre-execution
 /// stream and has no commitment level: each message is emitted exactly
@@ -728,6 +728,14 @@ fn load_server_config_from_tls_config(
     }
 }
 
+pub struct GrpcServiceResult {
+    pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
+    pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
+    pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
+    pub broadcast_tx: broadcast::Sender<BroadcastedMessage>,
+    pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
+}
+
 impl GrpcService {
     #[allow(clippy::type_complexity)]
     pub async fn create<St>(
@@ -737,10 +745,7 @@ impl GrpcService {
         task_tracker: TaskTracker,
         file_watcher: Arc<FileWatcher>,
         messages_rx: St,
-    ) -> anyhow::Result<(
-        Option<crossbeam_channel::Sender<Box<Message>>>,
-        broadcast::Sender<DeshredBroadcastedMessage>,
-    )>
+    ) -> anyhow::Result<GrpcServiceResult>
     where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
@@ -982,10 +987,10 @@ impl GrpcService {
 
         {
             let broadcast_tx = broadcast_tx.clone();
+
             task_tracker.spawn(async move {
                 Self::block_reconstruction_loop(
                     BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
-                    blocks_meta_tx,
                     broadcast_tx,
                     replay_stored_slots_rx,
                     replay_first_available_slot,
@@ -995,9 +1000,14 @@ impl GrpcService {
             });
         }
 
-        task_tracker.spawn(async move {
-            Self::geyser_loop(messages_rx, broadcast_tx, block_reconstruction_tx).await;
-        });
+        {
+            let block_reconstruction_tx = block_reconstruction_tx.clone();
+            let broadcast_tx = broadcast_tx.clone();
+
+            task_tracker.spawn(async move {
+                Self::geyser_loop(messages_rx, broadcast_tx, block_reconstruction_tx).await;
+            });
+        }
 
         // Health check service
         let (health_reporter, health_service) = health_reporter();
@@ -1070,7 +1080,13 @@ impl GrpcService {
             });
         }
 
-        Ok((snapshot_tx, deshred_broadcast_tx))
+        Ok(GrpcServiceResult {
+            snapshot_tx,
+            deshred_broadcast_tx,
+            block_reconstruction_tx,
+            broadcast_tx,
+            blocks_meta_tx,
+        })
     }
 
     /// Core message routing loop that reconstructs Solana blocks from raw Geyser plugin events
@@ -1143,7 +1159,7 @@ impl GrpcService {
     async fn geyser_loop<St>(
         mut messages_rx: St,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
-        block_reconstruction_tx: mpsc::UnboundedSender<Arc<Vec<Message>>>,
+        block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
@@ -1159,12 +1175,19 @@ impl GrpcService {
                 continue;
             }
 
+            metrics::message_queue_size_dec_by(message_batch.len() as i64);
             encode_messages(&message_batch);
             GEYSER_BATCH_SIZE.observe(message_batch.len() as f64);
 
             let message_batch_arc = Arc::new(message_batch);
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
-            let _ = block_reconstruction_tx.send(message_batch_arc);
+
+            if block_reconstruction_tx
+                .send(BlockReconstructionMessage::Batch(message_batch_arc))
+                .is_ok()
+            {
+                metrics::block_reconstruction_queue_size_inc();
+            }
 
             message_batch = Vec::with_capacity(32);
         }
@@ -1172,13 +1195,12 @@ impl GrpcService {
 
     async fn block_reconstruction_loop<St>(
         mut messages_rx: St,
-        blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
     ) where
-        St: BatchStream<Item = Arc<Vec<Message>>> + Unpin + Send + 'static,
+        St: BatchStream<Item = BlockReconstructionMessage> + Unpin + Send + 'static,
     {
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
@@ -1196,64 +1218,71 @@ impl GrpcService {
         loop {
             tokio::select! {
                 maybe = messages_rx.next_batch(&mut buffered_messages) => {
-                    if maybe.is_none() {
+                    let Some(buffered_size) = maybe else {
                         info!("Block reconstruction loop: messages channel closed");
                         break;
-                    }
+                    };
+
+                    metrics::block_reconstruction_queue_size_dec_by(buffered_size as i64);
 
                     for messages in buffered_messages.drain(..) {
-                        for message in messages.iter() {
-                            if let Message::Slot(slot_message) = message {
-                                metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
-                            }
+                        match messages {
+                            BlockReconstructionMessage::Batch(messages) => {
+                                for message in messages.iter() {
+                                    if let Message::Slot(slot_message) = message {
+                                        metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                                    }
 
-                            if let Some(blocks_meta_tx) = &blocks_meta_tx {
-                                if matches!(&message, Message::Slot(_) | Message::BlockMeta(_)) {
-                                    let _ = blocks_meta_tx.send(message.clone());
+                                    block_machine.add(message.clone());
                                 }
                             }
-
-                            block_machine.add(message.clone());
-
-                            while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
-                                let commitment_level = match slot_update.commitment {
-                                    solana_commitment_config::CommitmentLevel::Processed => CommitmentLevel::Processed,
-                                    solana_commitment_config::CommitmentLevel::Confirmed => CommitmentLevel::Confirmed,
-                                    solana_commitment_config::CommitmentLevel::Finalized => CommitmentLevel::Finalized,
-                                };
-                                // Processed must be sent differently, since processed geyser event were individually sent,
-                                // we only need to send Message::Block for block subscriber downstream.
-                                // While, confirmed,finalized must be sent in the two flavors: as a stream of individual events and block.
-                                if commitment_level != CommitmentLevel::Processed {
-                                    let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
+                            BlockReconstructionMessage::Single(message) => {
+                                if let Message::Slot(slot_message) = &message {
+                                    metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
                                 }
 
-                                let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                                let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
-                                let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
-
-                                let slot_message = Message::Slot(MessageSlot {
-                                    slot: slot_update.slot,
-                                    parent: slot_update.parent_slot,
-                                    status: match slot_update.commitment {
-                                        solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
-                                        solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
-                                        solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
-                                    },
-                                    dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
-                                });
-                                let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
-                                for commitment_level in ALL_COMMITMENT_LEVELS {
-                                    let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
-                                }
-                            }
-
-                            let min_replayable_slot = block_machine.min_replayable_slot();
-                            if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
-                                replay_first_available_slot.store(min_slot, Ordering::Relaxed);
+                                block_machine.add(message);
                             }
                         }
+                    }
+
+                    while let Some((slot_update, frozen_block)) = block_machine.pop_ready_block() {
+                        let commitment_level = match slot_update.commitment {
+                            solana_commitment_config::CommitmentLevel::Processed => CommitmentLevel::Processed,
+                            solana_commitment_config::CommitmentLevel::Confirmed => CommitmentLevel::Confirmed,
+                            solana_commitment_config::CommitmentLevel::Finalized => CommitmentLevel::Finalized,
+                        };
+                        // Processed must be sent differently, since processed geyser event were individually sent,
+                        // we only need to send Message::Block for block subscriber downstream.
+                        // While, confirmed,finalized must be sent in the two flavors: as a stream of individual events and block.
+                        if commitment_level != CommitmentLevel::Processed {
+                            let _ = broadcast_tx.send((commitment_level, frozen_block.messages()));
+                        }
+
+                        let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
+                        let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
+                        let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
+
+                        let slot_message = Message::Slot(MessageSlot {
+                            slot: slot_update.slot,
+                            parent: slot_update.parent_slot,
+                            status: match slot_update.commitment {
+                                solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
+                                solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                                solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
+                            },
+                            dead_error: None,
+                            created_at: Timestamp::from(SystemTime::now())
+                        });
+                        let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
+                        for commitment_level in ALL_COMMITMENT_LEVELS {
+                            let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
+                        }
+                    }
+
+                    let min_replayable_slot = block_machine.min_replayable_slot();
+                    if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
+                        replay_first_available_slot.store(min_slot, Ordering::Relaxed);
                     }
                 },
                 Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
@@ -2508,7 +2537,6 @@ mod tests {
             };
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
-                None,
                 broadcast_tx,
                 None,
                 None,
