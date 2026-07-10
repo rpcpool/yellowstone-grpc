@@ -4,8 +4,9 @@ use {
             ConstantSubscriptionRepository, HttpSubscriptionRepository, SubscriptionInfo,
             TrustedMetadataAuthenticator,
         },
+        billing::{BillingMeteredManager, HttpBillingEventSink},
         block_reconstruction::BlockMachineStorage,
-        config::{AuthConfig, AuthKind, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
         metrics::{
@@ -58,7 +59,7 @@ use {
         time::{sleep, Duration},
     },
     tokio_rustls::{rustls, TlsAcceptor},
-    tokio_stream::wrappers::UnixListenerStream,
+    tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream},
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
@@ -86,7 +87,7 @@ use {
         tonic::{
             auth::service::AuthLayer,
             interceptor::{HttpInterceptorLayer, OptionalHttpInterceptor},
-            metered::{MeteredBandwidthLayer, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
+            metered::{MeteredBandwidthLayer, MeteredManager, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
     },
@@ -1657,6 +1658,9 @@ impl GrpcService {
         let method_ratelimit_config = auth
             .as_ref()
             .and_then(|auth_config| auth_config.ratelimit.clone());
+        let billing_config = auth
+            .as_ref()
+            .and_then(|auth_config| auth_config.billing.clone());
 
         enum AuthLayerChoice {
             Http(AuthLayer<HttpSubscriptionRepository>),
@@ -1713,11 +1717,28 @@ impl GrpcService {
             }};
         }
 
-        // Request -> InterceptorLayer -> RateLimiter -> MeteredBandwidthLayer -> GeyserService
+        // Request -> InterceptorLayer -> RateLimiter -> MeteredBandwidthLayer (Promtheus / Billing*) -> GeyserService
 
-        let metered_svc =
-            MeteredBandwidthLayer::new(PrometheusMeteredManager, traffic_reporting_threshold)
-                .named_layer(service);
+        let maybe_billing_metered_man = billing_config.map(|billing_config| {
+            let client = reqwest::Client::new();
+            let BillingConfig::Http(billing_config) = billing_config;
+            let billing_endpoint = billing_config.billing_endpoint_url;
+            let (tx, rx) = mpsc::unbounded_channel();
+
+            let billing_sink = HttpBillingEventSink::new(
+                client,
+                billing_endpoint,
+                UnboundedReceiverStream::new(rx),
+                Some(billing_config.report_interval),
+            );
+            tokio::spawn(billing_sink);
+            BillingMeteredManager::new(tx)
+        });
+
+        let metered_man = PrometheusMeteredManager.stack(maybe_billing_metered_man);
+
+        let metered_svc = MeteredBandwidthLayer::new(metered_man, traffic_reporting_threshold)
+            .named_layer(service);
 
         let ratelimiter = OptionalHttpInterceptor::from_option(
             method_ratelimit_config.as_ref().map(|ratelimit| {
@@ -1729,6 +1750,7 @@ impl GrpcService {
                 MethodRatelimiter::new(ratelimit.default_max_hits, ratelimit.window)
             }),
         );
+
         let http_intercepted_svc = HttpInterceptorLayer::new(ratelimiter).named_layer(metered_svc);
 
         let intercepted_svc = interceptor::InterceptorLayer::new(XTokenInterceptor {

@@ -1,5 +1,5 @@
 use {
-    crate::plugin::filter::limits::FilterLimits,
+    crate::{billing::REPORT_INTERVAL, plugin::filter::limits::FilterLimits},
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
     },
@@ -521,6 +521,38 @@ pub struct AuthConfig {
     pub kind: AuthKind,
     #[serde(default = "AuthConfig::default_ratelimit")]
     pub ratelimit: Option<RatelimitConfig>,
+    #[serde(default)]
+    pub billing: Option<BillingConfig>,
+}
+
+///
+/// Configuration for billing events. This is used to configure the billing system for the gRPC server.
+///
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum BillingConfig {
+    /// Billing events are sent to a remote HTTP service.
+    Http(HttpBackedBillingConfig),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpBackedBillingConfig {
+    ///
+    /// The URL of the billing endpoint. The gRPC server will send billing events to this endpoint.
+    pub billing_endpoint_url: Url,
+    ///
+    /// The interval at which the gRPC server will report billing events to the billing endpoint.
+    #[serde(
+        default = "HttpBackedBillingConfig::default_report_interval",
+        with = "humantime_serde"
+    )]
+    pub report_interval: Duration,
+}
+
+impl HttpBackedBillingConfig {
+    pub const fn default_report_interval() -> Duration {
+        REPORT_INTERVAL
+    }
 }
 
 impl AuthConfig {

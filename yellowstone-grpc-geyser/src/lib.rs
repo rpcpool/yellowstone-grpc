@@ -1,4 +1,5 @@
 pub(crate) mod auth;
+pub(crate) mod billing;
 mod block_reconstruction;
 mod cache_ext;
 pub mod config;

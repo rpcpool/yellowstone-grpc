@@ -1,9 +1,8 @@
 use {
-    crate::metrics,
+    crate::{metrics, util::uri::PathName},
     dashmap::DashMap,
-    http::uri::PathAndQuery,
     std::{
-        hash::{Hash, Hasher},
+        hash::Hash,
         net::IpAddr,
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -27,43 +26,6 @@ pub struct PrometheusRatelimitCallbacks;
 impl RatelimitedCallbacks for PrometheusRatelimitCallbacks {
     fn on_rate_limit_exceeded(&self, remote_peer_ip: Option<IpAddr>) {
         metrics::incr_ip_conncur_rate_limit_exceeded(remote_peer_ip.map(|ip| ip.to_string()));
-    }
-}
-
-///
-/// Wrapper type around the shared-type [`http::uri::PathAndQuery`].
-/// It's useful to only compare the path portion of the URI, and ignore the query portion.
-///
-/// [`http::uri::PathAndQuery`] is cheap to clone as its internal data types uses `Bytes`,
-/// instead of using `String` we can avoid unnecessary allocations when comparing the path portion of the URI.
-///
-#[derive(Debug, Clone)]
-pub struct PathName(PathAndQuery);
-
-impl From<&PathAndQuery> for PathName {
-    fn from(path_and_query: &PathAndQuery) -> Self {
-        // We can safely clone the `PathAndQuery` as it uses `Bytes` internally, which is cheap to clone.
-        PathName(path_and_query.clone())
-    }
-}
-
-impl PartialEq for PathName {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.path() == other.0.path()
-    }
-}
-
-impl Eq for PathName {}
-
-impl AsRef<str> for PathName {
-    fn as_ref(&self) -> &str {
-        self.0.path()
-    }
-}
-
-impl Hash for PathName {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.path().hash(state);
     }
 }
 
