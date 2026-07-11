@@ -10,7 +10,10 @@ import Client, {
   txEncode,
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
-import type { ReconnectOptions } from "@triton-one/yellowstone-grpc";
+import type {
+  ReconnectOptions,
+  ReconnectReplayPolicy,
+} from "@triton-one/yellowstone-grpc";
 
 async function main() {
   const args = await parseCommandLineArgs();
@@ -93,13 +96,22 @@ function buildReconnectOptions(args): ReconnectOptions | undefined {
     return undefined;
   }
 
+  const replayPolicy: ReconnectReplayPolicy =
+    args.autoreconnectReplayPolicy === "fresh"
+      ? { fresh: true }
+      : {
+          fromCheckpoint: {
+            checkpointBuffer: String(args.autoreconnectCheckpointBuffer),
+          },
+        };
+
   return {
-    enabled: true,
     backoff: {
       initialIntervalMs: args.autoreconnectInitialIntervalMs,
       multiplier: args.autoreconnectMultiplier,
       maxRetries: args.autoreconnectMaxRetries,
     },
+    replayPolicy,
     slotRetention: args.autoreconnectSlotRetention,
   };
 }
@@ -506,6 +518,17 @@ async function parseCommandLineArgs() {
         default: 3,
         describe: "auto-reconnect retry count per reconnect attempt",
         type: "number",
+      },
+      "autoreconnect-replay-policy": {
+        choices: ["from-checkpoint", "fresh"],
+        default: "from-checkpoint",
+        describe: "auto-reconnect replay policy",
+        type: "string",
+      },
+      "autoreconnect-checkpoint-buffer": {
+        default: "2",
+        describe: "slots behind the latest block meta to replay from",
+        type: "string",
       },
       "autoreconnect-slot-retention": {
         default: 250,
