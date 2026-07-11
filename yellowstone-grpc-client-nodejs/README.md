@@ -38,6 +38,11 @@ const client = new Client(endpoint, xToken, channelOptions, {
     multiplier: 2,
     maxRetries: 10,
   },
+  replayPolicy: {
+    fromCheckpoint: {
+      checkpointBuffer: "2",
+    },
+  },
   slotRetention: 250,
 });
 
@@ -45,8 +50,11 @@ await client.connect();
 const stream = await client.subscribe(request);
 ```
 
-Omit the fourth argument, or pass `{ enabled: false }`, to keep the previous
-no-reconnect behavior. Deshred subscriptions are unchanged.
+Omit the fourth argument to keep the previous no-reconnect behavior. When
+`replayPolicy` is omitted from a reconnect config, the Rust client default is
+used: `fromCheckpoint` with a checkpoint buffer of `2`. Use
+`replayPolicy: { fresh: true }` to reconnect from the current stream point
+without checkpoint replay. Deshred subscriptions are unchanged.
 
 ### Compressed account filters
 
