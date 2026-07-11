@@ -1,5 +1,5 @@
 mod dedup;
-mod reconnect;
+pub mod reconnect;
 
 use {
     crate::{

@@ -1,7 +1,11 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
+use crate::bindings::{
+  JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig, JsReconnectReplayPolicy,
+};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
+use yellowstone_grpc_client::{
+  reconnect::ReplayPolicy, Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig,
+};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -25,6 +29,41 @@ fn invalid_arg(reason: impl Into<String>) -> napi::Error {
   error
 }
 
+fn parse_u64_string(value: &str, field_name: &str) -> Result<u64> {
+  value.parse::<u64>().map_err(|error| {
+    invalid_arg_with_cause(
+      format!("invalid {field_name}: expected a u64 string"),
+      &error,
+    )
+  })
+}
+
+fn replay_policy_from_js(replay_policy: Option<JsReconnectReplayPolicy>) -> Result<ReplayPolicy> {
+  let Some(replay_policy) = replay_policy else {
+    return Ok(ReplayPolicy::default());
+  };
+
+  match (replay_policy.from_checkpoint, replay_policy.fresh) {
+    (Some(from_checkpoint), None) => {
+      let checkpoint_buffer = parse_u64_string(
+        &from_checkpoint.checkpoint_buffer,
+        "reconnect.replayPolicy.fromCheckpoint.checkpointBuffer",
+      )?;
+      Ok(ReplayPolicy::FromCheckpoint { checkpoint_buffer })
+    }
+    (None, Some(true)) => Ok(ReplayPolicy::Fresh),
+    (None, Some(false)) => Err(invalid_arg(
+      "invalid reconnect.replayPolicy.fresh: expected true when set",
+    )),
+    (None, None) => Err(invalid_arg(
+      "invalid reconnect.replayPolicy: expected fromCheckpoint or fresh",
+    )),
+    (Some(_), Some(_)) => Err(invalid_arg(
+      "invalid reconnect.replayPolicy: expected exactly one of fromCheckpoint or fresh",
+    )),
+  }
+}
+
 fn reconnect_config_from_js(
   reconnect_config: Option<JsReconnectConfig>,
 ) -> Result<Option<ReconnectConfig>> {
@@ -32,11 +71,8 @@ fn reconnect_config_from_js(
     return Ok(None);
   };
 
-  if reconnect_config.enabled == Some(false) {
-    return Ok(None);
-  }
-
   let mut native_config = ReconnectConfig::default();
+  native_config.replay_policy = replay_policy_from_js(reconnect_config.replay_policy)?;
 
   if let Some(slot_retention) = reconnect_config.slot_retention {
     if slot_retention == 0 {
@@ -247,6 +283,11 @@ pub async fn get_client_builder(
 #[cfg(test)]
 mod tests {
   use super::get_client_builder;
+  use crate::bindings::{
+    JsReconnectBackoff, JsReconnectConfig, JsReconnectFromCheckpoint, JsReconnectReplayPolicy,
+  };
+  use std::time::Duration;
+  use yellowstone_grpc_client::{reconnect::ReplayPolicy, ReconnectConfig};
 
   #[tokio::test]
   async fn get_client_builder_invalid_endpoint_includes_cause() {
@@ -286,20 +327,31 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn get_client_builder_applies_reconnect_config() {
-    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
-    use std::time::Duration;
+  async fn get_client_builder_omits_reconnect_config_by_default() {
+    let builder = get_client_builder("http://127.0.0.1:10000".to_string(), None, None, None)
+      .await
+      .expect("valid endpoint should build");
 
+    assert!(builder.reconnect_config.is_none());
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_applies_reconnect_config() {
     let builder = get_client_builder(
       "http://127.0.0.1:10000".to_string(),
       None,
       None,
       Some(JsReconnectConfig {
-        enabled: Some(true),
         backoff: Some(JsReconnectBackoff {
           initial_interval_ms: Some(125),
           multiplier: Some(1.5),
           max_retries: Some(8),
+        }),
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: Some(JsReconnectFromCheckpoint {
+            checkpoint_buffer: "12".to_string(),
+          }),
+          fresh: None,
         }),
         slot_retention: Some(300),
       }),
@@ -307,30 +359,129 @@ mod tests {
     .await
     .expect("valid reconnect config should build");
 
+    let reconnect_config = builder
+      .reconnect_config
+      .expect("reconnect config should be set");
+
     assert_eq!(
-      builder.reconnect_config.backoff.initial_interval,
+      reconnect_config.backoff.initial_interval,
       Duration::from_millis(125)
     );
-    assert_eq!(builder.reconnect_config.backoff.multiplier, 1.5);
-    assert_eq!(builder.reconnect_config.backoff.max_retries, 8);
-    assert_eq!(builder.reconnect_config.slot_retention, 300);
+    assert_eq!(reconnect_config.backoff.multiplier, 1.5);
+    assert_eq!(reconnect_config.backoff.max_retries, 8);
+    assert_eq!(reconnect_config.slot_retention, 300);
+    match reconnect_config.replay_policy {
+      ReplayPolicy::FromCheckpoint { checkpoint_buffer } => assert_eq!(checkpoint_buffer, 12),
+      ReplayPolicy::Fresh => panic!("expected checkpoint replay policy"),
+    }
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_uses_default_replay_policy() {
+    let builder = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: None,
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect("valid reconnect config should build");
+
+    let reconnect_config = builder
+      .reconnect_config
+      .expect("reconnect config should be set");
+
+    match (
+      reconnect_config.replay_policy,
+      ReconnectConfig::default().replay_policy,
+    ) {
+      (
+        ReplayPolicy::FromCheckpoint { checkpoint_buffer },
+        ReplayPolicy::FromCheckpoint {
+          checkpoint_buffer: expected,
+        },
+      ) => assert_eq!(checkpoint_buffer, expected),
+      _ => panic!("expected default checkpoint replay policy"),
+    }
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_applies_fresh_replay_policy() {
+    let builder = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: None,
+          fresh: Some(true),
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect("valid reconnect config should build");
+
+    let reconnect_config = builder
+      .reconnect_config
+      .expect("reconnect config should be set");
+
+    match reconnect_config.replay_policy {
+      ReplayPolicy::Fresh => {}
+      ReplayPolicy::FromCheckpoint { .. } => panic!("expected fresh replay policy"),
+    }
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_accepts_checkpoint_buffer_above_u32_max() {
+    let builder = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: Some(JsReconnectFromCheckpoint {
+            checkpoint_buffer: "4294967296".to_string(),
+          }),
+          fresh: None,
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect("u64 checkpoint buffer should build");
+
+    let reconnect_config = builder
+      .reconnect_config
+      .expect("reconnect config should be set");
+
+    match reconnect_config.replay_policy {
+      ReplayPolicy::FromCheckpoint { checkpoint_buffer } => {
+        assert_eq!(checkpoint_buffer, 4294967296)
+      }
+      ReplayPolicy::Fresh => panic!("expected checkpoint replay policy"),
+    }
   }
 
   #[tokio::test]
   async fn get_client_builder_rejects_invalid_reconnect_config() {
-    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
-
     let error = get_client_builder(
       "http://127.0.0.1:10000".to_string(),
       None,
       None,
       Some(JsReconnectConfig {
-        enabled: Some(true),
         backoff: Some(JsReconnectBackoff {
           initial_interval_ms: None,
           multiplier: Some(0.5),
           max_retries: None,
         }),
+        replay_policy: None,
         slot_retention: None,
       }),
     )
@@ -343,5 +494,135 @@ mod tests {
         .contains("invalid reconnect.backoff.multiplier"),
       "unexpected error message: {error}"
     );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_zero_slot_retention() {
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: None,
+        slot_retention: Some(0),
+      }),
+    )
+    .await
+    .expect_err("zero slot retention should fail");
+
+    assert!(
+      error
+        .to_string()
+        .contains("invalid reconnect.slotRetention"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_empty_replay_policy() {
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: None,
+          fresh: None,
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect_err("empty replay policy should fail");
+
+    assert!(
+      error.to_string().contains("invalid reconnect.replayPolicy"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_ambiguous_replay_policy() {
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: Some(JsReconnectFromCheckpoint {
+            checkpoint_buffer: "2".to_string(),
+          }),
+          fresh: Some(true),
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect_err("ambiguous replay policy should fail");
+
+    assert!(
+      error
+        .to_string()
+        .contains("expected exactly one of fromCheckpoint or fresh"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_false_fresh_replay_policy() {
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: None,
+          fresh: Some(false),
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect_err("false fresh policy should fail");
+
+    assert!(
+      error
+        .to_string()
+        .contains("invalid reconnect.replayPolicy.fresh"),
+      "unexpected error message: {error}"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_client_builder_rejects_invalid_checkpoint_buffer() {
+    let error = get_client_builder(
+      "http://127.0.0.1:10000".to_string(),
+      None,
+      None,
+      Some(JsReconnectConfig {
+        backoff: None,
+        replay_policy: Some(JsReconnectReplayPolicy {
+          from_checkpoint: Some(JsReconnectFromCheckpoint {
+            checkpoint_buffer: "not-a-number".to_string(),
+          }),
+          fresh: None,
+        }),
+        slot_retention: None,
+      }),
+    )
+    .await
+    .expect_err("invalid checkpoint buffer should fail");
+
+    assert!(
+      error
+        .to_string()
+        .contains("invalid reconnect.replayPolicy.fromCheckpoint.checkpointBuffer"),
+      "unexpected error message: {error}"
+    );
+    assert!(error.cause.is_some(), "expected native parse cause");
   }
 }

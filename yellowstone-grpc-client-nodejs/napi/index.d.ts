@@ -141,13 +141,18 @@ export interface JsReconnectBackoff {
 }
 
 export interface JsReconnectConfig {
-  /**
-   * Omitted or true enables reconnect when this object is provided.
-   * False keeps legacy no-reconnect behavior.
-   */
-  enabled?: boolean
   backoff?: JsReconnectBackoff
+  replayPolicy?: JsReconnectReplayPolicy
   slotRetention?: number
+}
+
+export interface JsReconnectFromCheckpoint {
+  checkpointBuffer: string
+}
+
+export interface JsReconnectReplayPolicy {
+  fromCheckpoint?: JsReconnectFromCheckpoint
+  fresh?: boolean
 }
 
 export declare const enum WasmUiTransactionEncoding {

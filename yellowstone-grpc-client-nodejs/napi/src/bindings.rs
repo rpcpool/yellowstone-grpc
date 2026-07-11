@@ -57,11 +57,22 @@ pub struct JsReconnectBackoff {
 
 #[napi(object)]
 #[derive(Deserialize, Debug, Clone)]
+pub struct JsReconnectFromCheckpoint {
+  pub checkpoint_buffer: String,
+}
+
+#[napi(object)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct JsReconnectReplayPolicy {
+  pub from_checkpoint: Option<JsReconnectFromCheckpoint>,
+  pub fresh: Option<bool>,
+}
+
+#[napi(object)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct JsReconnectConfig {
-  /// Omitted or true enables reconnect when this object is provided.
-  /// False keeps legacy no-reconnect behavior.
-  pub enabled: Option<bool>,
   pub backoff: Option<JsReconnectBackoff>,
+  pub replay_policy: Option<JsReconnectReplayPolicy>,
   pub slot_retention: Option<u32>,
 }
 

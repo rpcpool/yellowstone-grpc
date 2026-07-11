@@ -82,7 +82,20 @@ npm start -- --endpoint https://api.rpcpool.com \
   --autoreconnect-initial-interval-ms 100 \
   --autoreconnect-multiplier 2 \
   --autoreconnect-max-retries 10 \
+  --autoreconnect-replay-policy from-checkpoint \
+  --autoreconnect-checkpoint-buffer "2" \
   --autoreconnect-slot-retention 250 \
+  subscribe \
+  --slots
+```
+
+Use fresh reconnect to reconnect from the current stream point without checkpoint replay:
+
+```shell
+npm start -- --endpoint https://api.rpcpool.com \
+  --x-token "<token>" \
+  --autoreconnect \
+  --autoreconnect-replay-policy fresh \
   subscribe \
   --slots
 ```
@@ -95,11 +108,15 @@ const client = new Client(
   "<token>",
   { grpcMaxDecodingMessageSize: 64 * 1024 * 1024 },
   {
-    enabled: true,
     backoff: {
       initialIntervalMs: 100,
       multiplier: 2,
       maxRetries: 10,
+    },
+    replayPolicy: {
+      fromCheckpoint: {
+        checkpointBuffer: "2",
+      },
     },
     slotRetention: 250,
   },
