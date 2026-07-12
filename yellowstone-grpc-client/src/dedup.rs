@@ -30,6 +30,7 @@ pub(crate) enum Observation {
 struct SealedSlot {
     blockhash: Option<String>,
     statuses: HashSet<i32>,
+    keys: HashSet<DedupKey>,
 }
 
 struct ReplayBuffer<T> {
@@ -240,16 +241,13 @@ impl DedupState {
     pub(crate) fn observe(&mut self, slot: u64, key: DedupKey) -> Observation {
         match key {
             DedupKey::Slot(status) => {
-                // CreatedBank means a bank was just created for this slot. Wipe any
-                // prior state unconditionally: on first creation this is a near no-op,
-                // on a repeated creation it recovers from a rollback.
-                //
-                // Rollback detection depends on receiving CreatedBank. The server only
-                // emits interslot statuses (CreatedBank, etc.) to filters with
-                // interslot_updates=true (see FilterSlots::get_updates server-side).
-                // Without it this wipe is dormant. That is by design: we do not inject
-                // the interslot flag; the user opts in by accepting the extra traffic.
+                // CreatedBank wipes prior state to recover from a rollback.
+                // During replay, CreatedBank for a sealed slot is a replay
+                // artifact, not a genuine rollback.
                 if status == CREATED_BANK_STATUS {
+                    if self.sealed.contains_key(&slot) {
+                        return Observation::Duplicate;
+                    }
                     self.clear_slot(slot);
                 }
 
@@ -289,6 +287,7 @@ impl DedupState {
                     SealedSlot {
                         blockhash: Some(blockhash),
                         statuses: state.statuses,
+                        keys: HashSet::new(),
                     },
                 );
                 self.prune();
@@ -297,9 +296,13 @@ impl DedupState {
 
             // Accounts, transactions, entries, blocks, etc.
             payload => {
-                // Sealed slot: hold for quarantine. The verdict comes when the
-                // replayed BlockMeta arrives; until then we buffer without deduping.
-                if self.sealed.contains_key(&slot) {
+                // Sealed slot: check if we already forwarded this event before
+                // the disconnect. If so, filter it. Otherwise quarantine it
+                // until the replayed BlockMeta arrives with the verdict.
+                if let Some(sealed) = self.sealed.get(&slot) {
+                    if sealed.keys.contains(&payload) {
+                        return Observation::Duplicate;
+                    }
                     return Observation::Replay;
                 }
 
@@ -337,6 +340,7 @@ impl DedupState {
                 SealedSlot {
                     blockhash: None,
                     statuses: state.statuses,
+                    keys: state.keys,
                 },
             );
         }

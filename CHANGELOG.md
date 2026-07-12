@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Misc
+
+- client: extract replay policy from AutoReconnect, fix dedup invariants, add reconnect-blocks e2e scenario ([#811](https://github.com/rpcpool/yellowstone-grpc/pull/811))
+
 ## 2026-07-08
 
 - yellowstone-grpc-geyser 14.2.0

@@ -4,7 +4,7 @@ pub mod reconnect;
 use {
     crate::{
         dedup::DEFAULT_SLOT_RETENTION,
-        reconnect::{ReplayPolicy, TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
+        reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
     },
     arc_swap::ArcSwap,
     bytes::Bytes,
@@ -44,7 +44,7 @@ use {
 pub use {
     crate::{
         dedup::{DedupState, DedupStream},
-        reconnect::{AutoReconnect, Backoff, GrpcConnector, TonicGrpcConnector},
+        reconnect::{AutoReconnect, Backoff, GrpcConnector, ReplayPolicy, TonicGrpcConnector},
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
