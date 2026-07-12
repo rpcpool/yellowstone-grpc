@@ -666,18 +666,17 @@ mod tests {
     }
 
     #[test]
-    fn test_created_bank_clears_sealed_slot() {
+    fn test_created_bank_clears_inflight_slot() {
         let mut dedup = DedupState::default();
 
-        // seal slot 800
+        // inflight slot, not sealed
         observe(&mut dedup, &make_slot_msg(800, 0));
-        observe(&mut dedup, &make_block_meta_msg(800));
 
-        // CreatedBank wipes the slot (rollback)
+        // CreatedBank on inflight slot: genuine rollback, clears state
         let created_bank_status = SlotStatus::SlotCreatedBank as i32;
         observe(&mut dedup, &make_slot_msg(800, created_bank_status));
 
-        // slot is fresh now: a new status is New, not Duplicate
+        // slot is fresh now
         assert!(matches!(
             observe(&mut dedup, &make_slot_msg(800, 0)),
             Observation::New
