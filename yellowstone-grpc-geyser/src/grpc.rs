@@ -1762,7 +1762,7 @@ impl GrpcService {
         routes.add_service(health_service);
 
         if let Some(auth_layer) = maybe_auth_layer {
-            // The final wrapping order is: AuthLayer -> InterceptorLayer -> MeteredBandwidthLayer -> GeyserService
+            // The final wrapping order is: AuthLayer -> RateLimit -> InterceptorLayer -> MeteredBandwidthLayer ((Promtheus / Billing*) -> GeyserService
             // The AuthLayer is the outermost layer, so it can intercept and handle authentication before any other processing occurs.
             with_auth!(auth_layer, |auth_layer| {
                 let auth_svc = auth_layer.named_layer(intercepted_svc);
