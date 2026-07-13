@@ -11,7 +11,7 @@ use {
     solana_pubkey::Pubkey,
     std::{
         borrow::Borrow,
-        collections::{btree_map::Range, BTreeMap, HashMap, VecDeque},
+        collections::{btree_map::Range, BTreeMap, VecDeque},
         str::FromStr,
         sync::Arc,
     },
@@ -19,17 +19,31 @@ use {
         BlockReplayEvent, BlockStateMachineOutput, BlockSummary, BlocksStateMachine,
         SlotCommitmentStatusUpdate, SlotLifecycle, SlotLifecycleUpdate, UntrackedSlot,
     },
+    foldhash::{HashMap as FoldHashMap, HashMapExt},
 };
 
-#[derive(Default)]
 pub struct ProcessingSlot {
     original_messages: Vec<Message>,
-    account_write_version_map: HashMap<Pubkey, u64>,
+    account_write_version_map: FoldHashMap<Pubkey, u64>,
     blockmeta: Option<Arc<MessageBlockMeta>>,
     transactions: Vec<Arc<MessageTransactionInfo>>,
     accounts: Vec<Arc<MessageAccountInfo>>,
     entries: Vec<Arc<MessageEntry>>,
     is_sealed: bool,
+}
+
+impl Default for ProcessingSlot {
+    fn default() -> Self {
+        Self {
+            original_messages: Vec::with_capacity(4096),
+            account_write_version_map: FoldHashMap::with_capacity(4096),
+            blockmeta: None,
+            transactions: Vec::with_capacity(4096),
+            accounts: Vec::with_capacity(4096),
+            entries: Vec::with_capacity(64),
+            is_sealed: false,
+        }
+    }
 }
 
 enum TrySealError {
@@ -75,17 +89,17 @@ impl ProcessingSlot {
         if self.is_sealed {
             return Err(TrySealError::AlreadySealed);
         }
-        if self.blockmeta.is_none() {
+        let Some(blockmeta) = self.blockmeta.as_ref() else {
             return Err(TrySealError::NotSealable);
-        }
-        let expected_txn_count =
-            self.blockmeta.as_ref().unwrap().executed_transaction_count as usize;
+        };
 
-        let expected_entry_count = self.blockmeta.as_ref().unwrap().entries_count as usize;
+        let expected_txn_count =
+            blockmeta.executed_transaction_count as usize;
         if self.transactions.len() < expected_txn_count {
             return Err(TrySealError::NotSealable);
         }
 
+        let expected_entry_count = blockmeta.entries_count as usize;
         if self.entries.len() < expected_entry_count {
             return Err(TrySealError::NotSealable);
         }
@@ -178,10 +192,10 @@ pub struct SlotProgression {
 }
 
 pub struct BlockMachineStorage {
-    processing_slots: HashMap<u64, ProcessingSlot>,
-    pending_blockmeta: HashMap<u64, Arc<MessageBlockMeta>>,
+    processing_slots: FoldHashMap<u64, ProcessingSlot>,
+    pending_blockmeta: FoldHashMap<u64, Arc<MessageBlockMeta>>,
     replayed_slot: BTreeMap<u64, Arc<FrozenBlock>>,
-    slot_commitment_progression_map: HashMap<u64, SlotProgression>,
+    slot_commitment_progression_map: FoldHashMap<u64, SlotProgression>,
     replayed_capacity: usize,
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBlock>)>,
     state: BlocksStateMachine,
@@ -254,11 +268,11 @@ pub const MINIMUM_FINALIZED_SLOT_TO_BUFFER: usize = 10;
 impl BlockMachineStorage {
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
-            processing_slots: HashMap::new(),
+            processing_slots: FoldHashMap::new(),
             replayed_slot: BTreeMap::new(),
             replayed_capacity,
-            pending_blockmeta: HashMap::new(),
-            slot_commitment_progression_map: HashMap::new(),
+            pending_blockmeta: FoldHashMap::new(),
+            slot_commitment_progression_map: FoldHashMap::new(),
             ready_queue: VecDeque::new(),
             state: BlocksStateMachine::default(),
             min_slot: None,

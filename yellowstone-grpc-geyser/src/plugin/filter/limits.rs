@@ -1,7 +1,7 @@
 use {
     serde::{de, Deserialize, Deserializer},
     solana_pubkey::Pubkey,
-    std::collections::HashSet,
+    foldhash::{HashSet as FoldHashSet, HashSetExt},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +56,7 @@ impl FilterLimits {
         }
     }
 
-    pub fn check_pubkey_reject(pubkey: &Pubkey, set: &HashSet<Pubkey>) -> FilterLimitsCheckResult {
+    pub fn check_pubkey_reject(pubkey: &Pubkey, set: &FoldHashSet<Pubkey>) -> FilterLimitsCheckResult {
         if !set.contains(pubkey) {
             Ok(())
         } else {
@@ -72,10 +72,10 @@ pub struct FilterLimitsAccounts {
     pub any: bool,
     pub account_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub account_reject: HashSet<Pubkey>,
+    pub account_reject: FoldHashSet<Pubkey>,
     pub owner_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub owner_reject: HashSet<Pubkey>,
+    pub owner_reject: FoldHashSet<Pubkey>,
     pub data_slice_max: usize,
     pub cuckoo_max_size: usize,
 }
@@ -86,9 +86,9 @@ impl Default for FilterLimitsAccounts {
             max: usize::MAX,
             any: true,
             account_max: usize::MAX,
-            account_reject: HashSet::new(),
+            account_reject: FoldHashSet::new(),
             owner_max: usize::MAX,
-            owner_reject: HashSet::new(),
+            owner_reject: FoldHashSet::new(),
             data_slice_max: usize::MAX,
             cuckoo_max_size: usize::MAX,
         }
@@ -117,7 +117,7 @@ pub struct FilterLimitsTransactions {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_include_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub account_include_reject: HashSet<Pubkey>,
+    pub account_include_reject: FoldHashSet<Pubkey>,
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_exclude_max: usize,
     #[serde(deserialize_with = "deserialize_usize_str")]
@@ -130,7 +130,7 @@ impl Default for FilterLimitsTransactions {
             max: usize::MAX,
             any: true,
             account_include_max: usize::MAX,
-            account_include_reject: HashSet::new(),
+            account_include_reject: FoldHashSet::new(),
             account_exclude_max: usize::MAX,
             account_required_max: usize::MAX,
         }
@@ -146,7 +146,7 @@ pub struct FilterLimitsBlocks {
     pub account_include_max: usize,
     pub account_include_any: bool,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub account_include_reject: HashSet<Pubkey>,
+    pub account_include_reject: FoldHashSet<Pubkey>,
     pub include_transactions: bool,
     pub include_accounts: bool,
     pub include_entries: bool,
@@ -160,7 +160,7 @@ impl Default for FilterLimitsBlocks {
             max: usize::MAX,
             account_include_max: usize::MAX,
             account_include_any: true,
-            account_include_reject: HashSet::new(),
+            account_include_reject: FoldHashSet::new(),
             include_transactions: true,
             include_accounts: true,
             include_entries: true,
@@ -204,7 +204,7 @@ pub struct FilterLimitsDeshredTransactions {
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_include_max: usize,
     #[serde(deserialize_with = "deserialize_pubkey_set")]
-    pub account_include_reject: HashSet<Pubkey>,
+    pub account_include_reject: FoldHashSet<Pubkey>,
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_exclude_max: usize,
     #[serde(deserialize_with = "deserialize_usize_str")]
@@ -217,7 +217,7 @@ impl Default for FilterLimitsDeshredTransactions {
             max: usize::MAX,
             any: true,
             account_include_max: usize::MAX,
-            account_include_reject: HashSet::new(),
+            account_include_reject: FoldHashSet::new(),
             account_exclude_max: usize::MAX,
             account_required_max: usize::MAX,
         }
@@ -244,7 +244,7 @@ where
     }
 }
 
-fn deserialize_pubkey_set<'de, D>(deserializer: D) -> Result<HashSet<Pubkey>, D::Error>
+fn deserialize_pubkey_set<'de, D>(deserializer: D) -> Result<FoldHashSet<Pubkey>, D::Error>
 where
     D: Deserializer<'de>,
 {

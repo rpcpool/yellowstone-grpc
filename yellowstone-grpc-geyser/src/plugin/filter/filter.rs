@@ -28,7 +28,7 @@ use {
         generic_token_account::GenericTokenAccount, state::Account as TokenAccount,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashMap,
         ops::Range,
         str::FromStr,
         sync::Arc,
@@ -347,7 +347,7 @@ impl Filter {
 
     fn decode_pubkeys<'a>(
         pubkeys: &'a [String],
-        limit: &'a HashSet<Pubkey>,
+        limit: &'a FoldHashSet<Pubkey>,
     ) -> impl Iterator<Item = FilterResult<Pubkey>> + 'a {
         pubkeys.iter().map(|value| {
             let pubkey = Pubkey::from_str(value)?;
@@ -358,7 +358,7 @@ impl Filter {
 
     fn decode_pubkeys_into_set(
         pubkeys: &[String],
-        limit: &HashSet<Pubkey>,
+        limit: &FoldHashSet<Pubkey>,
     ) -> FilterResult<FoldHashSet<Pubkey>> {
         Self::decode_pubkeys(pubkeys, limit).collect::<FilterResult<_>>()
     }
@@ -993,13 +993,13 @@ impl FilterTransactions {
                     .collect(),
                     account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?
                     .into_iter()
                     .collect(),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?
                     .into_iter()
                     .collect(),
@@ -1230,11 +1230,11 @@ impl FilterDeshredTransactions {
                     )?,
                     account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?,
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?,
                 },
             );
@@ -1272,7 +1272,7 @@ impl FilterDeshredTransactions {
                 }
 
                 if !inner.account_required.is_empty() {
-                    let all_keys: HashSet<&Pubkey> = tx.all_account_keys().collect();
+                    let all_keys: FoldHashSet<&Pubkey> = tx.all_account_keys().collect();
                     if !inner
                         .account_required
                         .iter()
