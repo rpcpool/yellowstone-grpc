@@ -10,22 +10,24 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-futures = { workspace = true }
+arc-swap = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 dotenvy = { workspace = true }
 humantime-serde = { workspace = true }
 inventory = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
+tonic = { workspace = true }
 tower = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 yellowstone-grpc-e2e-macros = { path = "../yellowstone-grpc-e2e-macros" }
 yellowstone-grpc-proto = { workspace = true }
-yellowstone-block-machine = { workspace = true }
-yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
+yellowstone-block-machine = { workspace = true, features = ["dragonsmouth-thin"] }
+yellowstone-grpc-client = { path = "../yellowstone-grpc-client", features = ["test-tools"] }
 yellowstone-grpc-geyser = { workspace = true }
 
 serde = { workspace = true, features = ["derive"] }

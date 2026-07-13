@@ -92,8 +92,21 @@ import type {
 
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
+import type {
+  JsReconnectBackoff as ReconnectBackoff,
+  JsReconnectConfig as ReconnectOptions,
+  JsReconnectFromCheckpoint as ReconnectFromCheckpoint,
+  JsReconnectReplayPolicy as ReconnectReplayPolicy,
+} from "./napi/index";
 
 export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
+
+export type {
+  ReconnectBackoff,
+  ReconnectFromCheckpoint,
+  ReconnectOptions,
+  ReconnectReplayPolicy,
+};
 
 /**
  * Public channel options accepted by the SDK constructor.
@@ -101,16 +114,6 @@ export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
  * duplicating option fields in this file.
  */
 export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
-
-export interface ReconnectOptions {
-  enabled?: boolean;
-  backoff?: {
-    initialIntervalMs?: number;
-    multiplier?: number;
-    maxRetries?: number;
-  };
-  slotRetention?: number;
-}
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

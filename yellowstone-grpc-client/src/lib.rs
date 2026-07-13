@@ -1,5 +1,5 @@
 mod dedup;
-mod reconnect;
+pub mod reconnect;
 
 use {
     crate::{
@@ -15,7 +15,9 @@ use {
     },
     std::{
         path::PathBuf,
+        pin::Pin,
         sync::{Arc, Mutex},
+        task::{Context, Poll},
         time::Duration,
     },
     tokio::net::UnixStream,
@@ -42,7 +44,7 @@ use {
 pub use {
     crate::{
         dedup::{DedupState, DedupStream},
-        reconnect::{AutoReconnect, Backoff, GrpcConnector, TonicGrpcConnector},
+        reconnect::{AutoReconnect, Backoff, GrpcConnector, ReplayPolicy, TonicGrpcConnector},
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
@@ -86,6 +88,7 @@ pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 /// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
     pub backoff: Backoff,
+    pub replay_policy: ReplayPolicy,
     pub slot_retention: usize,
 }
 
@@ -93,19 +96,13 @@ impl Default for ReconnectConfig {
     fn default() -> Self {
         Self {
             backoff: Backoff::default(),
+            replay_policy: ReplayPolicy::default(),
             slot_retention: DEFAULT_SLOT_RETENTION,
         }
     }
 }
 
 impl ReconnectConfig {
-    pub const fn no_reconnect() -> Self {
-        Self {
-            backoff: Backoff::new(Duration::from_millis(0), 1.0, 0),
-            slot_retention: 0,
-        }
-    }
-
     pub const fn with_backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
         self
@@ -124,7 +121,7 @@ impl ReconnectConfig {
 pub struct GeyserGrpcClient {
     pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
     pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
-    reconnect_config: ReconnectConfig,
+    reconnect_config: Option<ReconnectConfig>,
     geyser_client_opts: TonicGeyserClientOptions,
     reconnect_endpoint: Option<Endpoint>,
     reconnect_x_token: Option<AsciiMetadataValue>,
@@ -190,13 +187,27 @@ impl Sink<SubscribeDeshredRequest> for SubscribeDeshredRequestSink {
     }
 }
 
+/// Dispatch between a reconnecting stream and a bare dedup stream.
 ///
-/// Streams returned by the [`GeyserGrpcClient::subscribe`].
+/// `Reconnecting`: wraps the stream in `AutoReconnect`, which handles
+/// connection recovery, checkpoint replay, and dedup state carryover.
 ///
-/// The stream yields [`SubscribeUpdate`] from the server.
+/// `Direct`: dedup only, no reconnection. Used when the client is
+/// constructed without a `ReconnectConfig`.
+#[allow(clippy::large_enum_variant)] // created once, never moved;
+enum GeyserStreamInner {
+    Reconnecting(AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>),
+    Direct(DedupStream<Streaming<SubscribeUpdate>>),
+}
+
+/// Stream returned by [`GeyserGrpcClient::subscribe`].
 ///
+/// Yields `Result<SubscribeUpdate, Status>`. When constructed with a
+/// `ReconnectConfig`, transparently recovers from transient errors and
+/// deduplicates replayed messages. Without one, delivers messages from
+/// a single connection with dedup only.
 pub struct GeyserStream {
-    inner: AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>,
+    inner: GeyserStreamInner,
 }
 
 ///
@@ -211,22 +222,20 @@ pub struct SubscribeDeshredStream {
 impl Stream for SubscribeDeshredStream {
     type Item = Result<SubscribeUpdateDeshred, Status>;
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
     }
 }
 
 impl Stream for GeyserStream {
     type Item = Result<SubscribeUpdate, Status>;
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match &mut this.inner {
+            GeyserStreamInner::Reconnecting(s) => Pin::new(s).poll_next(cx),
+            GeyserStreamInner::Direct(s) => Pin::new(s).poll_next(cx),
+        }
     }
 }
 
@@ -323,7 +332,7 @@ impl GeyserGrpcClient {
         Self {
             health,
             geyser,
-            reconnect_config: ReconnectConfig::no_reconnect(),
+            reconnect_config: None,
             reconnect_endpoint: None,
             reconnect_x_token: None,
             geyser_client_opts: TonicGeyserClientOptions {
@@ -397,32 +406,40 @@ impl GeyserGrpcClient {
         &mut self,
         request: Option<SubscribeRequest>,
     ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
-        let reconnect_config = self.reconnect_config.clone();
-        let endpoint = self
-            .reconnect_endpoint
-            .clone()
-            .unwrap_or_else(|| Endpoint::from_static("http://127.0.0.1:0"));
-        let reconnect_x_token = self.reconnect_x_token.clone();
-
         self.subscribe_raw(request.clone())
             .await
             .map(|(sink, stream)| {
-                let connector = TonicGrpcConnector::new(
-                    endpoint,
-                    reconnect_config.clone(),
-                    reconnect_x_token,
-                    self.geyser_client_opts.clone(),
-                    Arc::clone(&sink.inner),
-                );
-                let inner = AutoReconnect::new(
-                    DedupStream::new(
-                        stream,
-                        DedupState::with_slot_retention(reconnect_config.slot_retention),
-                    ),
-                    connector,
-                    Arc::clone(&sink.shared),
-                    reconnect_config.backoff.clone(),
-                );
+                let inner = match self.reconnect_config.clone() {
+                    Some(config) => {
+                        let endpoint = self
+                            .reconnect_endpoint
+                            .clone()
+                            .expect("reconnect_config requires reconnect_endpoint");
+
+                        let dedup = DedupStream::new(
+                            stream,
+                            DedupState::with_slot_retention(config.slot_retention),
+                        );
+
+                        let connector = TonicGrpcConnector::new(
+                            endpoint,
+                            config.backoff.clone(),
+                            self.reconnect_x_token.clone(),
+                            self.geyser_client_opts.clone(),
+                            Arc::clone(&sink.inner),
+                        );
+
+                        GeyserStreamInner::Reconnecting(AutoReconnect::new(
+                            dedup,
+                            connector,
+                            Arc::clone(&sink.shared),
+                            config,
+                        ))
+                    }
+                    None => {
+                        GeyserStreamInner::Direct(DedupStream::new(stream, DedupState::default()))
+                    }
+                };
                 (sink, GeyserStream { inner })
             })
     }
@@ -571,7 +588,7 @@ pub struct GeyserGrpcBuilder {
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
     pub max_encoding_message_size: Option<usize>,
-    pub reconnect_config: ReconnectConfig,
+    pub reconnect_config: Option<ReconnectConfig>,
 }
 
 impl GeyserGrpcBuilder {
@@ -585,7 +602,7 @@ impl GeyserGrpcBuilder {
             accept_compressed: None,
             max_decoding_message_size: None,
             max_encoding_message_size: None,
-            reconnect_config: ReconnectConfig::no_reconnect(),
+            reconnect_config: None,
         }
     }
 
@@ -834,7 +851,7 @@ impl GeyserGrpcBuilder {
 
     pub fn set_reconnect_config(self, config: ReconnectConfig) -> Self {
         Self {
-            reconnect_config: config,
+            reconnect_config: Some(config),
             ..self
         }
     }

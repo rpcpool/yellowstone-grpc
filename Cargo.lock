@@ -6317,11 +6317,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "yellowstone-grpc-proto",
 ]
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.2.0"
+version = "13.3.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6457,6 +6458,7 @@ name = "yellowstone-grpc-intg-test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "clap",
  "dotenvy",
  "env_logger",
@@ -6473,6 +6475,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml 0.8.23",
+ "tonic",
  "tower",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",

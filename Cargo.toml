@@ -128,8 +128,8 @@ spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
 yellowstone-block-machine = { version = "0.8.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.3.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.2.0" }
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.2.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
@@ -138,6 +138,8 @@ yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
 tokio-rustls = "0.26.0"
 x509-parser = "0.18.0"
 
+[patch.crates-io]
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto" }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
