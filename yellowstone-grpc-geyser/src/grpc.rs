@@ -329,8 +329,13 @@ pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 /// once, when first received from the geyser plugin.
 type DeshredBroadcastedMessage = Message;
 
+pub enum ReplayResponseMessageType {
+    Single(Message),
+    Batch(Arc<Vec<Message>>),
+}
+
 pub enum ReplayedResponse {
-    Messages(Vec<Message>),
+    Messages(Vec<ReplayResponseMessageType>),
     Lagged(Slot),
 }
 
@@ -1298,34 +1303,40 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    let mut replayed_messages = Vec::with_capacity(32_768);
+                    // Elaboration on 5 * replay_stored_slots: Each slot can have up to 5 messages (1 for messages, 1 for block meta, 3 for slot status). So we allocate enough space for the worst case scenario.
+                    let mut replayed_messages = Vec::with_capacity(replay_stored_slots as usize + (5 * replay_stored_slots as usize));
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
+                    // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
+                    let created_at = Timestamp::from(SystemTime::now());
+
                     for replayed_slot in replayed_slot_iter {
-                        let slot_messages = replayed_slot
-                            .slot_status_messages
-                            .iter()
-                            .map(|s| {
-                                Message::Slot(MessageSlot {
-                                    slot: s.slot,
-                                    parent: s.parent_slot,
-                                    status: match s.commitment {
-                                        solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
-                                        solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
-                                        solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
-                                    },
-                                    dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
-                                })
-                            });
                         // 1st Put data (account/txn/entries)
-                        replayed_messages.extend(replayed_slot.frozen_block.messages().iter().cloned());
+                        replayed_messages.push(ReplayResponseMessageType::Batch(replayed_slot.frozen_block.messages()));
+
                         // 2nd Put block summary
-                        replayed_messages.push(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta()));
+                        replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta())));
+
                         // 3rd Put slot status
-                        replayed_messages.extend(slot_messages);
+                        for slot_update in replayed_slot.slot_status_messages.iter() {
+                            let slot_message = Message::Slot(MessageSlot {
+                                slot: slot_update.slot,
+                                parent: slot_update.parent_slot,
+                                status: match slot_update.commitment {
+                                    solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
+                                    solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                                    solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
+                                },
+                                dead_error: None,
+                                created_at,
+                            });
+                            replayed_messages.push(ReplayResponseMessageType::Single(slot_message));
+                        }
                     }
-                    let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
+
+                    if !replayed_messages.is_empty() {
+                        let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
+                    }
                 }
                 else => {
                     // No new messages and replay request channel closed, can only happen on shutdown
@@ -1430,8 +1441,8 @@ impl GrpcService {
                                     break 'outer;
                                 }
 
-                                let messages = match rx.await {
-                                    Ok(ReplayedResponse::Messages(messages)) => messages,
+                                let messages_batch = match rx.await {
+                                    Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
                                         task_tracker.spawn(async move {
@@ -1453,16 +1464,37 @@ impl GrpcService {
                                     }
                                 };
 
-                                for message in messages.iter() {
-                                    for message in session.filter.get_updates(message, Some(commitment)) {
-                                        match stream_tx.send(Ok(message)).await {
-                                            Ok(()) => {
-                                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+
+                                for message_batch in messages_batch.iter() {
+                                    match message_batch {
+                                        ReplayResponseMessageType::Single(message) => {
+                                            for filtered_message in session.filter.get_updates(message, Some(commitment)) {
+                                                match stream_tx.send(Ok(filtered_message)).await {
+                                                    Ok(()) => {
+                                                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                                    }
+                                                    Err(mpsc::error::SendError(_)) => {
+                                                        error!("client #{}: stream closed", session.subscriber_id);
+                                                        session.disconnect_reason = "client_closed";
+                                                        break 'outer;
+                                                    }
+                                                }
                                             }
-                                            Err(mpsc::error::SendError(_)) => {
-                                                error!("client #{}: stream closed", session.subscriber_id);
-                                                session.disconnect_reason = "client_closed";
-                                                break 'outer;
+                                        }
+                                        ReplayResponseMessageType::Batch(message_batch) => {
+                                            for message in message_batch.iter() {
+                                                for filtered_message in session.filter.get_updates(message, Some(commitment)) {
+                                                    match stream_tx.send(Ok(filtered_message)).await {
+                                                        Ok(()) => {
+                                                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                                        }
+                                                        Err(mpsc::error::SendError(_)) => {
+                                                            error!("client #{}: stream closed", session.subscriber_id);
+                                                            session.disconnect_reason = "client_closed";
+                                                            break 'outer;
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

@@ -6,6 +6,7 @@ use {
             MessageTransactionInfo, SlotStatus,
         },
     },
+    foldhash::{HashMap as FoldHashMap, HashMapExt},
     solana_commitment_config::CommitmentLevel,
     solana_hash::Hash,
     solana_pubkey::Pubkey,
@@ -19,7 +20,6 @@ use {
         BlockReplayEvent, BlockStateMachineOutput, BlockSummary, BlocksStateMachine,
         SlotCommitmentStatusUpdate, SlotLifecycle, SlotLifecycleUpdate, UntrackedSlot,
     },
-    foldhash::{HashMap as FoldHashMap, HashMapExt},
 };
 
 pub struct ProcessingSlot {
@@ -93,8 +93,7 @@ impl ProcessingSlot {
             return Err(TrySealError::NotSealable);
         };
 
-        let expected_txn_count =
-            blockmeta.executed_transaction_count as usize;
+        let expected_txn_count = blockmeta.executed_transaction_count as usize;
         if self.transactions.len() < expected_txn_count {
             return Err(TrySealError::NotSealable);
         }

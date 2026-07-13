@@ -1,7 +1,7 @@
 use {
+    foldhash::{HashSet as FoldHashSet, HashSetExt},
     serde::{de, Deserialize, Deserializer},
     solana_pubkey::Pubkey,
-    foldhash::{HashSet as FoldHashSet, HashSetExt},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +56,10 @@ impl FilterLimits {
         }
     }
 
-    pub fn check_pubkey_reject(pubkey: &Pubkey, set: &FoldHashSet<Pubkey>) -> FilterLimitsCheckResult {
+    pub fn check_pubkey_reject(
+        pubkey: &Pubkey,
+        set: &FoldHashSet<Pubkey>,
+    ) -> FilterLimitsCheckResult {
         if !set.contains(pubkey) {
             Ok(())
         } else {

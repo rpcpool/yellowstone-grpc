@@ -27,12 +27,7 @@ use {
     spl_token_2022_interface::{
         generic_token_account::GenericTokenAccount, state::Account as TokenAccount,
     },
-    std::{
-        collections::HashMap,
-        ops::Range,
-        str::FromStr,
-        sync::Arc,
-    },
+    std::{collections::HashMap, ops::Range, str::FromStr, sync::Arc},
     yellowstone_grpc_proto::{
         cuckoo::CuckooFilter,
         geyser::{
