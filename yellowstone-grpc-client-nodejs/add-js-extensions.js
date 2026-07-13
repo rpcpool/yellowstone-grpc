@@ -1,6 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 const recast = require('recast');
+const babelParser = require('@babel/parser');
+
+const parser = {
+  parse(source) {
+    return babelParser.parse(source, {
+      sourceType: 'module',
+      tokens: true,
+      plugins: ['importAttributes'],
+    });
+  },
+};
 
 //list of external packages that require '.js' extensions
 const packagesRequiringJsExtension = [
@@ -27,7 +38,7 @@ function shouldAppendJsExtension(source) {
 function processFile(filePath) {
   const code = fs.readFileSync(filePath, 'utf8');
   const ast = recast.parse(code, {
-    parser: require('recast/parsers/babel'), // Use Babel parser
+    parser,
   });
 
   let modified = false;
