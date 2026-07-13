@@ -1278,7 +1278,7 @@ impl GrpcService {
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now())
                         });
-                        let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
+                        let slot_message_singleton_vec = Arc::new(vec![slot_message]);
                         for commitment_level in ALL_COMMITMENT_LEVELS {
                             let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
                         }
