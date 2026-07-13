@@ -23,6 +23,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- Enabled address lookup table resolution for deshred transactions. The plugin left agave's `deshred_transaction_alt_resolution_enabled` at its default of `false`, so V0 transaction lookups were never resolved and `loaded_addresses` stayed empty. As a result subscribers received no ALT addresses and account filters could not match ALT-loaded keys.
 - Fixed a subscription-tracking edge case where counter updates could leak if execution failed before `ClientSession` creation.
 - Reworked subscription tracking to use an owned RAII permit with `Drop`, making acquire/release semantics explicit and safer.
 
