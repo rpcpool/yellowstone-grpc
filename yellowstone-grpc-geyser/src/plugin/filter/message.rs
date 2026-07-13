@@ -2,7 +2,11 @@ use {
     crate::{
         metrics,
         plugin::{
-            filter::{name::FilterName, FilterAccountsDataSlice},
+            filter::{
+                encoder::{AccountEncoder, TransactionEncoder},
+                name::FilterName,
+                FilterAccountsDataSlice,
+            },
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
                 MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
@@ -489,6 +493,12 @@ impl prost::Message for FilteredUpdateAccount {
     }
 }
 
+fn account_return_encoded(pre_encoded: &Vec<u8>, tag: u32, buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(pre_encoded.len() as u64, buf);
+    buf.put_slice(pre_encoded);
+}
+
 impl FilteredUpdateAccount {
     fn account_encode_raw(
         tag: u32,
@@ -500,12 +510,19 @@ impl FilteredUpdateAccount {
         if data_slice.as_ref().is_empty() {
             if let Some(pre_encoded) = account.get_pre_encoded() {
                 metrics::pre_encoded_cache_hit("account");
-                encode_key(tag, WireType::LengthDelimited, buf);
-                encode_varint(pre_encoded.len() as u64, buf);
-                buf.put_slice(pre_encoded);
+                account_return_encoded(pre_encoded, tag, buf);
                 return;
+            } else {
+                // lazyily pre-encode the account for future use
+                AccountEncoder::pre_encode(account);
+
+                metrics::pre_encoded_cache_miss("account");
+
+                if let Some(pre_encoded) = account.get_pre_encoded() {
+                    account_return_encoded(pre_encoded, tag, buf);
+                    return;
+                }
             }
-            metrics::pre_encoded_cache_miss("account");
         }
 
         // fallback: slice-aware encoding
@@ -691,15 +708,29 @@ impl prost::Message for FilteredUpdateTransaction {
     }
 }
 
+fn transaction_return_encoded(pre_encoded: &Vec<u8>, tag: u32, buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(pre_encoded.len() as u64, buf);
+    buf.put_slice(pre_encoded);
+}
+
 impl FilteredUpdateTransaction {
     fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
         // try to use pre-encoded bytes (fast path)
         if let Some(pre_encoded) = tx.get_pre_encoded() {
             metrics::pre_encoded_cache_hit("txn");
-            encode_key(tag, WireType::LengthDelimited, buf);
-            encode_varint(pre_encoded.len() as u64, buf);
-            buf.put_slice(pre_encoded);
+            transaction_return_encoded(pre_encoded, tag, buf);
             return;
+        } else {
+            // lazyly pre-encode the transaction for future use
+            TransactionEncoder::pre_encode(tx);
+
+            metrics::pre_encoded_cache_miss("txn");
+
+            if let Some(pre_encoded) = tx.get_pre_encoded() {
+                transaction_return_encoded(pre_encoded, tag, buf);
+                return;
+            }
         }
 
         metrics::pre_encoded_cache_miss("txn");

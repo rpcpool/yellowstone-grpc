@@ -137,12 +137,12 @@ impl ProcessingSlot {
             );
         }
 
-        let pre_computed_message_block = MessageBlock::new(
+        let pre_computed_message_block = Arc::new(MessageBlock::new(
             Arc::clone(&block_meta),
             self.transactions,
             account_info_vec,
             self.entries,
-        );
+        ));
 
         FrozenBlock {
             original_messages: Arc::new(dedup_messages),
@@ -155,12 +155,12 @@ impl ProcessingSlot {
 pub struct FrozenBlock {
     original_messages: Arc<Vec<Message>>,
     block_meta: Arc<MessageBlockMeta>,
-    pre_computed_message_block: MessageBlock,
+    pre_computed_message_block: Arc<MessageBlock>,
 }
 
 impl FrozenBlock {
-    pub fn get_message_block(&self) -> MessageBlock {
-        self.pre_computed_message_block.clone()
+    pub fn get_message_block(&self) -> Arc<MessageBlock> {
+        Arc::clone(&self.pre_computed_message_block)
     }
 
     pub fn messages(&self) -> Arc<Vec<Message>> {

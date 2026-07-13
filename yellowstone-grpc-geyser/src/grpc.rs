@@ -11,11 +11,10 @@ use {
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, observe_subscriber_queue_size,
-            subscription_limit_exceeded_inc, GEYSER_BATCH_SIZE,
+            subscription_limit_exceeded_inc,
         },
         plugin::{
             filter::{
-                encoder::encode_messages,
                 limits::FilterLimits,
                 message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
                 name::FilterNames,
@@ -1163,7 +1162,9 @@ impl GrpcService {
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
-        let mut message_batch = Vec::with_capacity(32);
+        const MESSAGE_BATCH_SIZE: usize = 1024;
+
+        let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         loop {
             let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
             let Some(_) = batch_size_maybe else {
@@ -1176,8 +1177,6 @@ impl GrpcService {
             }
 
             metrics::message_queue_size_dec_by(message_batch.len() as i64);
-            encode_messages(&message_batch);
-            GEYSER_BATCH_SIZE.observe(message_batch.len() as f64);
 
             let message_batch_arc = Arc::new(message_batch);
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
@@ -1189,7 +1188,7 @@ impl GrpcService {
                 metrics::block_reconstruction_queue_size_inc();
             }
 
-            message_batch = Vec::with_capacity(32);
+            message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         }
     }
 
@@ -1260,7 +1259,7 @@ impl GrpcService {
                         }
 
                         let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                        let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
+                        let msg_block = Message::Block(frozen_block.get_message_block());
                         let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
 
                         let slot_message = Message::Slot(MessageSlot {

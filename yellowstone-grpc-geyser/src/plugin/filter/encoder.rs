@@ -3,7 +3,7 @@ use {
         filter::message::{
             prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len,
         },
-        message::{Message, MessageAccountInfo, MessageTransactionInfo},
+        message::{MessageAccountInfo, MessageTransactionInfo},
     },
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -131,23 +131,5 @@ impl AccountEncoder {
             + account
                 .txn_signature
                 .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
-    }
-}
-
-pub fn encode_messages(messages: &Vec<Message>) {
-    for msg in messages {
-        match msg {
-            Message::Transaction(tx) => {
-                if tx.transaction.pre_encoded.get().is_none() {
-                    TransactionEncoder::pre_encode(&tx.transaction);
-                }
-            }
-            Message::Account(acc) => {
-                if acc.account.pre_encoded.get().is_none() {
-                    AccountEncoder::pre_encode(&acc.account);
-                }
-            }
-            _ => {}
-        }
     }
 }
