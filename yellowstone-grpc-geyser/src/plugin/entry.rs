@@ -368,6 +368,10 @@ impl GeyserPlugin for Plugin {
     fn deshred_transaction_notifications_enabled(&self) -> bool {
         true
     }
+
+    fn deshred_transaction_alt_resolution_enabled(&self) -> bool {
+        true
+    }
 }
 
 #[no_mangle]
