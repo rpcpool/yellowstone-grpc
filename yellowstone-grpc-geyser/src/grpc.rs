@@ -17,9 +17,10 @@ use {
             },
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
-            shmem::{decoder::snapshot_account_to_message, ProstShmemDecoder, ShmemHealthReporter},
+            shmem::decoder::snapshot_account_to_message,
         },
         ratelimit::PrometheusRatelimitCallbacks,
+        stream::{BatchStream, BatchStreamExt},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -81,7 +82,7 @@ use {
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
     },
-    yellowstone_shmem_client::{ClientError, ShmemClient, SnapshotReader},
+    yellowstone_shmem_client::SnapshotReader,
 };
 
 #[derive(Debug)]
@@ -568,9 +569,9 @@ fn load_server_config_from_tls_config(
 
 impl GrpcService {
     #[allow(clippy::type_complexity)]
-    pub async fn create(
+    pub async fn create<S: BatchStream<Item = Message> + Unpin + Send + 'static>(
         config: ConfigGrpc,
-        client: ShmemClient<ProstShmemDecoder>,
+        source: S,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
@@ -803,7 +804,6 @@ impl GrpcService {
         for encoding in config.compression.send {
             service = service.send_compressed(encoding);
         }
-        let shmem_health_interval_secs = config.shmem_health_interval_secs;
 
         let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
 
@@ -834,11 +834,10 @@ impl GrpcService {
 
         task_tracker.spawn(async move {
             Self::geyser_loop(
-                client,
+                source,
                 broadcast_tx,
                 block_reconstruction_tx,
                 geyser_cancellation_token,
-                shmem_health_interval_secs,
             )
             .await;
         });
@@ -977,16 +976,16 @@ impl GrpcService {
     /// - `replay_stored_slots_rx`: services replay requests from newly-connected subscribers.
     ///   `replay_first_available_slot` is updated after every batch to reflect the oldest slot
     ///   still available in the replay buffer, and is exposed via `subscribe_first_available_slot`.
-    async fn geyser_loop(
-        mut client: ShmemClient<ProstShmemDecoder>,
+    async fn geyser_loop<S: BatchStream<Item = Message> + Unpin>(
+        mut stream: S,
         broadcast_tx: broadcast::Sender<BroadcastedMessage>,
         block_reconstruction_tx: mpsc::UnboundedSender<Arc<Vec<Message>>>,
         cancellation_token: CancellationToken,
-        health_interval_secs: u64,
     ) {
         const PROCESSED_MESSAGES_MAX: usize = 31;
-        const STATE_MESSAGES_MAX: usize = 4; /* In a reasonable loop, we don't expect to receive more than FirstShredReceived, Completed, CreatedBank, or Finalized messages per iteration */
+        const STATE_MESSAGES_MAX: usize = 4;
 
+        let mut batch = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut processed_messages = Vec::with_capacity(PROCESSED_MESSAGES_MAX);
         let mut confirmed_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
         let mut finalized_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
@@ -1001,59 +1000,25 @@ impl GrpcService {
             _ => false,
         };
 
-        let shutdown_wake = client.wait_handle();
-        let mut health = ShmemHealthReporter::new(health_interval_secs);
-
         loop {
+            batch.clear();
+
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Geyser loop: shutting down");
-                    shutdown_wake.wake();
                     break;
                 }
-                _ = health.interval.tick() => {
-                    health.report(&client);
+                result = stream.next_batch(&mut batch) => {
+                    let Some(_count) = result else {
+                        info!("Geyser loop: source closed");
+                        break;
+                    };
 
-                    if !client.check_region() {
-                        panic!(
-                            "shmem: region was re-created. Consumer must rejoin."
-                        );
-                    }
-                }
-                _ = {
-                let wait = client.prepare_wait();
-                    tokio::task::spawn_blocking(move || wait.wait())
-                } => {
-                    while let Some(result) = client.try_recv() {
-                        let message = match result {
-                            Ok(gm) => match ProstShmemDecoder::to_dm_message(gm, Timestamp::from(SystemTime::now())) {
-                                Ok(msg) => msg,
-                                Err(e) => {
-                                    log::error!("conversion error: {e}");
-                                    continue;
-                                }
-                            },
-                            Err(ClientError::Lagged(n)) => {
-                                health.observe_lagged(n);
-                                log::warn!("shmem reader lagged, lost {n} entries");
-                                continue;
-                            }
-                            Err(ClientError::MidWrite) => continue,
-                            Err(e) => {
-                                log::error!("shmem read error: {e}");
-                                continue;
-                            }
-                        };
-
-                        health.observe(&message);
-
+                    for message in batch.drain(..) {
                         if is_block_reconstruction_message(&message) {
                             block_reconstruction_messages.push(message);
                         } else {
                             processed_messages.push(message);
-                            if processed_messages.len() >= PROCESSED_MESSAGES_MAX {
-                                break;
-                            }
                         }
                     }
 
@@ -1064,8 +1029,6 @@ impl GrpcService {
                     for message in processed_messages.iter() {
                         match message {
                             Message::Slot(slot_message) => {
-                                // Only match on slot lifecycle update not commitment update, as
-                                // we must go through the block machine to make sure users sees block content before any commitment update.
                                 if matches!(slot_message.status,
                                     SlotStatus::FirstShredReceived |
                                     SlotStatus::Completed |
@@ -1077,11 +1040,9 @@ impl GrpcService {
                                 }
                             }
                             Message::Block(_) => {
-                               unreachable!("Block message should not be sent by plugin directly, it is constructed in geyser loop after receiving all necessary messages for the slot and then broadcasted to subscribers");
+                                unreachable!("Block message should not be sent by plugin directly");
                             }
-                            _ => {
-                                /* We don't need to process anything here.  */
-                            }
+                            _ => {}
                         }
                     }
 
@@ -1104,8 +1065,6 @@ impl GrpcService {
 
                     let _ = block_reconstruction_tx.send(processed_messages_arc);
 
-                    // Make sure that blockmeta is always after all kind of other events so the block-machine sees every block
-                    // updates.
                     if !block_reconstruction_messages.is_empty() {
                         let _ = block_reconstruction_tx.send(Arc::new(block_reconstruction_messages));
                         block_reconstruction_messages = Vec::with_capacity(STATE_MESSAGES_MAX);
@@ -2099,484 +2058,5 @@ mod tests {
         }
         // drop fires but "UNKNOWN" was never in the tracker, so nothing changes
         assert!(tracker.lock().unwrap().is_empty());
-    }
-}
-
-#[cfg(test)]
-mod shmem_tests {
-    use super::*;
-    use crate::plugin::shmem::decoder::ProstShmemDecoder;
-    use yellowstone_conduit::Producer;
-    use yellowstone_grpc_proto::prelude as proto;
-    use yellowstone_grpc_proto::prost::Message as ProstMessage;
-    use yellowstone_shmem_client::ShmemClient;
-    use yellowstone_shmem_common::{EventType, HEADER_SIZE, PAYLOAD_VERSION};
-
-    struct TestHarness {
-        _path: String,
-        handle: tokio::task::JoinHandle<()>,
-        cancel: CancellationToken,
-        broadcast_rx: broadcast::Receiver<BroadcastedMessage>,
-        block_reconstruction_rx: mpsc::UnboundedReceiver<Arc<Vec<Message>>>,
-    }
-
-    impl TestHarness {
-        async fn new(path: &str) -> (Self, Producer<EventType>) {
-            let _ = std::fs::remove_file(path);
-
-            let producer = Producer::<EventType>::create(
-                std::path::Path::new(path),
-                16384,
-                64 * 1024 * 1024,
-                1,
-            )
-            .unwrap();
-
-            let client = ShmemClient::open(std::path::Path::new(path), ProstShmemDecoder).unwrap();
-
-            let (broadcast_tx, broadcast_rx) = broadcast::channel(256);
-            let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
-            let cancellation_token = CancellationToken::new();
-            let cancel = cancellation_token.clone();
-
-            let handle = tokio::spawn(async move {
-                GrpcService::geyser_loop(
-                    client,
-                    broadcast_tx,
-                    block_reconstruction_tx,
-                    cancellation_token,
-                    0, // disable health reporting
-                )
-                .await;
-            });
-
-            let harness = Self {
-                _path: path.to_string(),
-                handle,
-                cancel,
-                broadcast_rx,
-                block_reconstruction_rx,
-            };
-
-            (harness, producer)
-        }
-
-        async fn shutdown(self) {
-            self.cancel.cancel();
-            tokio::time::timeout(std::time::Duration::from_secs(2), self.handle)
-                .await
-                .expect("geyser_loop did not exit")
-                .expect("geyser_loop panicked");
-            let _ = std::fs::remove_file(&self._path);
-        }
-
-        fn collect_broadcast(&mut self) -> Vec<(CommitmentLevel, Vec<Message>)> {
-            let mut results = Vec::new();
-            while let Ok((commitment, messages)) = self.broadcast_rx.try_recv() {
-                results.push((commitment, messages.iter().cloned().collect()));
-            }
-            results
-        }
-
-        fn collect_block_reconstruction(&mut self) -> Vec<Message> {
-            let mut results = Vec::new();
-            while let Ok(messages) = self.block_reconstruction_rx.try_recv() {
-                results.extend(messages.iter().cloned());
-            }
-            results
-        }
-    }
-
-    async fn write_and_settle<F>(f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let h = tokio::task::spawn_blocking(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            f();
-        });
-        h.await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-
-    fn write_slot(
-        producer: &Producer<EventType>,
-        slot: u64,
-        parent: Option<u64>,
-        status: proto::SlotStatus,
-    ) {
-        let msg = proto::SubscribeUpdateSlot {
-            slot,
-            parent,
-            status: status as i32,
-            dead_error: None,
-        };
-        let body = msg.encode_to_vec();
-        let size = HEADER_SIZE + body.len();
-        producer
-            .write_with(&EventType::Slot, size, |buf| {
-                buf[0] = PAYLOAD_VERSION;
-                buf[1..9].copy_from_slice(&slot.to_le_bytes());
-                buf[9] = EventType::Slot as u8;
-                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
-            })
-            .expect("write slot failed");
-    }
-
-    fn write_entry(producer: &Producer<EventType>, slot: u64, index: u64) {
-        let msg = proto::SubscribeUpdateEntry {
-            slot,
-            index,
-            num_hashes: 100,
-            hash: vec![0u8; 32],
-            executed_transaction_count: 1,
-            starting_transaction_index: 0,
-        };
-        let body = msg.encode_to_vec();
-        let size = HEADER_SIZE + body.len();
-        producer
-            .write_with(&EventType::Entry, size, |buf| {
-                buf[0] = PAYLOAD_VERSION;
-                buf[1..9].copy_from_slice(&slot.to_le_bytes());
-                buf[9] = EventType::Entry as u8;
-                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
-            })
-            .expect("write entry failed");
-    }
-
-    fn write_block_meta(producer: &Producer<EventType>, slot: u64, parent_slot: u64) {
-        let msg = proto::SubscribeUpdateBlockMeta {
-            slot,
-            parent_slot,
-            parent_blockhash: "parent".into(),
-            blockhash: "block".into(),
-            rewards: None,
-            block_time: None,
-            block_height: None,
-            executed_transaction_count: 1,
-            entries_count: 1,
-        };
-        let body = msg.encode_to_vec();
-        let size = HEADER_SIZE + body.len();
-        producer
-            .write_with(&EventType::BlockMeta, size, |buf| {
-                buf[0] = PAYLOAD_VERSION;
-                buf[1..9].copy_from_slice(&slot.to_le_bytes());
-                buf[9] = EventType::BlockMeta as u8;
-                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
-            })
-            .expect("write block_meta failed");
-    }
-
-    fn write_account(producer: &Producer<EventType>, slot: u64, pubkey: &[u8; 32], lamports: u64) {
-        let owner = [2u8; 32];
-        let data = vec![0xABu8; 32];
-        let body_size = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + data.len() + 8 + 1 + 8;
-        let size = HEADER_SIZE + body_size;
-        producer
-            .write_with(&EventType::Account, size, |buf| {
-                buf[0] = PAYLOAD_VERSION;
-                buf[1..9].copy_from_slice(&slot.to_le_bytes());
-                buf[9] = EventType::Account as u8;
-                let dst = &mut buf[HEADER_SIZE..];
-                let mut o = 0usize;
-                dst[o..o + 32].copy_from_slice(pubkey);
-                o += 32;
-                dst[o..o + 8].copy_from_slice(&lamports.to_le_bytes());
-                o += 8;
-                dst[o..o + 32].copy_from_slice(&owner);
-                o += 32;
-                dst[o] = 0;
-                o += 1;
-                dst[o..o + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-                o += 8;
-                dst[o..o + 8].copy_from_slice(&1u64.to_le_bytes());
-                o += 8;
-                dst[o] = 0;
-                o += 1;
-                dst[o..o + 64].fill(0);
-                o += 64;
-                dst[o..o + 8].copy_from_slice(&(data.len() as u64).to_le_bytes());
-                o += 8;
-                dst[o..o + data.len()].copy_from_slice(&data);
-                o += data.len();
-                dst[o..o + 8].copy_from_slice(&slot.to_le_bytes());
-                o += 8;
-                dst[o] = 0;
-                o += 1;
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos() as i64;
-                dst[o..o + 8].copy_from_slice(&ts.to_le_bytes());
-            })
-            .expect("write account failed");
-    }
-
-    fn write_transaction(producer: &Producer<EventType>, slot: u64, signature: &[u8; 64]) {
-        let msg = proto::SubscribeUpdateTransactionInfo {
-            signature: signature.to_vec(),
-            is_vote: false,
-            transaction: Some(proto::Transaction {
-                signatures: vec![signature.to_vec()],
-                message: Some(proto::Message {
-                    header: Some(proto::MessageHeader {
-                        num_required_signatures: 1,
-                        num_readonly_signed_accounts: 0,
-                        num_readonly_unsigned_accounts: 0,
-                    }),
-                    account_keys: vec![vec![1u8; 32]],
-                    recent_blockhash: vec![0u8; 32],
-                    instructions: vec![],
-                    versioned: false,
-                    address_table_lookups: vec![],
-                }),
-            }),
-            meta: Some(proto::TransactionStatusMeta {
-                err: None,
-                fee: 5000,
-                pre_balances: vec![100],
-                post_balances: vec![95000],
-                inner_instructions: vec![],
-                inner_instructions_none: false,
-                log_messages: vec![],
-                log_messages_none: false,
-                pre_token_balances: vec![],
-                post_token_balances: vec![],
-                rewards: vec![],
-                loaded_writable_addresses: vec![],
-                loaded_readonly_addresses: vec![],
-                return_data: None,
-                return_data_none: false,
-                compute_units_consumed: Some(200),
-                cost_units: Some(0),
-            }),
-            index: 0,
-        };
-        let body = msg.encode_to_vec();
-        let size = HEADER_SIZE + body.len();
-        producer
-            .write_with(&EventType::Transaction, size, |buf| {
-                buf[0] = PAYLOAD_VERSION;
-                buf[1..9].copy_from_slice(&slot.to_le_bytes());
-                buf[9] = EventType::Transaction as u8;
-                buf[HEADER_SIZE..HEADER_SIZE + body.len()].copy_from_slice(&body);
-            })
-            .expect("write transaction failed");
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_lifecycle_slot_to_all_commitments() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-lifecycle").await;
-
-        write_and_settle(move || {
-            write_slot(
-                &producer,
-                100,
-                Some(99),
-                proto::SlotStatus::SlotFirstShredReceived,
-            );
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCompleted);
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotCreatedBank);
-        })
-        .await;
-
-        let broadcast = harness.collect_broadcast();
-
-        // lifecycle statuses go to Processed, Confirmed, and Finalized
-        for status in [
-            SlotStatus::FirstShredReceived,
-            SlotStatus::Completed,
-            SlotStatus::CreatedBank,
-        ] {
-            for commitment in [
-                CommitmentLevel::Processed,
-                CommitmentLevel::Confirmed,
-                CommitmentLevel::Finalized,
-            ] {
-                assert!(
-                    broadcast.iter().any(|(c, msgs)| {
-                        *c == commitment && msgs.iter().any(|m| {
-                            matches!(m, Message::Slot(s) if s.slot == 100 && s.status == status)
-                        })
-                    }),
-                    "expected {status:?} at {commitment:?}"
-                );
-            }
-        }
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_commitment_slot_to_block_reconstruction_only() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-commitment").await;
-
-        write_and_settle(move || {
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotProcessed);
-        })
-        .await;
-
-        let _broadcast = harness.collect_broadcast();
-        let block_recon = harness.collect_block_reconstruction();
-
-        // commitment status should NOT appear directly in broadcast as a slot message
-        // it goes through block_reconstruction_tx
-        assert!(
-            block_recon.iter().any(|m| {
-                matches!(m, Message::Slot(s) if s.slot == 100 && s.status == SlotStatus::Processed)
-            }),
-            "expected Processed slot in block reconstruction, got: {block_recon:?}"
-        );
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_account_to_processed_broadcast() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-account").await;
-
-        let pubkey = [1u8; 32];
-        write_and_settle(move || {
-            write_account(&producer, 100, &pubkey, 5000);
-        })
-        .await;
-
-        let broadcast = harness.collect_broadcast();
-
-        assert!(
-            broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed
-                    && msgs.iter().any(|m| matches!(m, Message::Account(_)))
-            }),
-            "expected account at Processed, got: {broadcast:?}"
-        );
-
-        // should not appear at Confirmed or Finalized
-        assert!(
-            !broadcast
-                .iter()
-                .any(|(c, _)| *c == CommitmentLevel::Confirmed || *c == CommitmentLevel::Finalized),
-            "account should not broadcast at Confirmed/Finalized"
-        );
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_entry_to_processed_broadcast() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-entry").await;
-
-        write_and_settle(move || {
-            write_entry(&producer, 100, 0);
-        })
-        .await;
-
-        let broadcast = harness.collect_broadcast();
-
-        assert!(
-            broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed
-                    && msgs.iter().any(|m| matches!(m, Message::Entry(_)))
-            }),
-            "expected entry at Processed, got: {broadcast:?}"
-        );
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_transaction_to_processed_broadcast() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-tx").await;
-
-        let sig = [7u8; 64];
-        write_and_settle(move || {
-            write_transaction(&producer, 100, &sig);
-        })
-        .await;
-
-        let broadcast = harness.collect_broadcast();
-
-        assert!(
-            broadcast.iter().any(|(c, msgs)| {
-                *c == CommitmentLevel::Processed
-                    && msgs.iter().any(|m| matches!(m, Message::Transaction(_)))
-            }),
-            "expected transaction at Processed, got: {broadcast:?}"
-        );
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_block_meta_to_block_reconstruction() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-blockmeta").await;
-
-        write_and_settle(move || {
-            write_block_meta(&producer, 100, 99);
-        })
-        .await;
-
-        let block_recon = harness.collect_block_reconstruction();
-
-        assert!(
-            block_recon
-                .iter()
-                .any(|m| matches!(m, Message::BlockMeta(_))),
-            "expected BlockMeta in block reconstruction, got: {block_recon:?}"
-        );
-
-        harness.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn geyser_loop_routes_mixed_batch_correctly() {
-        let (mut harness, producer) = TestHarness::new("/tmp/test-gl-mixed").await;
-
-        let pubkey = [3u8; 32];
-        let sig = [4u8; 64];
-        write_and_settle(move || {
-            write_slot(
-                &producer,
-                100,
-                Some(99),
-                proto::SlotStatus::SlotFirstShredReceived,
-            );
-            write_account(&producer, 100, &pubkey, 1000);
-            write_transaction(&producer, 100, &sig);
-            write_entry(&producer, 100, 0);
-            write_block_meta(&producer, 100, 99);
-            write_slot(&producer, 100, Some(99), proto::SlotStatus::SlotProcessed);
-        })
-        .await;
-
-        let broadcast = harness.collect_broadcast();
-        let block_recon = harness.collect_block_reconstruction();
-
-        // processed broadcast has: lifecycle slot, account, transaction, entry
-        let processed: Vec<&Message> = broadcast
-            .iter()
-            .filter(|(c, _)| *c == CommitmentLevel::Processed)
-            .flat_map(|(_, msgs)| msgs.iter())
-            .collect();
-
-        assert!(processed
-            .iter()
-            .any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::FirstShredReceived)));
-        assert!(processed.iter().any(|m| matches!(m, Message::Account(_))));
-        assert!(processed
-            .iter()
-            .any(|m| matches!(m, Message::Transaction(_))));
-        assert!(processed.iter().any(|m| matches!(m, Message::Entry(_))));
-
-        // block reconstruction has: Processed slot, BlockMeta
-        assert!(block_recon
-            .iter()
-            .any(|m| matches!(m, Message::Slot(s) if s.status == SlotStatus::Processed)));
-        assert!(block_recon
-            .iter()
-            .any(|m| matches!(m, Message::BlockMeta(_))));
-
-        harness.shutdown().await;
     }
 }

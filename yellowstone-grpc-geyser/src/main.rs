@@ -7,7 +7,9 @@ use tokio_rustls::rustls;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use yellowstone_grpc_geyser::plugin::shmem::decoder::ProstShmemDecoder;
+use yellowstone_grpc_geyser::plugin::shmem::{
+    decoder::ProstShmemDecoder, stream::ShmemBatchStream,
+};
 use yellowstone_grpc_geyser::{config::Config, grpc::GrpcService, metrics::PrometheusService};
 use yellowstone_shmem_client::ShmemClient;
 
@@ -27,7 +29,9 @@ fn main() -> anyhow::Result<()> {
         .shmem_path
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
+
     let client = ShmemClient::open(Path::new(shmem_path), ProstShmemDecoder)?;
+    let source = ShmemBatchStream::new(client, config.grpc.shmem_health_interval_secs);
 
     let mut builder = Builder::new_multi_thread();
     if let Some(worker_threads) = config.tokio.worker_threads {
@@ -60,7 +64,7 @@ fn main() -> anyhow::Result<()> {
 
         let _snapshot_tx = GrpcService::create(
             config.grpc,
-            client,
+            source,
             config.debug_clients_http.then_some(debug_client_tx),
             cancellation_token.child_token(),
             task_tracker.clone(),
