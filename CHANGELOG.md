@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-13
+
+- yellowstone-grpc-geyser 14.1.1
+
+### Fixes
+
+- Enabled address lookup table resolution for deshred transactions. The plugin left agave's `deshred_transaction_alt_resolution_enabled` at its default of `false`, so V0 transaction lookups were never resolved and `loaded_addresses` stayed empty. As a result subscribers received no ALT addresses and account filters could not match ALT-loaded keys. [#821](https://github.com/rpcpool/yellowstone-grpc/pull/821)
+
 ## 2026-07-03
 
 - yellowstone-grpc-geyser 14.1.0
