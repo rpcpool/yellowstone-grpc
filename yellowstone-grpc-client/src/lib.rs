@@ -590,11 +590,13 @@ impl GeyserGrpcBuilder {
     }
 
     pub fn from_shared(endpoint: impl Into<Bytes>) -> GeyserGrpcBuilderResult<Self> {
-        Ok(Self::new(Endpoint::from_shared(endpoint)?))
+        Ok(Self::new(
+            Endpoint::from_shared(endpoint)?.http2_adaptive_window(true),
+        ))
     }
 
     pub fn from_static(endpoint: &'static str) -> Self {
-        Self::new(Endpoint::from_static(endpoint))
+        Self::new(Endpoint::from_static(endpoint).http2_adaptive_window(true))
     }
 
     // Create client
