@@ -59,6 +59,10 @@ lazy_static::lazy_static! {
         "yellowstone_grpc_geyser_deshred_queue_size", "Size of deshred message queue"
     ).unwrap();
 
+    static ref BLOCK_RECONSTRUCTION_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "yellowstone_grpc_geyser_block_reconstruction_queue_size", "Size of block reconstruction message queue"
+    ).unwrap();
+
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("yellowstone_grpc_geyser_subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
@@ -253,6 +257,7 @@ impl PrometheusService {
             register!(SLOT_STATUS_PLUGIN);
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
+            register!(BLOCK_RECONSTRUCTION_QUEUE_SIZE);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
@@ -505,12 +510,24 @@ pub fn deshred_queue_size_inc(amount: i64) {
     DESHRED_QUEUE_SIZE.add(amount);
 }
 
+pub fn block_reconstruction_queue_size_inc() {
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.inc()
+}
+
 pub fn message_queue_size_dec() {
-    MESSAGE_QUEUE_SIZE.dec()
+    MESSAGE_QUEUE_SIZE.dec();
+}
+
+pub fn message_queue_size_dec_by(amount: i64) {
+    MESSAGE_QUEUE_SIZE.sub(amount);
 }
 
 pub fn deshred_queue_size_dec() {
     DESHRED_QUEUE_SIZE.dec()
+}
+
+pub fn block_reconstruction_queue_size_dec_by(amount: i64) {
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.sub(amount);
 }
 
 pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
@@ -620,6 +637,8 @@ pub fn remove_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscri
 pub fn reset_metrics() {
     // Reset gauge metrics to 0
     MESSAGE_QUEUE_SIZE.set(0);
+    DESHRED_QUEUE_SIZE.set(0);
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.set(0);
 
     // Reset gauge vectors (clears all label combinations)
     SUBSCRIPTIONS_TOTAL.reset();

@@ -1,5 +1,6 @@
 use {
     super::convert_to,
+    crate::stream::BatchInto,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
         ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
@@ -687,6 +688,13 @@ pub enum Message {
     Entry(Arc<MessageEntry>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
+}
+
+impl BatchInto<Message> for Message {
+    fn batch_into(self, batch: &mut Vec<Message>, count: &mut usize) {
+        batch.push(self);
+        *count += 1;
+    }
 }
 
 impl Message {
