@@ -1171,7 +1171,7 @@ impl GrpcService {
                 break;
             };
 
-            if message_batch.len() == 0 {
+            if message_batch.is_empty() {
                 continue;
             }
 
