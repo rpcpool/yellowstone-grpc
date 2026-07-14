@@ -14,7 +14,7 @@ enum Commands {
     /// List all available e2e subscriber scenarios.
     List {
         /// Only show scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tag", value_name = "TAG")]
+        #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
         /// Only show scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
@@ -23,7 +23,7 @@ enum Commands {
     /// Run all e2e subscriber scenarios.
     All {
         /// Only run scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tag", value_name = "TAG")]
+        #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
         /// Only run scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
@@ -159,7 +159,9 @@ fn matches_tags(scenario: &Scenario, tags: &[String]) -> bool {
 }
 
 fn matches_module(scenario: &Scenario, module: &str) -> bool {
-    scenario.module == module || scenario.module.ends_with(&format!("::{module}"))
+    scenario.module == module
+        || scenario.module.ends_with(&format!("::{module}"))
+        || scenario.module.contains(&format!("::{module}::"))
 }
 
 fn find_scenario(name: &str) -> Result<&'static Scenario> {
