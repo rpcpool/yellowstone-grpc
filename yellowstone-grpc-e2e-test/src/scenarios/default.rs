@@ -634,6 +634,9 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
             }
             UpdateOneof::Account(ev) => {
                 if let Some(block) = &mut block_started {
+                    if block.slot != ev.slot {
+                        continue;
+                    }
                     log::info!("received account update for slot {}", ev.slot);
                     ensure!(
                         block.slot == ev.slot,
@@ -644,6 +647,9 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
             }
             UpdateOneof::Transaction(ev) => {
                 if let Some(block) = &mut block_started {
+                    if block.slot != ev.slot {
+                        continue;
+                    }
                     log::info!("received transaction update for slot {}", ev.slot);
                     ensure!(
                         block.slot == ev.slot,
@@ -654,6 +660,9 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
             }
             UpdateOneof::Entry(ev) => {
                 if let Some(block) = &mut block_started {
+                    if block.slot != ev.slot {
+                        continue;
+                    }
                     log::info!("received entry update for slot {}", ev.slot);
                     ensure!(
                         block.slot == ev.slot,
@@ -664,6 +673,9 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
             }
             UpdateOneof::Block(ev) => {
                 if let Some(block) = &mut block_started {
+                    if block.slot != ev.slot {
+                        continue;
+                    }
                     log::info!("received block update for slot {}", ev.slot);
                     ensure!(
                         block.slot == ev.slot,
@@ -674,6 +686,9 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
             }
             UpdateOneof::BlockMeta(ev) => {
                 if let Some(block) = &mut block_started {
+                    if block.slot != ev.slot {
+                        continue;
+                    }
                     log::info!("received block meta update for slot {}", ev.slot);
                     ensure!(
                         block.slot == ev.slot,

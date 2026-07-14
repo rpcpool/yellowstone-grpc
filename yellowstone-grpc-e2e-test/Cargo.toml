@@ -14,8 +14,10 @@ futures = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 dotenvy = { workspace = true }
 humantime-serde = { workspace = true }
+indicatif = { workspace = true }
 inventory = { workspace = true }
 log = { workspace = true }
+num_cpus = { workspace = true }
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
