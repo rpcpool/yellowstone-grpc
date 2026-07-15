@@ -63,8 +63,8 @@ fn ensure_all_account_txn_sig_exist(
     Ok(())
 }
 
-/// Scenario: Block Machine
-#[test_helper(name = "blockmachine")]
+/// Test the integration with yellowstone-block-machine.
+#[test_helper(name = "blockmachine", tags = ["blockmachine", "ordering"])]
 pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()> {
     let mut client = crate::grpc::new_client(run_config).await?;
     let block_st_req = SubscribeRequest {

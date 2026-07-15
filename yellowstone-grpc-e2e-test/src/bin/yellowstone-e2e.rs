@@ -1,8 +1,9 @@
 use {
     anyhow::{Context, Result},
     clap::{Parser, Subcommand},
-    std::{collections::HashMap, env, io::Write, path::PathBuf, process::ExitCode},
-    tokio::time::{self, Duration, MissedTickBehavior},
+    futures::stream::{self, StreamExt, TryStreamExt},
+    indicatif::{MultiProgress, ProgressBar, ProgressStyle},
+    std::{collections::HashMap, env, path::PathBuf, process::ExitCode, time::Duration},
     yellowstone_grpc_intg_test::{
         config::Config,
         scenarios::{init_log, RunConfig, Scenario},
@@ -14,7 +15,7 @@ enum Commands {
     /// List all available e2e subscriber scenarios.
     List {
         /// Only show scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tag", value_name = "TAG")]
+        #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
         /// Only show scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
@@ -23,11 +24,14 @@ enum Commands {
     /// Run all e2e subscriber scenarios.
     All {
         /// Only run scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tag", value_name = "TAG")]
+        #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
         /// Only run scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
         module: String,
+        /// Number of scenarios to run concurrently. Defaults to the number of physical CPU cores.
+        #[arg(long = "num-threads", short = 'j', default_value_t = num_cpus::get_physical())]
+        num_threads: usize,
     },
     /// Run one specific subscriber scenario.
     Run {
@@ -159,7 +163,9 @@ fn matches_tags(scenario: &Scenario, tags: &[String]) -> bool {
 }
 
 fn matches_module(scenario: &Scenario, module: &str) -> bool {
-    scenario.module == module || scenario.module.ends_with(&format!("::{module}"))
+    scenario.module == module
+        || scenario.module.ends_with(&format!("::{module}"))
+        || scenario.module.contains(&format!("::{module}::"))
 }
 
 fn find_scenario(name: &str) -> Result<&'static Scenario> {
@@ -179,44 +185,35 @@ fn find_scenario(name: &str) -> Result<&'static Scenario> {
         })
 }
 
-async fn run_scenario(scenario: &'static Scenario, config: &RunConfig) -> Result<()> {
-    let mut result = Box::pin((scenario.run)(config));
-    let mut interval = time::interval(Duration::from_millis(120));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+async fn run_scenario(
+    scenario: &'static Scenario,
+    config: &RunConfig,
+    multi: &MultiProgress,
+) -> Result<()> {
+    let pb = multi.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} {msg}")
+            .expect("valid template")
+            .tick_strings(&["|", "/", "-", "\\"]),
+    );
+    pb.set_message(format!("running scenario '{}'...", scenario.name));
+    pb.enable_steady_tick(Duration::from_millis(120));
 
-    let frames = ["|", "/", "-", "\\"];
-    let mut frame_index = 0usize;
-    let mut stdout = std::io::stdout();
+    let res = (scenario.run)(config).await;
 
-    loop {
-        tokio::select! {
-            res = &mut result => {
-                write!(stdout, "\r\x1b[2K")?;
-                if res.is_ok() {
-                    writeln!(stdout, "✅ scenario '{}' passed", scenario.name)?;
-                } else {
-                    writeln!(
-                        stdout,
-                        "❌ scenario '{}' failed: {:#}",
-                        scenario.name,
-                        res.as_ref().expect_err("error should be present on failure")
-                    )?;
-                }
-                stdout.flush()?;
-                return res;
-            }
-            _ = interval.tick() => {
-                write!(
-                    stdout,
-                    "\r{} running scenario '{}'...",
-                    frames[frame_index],
-                    scenario.name
-                )?;
-                stdout.flush()?;
-                frame_index = (frame_index + 1) % frames.len();
-            }
-        }
-    }
+    pb.disable_steady_tick();
+
+    let message = match &res {
+        Ok(()) => format!("✅ scenario '{}' passed", scenario.name),
+        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.name, err),
+    };
+    // Print the final line to the scrollback and drop this bar, so the still-running
+    // scenarios' spinners stay pinned as the trailing lines instead of being interleaved
+    // with finished ones sitting at their original position.
+    multi.println(&message).ok();
+    pb.finish_and_clear();
+
+    res
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -280,21 +277,34 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::All {
             ref tags,
             ref module,
+            num_threads,
         } => {
-            for scenario in inventory::iter::<Scenario> {
-                if !matches_tags(scenario, tags) || !matches_module(scenario, module.as_str()) {
-                    continue;
-                }
-                log::info!("running scenario: {}", scenario.name);
-                run_scenario(scenario, &run_config)
-                    .await
-                    .with_context(|| format!("scenario '{}' failed", scenario.name))?;
-            }
-            Ok(())
+            let scenarios: Vec<&'static Scenario> = inventory::iter::<Scenario>
+                .into_iter()
+                .filter(|s| matches_tags(s, tags) && matches_module(s, module.as_str()))
+                .collect();
+
+            let num_threads = (*num_threads).max(1);
+            let multi = MultiProgress::new();
+
+            stream::iter(scenarios)
+                .map(Ok::<_, anyhow::Error>)
+                .try_for_each_concurrent(Some(num_threads), |scenario| {
+                    let run_config = &run_config;
+                    let multi = &multi;
+                    async move {
+                        log::info!("running scenario: {}", scenario.name);
+                        run_scenario(scenario, run_config, multi)
+                            .await
+                            .with_context(|| format!("scenario '{}' failed", scenario.name))
+                    }
+                })
+                .await
         }
         Commands::Run { scenario } => {
             let entry = find_scenario(scenario)?;
-            run_scenario(entry, &run_config)
+            let multi = MultiProgress::new();
+            run_scenario(entry, &run_config, &multi)
                 .await
                 .with_context(|| format!("scenario '{}' failed", scenario))
         }

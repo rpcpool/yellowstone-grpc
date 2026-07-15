@@ -46,6 +46,5 @@ pub fn init_log() {
     });
 }
 
-pub mod blockmachine;
 pub mod default;
 pub mod ratelimit;
