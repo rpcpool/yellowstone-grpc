@@ -68,8 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -82,8 +82,8 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "log",
  "solana-clock",
@@ -97,8 +97,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.2.0",
@@ -3689,8 +3689,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "Inflector",
  "base64",
@@ -3731,8 +3731,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "base64",
  "bs58",
@@ -4470,8 +4470,8 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "bs58",
  "prost",
@@ -4495,8 +4495,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 
 [[package]]
 name = "solana-system-interface"
@@ -4597,8 +4597,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "bincode",
  "serde",
@@ -4614,9 +4614,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-error"
-version = "3.3.0"
+version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "757a648388ab1e7350a806ffceb31ce656dc5b5fe607b9f8209aa56f63040179"
+checksum = "a949797bc1ac31836d0070e791083028a8c2e0d493fa4cf51c0bed7a04c65c22"
 dependencies = [
  "serde",
  "serde_derive",
@@ -4627,8 +4627,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -4669,8 +4669,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "4.2.0-beta.0"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.0#b23fc23bcdb4a7b25ddacce7a33daf4dbcc5d7e5"
+version = "4.2.0-beta.1"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.1#802264fcc093dc041a991e07d3196a96254b912e"
 dependencies = [
  "base64",
  "bincode",
