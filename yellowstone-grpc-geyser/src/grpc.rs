@@ -1267,7 +1267,7 @@ impl GrpcService {
                         let msg_block = Message::Block(frozen_block.get_message_block());
                         let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
 
-                        let slot_message = Message::Slot(MessageSlot {
+                        let slot_message = Message::Slot(Arc::new(MessageSlot {
                             slot: slot_update.slot,
                             parent: slot_update.parent_slot,
                             status: match slot_update.commitment {
@@ -1277,7 +1277,8 @@ impl GrpcService {
                             },
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now())
-                        });
+                        }));
+
                         let slot_message_singleton_vec = Arc::new(vec![slot_message]);
                         for commitment_level in ALL_COMMITMENT_LEVELS {
                             let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
@@ -1319,7 +1320,7 @@ impl GrpcService {
 
                         // 3rd Put slot status
                         for slot_update in replayed_slot.slot_status_messages.iter() {
-                            let slot_message = Message::Slot(MessageSlot {
+                            let slot_message = Message::Slot(Arc::new(MessageSlot {
                                 slot: slot_update.slot,
                                 parent: slot_update.parent_slot,
                                 status: match slot_update.commitment {
@@ -1329,7 +1330,7 @@ impl GrpcService {
                                 },
                                 dead_error: None,
                                 created_at,
-                            });
+                            }));
                             replayed_messages.push(ReplayResponseMessageType::Single(slot_message));
                         }
                     }
@@ -2461,13 +2462,13 @@ mod tests {
         drop(stream_rx);
 
         // broadcast so client_loop hits try_send -> Closed
-        let msg = Message::Slot(MessageSlot {
+        let msg = Message::Slot(Arc::new(MessageSlot {
             slot: 100,
             parent: Some(99),
             status: SlotStatus::Processed,
             dead_error: None,
             created_at: Timestamp::from(SystemTime::now()),
-        });
+        }));
         let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(vec![msg])));
 
         tokio::time::timeout(Duration::from_secs(2), handle)
@@ -2628,13 +2629,13 @@ mod tests {
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
-            Message::Slot(MessageSlot {
+            Message::Slot(Arc::new(MessageSlot {
                 slot,
                 parent,
                 status,
                 dead_error: None,
                 created_at: Timestamp::from(SystemTime::now()),
-            })
+            }))
         }
 
         #[tokio::test]

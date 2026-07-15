@@ -301,7 +301,7 @@ impl BlockMachineStorage {
             .retain(|(_, block)| block.block_meta.slot != slot);
     }
 
-    fn on_message_slot(&mut self, slot_update: MessageSlot) -> Result<(), UntrackedSlot> {
+    fn on_message_slot(&mut self, slot_update: &MessageSlot) -> Result<(), UntrackedSlot> {
         let slot_status = slot_update.status;
         const LIFE_CYCLE_STATUS: [SlotStatus; 4] = [
             SlotStatus::FirstShredReceived,
@@ -506,7 +506,7 @@ impl BlockMachineStorage {
     pub fn add(&mut self, message: Message) {
         match message {
             Message::Slot(message_slot) => {
-                if self.on_message_slot(message_slot).is_err() {
+                if self.on_message_slot(&message_slot).is_err() {
                     // Symmetric with handle_block_data which increments the same metric
                     // when is_slot_tracked returns false.
                     metrics::incr_geyser_untrack_slot_event_dropped();
@@ -625,13 +625,13 @@ mod tests {
     }
 
     fn make_slot_msg(slot: u64, parent: Option<u64>, status: SlotStatus) -> Message {
-        Message::Slot(MessageSlot {
+        Message::Slot(Arc::new(MessageSlot {
             slot,
             parent,
             status,
             dead_error: None,
             created_at: ts(),
-        })
+        }))
     }
 
     fn make_block_meta_msg(slot: u64, parent_slot: u64) -> Message {

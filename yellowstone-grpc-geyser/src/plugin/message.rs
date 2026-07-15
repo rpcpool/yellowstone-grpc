@@ -681,7 +681,7 @@ impl MessageBlock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
-    Slot(MessageSlot),
+    Slot(Arc<MessageSlot>),
     Account(MessageAccount),
     Transaction(MessageTransaction),
     DeshredTransaction(MessageDeshredTransaction),
@@ -719,7 +719,9 @@ impl Message {
             UpdateOneof::Account(msg) => {
                 Self::Account(MessageAccount::from_update_oneof(msg, created_at)?)
             }
-            UpdateOneof::Slot(msg) => Self::Slot(MessageSlot::from_update_oneof(&msg, created_at)?),
+            UpdateOneof::Slot(msg) => {
+                Self::Slot(Arc::new(MessageSlot::from_update_oneof(&msg, created_at)?))
+            }
             UpdateOneof::Transaction(msg) => {
                 Self::Transaction(MessageTransaction::from_update_oneof(msg, created_at)?)
             }
