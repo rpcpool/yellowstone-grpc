@@ -84,12 +84,22 @@ pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone, Debug)]
 /// Configuration for automatic subscribe reconnect behavior.
+///
+/// The [`Default`] configuration uses [`Backoff::default`] and a
+/// `slot_retention` of `250` slots. Use [`ReconnectConfig::no_reconnect`] to
+/// disable automatic reconnection entirely.
 pub struct ReconnectConfig {
+    /// Backoff policy applied between reconnect attempts. Defaults to
+    /// [`Backoff::default`] (`10ms` initial interval, `2.0` multiplier, `3`
+    /// retries).
     pub backoff: Backoff,
+    /// Number of most-recent slots retained to de-duplicate messages across a
+    /// reconnect. Default: `250`.
     pub slot_retention: usize,
 }
 
 impl Default for ReconnectConfig {
+    /// [`Backoff::default`] with a `slot_retention` of `250` slots.
     fn default() -> Self {
         Self {
             backoff: Backoff::default(),

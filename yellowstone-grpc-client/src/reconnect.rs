@@ -33,10 +33,25 @@ pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
 type ConnectFuture<S> =
     Pin<Box<dyn Future<Output = Result<DedupStream<S>, GeyserGrpcClientError>> + Send + 'static>>;
 
+/// Exponential backoff policy for automatic subscribe reconnects.
+///
+/// After each failed attempt the wait interval is multiplied by [`multiplier`],
+/// starting from [`initial_interval`], for up to [`max_retries`] attempts.
+///
+/// The [`Default`] policy is a `10ms` initial interval, a `2.0` multiplier, and
+/// `3` retries (waits of roughly `10ms`, `20ms`, then `40ms` before giving up).
+///
+/// [`initial_interval`]: Backoff::initial_interval
+/// [`multiplier`]: Backoff::multiplier
+/// [`max_retries`]: Backoff::max_retries
 #[derive(Debug, Clone)]
 pub struct Backoff {
+    /// Wait interval before the first retry. Default: `10ms`.
     pub initial_interval: Duration,
+    /// Factor the wait interval is multiplied by after each attempt.
+    /// Default: `2.0`.
     pub multiplier: f64,
+    /// Maximum number of reconnect attempts before giving up. Default: `3`.
     pub max_retries: u32,
 }
 
@@ -160,6 +175,7 @@ impl Backoff {
 }
 
 impl Default for Backoff {
+    /// A `10ms` initial interval, a `2.0` multiplier, and `3` retries.
     fn default() -> Self {
         Self::new(
             Self::default_initial_interval(),
