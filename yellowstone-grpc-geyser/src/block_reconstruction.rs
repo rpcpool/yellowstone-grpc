@@ -192,7 +192,6 @@ pub struct SlotProgression {
 
 pub struct BlockMachineStorage {
     processing_slots: FoldHashMap<u64, ProcessingSlot>,
-    pending_blockmeta: FoldHashMap<u64, Arc<MessageBlockMeta>>,
     replayed_slot: BTreeMap<u64, Arc<FrozenBlock>>,
     slot_commitment_progression_map: FoldHashMap<u64, SlotProgression>,
     replayed_capacity: usize,
@@ -267,12 +266,11 @@ pub const MINIMUM_FINALIZED_SLOT_TO_BUFFER: usize = 10;
 impl BlockMachineStorage {
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
-            processing_slots: FoldHashMap::new(),
+            processing_slots: FoldHashMap::with_capacity(replayed_capacity),
             replayed_slot: BTreeMap::new(),
             replayed_capacity,
-            pending_blockmeta: FoldHashMap::new(),
-            slot_commitment_progression_map: FoldHashMap::new(),
-            ready_queue: VecDeque::new(),
+            slot_commitment_progression_map: FoldHashMap::with_capacity(replayed_capacity),
+            ready_queue: VecDeque::with_capacity(replayed_capacity),
             state: BlocksStateMachine::default(),
             min_slot: None,
             num_buffered_finalized_slot: 0,
@@ -285,7 +283,6 @@ impl BlockMachineStorage {
 
     fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool) {
         self.processing_slots.remove(&slot);
-        self.pending_blockmeta.remove(&slot);
         self.replayed_slot.remove(&slot);
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
             if progression.max_commitment == CommitmentLevel::Finalized {
