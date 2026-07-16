@@ -349,9 +349,9 @@ pub struct ReplayResponseMessageIterator<'a> {
 }
 
 impl ReplayResponseMessageType {
-    fn iter(&self) -> ReplayResponseMessageIterator<'_> {
+    const fn iter(&self) -> ReplayResponseMessageIterator<'_> {
         ReplayResponseMessageIterator {
-            msg: &self,
+            msg: self,
             current_index: 0,
         }
     }
