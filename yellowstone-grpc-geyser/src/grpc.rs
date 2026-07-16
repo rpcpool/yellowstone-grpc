@@ -11,11 +11,10 @@ use {
         metered::PrometheusMeteredManager,
         metrics::{
             self, incr_grpc_method_call_count, observe_subscriber_queue_size,
-            subscription_limit_exceeded_inc, GEYSER_BATCH_SIZE,
+            subscription_limit_exceeded_inc,
         },
         plugin::{
             filter::{
-                encoder::encode_messages,
                 limits::FilterLimits,
                 message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
                 name::FilterNames,
@@ -330,8 +329,62 @@ pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 /// once, when first received from the geyser plugin.
 type DeshredBroadcastedMessage = Message;
 
+pub enum ReplayResponseMessageType {
+    Single(Message),
+    Batch(Arc<Vec<Message>>),
+}
+
+impl<'a> IntoIterator for &'a ReplayResponseMessageType {
+    type Item = &'a Message;
+    type IntoIter = ReplayResponseMessageIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub struct ReplayResponseMessageIterator<'a> {
+    msg: &'a ReplayResponseMessageType,
+    current_index: usize,
+}
+
+impl ReplayResponseMessageType {
+    const fn iter(&self) -> ReplayResponseMessageIterator<'_> {
+        ReplayResponseMessageIterator {
+            msg: self,
+            current_index: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for ReplayResponseMessageIterator<'a> {
+    type Item = &'a Message;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.msg {
+            ReplayResponseMessageType::Single(msg) => {
+                if self.current_index == 0 {
+                    self.current_index += 1;
+                    Some(msg)
+                } else {
+                    None
+                }
+            }
+            ReplayResponseMessageType::Batch(batch) => {
+                if self.current_index < batch.len() {
+                    let msg = &batch[self.current_index];
+                    self.current_index += 1;
+                    Some(msg)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
 pub enum ReplayedResponse {
-    Messages(Vec<Message>),
+    Messages(Vec<ReplayResponseMessageType>),
     Lagged(Slot),
 }
 
@@ -1163,7 +1216,9 @@ impl GrpcService {
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
-        let mut message_batch = Vec::with_capacity(32);
+        const MESSAGE_BATCH_SIZE: usize = 1024;
+
+        let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         loop {
             let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
             let Some(_) = batch_size_maybe else {
@@ -1176,8 +1231,6 @@ impl GrpcService {
             }
 
             metrics::message_queue_size_dec_by(message_batch.len() as i64);
-            encode_messages(&message_batch);
-            GEYSER_BATCH_SIZE.observe(message_batch.len() as f64);
 
             let message_batch_arc = Arc::new(message_batch);
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
@@ -1189,7 +1242,7 @@ impl GrpcService {
                 metrics::block_reconstruction_queue_size_inc();
             }
 
-            message_batch = Vec::with_capacity(32);
+            message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         }
     }
 
@@ -1260,10 +1313,10 @@ impl GrpcService {
                         }
 
                         let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                        let msg_block = Message::Block(Arc::new(frozen_block.get_message_block()));
+                        let msg_block = Message::Block(frozen_block.get_message_block());
                         let _ = broadcast_tx.send((commitment_level, Arc::new(vec![msg_block, block_meta])));
 
-                        let slot_message = Message::Slot(MessageSlot {
+                        let slot_message = Message::Slot(Arc::new(MessageSlot {
                             slot: slot_update.slot,
                             parent: slot_update.parent_slot,
                             status: match slot_update.commitment {
@@ -1273,8 +1326,9 @@ impl GrpcService {
                             },
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now())
-                        });
-                        let slot_message_singleton_vec = Arc::new(vec![slot_message.clone()]);
+                        }));
+
+                        let slot_message_singleton_vec = Arc::new(vec![slot_message]);
                         for commitment_level in ALL_COMMITMENT_LEVELS {
                             let _ = broadcast_tx.send((commitment_level, Arc::clone(&slot_message_singleton_vec)));
                         }
@@ -1299,34 +1353,40 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    let mut replayed_messages = Vec::with_capacity(32_768);
+                    // Elaboration on 5 * replay_stored_slots: Each slot can have up to 5 messages (1 for messages, 1 for block meta, 3 for slot status). So we allocate enough space for the worst case scenario.
+                    let mut replayed_messages = Vec::with_capacity(replay_stored_slots as usize + (5 * replay_stored_slots as usize));
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
+                    // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
+                    let created_at = Timestamp::from(SystemTime::now());
+
                     for replayed_slot in replayed_slot_iter {
-                        let slot_messages = replayed_slot
-                            .slot_status_messages
-                            .iter()
-                            .map(|s| {
-                                Message::Slot(MessageSlot {
-                                    slot: s.slot,
-                                    parent: s.parent_slot,
-                                    status: match s.commitment {
-                                        solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
-                                        solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
-                                        solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
-                                    },
-                                    dead_error: None,
-                                    created_at: Timestamp::from(SystemTime::now())
-                                })
-                            });
                         // 1st Put data (account/txn/entries)
-                        replayed_messages.extend(replayed_slot.frozen_block.messages().iter().cloned());
+                        replayed_messages.push(ReplayResponseMessageType::Batch(replayed_slot.frozen_block.messages()));
+
                         // 2nd Put block summary
-                        replayed_messages.push(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta()));
+                        replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta())));
+
                         // 3rd Put slot status
-                        replayed_messages.extend(slot_messages);
+                        for slot_update in replayed_slot.slot_status_messages.iter() {
+                            let slot_message = Message::Slot(Arc::new(MessageSlot {
+                                slot: slot_update.slot,
+                                parent: slot_update.parent_slot,
+                                status: match slot_update.commitment {
+                                    solana_commitment_config::CommitmentLevel::Processed => SlotStatus::Processed,
+                                    solana_commitment_config::CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                                    solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
+                                },
+                                dead_error: None,
+                                created_at,
+                            }));
+                            replayed_messages.push(ReplayResponseMessageType::Single(slot_message));
+                        }
                     }
-                    let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
+
+                    if !replayed_messages.is_empty() {
+                        let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
+                    }
                 }
                 else => {
                     // No new messages and replay request channel closed, can only happen on shutdown
@@ -1431,8 +1491,8 @@ impl GrpcService {
                                     break 'outer;
                                 }
 
-                                let messages = match rx.await {
-                                    Ok(ReplayedResponse::Messages(messages)) => messages,
+                                let messages_batch = match rx.await {
+                                    Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
                                         task_tracker.spawn(async move {
@@ -1454,17 +1514,20 @@ impl GrpcService {
                                     }
                                 };
 
-                                for message in messages.iter() {
-                                    for message in session.filter.get_updates(message, Some(commitment)) {
-                                        match stream_tx.send(Ok(message)).await {
-                                            Ok(()) => {
-                                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                            }
-                                            Err(mpsc::error::SendError(_)) => {
-                                                error!("client #{}: stream closed", session.subscriber_id);
-                                                session.disconnect_reason = "client_closed";
-                                                break 'outer;
-                                            }
+                                let replay_it = messages_batch
+                                    .iter()
+                                    .flatten()
+                                    .flat_map(|message| session.filter.get_updates(message, Some(commitment)));
+
+                                for filtered_message in replay_it {
+                                    match stream_tx.send(Ok(filtered_message)).await {
+                                        Ok(()) => {
+                                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                        }
+                                        Err(mpsc::error::SendError(_)) => {
+                                            error!("client #{}: stream closed", session.subscriber_id);
+                                            session.disconnect_reason = "client_closed";
+                                            break 'outer;
                                         }
                                     }
                                 }
@@ -2430,13 +2493,13 @@ mod tests {
         drop(stream_rx);
 
         // broadcast so client_loop hits try_send -> Closed
-        let msg = Message::Slot(MessageSlot {
+        let msg = Message::Slot(Arc::new(MessageSlot {
             slot: 100,
             parent: Some(99),
             status: SlotStatus::Processed,
             dead_error: None,
             created_at: Timestamp::from(SystemTime::now()),
-        });
+        }));
         let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::new(vec![msg])));
 
         tokio::time::timeout(Duration::from_secs(2), handle)
@@ -2597,13 +2660,13 @@ mod tests {
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
-            Message::Slot(MessageSlot {
+            Message::Slot(Arc::new(MessageSlot {
                 slot,
                 parent,
                 status,
                 dead_error: None,
                 created_at: Timestamp::from(SystemTime::now()),
-            })
+            }))
         }
 
         #[tokio::test]

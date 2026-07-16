@@ -295,8 +295,7 @@ impl GeyserPlugin for Plugin {
         status: &SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
-
+            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status)));
             if matches!(
                 status,
                 SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted

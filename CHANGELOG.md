@@ -33,10 +33,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 - Removed `/debug_clients` endpoint from the auxiliary sidecar server.
 - Changed client-loop logs to include subscriber context for improved monitoring and troubleshooting.
 - Changed `yellowstone_grpc_geyser_subscriber_queue_size` from `IntGaugeVec` to `HistogramVec` to better represent multiple concurrent subscriptions per subscriber.
+- Removed 'yellowstone_grpc_geyser_batch_size' metric due to geyser_loop overhead and unnecessary tracking
 
 ### Misc
 - Introduced a stream which feeds data into the geyser and block reconstruction loops
 - Optimizes the geyser_loop processed message feed by moving block reconstruction, block meta and slot messages to a 1hop channel send instead of running through geyser_loop
+- Optimizes geyser_loop by lazily encoding messages on a first visit basis instead of encoding them in geyser_loop
+- Optimizes block reconstruction message ingress and egress
+- Optimizes replay 
+- Wrap MessageSlot in an Arc to reduce overall size of 'Message' to 40 bytes down from 80, reducing amount of memory required during copy and allocate
 
 ## 2026-07-03
 
