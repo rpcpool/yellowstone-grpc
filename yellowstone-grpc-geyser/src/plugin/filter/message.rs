@@ -516,8 +516,6 @@ impl FilteredUpdateAccount {
                 // lazyily pre-encode the account for future use
                 AccountEncoder::pre_encode(account);
 
-                metrics::pre_encoded_cache_miss("account");
-
                 if let Some(pre_encoded) = account.get_pre_encoded() {
                     account_return_encoded(pre_encoded, tag, buf);
                     return;
@@ -724,8 +722,6 @@ impl FilteredUpdateTransaction {
         } else {
             // lazyly pre-encode the transaction for future use
             TransactionEncoder::pre_encode(tx);
-
-            metrics::pre_encoded_cache_miss("txn");
 
             if let Some(pre_encoded) = tx.get_pre_encoded() {
                 transaction_return_encoded(pre_encoded, tag, buf);
