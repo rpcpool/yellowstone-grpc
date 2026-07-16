@@ -334,6 +334,55 @@ pub enum ReplayResponseMessageType {
     Batch(Arc<Vec<Message>>),
 }
 
+impl<'a> IntoIterator for &'a ReplayResponseMessageType {
+    type Item = &'a Message;
+    type IntoIter = ReplayResponseMessageIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub struct ReplayResponseMessageIterator<'a> {
+    msg: &'a ReplayResponseMessageType,
+    current_index: usize,
+}
+
+impl ReplayResponseMessageType {
+    fn iter(&self) -> ReplayResponseMessageIterator<'_> {
+        ReplayResponseMessageIterator {
+            msg: &self,
+            current_index: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for ReplayResponseMessageIterator<'a> {
+    type Item = &'a Message;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.msg {
+            ReplayResponseMessageType::Single(msg) => {
+                if self.current_index == 0 {
+                    self.current_index += 1;
+                    Some(msg)
+                } else {
+                    None
+                }
+            }
+            ReplayResponseMessageType::Batch(batch) => {
+                if self.current_index < batch.len() {
+                    let msg = &batch[self.current_index];
+                    self.current_index += 1;
+                    Some(msg)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
 pub enum ReplayedResponse {
     Messages(Vec<ReplayResponseMessageType>),
     Lagged(Slot),
@@ -1465,38 +1514,20 @@ impl GrpcService {
                                     }
                                 };
 
+                                let replay_it = messages_batch
+                                    .iter()
+                                    .flatten()
+                                    .flat_map(|message| session.filter.get_updates(message, Some(commitment)));
 
-                                for message_batch in messages_batch.iter() {
-                                    match message_batch {
-                                        ReplayResponseMessageType::Single(message) => {
-                                            for filtered_message in session.filter.get_updates(message, Some(commitment)) {
-                                                match stream_tx.send(Ok(filtered_message)).await {
-                                                    Ok(()) => {
-                                                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                                    }
-                                                    Err(mpsc::error::SendError(_)) => {
-                                                        error!("client #{}: stream closed", session.subscriber_id);
-                                                        session.disconnect_reason = "client_closed";
-                                                        break 'outer;
-                                                    }
-                                                }
-                                            }
+                                for filtered_message in replay_it {
+                                    match stream_tx.send(Ok(filtered_message)).await {
+                                        Ok(()) => {
+                                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                         }
-                                        ReplayResponseMessageType::Batch(message_batch) => {
-                                            for message in message_batch.iter() {
-                                                for filtered_message in session.filter.get_updates(message, Some(commitment)) {
-                                                    match stream_tx.send(Ok(filtered_message)).await {
-                                                        Ok(()) => {
-                                                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                                        }
-                                                        Err(mpsc::error::SendError(_)) => {
-                                                            error!("client #{}: stream closed", session.subscriber_id);
-                                                            session.disconnect_reason = "client_closed";
-                                                            break 'outer;
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                        Err(mpsc::error::SendError(_)) => {
+                                            error!("client #{}: stream closed", session.subscriber_id);
+                                            session.disconnect_reason = "client_closed";
+                                            break 'outer;
                                         }
                                     }
                                 }
