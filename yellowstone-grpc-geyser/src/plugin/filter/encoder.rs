@@ -1,9 +1,12 @@
 use {
-    crate::plugin::{
-        filter::message::{
-            prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len,
+    crate::{
+        metrics,
+        plugin::{
+            filter::message::{
+                prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len,
+            },
+            message::{MessageAccountInfo, MessageTransactionInfo},
         },
-        message::{MessageAccountInfo, MessageTransactionInfo},
     },
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -16,7 +19,9 @@ impl TransactionEncoder {
         let len = Self::encoded_len(tx);
         let mut buf = Vec::with_capacity(len);
         Self::encode_raw(tx, &mut buf);
-        let _ = tx.pre_encoded.set(buf);
+        if tx.pre_encoded.set(buf).is_err() {
+            metrics::pre_encoded_cache_miss("txn");
+        }
     }
 
     fn encode_raw(tx: &MessageTransactionInfo, buf: &mut impl bytes::BufMut) {
@@ -92,7 +97,9 @@ impl AccountEncoder {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
 
-        let _ = account.pre_encoded.set(buf);
+        if account.pre_encoded.set(buf).is_err() {
+            metrics::pre_encoded_cache_miss("account");
+        }
     }
 
     pub fn encoded_len(account: &MessageAccountInfo) -> usize {
