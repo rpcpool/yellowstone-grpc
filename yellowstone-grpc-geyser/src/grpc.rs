@@ -1219,29 +1219,41 @@ impl GrpcService {
         const MESSAGE_BATCH_SIZE: usize = 1024;
         const RING_BUFFER_SIZE: usize = 2048;
 
-        let mut ring_allocs: Vec<Arc<Vec<Message>>> = (0..RING_BUFFER_SIZE)
+        let mut mempool_alloc: Vec<Arc<Vec<Message>>> = (0..RING_BUFFER_SIZE)
             .map(|_| Arc::new(Vec::with_capacity(MESSAGE_BATCH_SIZE)))
             .collect();
-        let mut ring_index = 0usize;
+        let mut mempool_index = 0usize;
+        let mut mempool_miss_temporary = Arc::new(Vec::with_capacity(MESSAGE_BATCH_SIZE));
 
         loop {
-            let mut ring_index_current = ring_index;
-            ring_index = (ring_index + 1) % RING_BUFFER_SIZE;
+            let mut message_batch_arc = &mut mempool_alloc[mempool_index];
+            mempool_index = (mempool_index + 1) % RING_BUFFER_SIZE;
 
-            let message_batch;
-            loop {
-                match Arc::get_mut(&mut ring_allocs[ring_index_current]) {
-                    Some(batch) => {
-                        message_batch = batch;
-                        message_batch.clear();
-                        break;
-                    }
-                    None => {
-                        ring_index_current = ring_index;
-                        ring_index = (ring_index + 1) % RING_BUFFER_SIZE;
+            let message_batch = match Arc::get_mut(message_batch_arc) {
+                Some(batch) => {
+                    batch.clear();
+                    batch
+                }
+                None => {
+                    // This path shouldn't be happening under normal circumstances, it would usually indicate an error of processing speed
+                    // By either block_reconstruction_loop or by client_loop
+                    message_batch_arc = &mut mempool_miss_temporary;
+                    match Arc::get_mut(message_batch_arc) {
+                        Some(batch) => {
+                            batch.clear();
+                            batch
+                        }
+                        None => {
+                            // The temporary is taken as well, make a new one and immediatelly unwrap the get_mut as no other thread holds a reference
+                            // make_mut is not aplicable here as it would clone the inner data unnecessarily
+                            mempool_miss_temporary =
+                                Arc::new(Vec::with_capacity(MESSAGE_BATCH_SIZE));
+                            message_batch_arc = &mut mempool_miss_temporary;
+                            Arc::get_mut(message_batch_arc).unwrap()
+                        }
                     }
                 }
-            }
+            };
 
             let batch_size_maybe = messages_rx.next_batch(message_batch).await;
             let Some(_) = batch_size_maybe else {
@@ -1255,7 +1267,6 @@ impl GrpcService {
 
             metrics::message_queue_size_dec_by(message_batch.len() as i64);
 
-            let message_batch_arc = &ring_allocs[ring_index_current];
             let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(message_batch_arc)));
 
             if block_reconstruction_tx
