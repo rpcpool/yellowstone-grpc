@@ -1217,10 +1217,33 @@ impl GrpcService {
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
+        const RING_BUFFER_SIZE: usize = 2048;
 
-        let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        let mut ring_allocs: Vec<Arc<Vec<Message>>> = (0..RING_BUFFER_SIZE)
+            .map(|_| Arc::new(Vec::with_capacity(MESSAGE_BATCH_SIZE)))
+            .collect();
+        let mut ring_index = 0usize;
+
         loop {
-            let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
+            let mut ring_index_current = ring_index;
+            ring_index = (ring_index + 1) % RING_BUFFER_SIZE;
+
+            let message_batch;
+            loop {
+                match Arc::get_mut(&mut ring_allocs[ring_index_current]) {
+                    Some(batch) => {
+                        message_batch = batch;
+                        message_batch.clear();
+                        break;
+                    }
+                    None => {
+                        ring_index_current = ring_index;
+                        ring_index = (ring_index + 1) % RING_BUFFER_SIZE;
+                    }
+                }
+            }
+
+            let batch_size_maybe = messages_rx.next_batch(message_batch).await;
             let Some(_) = batch_size_maybe else {
                 info!("Geyser loop: messages channel closed");
                 break;
@@ -1232,17 +1255,17 @@ impl GrpcService {
 
             metrics::message_queue_size_dec_by(message_batch.len() as i64);
 
-            let message_batch_arc = Arc::new(message_batch);
-            let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
+            let message_batch_arc = &ring_allocs[ring_index_current];
+            let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(message_batch_arc)));
 
             if block_reconstruction_tx
-                .send(BlockReconstructionMessage::Batch(message_batch_arc))
+                .send(BlockReconstructionMessage::Batch(Arc::clone(
+                    message_batch_arc,
+                )))
                 .is_ok()
             {
                 metrics::block_reconstruction_queue_size_inc();
             }
-
-            message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         }
     }
 
@@ -2647,8 +2670,8 @@ mod tests {
 
         fn make_deshred(slot: u64, sig_byte: u8) -> Message {
             let (versioned, signature) = build_versioned_tx(sig_byte);
-            Message::DeshredTransaction(MessageDeshredTransaction {
-                transaction: Arc::new(MessageDeshredTransactionInfo {
+            Message::DeshredTransaction(Arc::new(MessageDeshredTransaction {
+                transaction: MessageDeshredTransactionInfo {
                     signature,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
@@ -2657,10 +2680,10 @@ mod tests {
                     loaded_readonly_addresses: vec![],
                     completed_data_set_starting_shred_index: 0,
                     completed_data_set_ending_shred_index_exclusive: 0,
-                }),
+                },
                 slot,
                 created_at: Timestamp::from(SystemTime::now()),
-            })
+            }))
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {

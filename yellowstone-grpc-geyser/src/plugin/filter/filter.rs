@@ -573,7 +573,7 @@ impl FilterAccounts {
 
     fn get_updates(
         &self,
-        message: &MessageAccount,
+        message: &Arc<MessageAccount>,
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
         let mut filter = FilterAccountsMatch::new(self);
@@ -1011,7 +1011,7 @@ impl FilterTransactions {
         })
     }
 
-    pub fn get_updates(&self, message: &MessageTransaction) -> FilteredUpdates {
+    pub fn get_updates(&self, message: &Arc<MessageTransaction>) -> FilteredUpdates {
         let filters = self
             .filters
             .iter()
@@ -1237,7 +1237,7 @@ impl FilterDeshredTransactions {
         Ok(Self { filters })
     }
 
-    pub fn get_updates(&self, message: &MessageDeshredTransaction) -> FilteredUpdatesDeshred {
+    pub fn get_updates(&self, message: &Arc<MessageDeshredTransaction>) -> FilteredUpdatesDeshred {
         let filters = self
             .filters
             .iter()
@@ -1498,7 +1498,7 @@ impl FilterBlocks {
                     .transactions
                     .iter()
                     .filter_map(|tx| {
-                        if inner.matches_any_in_set(&tx.account_keys) {
+                        if inner.matches_any_in_set(&tx.transaction.account_keys) {
                             Some(Arc::clone(tx))
                         } else {
                             None
@@ -1515,7 +1515,7 @@ impl FilterBlocks {
                     .accounts
                     .iter()
                     .filter_map(|account| {
-                        if inner.matches_account(&account.pubkey) {
+                        if inner.matches_account(&account.account.pubkey) {
                             Some(Arc::clone(account))
                         } else {
                             None
@@ -1772,7 +1772,7 @@ mod tests {
     fn create_message_transaction(
         keypair: &Keypair,
         account_keys: Vec<Pubkey>,
-    ) -> MessageTransaction {
+    ) -> Arc<MessageTransaction> {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -1809,8 +1809,8 @@ mod tests {
             .iter()
             .copied()
             .collect();
-        MessageTransaction {
-            transaction: Arc::new(MessageTransactionInfo {
+        Arc::new(MessageTransaction {
+            transaction: MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: convert_to::create_transaction(&versioned_transaction),
@@ -1820,10 +1820,10 @@ mod tests {
                 pre_encoded: OnceLock::new(),
                 token_owners_all: OnceLock::new(),
                 token_owners_changed: OnceLock::new(),
-            }),
+            },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
-        }
+        })
     }
 
     #[test]
@@ -2213,7 +2213,7 @@ mod tests {
         loaded_writable: Vec<Pubkey>,
         loaded_readonly: Vec<Pubkey>,
         is_vote: bool,
-    ) -> MessageDeshredTransaction {
+    ) -> Arc::new(MessageDeshredTransaction) {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -2226,8 +2226,8 @@ mod tests {
         let versioned_transaction =
             VersionedTransaction::from(Transaction::new(&[keypair], message, recent_blockhash));
 
-        MessageDeshredTransaction {
-            transaction: Arc::new(MessageDeshredTransactionInfo {
+        Arc::new(MessageDeshredTransaction {
+            transaction: MessageDeshredTransactionInfo {
                 signature: *versioned_transaction
                     .signatures
                     .first()
@@ -2239,10 +2239,10 @@ mod tests {
                 loaded_readonly_addresses: loaded_readonly,
                 completed_data_set_starting_shred_index: 0,
                 completed_data_set_ending_shred_index_exclusive: 0,
-            }),
+            },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
-        }
+        })
     }
 
     #[test]
@@ -2605,15 +2605,15 @@ mod cuckoo_tests {
         ProtoCuckooFilter::from(&filter)
     }
 
-    fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> MessageAccount {
+    fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
         use {
             bytes::Bytes,
             prost_types::Timestamp,
             std::{sync::Arc, time::SystemTime},
         };
 
-        MessageAccount {
-            account: Arc::new(MessageAccountInfo {
+        Arc::new(MessageAccount {
+            account: MessageAccountInfo {
                 pubkey,
                 lamports: 1000,
                 owner,
@@ -2623,11 +2623,11 @@ mod cuckoo_tests {
                 write_version: 1,
                 txn_signature: None,
                 pre_encoded: std::sync::OnceLock::new(),
-            }),
+            },
             slot: 100,
             is_startup: false,
             created_at: Timestamp::from(SystemTime::now()),
-        }
+        })
     }
 
     #[test]
@@ -2918,7 +2918,7 @@ mod cuckoo_tests {
             account_keys: Vec<Pubkey>,
             pre: Vec<confirmed_block::TokenBalance>,
             post: Vec<confirmed_block::TokenBalance>,
-        ) -> MessageTransaction {
+        ) -> Arc<MessageTransaction> {
             let signer = Keypair::new();
             let signer_pk = signer.pubkey();
             let mut full_keys = Vec::with_capacity(1 + account_keys.len());
@@ -2966,8 +2966,8 @@ mod cuckoo_tests {
                 .iter()
                 .copied()
                 .collect();
-            MessageTransaction {
-                transaction: Arc::new(MessageTransactionInfo {
+            Arc::new(MessageTransaction {
+                transaction: MessageTransactionInfo {
                     signature: sig,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
@@ -2977,10 +2977,10 @@ mod cuckoo_tests {
                     pre_encoded: OnceLock::new(),
                     token_owners_all: OnceLock::new(),
                     token_owners_changed: OnceLock::new(),
-                }),
+                },
                 slot: 100,
                 created_at: Timestamp::from(SystemTime::now()),
-            }
+            })
         }
 
         fn filter_with_transactions(
@@ -3646,10 +3646,9 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
 
-            assert!(tx_arc.token_owners_all.get().is_none());
-            assert!(tx_arc.token_owners_changed.get().is_none());
+            assert!(tx.token_owners_all.get().is_none());
+            assert!(tx.token_owners_changed.get().is_none());
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3665,11 +3664,11 @@ mod cuckoo_tests {
             assert!(matches(&filter, &Message::Transaction(tx)));
 
             assert!(
-                tx_arc.token_owners_all.get().is_some(),
+                tx.token_owners_all.get().is_some(),
                 "mode=All must populate token_owners_all"
             );
             assert!(
-                tx_arc.token_owners_changed.get().is_none(),
+                tx.token_owners_changed.get().is_none(),
                 "mode=All must NOT touch token_owners_changed"
             );
         }
@@ -3687,7 +3686,6 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
             let message = Message::Transaction(tx);
 
             let mut tx_filters = HashMap::new();
@@ -3752,7 +3750,6 @@ mod cuckoo_tests {
                 ],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
             let message = Message::Transaction(tx);
 
             let mut tx_filters = HashMap::new();
@@ -3800,7 +3797,6 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
             let message = Message::Transaction(tx);
 
             let mut tx_filters = HashMap::new();
