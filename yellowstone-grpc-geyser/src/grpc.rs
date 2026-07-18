@@ -2643,8 +2643,8 @@ mod tests {
 
         fn make_deshred(slot: u64, sig_byte: u8) -> Message {
             let (versioned, signature) = build_versioned_tx(sig_byte);
-            Message::DeshredTransaction(MessageDeshredTransaction {
-                transaction: Arc::new(MessageDeshredTransactionInfo {
+            Message::DeshredTransaction(Arc::new(MessageDeshredTransaction {
+                transaction: MessageDeshredTransactionInfo {
                     signature,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
@@ -2653,10 +2653,10 @@ mod tests {
                     loaded_readonly_addresses: vec![],
                     completed_data_set_starting_shred_index: 0,
                     completed_data_set_ending_shred_index_exclusive: 0,
-                }),
+                },
                 slot,
                 created_at: Timestamp::from(SystemTime::now()),
-            })
+            }))
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {

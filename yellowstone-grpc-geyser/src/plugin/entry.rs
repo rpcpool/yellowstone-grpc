@@ -258,8 +258,9 @@ impl GeyserPlugin for Plugin {
 
             if is_startup {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message =
-                        Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                    let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                        account, slot, is_startup,
+                    )));
                     match channel.send(Box::new(message)) {
                         Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
@@ -272,8 +273,9 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
-                let message =
-                    Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                    account, slot, is_startup,
+                )));
                 inner.send_message(message);
             }
 
@@ -360,7 +362,8 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
+            let message =
+                Message::Transaction(Arc::new(MessageTransaction::from_geyser(transaction, slot)));
             inner.send_message(message);
 
             Ok(())
@@ -415,9 +418,9 @@ impl GeyserPlugin for Plugin {
         slot: u64,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::DeshredTransaction(
+            let message = Message::DeshredTransaction(Arc::new(
                 MessageDeshredTransaction::from_geyser_versioned(transaction, slot),
-            );
+            ));
             inner.send_deshred_message(message);
 
             Ok(())
