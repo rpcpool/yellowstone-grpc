@@ -17,7 +17,9 @@ use {
             },
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
-            shmem::decoder::snapshot_account_to_message,
+            shmem::{
+              stream::ShmemBatchStream, ProstShmemDecoder,
+            },
         },
         ratelimit::PrometheusRatelimitCallbacks,
         stream::{BatchStream, BatchStreamExt},
@@ -39,7 +41,7 @@ use {
         io,
         net::SocketAddr,
         os::unix::fs::PermissionsExt,
-        path::{Path, PathBuf},
+        path::PathBuf,
         pin::Pin,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -82,7 +84,7 @@ use {
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
     },
-    yellowstone_shmem_client::SnapshotReader,
+    yellowstone_shmem_client::SnapshotClient,
 };
 
 #[derive(Debug)]
@@ -512,7 +514,7 @@ pub struct GrpcService {
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
     subscribe_id: Arc<AtomicUsize>,
-    snapshot_reader: Option<Arc<SnapshotReader>>,
+    snapshot_path: Option<PathBuf>,
     broadcast_tx: broadcast::Sender<BroadcastedMessage>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -572,10 +574,11 @@ impl GrpcService {
     pub async fn create<S: BatchStream<Item = Message> + Unpin + Send + 'static>(
         config: ConfigGrpc,
         source: S,
+        snapshot_path: Option<PathBuf>,
         debug_clients_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
         service_cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<crossbeam_channel::Sender<Box<Message>>>> {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
 
@@ -721,26 +724,6 @@ impl GrpcService {
             }
         }
 
-        // Snapshot reader from shmem region
-        let snapshot_reader = if let Some(shmem_snapshot_path) = &config.shmem_snapshot_path {
-            match SnapshotReader::open(Path::new(shmem_snapshot_path)) {
-                Ok(reader) => {
-                    log::info!(
-                        "snapshot available: {} entries from {}",
-                        reader.entry_count(),
-                        shmem_snapshot_path
-                    );
-                    Some(Arc::new(reader))
-                }
-                Err(e) => {
-                    log::warn!("snapshot not available: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         // Blocks meta storage
         let (blocks_meta, blocks_meta_tx) = if config.unary_disabled {
             (None, None)
@@ -786,7 +769,7 @@ impl GrpcService {
             subscription_tracker: Arc::new(StdMutex::new(HashMap::new())),
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
-            snapshot_reader,
+            snapshot_path,
             broadcast_tx: broadcast_tx.clone(),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
@@ -906,7 +889,7 @@ impl GrpcService {
             });
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// Core message routing loop that reconstructs Solana blocks from raw Geyser plugin events
@@ -1222,7 +1205,7 @@ impl GrpcService {
         endpoint: String,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
-        snapshot_reader: Option<Arc<SnapshotReader>>,
+        snapshot_stream: Option<ShmemBatchStream<SnapshotClient<ProstShmemDecoder>>>,
         mut messages_rx: broadcast::Receiver<BroadcastedMessage>,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         debug_client_tx: Option<mpsc::UnboundedSender<DebugClientMessage>>,
@@ -1242,14 +1225,14 @@ impl GrpcService {
         );
         let cancellation_token = session.cancellation_token.clone();
 
-        if let Some(reader) = snapshot_reader {
+        if let Some(mut stream) = snapshot_stream {
             info!("client #{id}: snapshot requested");
             let result = Self::client_loop_snapshot(
                 id,
                 &session.endpoint,
                 stream_tx.clone(),
                 &mut client_rx,
-                &reader,
+                &mut stream,
                 &mut session.filter,
                 cancellation_token.clone(),
             )
@@ -1429,18 +1412,18 @@ impl GrpcService {
         }
     }
 
-    /// Streams snapshot accounts to a client from the mmap'd snapshot region.
+    /// Streams snapshot accounts to a client from the snapshot ring.
     ///
-    /// Waits for the client's filter before iterating. Each entry is
-    /// read from the mmap, converted to a Message, filtered, and streamed.
-    /// Only matching entries allocate so non-matches are skipped at the
-    /// fixed-field level.
+    /// Waits for the client's filter, then drains the snapshot ring in
+    /// batches until the producer writes the EndOfStartup sentinel (which
+    /// closes the underlying stream). Each account is filtered and
+    /// forwarded on the client's gRPC stream.
     async fn client_loop_snapshot(
         id: usize,
         endpoint: &str,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
-        snapshot_reader: &SnapshotReader,
+        snapshot_stream: &mut ShmemBatchStream<SnapshotClient<ProstShmemDecoder>>,
         filter: &mut Filter,
         cancellation_token: CancellationToken,
     ) -> Result<(), ClientSnapshotReplayError> {
@@ -1477,38 +1460,32 @@ impl GrpcService {
                         }
                     }
                 }
-
             }
         }
 
-        // Iterate the mmap directly, convert and filter per entry
-        for account in snapshot_reader.iter() {
+        // drain the snapshot ring
+        let mut batch: Vec<Message> = Vec::with_capacity(32);
+        loop {
             if cancellation_token.is_cancelled() {
-                info!("client #{id}: cancelled");
                 return Err(ClientSnapshotReplayError::Cancelled);
             }
 
-            let message = match snapshot_account_to_message(account) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    log::error!("client #{id}: snapshot conversion error: {e}");
-                    continue;
-                }
-            };
+            batch.clear();
+            let count = snapshot_stream.next_batch(&mut batch).await;
+            if count.is_none() {
+                info!("client #{id}: snapshot complete");
+                return Ok(());
+            }
 
-            for update in filter.get_updates(&message, None) {
-                if stream_tx.send(Ok(update)).await.is_err() {
-                    error!("client #{id}: stream closed");
-                    return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+            for message in batch.drain(..) {
+                for update in filter.get_updates(&message, None) {
+                    if stream_tx.send(Ok(update)).await.is_err() {
+                        return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                    }
                 }
             }
         }
-
-        info!("client #{id}: snapshot complete");
-
-        Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     async fn serve_listener<H, I, IO>(
         incoming: I,
@@ -1627,13 +1604,21 @@ impl Geyser for GrpcService {
         }
 
         let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
-        let snapshot_reader = if x_request_snapshot {
-            self.snapshot_reader.clone()
+        let snapshot_stream = if x_request_snapshot {
+            self.snapshot_path.as_ref().and_then(|path| {
+                match SnapshotClient::open(path, ProstShmemDecoder) {
+                    Ok(client) => Some(ShmemBatchStream::new(client, Duration::from_secs(0))),
+                    Err(e) => {
+                        error!("client #{id}: failed to open snapshot ring: {e}");
+                        None
+                    }
+                }
+            })
         } else {
             None
         };
 
-        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_reader.is_some() {
+        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_stream.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
             self.config_channel_capacity
@@ -1747,7 +1732,7 @@ impl Geyser for GrpcService {
             endpoint,
             stream_tx,
             client_rx,
-            snapshot_reader,
+            snapshot_stream,
             self.broadcast_tx.subscribe(),
             self.replay_stored_slots_tx.clone(),
             self.debug_clients_tx.clone(),

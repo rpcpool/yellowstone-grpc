@@ -14,8 +14,8 @@ pub struct ShmemHealthReporter {
 }
 
 impl ShmemHealthReporter {
-    pub fn new(period_secs: u64) -> Self {
-        if period_secs == 0 {
+    pub fn new(period_secs: Duration) -> Self {
+        if period_secs.is_zero() {
             Self {
                 accounts: 0,
                 transactions: 0,
@@ -34,7 +34,7 @@ impl ShmemHealthReporter {
                 entries: 0,
                 block_meta: 0,
                 lagged: 0,
-                interval: tokio::time::interval(Duration::from_secs(period_secs)),
+                interval: tokio::time::interval(period_secs),
                 enabled: true,
             }
         }

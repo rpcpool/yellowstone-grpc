@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Once;
+use std::time::Duration;
 
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
@@ -24,14 +25,16 @@ fn main() -> anyhow::Result<()> {
     log::info!("starting yellowstone-grpc server");
 
     // Open conduit ring
-    let shmem_path = config
-        .grpc
-        .shmem_path
+    let shmem = config
+        .shmem
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
 
-    let client = ShmemClient::open(Path::new(shmem_path), ProstShmemDecoder)?;
-    let source = ShmemBatchStream::new(client, config.grpc.shmem_health_interval_secs);
+    let client = ShmemClient::open(Path::new(&shmem.path), ProstShmemDecoder)?;
+    let source = ShmemBatchStream::new(client, Duration::from_secs(shmem.health_interval_secs));
+
+    let snapshot_path = shmem.snapshot_path.clone();
+
 
     let mut builder = Builder::new_multi_thread();
     if let Some(worker_threads) = config.tokio.worker_threads {
@@ -65,6 +68,7 @@ fn main() -> anyhow::Result<()> {
         let _snapshot_tx = GrpcService::create(
             config.grpc,
             source,
+            snapshot_path,
             config.debug_clients_http.then_some(debug_client_tx),
             cancellation_token.child_token(),
             task_tracker.clone(),

@@ -1,6 +1,0 @@
-{
-    "libpath": "/workspaces/devpool/yellowstone-grpc/target/release/libyellowstone_grpc_geyser.so",
-    "grpc": {
-        "shmem_path": "/dev/shm/yellowstone-shmem"
-    }
-}

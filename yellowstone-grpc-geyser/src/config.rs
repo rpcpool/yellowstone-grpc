@@ -25,6 +25,8 @@ pub struct Config {
     pub tokio: ConfigTokio,
     pub grpc: ConfigGrpc,
     #[serde(default)]
+    pub shmem: Option<ConfigShmem>,
+    #[serde(default)]
     pub prometheus: Option<ConfigPrometheus>,
     /// Collect client filters, processed slot and make it available on prometheus port `/debug_clients`
     #[serde(default)]
@@ -407,25 +409,6 @@ pub struct ConfigGrpc {
 
     #[serde(default)]
     pub listen: Option<Vec<ListenConfig>>,
-
-    /// Path to the yellowstone-shmem shared memory file.
-    /// When set, the grpc service reads geyser events from the shmem ring
-    /// instead of the in-process plugin channel.
-    /// Example: `/dev/shm/yellowstone-shmem`
-    #[serde(default)]
-    pub shmem_path: Option<String>,
-
-    /// Path to the shmem geyser plugin snapshot mmap file.
-    /// When set, the grpc service reads snapshot from the from the mmap file
-    /// instead of the in-process plugin channel.
-    /// Example: `/dev/shm/yellowstone-shmem-snapshot`
-    #[serde(default)]
-    pub shmem_snapshot_path: Option<String>,
-
-    /// Interval in seconds between shmem health reports.
-    /// Set to 0 to disable diagnostics entirely.
-    #[serde(default = "ConfigGrpc::default_shmem_health_interval_secs")]
-    pub shmem_health_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -487,10 +470,6 @@ impl ConfigGrpc {
 
     const fn default_replay_stored_slots() -> u64 {
         150
-    }
-
-    fn default_shmem_health_interval_secs() -> u64 {
-        10
     }
 }
 
@@ -554,6 +533,34 @@ impl ConfigGrpcCompression {
 pub struct ConfigPrometheus {
     /// Address of Prometheus service.
     pub address: SocketAddr,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigShmem {
+    /// Path to the yellowstone-shmem shared memory file.
+    /// When set, the grpc service reads geyser events from the shmem ring
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem`
+    pub path: PathBuf,
+
+    /// Path to the shmem geyser plugin snapshot mmap file.
+    /// When set, the grpc service reads snapshot from the from the mmap file
+    /// instead of the in-process plugin channel.
+    /// Example: `/dev/shm/yellowstone-shmem-snapshot`
+    #[serde(default)]
+    pub snapshot_path: Option<PathBuf>,
+
+    /// Interval in seconds between shmem health reports.
+    /// Set to 0 to disable diagnostics entirely.
+    #[serde(default = "ConfigShmem::default_health_interval_secs")]
+    pub health_interval_secs: u64,
+}
+
+impl ConfigShmem {
+    fn default_health_interval_secs() -> u64 {
+        10
+    }
 }
 
 #[derive(Deserialize)]

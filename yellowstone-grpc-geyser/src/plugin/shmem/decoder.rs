@@ -4,13 +4,11 @@ use prost_types::Timestamp;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use std::{
-    sync::{Arc, OnceLock},
-    time::SystemTime,
+    sync::{Arc, OnceLock}
 };
 use yellowstone_grpc_proto::prelude as proto;
 use yellowstone_shmem_client::{
     codec::{DecodeError, ShmemDecoder},
-    SnapshotAccount,
 };
 use yellowstone_shmem_common::{
     EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION,
@@ -54,6 +52,9 @@ impl ShmemDecoder for ProstShmemDecoder {
             EventType::Transaction => decode_transaction(slot, body),
             EventType::Entry => decode_entry(body),
             EventType::BlockMeta => decode_block_meta(body),
+            EventType::EndOfStartup => Err(DecodeError::DecodeError(
+                "EndOfStartup reached live decoder".into(),
+            )),
         }
     }
 }
@@ -359,28 +360,4 @@ const fn convert_slot_status(status: &SlotStatus) -> crate::plugin::message::Slo
         SlotStatus::CreatedBank => DmSlotStatus::CreatedBank,
         SlotStatus::Dead(_e) => DmSlotStatus::Dead,
     }
-}
-
-/// Converts a raw [`SnapshotAccount`] from the mmap region
-/// into a dragons-mouth [`Message`] for client delivery.
-pub fn snapshot_account_to_message(account: SnapshotAccount) -> Result<Message, &'static str> {
-    let pubkey = Pubkey::try_from(account.pubkey.as_slice()).map_err(|_| "invalid pubkey")?;
-    let owner = Pubkey::try_from(account.owner.as_slice()).map_err(|_| "invalid owner")?;
-
-    Ok(Message::Account(MessageAccount {
-        account: Arc::new(MessageAccountInfo {
-            pubkey,
-            lamports: account.lamports,
-            owner,
-            executable: account.executable,
-            rent_epoch: account.rent_epoch,
-            data: account.data.into(),
-            write_version: account.write_version,
-            txn_signature: None,
-            pre_encoded: OnceLock::new(),
-        }),
-        slot: account.slot,
-        is_startup: true,
-        created_at: Timestamp::from(SystemTime::now()),
-    }))
 }
