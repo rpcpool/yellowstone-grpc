@@ -261,33 +261,12 @@ impl<'de> Deserialize<'de> for GrpcAddresses {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    Io(std::io::Error),
-    Parse(serde_json::Error),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "config file error: {e}"),
-            Self::Parse(e) => write!(f, "config parse error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-impl From<std::io::Error> for ConfigError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-
-impl From<serde_json::Error> for ConfigError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::Parse(e)
-    }
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    JsonParse(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone, Deserialize)]

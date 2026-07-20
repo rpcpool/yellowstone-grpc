@@ -6056,8 +6056,10 @@ dependencies = [
 [[package]]
 name = "yellowstone-shmem-client"
 version = "0.1.0"
+source = "git+https://github.com/rpcpool/yellowstone-shmem.git?branch=fix%2Fsnapshot#3449a2dba714c5b4567103f32cec383d7e45c556"
 dependencies = [
- "thiserror 2.0.18",
+ "futures",
+ "log",
  "yellowstone-conduit",
  "yellowstone-shmem-common",
 ]
@@ -6065,6 +6067,7 @@ dependencies = [
 [[package]]
 name = "yellowstone-shmem-common"
 version = "0.1.0"
+source = "git+https://github.com/rpcpool/yellowstone-shmem.git?branch=fix%2Fsnapshot#3449a2dba714c5b4567103f32cec383d7e45c556"
 dependencies = [
  "serde",
 ]
