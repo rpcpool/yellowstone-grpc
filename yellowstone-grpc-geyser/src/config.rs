@@ -555,11 +555,19 @@ pub struct ConfigShmem {
     /// Set to 0 to disable diagnostics entirely.
     #[serde(default = "ConfigShmem::default_health_interval_secs")]
     pub health_interval_secs: u64,
+
+    /// Interval in seconds between ring restart checks.
+    #[serde(default = "ConfigShmem::default_restart_check_interval_secs")]
+    pub restart_check_interval_secs: u64,
 }
 
 impl ConfigShmem {
     fn default_health_interval_secs() -> u64 {
         10
+    }
+
+    pub fn default_restart_check_interval_secs() -> u64 {
+        5
     }
 }
 

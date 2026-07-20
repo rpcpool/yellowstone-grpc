@@ -31,7 +31,13 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
 
     let client = ShmemClient::open(Path::new(&shmem.path), ProstShmemDecoder)?;
-    let source = ShmemBatchStream::new(client, Duration::from_secs(shmem.health_interval_secs));
+    let checker = client.restart_checker();
+    let source = ShmemBatchStream::with_restart_check(
+        client,
+        Duration::from_secs(shmem.health_interval_secs),
+        move || checker.check(),
+        Duration::from_secs(shmem.restart_check_interval_secs),
+    );
 
     let snapshot_path = shmem.snapshot_path.clone();
 
