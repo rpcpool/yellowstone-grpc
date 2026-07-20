@@ -35,7 +35,6 @@ fn main() -> anyhow::Result<()> {
 
     let snapshot_path = shmem.snapshot_path.clone();
 
-
     let mut builder = Builder::new_multi_thread();
     if let Some(worker_threads) = config.tokio.worker_threads {
         builder.worker_threads(worker_threads);

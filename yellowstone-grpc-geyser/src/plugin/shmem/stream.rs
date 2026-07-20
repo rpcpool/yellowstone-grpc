@@ -44,10 +44,11 @@ impl<S: ShmemSource + Unpin> BatchStream for ShmemBatchStream<S> {
         this.wait_in_flight = false;
         let mut count = 0;
 
+        let batch_timestamp = Timestamp::from(SystemTime::now());
         while batch.len() < batch.capacity() {
             match this.inner.try_recv() {
                 Some(Ok(SourceItem::Message(gm))) => {
-                    match ProstShmemDecoder::to_dm_message(gm, Timestamp::from(SystemTime::now())) {
+                    match ProstShmemDecoder::to_dm_message(gm, batch_timestamp.clone()) {
                         Ok(msg) => {
                             this.health.observe(&msg);
                             batch.push(msg);
@@ -80,8 +81,17 @@ impl<S: ShmemSource + Unpin> BatchStream for ShmemBatchStream<S> {
             return Poll::Ready(Some(count));
         }
 
-        if !this.inner.check_region().unwrap_or(true) {
-            panic!("shmem: region was re-created. Consumer must rejoin.");
+        match this.inner.check_region() {
+            Ok(true) => {}
+            Ok(false) => {
+                // Producer recreated the ring file. Our mapping is stale;
+                // recovery requires reopening from the current generation.
+                // Panicking is intentional: no in-loop recovery is possible.
+                panic!("shmem: region was re-created, consumer must rejoin");
+            }
+            Err(e) => {
+                log::error!("shmem: check_region failed: {e}");
+            }
         }
 
         if !this.wait_in_flight {

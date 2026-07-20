@@ -17,9 +17,7 @@ use {
             },
             message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
-            shmem::{
-              stream::ShmemBatchStream, ProstShmemDecoder,
-            },
+            shmem::{stream::ShmemBatchStream, ProstShmemDecoder},
         },
         ratelimit::PrometheusRatelimitCallbacks,
         stream::{BatchStream, BatchStreamExt},

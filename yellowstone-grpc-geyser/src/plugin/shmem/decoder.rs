@@ -3,13 +3,9 @@ use prost::Message as ProstMessage;
 use prost_types::Timestamp;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
-use std::{
-    sync::{Arc, OnceLock}
-};
+use std::sync::{Arc, OnceLock};
 use yellowstone_grpc_proto::prelude as proto;
-use yellowstone_shmem_client::{
-    codec::{DecodeError, ShmemDecoder},
-};
+use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
 use yellowstone_shmem_common::{
     EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION,
 };
@@ -91,68 +87,66 @@ fn decode_account(bytes: &[u8], created_at_ns: i64) -> Result<GeyserMessage, Dec
 
     let mut o = 0usize;
 
-    unsafe fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
+    fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
         let v = bytes[*o];
         *o += 1;
         v
     }
 
-    unsafe fn read_u64(bytes: &[u8], o: &mut usize) -> u64 {
+    fn read_u64(bytes: &[u8], o: &mut usize) -> u64 {
         let v = u64::from_le_bytes(bytes[*o..*o + 8].try_into().unwrap());
         *o += 8;
         v
     }
 
-    unsafe fn read_bytes(bytes: &[u8], o: &mut usize, len: usize) -> Vec<u8> {
+    fn read_bytes(bytes: &[u8], o: &mut usize, len: usize) -> Vec<u8> {
         let v = bytes[*o..*o + len].to_vec();
         *o += len;
         v
     }
 
-    unsafe {
-        let pubkey = read_bytes(bytes, &mut o, 32);
-        let lamports = read_u64(bytes, &mut o);
-        let owner = read_bytes(bytes, &mut o, 32);
-        let executable = read_u8(bytes, &mut o) != 0;
-        let rent_epoch = read_u64(bytes, &mut o);
-        let write_version = read_u64(bytes, &mut o);
+    let pubkey = read_bytes(bytes, &mut o, 32);
+    let lamports = read_u64(bytes, &mut o);
+    let owner = read_bytes(bytes, &mut o, 32);
+    let executable = read_u8(bytes, &mut o) != 0;
+    let rent_epoch = read_u64(bytes, &mut o);
+    let write_version = read_u64(bytes, &mut o);
 
-        let txn_signature = if read_u8(bytes, &mut o) != 0 {
-            Some(read_bytes(bytes, &mut o, 64))
-        } else {
-            o += 64; // skip zeroed bytes
-            None
-        };
+    let txn_signature = if read_u8(bytes, &mut o) != 0 {
+        Some(read_bytes(bytes, &mut o, 64))
+    } else {
+        o += 64; // skip zeroed bytes
+        None
+    };
 
-        let data_len = read_u64(bytes, &mut o) as usize;
+    let data_len = read_u64(bytes, &mut o) as usize;
 
-        if o + data_len > bytes.len() {
-            return Err(DecodeError::DecodeError(format!(
-                "decode_account: data_len {data_len} exceeds buffer length {}",
-                bytes.len()
-            )));
-        }
-
-        let data = read_bytes(bytes, &mut o, data_len);
-        let slot = read_u64(bytes, &mut o);
-
-        Ok(GeyserMessage::Account(
-            yellowstone_shmem_common::MessageAccount {
-                account: yellowstone_shmem_common::MessageAccountInfo {
-                    pubkey,
-                    lamports,
-                    owner,
-                    executable,
-                    rent_epoch,
-                    data,
-                    write_version,
-                    txn_signature,
-                },
-                slot,
-                created_at_ns,
-            },
-        ))
+    if o + data_len > bytes.len() {
+        return Err(DecodeError::DecodeError(format!(
+            "decode_account: data_len {data_len} exceeds buffer length {}",
+            bytes.len()
+        )));
     }
+
+    let data = read_bytes(bytes, &mut o, data_len);
+    let slot = read_u64(bytes, &mut o);
+
+    Ok(GeyserMessage::Account(
+        yellowstone_shmem_common::MessageAccount {
+            account: yellowstone_shmem_common::MessageAccountInfo {
+                pubkey,
+                lamports,
+                owner,
+                executable,
+                rent_epoch,
+                data,
+                write_version,
+                txn_signature,
+            },
+            slot,
+            created_at_ns,
+        },
+    ))
 }
 
 fn decode_transaction(slot: u64, bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
