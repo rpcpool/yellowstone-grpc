@@ -64,11 +64,11 @@ impl ProcessingSlot {
                         }
                     })
                     .or_insert(write_version);
-                self.accounts.push(Arc::clone(&message_account));
+                self.accounts.push(Arc::clone(message_account));
                 // Handle account event
             }
             Message::Transaction(message_transaction) => {
-                self.transactions.push(Arc::clone(&message_transaction));
+                self.transactions.push(Arc::clone(message_transaction));
                 // Handle transaction event
             }
             Message::Entry(message_entry) => {
@@ -804,7 +804,7 @@ mod tests {
         let mb = frozen.get_message_block();
         assert_eq!(mb.accounts.len(), 1);
         assert_eq!(mb.updated_account_count, 1);
-        assert_eq!(mb.accounts[0].write_version, 8);
+        assert_eq!(mb.accounts[0].account.write_version, 8);
     }
 
     // ─── cmp_commitment_level ────────────────────────────────────────────────

@@ -280,8 +280,8 @@ impl MessageAccount {
     ) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             account: MessageAccountInfo::from_update_oneof(msg)?,
-            slot: slot,
-            is_startup: is_startup,
+            slot,
+            is_startup,
             created_at,
         })
     }
@@ -431,7 +431,7 @@ impl MessageTransaction {
     ) -> FromUpdateOneofResult<Self> {
         Ok(Self {
             transaction: MessageTransactionInfo::from_update_oneof(msg)?,
-            slot: slot,
+            slot,
             created_at,
         })
     }

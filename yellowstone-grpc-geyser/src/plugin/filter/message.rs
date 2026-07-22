@@ -353,7 +353,7 @@ pub enum FilteredUpdateOneof {
 impl FilteredUpdateOneof {
     pub fn account(message: &Arc<MessageAccount>, data_slice: FilterAccountsDataSlice) -> Self {
         Self::Account(FilteredUpdateAccount {
-            account: Arc::clone(&message),
+            account: Arc::clone(message),
             data_slice,
         })
     }
@@ -364,7 +364,7 @@ impl FilteredUpdateOneof {
 
     pub fn transaction(message: &Arc<MessageTransaction>) -> Self {
         Self::Transaction(FilteredUpdateTransaction {
-            transaction: Arc::clone(&message),
+            transaction: Arc::clone(message),
             slot: message.slot,
         })
     }
@@ -1396,7 +1396,7 @@ pub mod tests {
                 for is_startup in [true, false] {
                     for data_slice in create_account_data_slice() {
                         let msg = MessageAccount {
-                            account,
+                            account: account.clone(),
                             slot,
                             is_startup,
                             created_at: Timestamp::from(SystemTime::now()),
@@ -1461,7 +1461,12 @@ pub mod tests {
     pub fn load_predefined_transactions() -> Vec<Arc<MessageTransaction>> {
         load_predefined_blocks()
             .into_iter()
-            .flat_map(|block| block.transactions.into_iter().map(|tx| (tx.signature, tx)))
+            .flat_map(|block| {
+                block
+                    .transactions
+                    .into_iter()
+                    .map(|tx| (tx.transaction.signature, tx))
+            })
             .collect::<HashMap<_, _>>()
             .into_values()
             .collect()
@@ -1527,13 +1532,15 @@ pub mod tests {
 
                 let accounts = create_accounts_raw()
                     .into_iter()
-                    .map(|acc_info| MessageAccount {
-                        account: acc_info,
-                        slot: block.parent_slot + 1,
-                        is_startup: false,
-                        created_at: Timestamp::from(SystemTime::now()),
+                    .map(|acc_info| {
+                        Arc::new(MessageAccount {
+                            account: acc_info,
+                            slot: block.parent_slot + 1,
+                            is_startup: false,
+                            created_at: Timestamp::from(SystemTime::now()),
+                        })
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
                 create_account_data_slice()
                     .into_iter()
                     .flat_map(move |data_slice| {
@@ -1711,46 +1718,47 @@ pub mod tests {
     #[test]
     fn test_pre_encoded_matches_manual_encoding() {
         // Get real transactions from fixtures (these have pre_encoded: None)
-        for tx_arc in load_predefined_transactions() {
+        for message_arc in load_predefined_transactions() {
+            let tx = &message_arc.transaction;
             // Clone the transaction info
             let tx_with_cache = Arc::new(MessageTransaction {
                 transaction: MessageTransactionInfo {
-                    signature: tx_arc.signature,
-                    is_vote: tx_arc.is_vote,
-                    transaction: tx_arc.transaction.transaction.clone(),
-                    meta: tx_arc.meta.clone(),
-                    index: tx_arc.index,
-                    account_keys: tx_arc.account_keys.clone(),
+                    signature: tx.signature,
+                    is_vote: tx.is_vote,
+                    transaction: tx.transaction.clone(),
+                    meta: tx.meta.clone(),
+                    index: tx.index,
+                    account_keys: tx.account_keys.clone(),
                     pre_encoded: OnceLock::new(),
                     token_owners_all: OnceLock::new(),
                     token_owners_changed: OnceLock::new(),
                 },
-                slot: tx_arc.slot,
-                created_at: tx_arc.created_at,
+                slot: message_arc.slot,
+                created_at: message_arc.created_at,
             });
 
             // Create version without cache (fallback path)
             let tx_without_cache = Arc::new(MessageTransaction {
                 transaction: MessageTransactionInfo {
-                    signature: tx_arc.signature,
-                    is_vote: tx_arc.is_vote,
-                    transaction: tx_arc.transaction.transaction.clone(),
-                    meta: tx_arc.meta.clone(),
-                    index: tx_arc.index,
-                    account_keys: tx_arc.account_keys.clone(),
+                    signature: tx.signature,
+                    is_vote: tx.is_vote,
+                    transaction: tx.transaction.clone(),
+                    meta: tx.meta.clone(),
+                    index: tx.index,
+                    account_keys: tx.account_keys.clone(),
                     pre_encoded: OnceLock::new(),
                     token_owners_all: OnceLock::new(),
                     token_owners_changed: OnceLock::new(),
                 },
-                slot: tx_arc.slot,
-                created_at: tx_arc.created_at,
+                slot: message_arc.slot,
+                created_at: message_arc.created_at,
             });
 
             // Pre-encode one of them
             TransactionEncoder::pre_encode(&tx_with_cache.transaction);
 
             assert!(
-                tx_with_cache.pre_encoded.get().is_some(),
+                tx_with_cache.transaction.pre_encoded.get().is_some(),
                 "pre_encode should populate the field"
             );
 
@@ -1772,7 +1780,7 @@ pub mod tests {
             assert_eq!(
                 buf_cached, buf_manual,
                 "Pre-encoded bytes differ from manual encoding for tx {:?}",
-                tx_arc.signature
+                tx.signature
             );
         }
 

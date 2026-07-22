@@ -2213,7 +2213,7 @@ mod tests {
         loaded_writable: Vec<Pubkey>,
         loaded_readonly: Vec<Pubkey>,
         is_vote: bool,
-    ) -> Arc::new(MessageDeshredTransaction) {
+    ) -> Arc<MessageDeshredTransaction> {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -3647,8 +3647,8 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "200")],
             );
 
-            assert!(tx.token_owners_all.get().is_none());
-            assert!(tx.token_owners_changed.get().is_none());
+            assert!(tx.transaction.token_owners_all.get().is_none());
+            assert!(tx.transaction.token_owners_changed.get().is_none());
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3661,14 +3661,14 @@ mod cuckoo_tests {
                 ),
             );
             let filter = filter_with_transactions(tx_filters);
-            assert!(matches(&filter, &Message::Transaction(tx)));
+            assert!(matches(&filter, &Message::Transaction(Arc::clone(&tx))));
 
             assert!(
-                tx.token_owners_all.get().is_some(),
+                tx.transaction.token_owners_all.get().is_some(),
                 "mode=All must populate token_owners_all"
             );
             assert!(
-                tx.token_owners_changed.get().is_none(),
+                tx.transaction.token_owners_changed.get().is_none(),
                 "mode=All must NOT touch token_owners_changed"
             );
         }
@@ -3686,7 +3686,7 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3717,12 +3717,12 @@ mod cuckoo_tests {
             );
 
             // First run populated the cache. Capture the pointer.
-            let first_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+            let first_addr = tx.transaction.token_owners_all.get().expect("populated") as *const _;
 
             // Run the filter again on the same tx (same Arc). The cache
             // must still be there and point at the SAME allocation.
             let _ = filter.get_updates(&message, None);
-            let second_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+            let second_addr = tx.transaction.token_owners_all.get().expect("populated") as *const _;
             assert_eq!(
                 first_addr, second_addr,
                 "cache backing storage must be reused, not reallocated"
@@ -3750,7 +3750,7 @@ mod cuckoo_tests {
                 ],
                 vec![token_balance(0, owner, "200")],
             );
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3775,16 +3775,16 @@ mod cuckoo_tests {
             let _ = filter.get_updates(&message, None);
 
             assert!(
-                tx_arc.token_owners_all.get().is_some(),
+                tx.transaction.token_owners_all.get().is_some(),
                 "mode=All filter must populate token_owners_all"
             );
             assert!(
-                tx_arc.token_owners_changed.get().is_some(),
+                tx.transaction.token_owners_changed.get().is_some(),
                 "mode=BalanceChanged filter must populate token_owners_changed"
             );
             // Sanity: they're at different addresses (different OnceLocks).
-            let all_addr = tx_arc.token_owners_all.get().unwrap() as *const _;
-            let changed_addr = tx_arc.token_owners_changed.get().unwrap() as *const _;
+            let all_addr = tx.transaction.token_owners_all.get().unwrap() as *const _;
+            let changed_addr = tx.transaction.token_owners_changed.get().unwrap() as *const _;
             assert_ne!(all_addr as usize, changed_addr as usize);
         }
 
@@ -3797,7 +3797,7 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3808,10 +3808,10 @@ mod cuckoo_tests {
             let _ = filter.get_updates(&message, None);
 
             assert!(
-                tx_arc.token_owners_all.get().is_none(),
+                tx.transaction.token_owners_all.get().is_none(),
                 "mode=None must NOT populate any owner-set cache"
             );
-            assert!(tx_arc.token_owners_changed.get().is_none());
+            assert!(tx.transaction.token_owners_changed.get().is_none());
         }
     }
 }
