@@ -1296,7 +1296,7 @@ pub mod tests {
             encoder::{AccountEncoder, TransactionEncoder},
             message::{FilteredUpdateAccount, FilteredUpdateTransaction},
         },
-        message::{MessageSlot, MessageTransaction, SlotStatus},
+        message::{MessageSlot, SlotStatus},
     };
     #[cfg(test)]
     use yellowstone_grpc_proto::geyser::SubscribeUpdate;
@@ -1307,7 +1307,7 @@ pub mod tests {
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageTransactionInfo,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
         bytes::Bytes,
