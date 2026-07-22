@@ -2,8 +2,8 @@ use {
     crate::{
         metrics,
         plugin::message::{
-            Message, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
-            MessageTransactionInfo, SlotStatus,
+            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
+            MessageTransaction, SlotStatus,
         },
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
@@ -26,8 +26,8 @@ pub struct ProcessingSlot {
     original_messages: Vec<Message>,
     account_write_version_map: FoldHashMap<Pubkey, u64>,
     blockmeta: Option<Arc<MessageBlockMeta>>,
-    transactions: Vec<Arc<MessageTransactionInfo>>,
-    accounts: Vec<Arc<MessageAccountInfo>>,
+    transactions: Vec<Arc<MessageTransaction>>,
+    accounts: Vec<Arc<MessageAccount>>,
     entries: Vec<Arc<MessageEntry>>,
     is_sealed: bool,
 }
@@ -64,12 +64,11 @@ impl ProcessingSlot {
                         }
                     })
                     .or_insert(write_version);
-                self.accounts.push(Arc::clone(&message_account.account));
+                self.accounts.push(Arc::clone(message_account));
                 // Handle account event
             }
             Message::Transaction(message_transaction) => {
-                self.transactions
-                    .push(Arc::clone(&message_transaction.transaction));
+                self.transactions.push(Arc::clone(message_transaction));
                 // Handle transaction event
             }
             Message::Entry(message_entry) => {
@@ -112,8 +111,10 @@ impl ProcessingSlot {
             .accounts
             .into_iter()
             .filter_map(|account| {
-                let write_version = self.account_write_version_map.get(&account.pubkey)?;
-                if *write_version == account.write_version {
+                let write_version = self
+                    .account_write_version_map
+                    .get(&account.account.pubkey)?;
+                if *write_version == account.account.write_version {
                     Some(account)
                 } else {
                     None
@@ -576,8 +577,8 @@ mod tests {
     }
 
     fn make_account_msg(slot: u64, pubkey: Pubkey, write_version: u64) -> Message {
-        Message::Account(MessageAccount {
-            account: Arc::new(MessageAccountInfo {
+        Message::Account(Arc::new(MessageAccount {
+            account: MessageAccountInfo {
                 pubkey,
                 lamports: 100,
                 owner: Pubkey::default(),
@@ -587,16 +588,16 @@ mod tests {
                 write_version,
                 txn_signature: None,
                 pre_encoded: OnceLock::new(),
-            }),
+            },
             slot,
             is_startup: false,
             created_at: ts(),
-        })
+        }))
     }
 
     fn make_transaction_msg(slot: u64) -> Message {
-        Message::Transaction(MessageTransaction {
-            transaction: Arc::new(MessageTransactionInfo {
+        Message::Transaction(Arc::new(MessageTransaction {
+            transaction: MessageTransactionInfo {
                 signature: Signature::default(),
                 is_vote: false,
                 transaction: Default::default(),
@@ -606,10 +607,10 @@ mod tests {
                 pre_encoded: OnceLock::new(),
                 token_owners_all: OnceLock::new(),
                 token_owners_changed: OnceLock::new(),
-            }),
+            },
             slot,
             created_at: ts(),
-        })
+        }))
     }
 
     fn make_entry_msg(slot: u64, index: usize) -> Message {
@@ -803,7 +804,7 @@ mod tests {
         let mb = frozen.get_message_block();
         assert_eq!(mb.accounts.len(), 1);
         assert_eq!(mb.updated_account_count, 1);
-        assert_eq!(mb.accounts[0].write_version, 8);
+        assert_eq!(mb.accounts[0].account.write_version, 8);
     }
 
     // ─── cmp_commitment_level ────────────────────────────────────────────────
