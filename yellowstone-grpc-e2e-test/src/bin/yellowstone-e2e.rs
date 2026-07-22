@@ -11,7 +11,7 @@ use {
         subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
         subscribe_should_receive_full_blocks, subscribe_should_receive_no_slot_duplicates,
-        test_subscribe_deshred, RunConfig,
+        test_subscribe_deshred, verify_target_version, RunConfig,
     },
 };
 
@@ -81,6 +81,12 @@ struct Cli {
     /// x-token override. Takes precedence over dotenv and environment variables.
     #[arg(long)]
     x_token: Option<String>,
+
+    /// Assert the target reports this plugin version before running scenarios.
+    /// Matched against the `GetVersion` semver (`version`) or `git` field; a
+    /// leading `v` is ignored and a git prefix is accepted. Mismatch exits 1.
+    #[arg(long, value_name = "VERSION")]
+    expect_version: Option<String>,
 
     /// Dotenv file path override. If set, only this file is loaded.
     #[arg(long, value_name = "PATH")]
@@ -177,6 +183,23 @@ fn resolve_dial(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<St
         .or_else(|| env::var("YELLOWSTONE_GRPC_DIAL").ok())
 }
 
+fn resolve_expect_version(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<String> {
+    if let Some(expect) = &cli.expect_version {
+        return Some(expect.clone());
+    }
+
+    dotenv_values
+        .get("TEST_EXPECT_VERSION")
+        .cloned()
+        .or_else(|| {
+            dotenv_values
+                .get("YELLOWSTONE_GRPC_EXPECT_VERSION")
+                .cloned()
+        })
+        .or_else(|| env::var("TEST_EXPECT_VERSION").ok())
+        .or_else(|| env::var("YELLOWSTONE_GRPC_EXPECT_VERSION").ok())
+}
+
 async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
     let mut result = Box::pin(async {
         match scenario {
@@ -271,6 +294,16 @@ async fn run(cli: Cli) -> Result<()> {
         dial,
         x_token,
     };
+
+    if let Some(expected) = resolve_expect_version(&cli, &dotenv_values) {
+        let target = verify_target_version(&run_config, &expected)
+            .await
+            .with_context(|| format!("target version check failed (expected '{expected}')"))?;
+        println!(
+            "✅ target version verified: expected '{}', target reports version='{}' git='{}'",
+            expected, target.version, target.git
+        );
+    }
 
     match &cli.command {
         Commands::List => Ok(()),

@@ -55,6 +55,19 @@ builds:
           post:
               - cmd: strip {{ .Path }}
 
+    - id: e2e
+      builder: rust
+      binary: yellowstone-e2e
+      targets:
+          - x86_64-unknown-linux-gnu
+      flags:
+          - --release
+          - --package=yellowstone-grpc-intg-test
+          - --bin=yellowstone-e2e
+      hooks:
+          post:
+              - cmd: strip {{ .Path }}
+
 archives:
     - id: geyser
       ids: [geyser]
@@ -70,6 +83,11 @@ archives:
       formats: [binary]
       ids: [config-check]
       name_template: config-check-linux-amd64
+
+    - id: e2e
+      formats: [binary]
+      ids: [e2e]
+      name_template: yellowstone-e2e-linux-amd64
 
 release:
     github:

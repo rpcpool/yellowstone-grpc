@@ -100,6 +100,63 @@ async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
     }
 }
 
+/// Version reported by the target endpoint via the `GetVersion` RPC.
+#[derive(Debug, Clone)]
+pub struct TargetVersion {
+    /// Package semver as reported by the target (`.version.version`).
+    pub version: String,
+    /// Git describe as reported by the target (`.version.git`).
+    pub git: String,
+    /// Raw JSON string returned by `GetVersion`.
+    pub raw: String,
+}
+
+/// Connects to the target and fetches its reported version via the `GetVersion` RPC.
+pub async fn fetch_target_version(config: &RunConfig) -> Result<TargetVersion> {
+    let mut client = new_client(config).await?;
+    let response = client
+        .get_version()
+        .await
+        .context("GetVersion RPC should succeed")?;
+    let raw = response.version;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).context("GetVersion response should be valid JSON")?;
+    let version = parsed
+        .pointer("/version/version")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let git = parsed
+        .pointer("/version/git")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Ok(TargetVersion { version, git, raw })
+}
+
+/// Asserts the target reports the expected version before scenarios run.
+///
+/// `expected` is matched (after stripping a leading `v`) against either the
+/// semver `version` field (exact) or the `git` field (exact or as a prefix, so a
+/// short commit or `git describe` prefix matches a longer value). Returns the
+/// resolved [`TargetVersion`] on success so callers can log it for the run record.
+pub async fn verify_target_version(config: &RunConfig, expected: &str) -> Result<TargetVersion> {
+    let target = fetch_target_version(config).await?;
+    let needle = expected.trim().trim_start_matches('v');
+    let version_field = target.version.trim_start_matches('v');
+    let git_field = target.git.trim_start_matches('v');
+    let matches = !needle.is_empty()
+        && (version_field == needle || git_field == needle || git_field.starts_with(needle));
+    ensure!(
+        matches,
+        "target version mismatch: expected '{}', target reports version='{}' git='{}'",
+        expected,
+        target.version,
+        target.git,
+    );
+    Ok(target)
+}
+
 /// Subscribes to account updates and verifies only SysvarClock updates are returned.
 #[test_helper(name = "sysvar-account")]
 pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfig) -> Result<()> {

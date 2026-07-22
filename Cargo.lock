@@ -6349,6 +6349,7 @@ dependencies = [
  "hyper-util",
  "inventory",
  "log",
+ "serde_json",
  "solana-commitment-config",
  "solana-pubkey 4.1.0",
  "solana-signature",
