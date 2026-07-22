@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-07-22
+
+- yellowstone-grpc-geyser 14.2.1
+
+### Fixes
+
+- Fixed `from_slot` replay never delivering `Message::Block`: subscribers with a `blocks` filter had their replay request accepted but received zero replayed messages (the filter matches none of the raw Account/Transaction/Entry/BlockMeta messages), silently resuming from the live head with a state gap. Replay now emits the precomputed block message between block content and `BlockMeta`, mirroring the live broadcast path. Regression from [#750](https://github.com/rpcpool/yellowstone-grpc/pull/750); the fix was originally part of [#810](https://github.com/rpcpool/yellowstone-grpc/pull/810) but was not imported by [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809). Closes [#830](https://github.com/rpcpool/yellowstone-grpc/issues/830). Thanks to @zoukba0014
+
 ## 2026-07-08
 
 - yellowstone-grpc-geyser 14.2.0

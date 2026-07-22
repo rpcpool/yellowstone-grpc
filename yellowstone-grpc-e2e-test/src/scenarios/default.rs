@@ -367,11 +367,6 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
     let resp = client.get_slot(None).await.context("get_slot")?;
     let tip = resp.slot;
     let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
-    let sysvar_clock_pubkey = Pubkey::from_str(sysvar_clock_str).context("valid pubkey string")?;
-    let account_filter = SubscribeRequestFilterAccounts {
-        account: vec![sysvar_clock_str.to_string()],
-        ..Default::default()
-    };
     let from_slot = tip.saturating_sub(10);
     let subscription = SubscribeRequest {
         blocks: HashMap::from([(
@@ -384,6 +379,7 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
                 ..Default::default()
             },
         )]),
+        from_slot: Some(from_slot),
         ..Default::default()
     };
 
@@ -391,14 +387,13 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
         .subscribe_once(subscription)
         .await
         .context("subscription should succeed")?;
-    let mut count = 0usize;
-    const MAX_UPDATES: usize = 10;
     log::info!(
         "current tip slot is {}, subscribing from slot {}",
         tip,
         from_slot
     );
     let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    let mut visited = HashSet::new();
     while let Some(update) = stream.next().await {
         if remaining_slot_to_visit.is_empty() {
             break;
@@ -410,9 +405,13 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
 
         match update_oneof {
             UpdateOneof::Block(slot) => {
+                log::info!("received block update for slot {}", slot.slot);
                 remaining_slot_to_visit.retain(|s| *s != slot.slot);
+                if !visited.insert(slot.slot) {
+                    bail!("received duplicate block update for slot {}", slot.slot);
+                }
             }
-            other => {}
+            _ => {}
         }
     }
     ensure!(
