@@ -1515,7 +1515,9 @@ impl FilterBlocks {
                     .accounts
                     .iter()
                     .filter_map(|account| {
-                        if inner.matches_account(&account.pubkey) {
+                        if inner.matches_account(&account.pubkey)
+                            || inner.matches_account(&account.owner)
+                        {
                             Some(Arc::clone(account))
                         } else {
                             None
@@ -1732,17 +1734,18 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
-        super::{DeshredFilter, Filter},
+        super::{DeshredFilter, Filter, FilterAccountsDataSlice, FilterBlocks},
         crate::plugin::{
             convert_to,
             filter::{
-                limits::FilterLimits,
+                limits::{FilterLimits, FilterLimitsBlocks},
                 message::{FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof},
                 name::{FilterName, FilterNames},
             },
             message::{
-                Message, MessageDeshredTransaction, MessageDeshredTransactionInfo,
-                MessageTransaction, MessageTransactionInfo,
+                Message, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageTransaction,
+                MessageTransactionInfo,
             },
         },
         prost_types::Timestamp,
@@ -1760,8 +1763,8 @@ mod tests {
         },
         yellowstone_grpc_proto::geyser::{
             SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterTransactions,
-            SubscribeRequestPing,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterDeshredTransactions,
+            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateBlockMeta,
         },
     };
 
@@ -1823,6 +1826,20 @@ mod tests {
             }),
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+
+    fn create_message_account_info(pubkey: Pubkey, owner: Pubkey) -> MessageAccountInfo {
+        MessageAccountInfo {
+            pubkey,
+            lamports: 1000,
+            owner,
+            executable: false,
+            rent_epoch: 0,
+            data: bytes::Bytes::new(),
+            write_version: 1,
+            txn_signature: None,
+            pre_encoded: OnceLock::new(),
         }
     }
 
@@ -1953,6 +1970,58 @@ mod tests {
         let filter_res = Filter::new(&config, &limit, &mut create_filter_names());
         // filter should succeed
         assert!(filter_res.is_ok());
+    }
+
+    #[test]
+    fn test_block_account_include_matches_account_owner() {
+        let account_pubkey = Pubkey::new_unique();
+        let account_owner = Pubkey::new_unique();
+
+        let mut blocks = HashMap::new();
+        blocks.insert(
+            "blocks".to_string(),
+            SubscribeRequestFilterBlocks {
+                account_include: vec![account_owner.to_string()],
+                include_transactions: Some(false),
+                include_accounts: Some(true),
+                include_entries: Some(false),
+                cuckoo_account_include: None,
+            },
+        );
+
+        let filter = FilterBlocks::new(
+            &blocks,
+            &FilterLimitsBlocks::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let account = Arc::new(create_message_account_info(account_pubkey, account_owner));
+        let block = MessageBlock::new(
+            Arc::new(MessageBlockMeta {
+                block_meta: SubscribeUpdateBlockMeta::default(),
+                created_at: Timestamp::from(SystemTime::now()),
+            }),
+            vec![],
+            vec![account],
+            vec![],
+        );
+        let updates = filter.get_updates(&Arc::new(block), &FilterAccountsDataSlice::default());
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].filters,
+            FilteredUpdateFilters::from_vec(vec![FilterName::new("blocks")])
+        );
+
+        match &updates[0].message {
+            FilteredUpdateOneof::Block(block) => {
+                assert_eq!(block.accounts.len(), 1);
+                assert_eq!(block.accounts[0].pubkey, account_pubkey);
+                assert_eq!(block.accounts[0].owner, account_owner);
+            }
+            _ => panic!("expected block update"),
+        }
     }
 
     #[test]
