@@ -1364,10 +1364,14 @@ impl GrpcService {
                         // 1st Put data (account/txn/entries)
                         replayed_messages.push(ReplayResponseMessageType::Batch(replayed_slot.frozen_block.messages()));
 
-                        // 2nd Put block summary
+                        // 2nd Put the reconstructed block, then the block summary — mirrors the
+                        // live broadcast path so `blocks` subscribers can resume via `from_slot`
+                        replayed_messages.push(ReplayResponseMessageType::Single(Message::Block(replayed_slot.frozen_block.get_message_block())));
+
+                        // 3rd Put block summary
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta())));
 
-                        // 3rd Put slot status
+                        // 4th Put slot status
                         for slot_update in replayed_slot.slot_status_messages.iter() {
                             let slot_message = Message::Slot(Arc::new(MessageSlot {
                                 slot: slot_update.slot,

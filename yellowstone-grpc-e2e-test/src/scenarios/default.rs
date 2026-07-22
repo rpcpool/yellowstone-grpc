@@ -359,6 +359,69 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     Ok(())
 }
 
+/// Verifies replay support by receiving historical data from a replay request.
+#[test_helper(name = "block-subscription-replay", tags = ["replay"])]
+pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    let resp = client.get_slot(None).await.context("get_slot")?;
+    let tip = resp.slot;
+    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+    let from_slot = tip.saturating_sub(10);
+    let subscription = SubscribeRequest {
+        blocks: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterBlocks {
+                account_include: vec![sysvar_clock_str.to_string()],
+                include_accounts: Some(true),
+                include_transactions: Some(true),
+                include_entries: Some(true),
+                ..Default::default()
+            },
+        )]),
+        from_slot: Some(from_slot),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    log::info!(
+        "current tip slot is {}, subscribing from slot {}",
+        tip,
+        from_slot
+    );
+    let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    let mut visited = HashSet::new();
+    while let Some(update) = stream.next().await {
+        if remaining_slot_to_visit.is_empty() {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Block(slot) => {
+                log::info!("received block update for slot {}", slot.slot);
+                remaining_slot_to_visit.retain(|s| *s != slot.slot);
+                if !visited.insert(slot.slot) {
+                    bail!("received duplicate block update for slot {}", slot.slot);
+                }
+            }
+            _ => {}
+        }
+    }
+    ensure!(
+        remaining_slot_to_visit.is_empty(),
+        "should have received updates for all expected slots in the replay"
+    );
+
+    Ok(())
+}
+
 /// Insure subscription at any commitment level returns all possible updates for that commitment, including all slot lifecycle updates, account updates, transaction updates and entry updates.
 #[test_helper(name = "any-commitment")]
 pub async fn any_commitment_level_of_subscription_should_return_all_possible_values(
