@@ -2,6 +2,18 @@ const fs = require('fs');
 const path = require('path');
 const recast = require('recast');
 
+function createParser(babelParser) {
+  return {
+    parse(source) {
+      return babelParser.parse(source, {
+        sourceType: 'module',
+        tokens: true,
+        plugins: ['importAttributes'],
+      });
+    },
+  };
+}
+
 //list of external packages that require '.js' extensions
 const packagesRequiringJsExtension = [
   'protobufjs/minimal',
@@ -24,10 +36,10 @@ function shouldAppendJsExtension(source) {
 }
 
 
-function processFile(filePath) {
+function processFile(filePath, parser) {
   const code = fs.readFileSync(filePath, 'utf8');
   const ast = recast.parse(code, {
-    parser: require('recast/parsers/babel'), // Use Babel parser
+    parser,
   });
 
   let modified = false;
@@ -71,20 +83,22 @@ function processFile(filePath) {
 }
 
 
-function traverseDir(dir) {
+function traverseDir(dir, parser) {
   fs.readdirSync(dir).forEach((file) => {
     const fullPath = path.join(dir, file);
     const stat = fs.statSync(fullPath);
 
     if (stat.isDirectory()) {
-      traverseDir(fullPath);
+      traverseDir(fullPath, parser);
     } else if (stat.isFile() && path.extname(fullPath) === '.js') {
-      processFile(fullPath);
+      processFile(fullPath, parser);
     }
   });
 }
 
-function main() {
+async function main() {
+  const babelParser = await import('@babel/parser');
+  const parser = createParser(babelParser);
   const esmDir = path.resolve(__dirname, './dist/esm');
 
   if (!fs.existsSync(esmDir)) {
@@ -92,7 +106,10 @@ function main() {
     process.exit(1);
   }
 
-  traverseDir(esmDir);
+  traverseDir(esmDir, parser);
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
