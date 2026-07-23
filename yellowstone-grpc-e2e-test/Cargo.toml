@@ -31,5 +31,10 @@ solana-signature = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-commitment-config = { workspace = true }
 
+[build-dependencies]
+anyhow = "1"
+git-version = { workspace = true }
+vergen = { workspace = true, features = ["build", "rustc"] }
+
 [lints]
 workspace = true

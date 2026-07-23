@@ -4,16 +4,29 @@ use {
     std::{collections::HashMap, env, io::Write, path::PathBuf, process::ExitCode},
     tokio::time::{self, Duration, MissedTickBehavior},
     yellowstone_grpc_intg_test::scenarios::{
-        any_commitment_level_of_subscription_should_return_all_possible_values, init_log,
+        any_commitment_level_of_subscription_should_return_all_possible_values,
+        fetch_target_version, init_log,
         it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
         it_should_support_replay, it_should_verifies_geyser_event_ordering_is_correct,
         scenario_description, subscribe_should_filter_accounts,
         subscribe_should_only_returns_sysvarclock_account,
         subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
         subscribe_should_receive_full_blocks, subscribe_should_receive_no_slot_duplicates,
-        test_subscribe_deshred, verify_target_version, RunConfig,
+        test_subscribe_deshred, RunConfig,
     },
 };
+
+/// Build metadata for this `yellowstone-e2e` binary, embedded by `build.rs`.
+mod build_info {
+    /// Crate version (e.g. `0.1.0`).
+    pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+    /// `git describe` of the source tree: tag + commit sha this was built from.
+    pub const GIT: &str = env!("GIT_VERSION");
+    /// Build timestamp (RFC 3339).
+    pub const BUILD_TS: &str = env!("VERGEN_BUILD_TIMESTAMP");
+    /// rustc version used to build.
+    pub const RUSTC: &str = env!("VERGEN_RUSTC_SEMVER");
+}
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Scenario {
@@ -295,14 +308,38 @@ async fn run(cli: Cli) -> Result<()> {
         x_token,
     };
 
-    if let Some(expected) = resolve_expect_version(&cli, &dotenv_values) {
-        let target = verify_target_version(&run_config, &expected)
-            .await
-            .with_context(|| format!("target version check failed (expected '{expected}')"))?;
-        println!(
-            "✅ target version verified: expected '{}', target reports version='{}' git='{}'",
-            expected, target.version, target.git
-        );
+    // Record what is under test: this binary's build, and the target endpoint.
+    println!(
+        "yellowstone-e2e version={} git={} built={} rustc={}",
+        build_info::VERSION,
+        build_info::GIT,
+        build_info::BUILD_TS,
+        build_info::RUSTC,
+    );
+    println!("target endpoint: {}", run_config.endpoint);
+
+    // Always report the plugin version the target is running (via GetVersion).
+    let expected = resolve_expect_version(&cli, &dotenv_values);
+    match fetch_target_version(&run_config).await {
+        Ok(target) => {
+            println!(
+                "target plugin version: version={} git={} proto={} solana={}",
+                target.version, target.git, target.proto, target.solana
+            );
+            if let Some(expected) = &expected {
+                target.assert_matches(expected).with_context(|| {
+                    format!("target version check failed (expected '{expected}')")
+                })?;
+                println!("✅ target version matches expected '{expected}'");
+            }
+        }
+        Err(err) => {
+            // A missing version is only fatal when an explicit expectation was set.
+            if expected.is_some() {
+                return Err(err.context("could not read target plugin version (GetVersion)"));
+            }
+            println!("⚠️ could not read target plugin version (GetVersion): {err:#}");
+        }
     }
 
     match &cli.command {
