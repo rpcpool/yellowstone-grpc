@@ -36,6 +36,7 @@ clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.8"
 dotenvy = "0.15.0"
+dashmap = "6.1.0"
 env_logger = "0.11.3"
 fastrand = "2.0"
 futures = "0.3.24"
@@ -46,6 +47,7 @@ hex = "0.4.3"
 home = "0.5.11"
 hostname = "0.4.0"
 http = "1.1.0"
+http-body = "1.0.0"
 http-body-util = "0.1.2"
 humantime-serde = "1.1.1"
 hyper = "1.4.1"
@@ -62,6 +64,7 @@ napi-build = "2.2.4"
 napi-derive = "3.3.0"
 napi-derive-backend = "3.0.0"
 napi-sys = "3.0.1"
+num_cpus = "1.16.0"
 parking_lot = "0.12"
 prometheus = "0.14.0"
 pin-project = "1.1.10"
@@ -77,6 +80,7 @@ reqwest = { version = "0.13.0" }
 rustls = "0.23.0"
 serde = "1.0.145"
 serde_json = "1.0.86"
+toml = "0.8"
 siphasher = "1"
 socket2 = "0.6.4"
 smallvec = "1.15.1"
@@ -96,6 +100,7 @@ url = "2.5.0"
 uuid = "1"
 vergen = "9.0.6"
 wincode = "0.5.0"
+notify = "8.2.0"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1", package = "agave-geyser-plugin-interface" }
@@ -123,8 +128,8 @@ solana-transaction-error = "=3.3.1"
 spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
-yellowstone-block-machine = { version = "0.8.0", default-features = false }
-yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.1.0" }
+yellowstone-block-machine = { version = "0.9.0", default-features = false }
+yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.2.1" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.0.0-rc1+solana.4.2.0.beta.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }

@@ -17,6 +17,7 @@ bytesize = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 pin-project = { workspace = true }

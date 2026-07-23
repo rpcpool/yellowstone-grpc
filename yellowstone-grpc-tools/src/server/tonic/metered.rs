@@ -35,31 +35,52 @@ where
     }
 }
 
+impl<MH> MeteredBandwidthHooks for Option<MH>
+where
+    MH: MeteredBandwidthHooks,
+{
+    fn on_emit_bytes(&mut self, byte_count: u64, now: Instant, system_now: SystemTime) {
+        if let Some(hooks) = self.as_mut() {
+            hooks.on_emit_bytes(byte_count, now, system_now);
+        }
+    }
+}
+
 /// Manager composition that forwards hook construction to both managers.
 #[derive(Debug, Clone)]
-pub struct StackMeteredBandwidthManager<MM1, MM2> {
+pub struct StackMeteredManager<MM1, MM2> {
     manager1: MM1,
     manager2: MM2,
 }
 
-impl<MM1, MM2> StackMeteredBandwidthManager<MM1, MM2> {
+impl<MM1, MM2> StackMeteredManager<MM1, MM2> {
     pub fn new(manager1: MM1, manager2: MM2) -> Self {
         Self { manager1, manager2 }
     }
 }
 
-impl<MM1, MM2> MeteredBandwidthManager for StackMeteredBandwidthManager<MM1, MM2>
+impl<MM1, MM2> MeteredManager for StackMeteredManager<MM1, MM2>
 where
-    MM1: MeteredBandwidthManager,
-    MM2: MeteredBandwidthManager,
+    MM1: MeteredManager,
+    MM2: MeteredManager,
 {
-    type Hooks = StackMeteredHooks<MM1::Hooks, MM2::Hooks>;
+    type BandwidthMeteredHooks =
+        StackMeteredHooks<Option<MM1::BandwidthMeteredHooks>, Option<MM2::BandwidthMeteredHooks>>;
 
-    fn build_hooks(&self, parts: &Parts) -> Self::Hooks {
-        StackMeteredHooks {
-            hooks1: self.manager1.build_hooks(parts),
-            hooks2: self.manager2.build_hooks(parts),
+    fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
+        let hooks1 = self.manager1.build_hooks(parts);
+        let hooks2 = self.manager2.build_hooks(parts);
+
+        if hooks1.is_none() && hooks2.is_none() {
+            return None;
         }
+
+        Some(StackMeteredHooks { hooks1, hooks2 })
+    }
+
+    fn on_method(&self, method: &Parts) {
+        self.manager1.on_method(method);
+        self.manager2.on_method(method);
     }
 }
 
@@ -75,9 +96,9 @@ pub trait MeteredBandwidthHooks {
     fn on_emit_bytes(&mut self, byte_count: u64, now: Instant, system_now: SystemTime);
 }
 
-pub trait MeteredBandwidthManager {
+pub trait MeteredManager {
     /// Concrete hooks type produced for each request.
-    type Hooks: MeteredBandwidthHooks + Send + Sync + 'static;
+    type BandwidthMeteredHooks: MeteredBandwidthHooks + Send + Sync + 'static;
 
     /// Builds per-request hooks used to meter the response body.
     ///
@@ -86,14 +107,38 @@ pub trait MeteredBandwidthManager {
     ///
     /// # Returns
     /// A hooks instance attached to the response body wrapper.
-    fn build_hooks(&self, parts: &Parts) -> Self::Hooks;
+    fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks>;
 
-    fn stack<Next>(self, next: Next) -> StackMeteredBandwidthManager<Self, Next>
+    fn stack<Next>(self, next: Next) -> StackMeteredManager<Self, Next>
     where
         Self: Sized,
-        Next: MeteredBandwidthManager,
+        Next: MeteredManager,
     {
-        StackMeteredBandwidthManager::new(self, next)
+        StackMeteredManager::new(self, next)
+    }
+
+    ///
+    /// Invoked when a request is received, allowing the manager to inspect the request method and path.
+    ///
+    fn on_method(&self, _parts: &Parts) {
+        // Default implementation does nothing.
+    }
+}
+
+impl<MM> MeteredManager for Option<MM>
+where
+    MM: MeteredManager,
+{
+    type BandwidthMeteredHooks = MM::BandwidthMeteredHooks;
+
+    fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
+        self.as_ref().and_then(|manager| manager.build_hooks(parts))
+    }
+
+    fn on_method(&self, method: &Parts) {
+        if let Some(manager) = self.as_ref() {
+            manager.on_method(method);
+        }
     }
 }
 
@@ -119,7 +164,7 @@ impl<MM> MeteredBandwidthLayer<MM> {
 
 impl<S, MM> Layer<S> for MeteredBandwidthLayer<MM>
 where
-    MM: MeteredBandwidthManager,
+    MM: MeteredManager,
 {
     type Service = MeteredBandwidthService<S, MM>;
 
@@ -165,7 +210,7 @@ pub struct MeteredBandwidthFuture<F, B, E, MH> {
 pub struct MeteredBandwidthBody<B, MH: MeteredBandwidthHooks> {
     #[pin]
     inner: B,
-    metered_hooks: MH,
+    metered_hooks: Option<MH>,
     traffic_reporting_threshold: ByteSize,
     cumulative_bytes: u64,
 }
@@ -177,8 +222,9 @@ where
 {
     fn drop(self: Pin<&mut Self>) {
         let this = self.project();
-        this.metered_hooks
-            .on_emit_bytes(*this.cumulative_bytes, Instant::now(), SystemTime::now());
+        if let Some(hooks) = this.metered_hooks.as_mut() {
+            hooks.on_emit_bytes(*this.cumulative_bytes, Instant::now(), SystemTime::now());
+        }
     }
 }
 
@@ -201,11 +247,13 @@ where
                 if let Some(data) = frame.data_ref() {
                     *this.cumulative_bytes += data.remaining() as u64;
                     if *this.cumulative_bytes >= this.traffic_reporting_threshold.as_u64() {
-                        this.metered_hooks.on_emit_bytes(
-                            *this.cumulative_bytes,
-                            Instant::now(),
-                            SystemTime::now(),
-                        );
+                        if let Some(hooks) = this.metered_hooks.as_mut() {
+                            hooks.on_emit_bytes(
+                                *this.cumulative_bytes,
+                                Instant::now(),
+                                SystemTime::now(),
+                            );
+                        }
                         *this.cumulative_bytes = 0;
                     }
                 }
@@ -246,7 +294,7 @@ where
                 // increment_active_metered_bodies_for_subscriber_and_path(&subscriber_id, &uri_path);
                 let metered_body = MeteredBandwidthBody {
                     inner: body,
-                    metered_hooks: this.metered_hooks.take().expect("poll after completed"),
+                    metered_hooks: this.metered_hooks.take(),
                     traffic_reporting_threshold: *this.traffic_reporting_threshold,
                     cumulative_bytes: 0,
                 };
@@ -263,11 +311,11 @@ where
     S::Future: Send + 'static,
     ResBody: HttpBody + Send + 'static,
     ResBody::Error: Into<StdError>,
-    MM: MeteredBandwidthManager + Send + Sync + 'static,
+    MM: MeteredManager + Send + Sync + 'static,
 {
-    type Response = Response<MeteredBandwidthBody<ResBody, MM::Hooks>>;
+    type Response = Response<MeteredBandwidthBody<ResBody, MM::BandwidthMeteredHooks>>;
     type Error = S::Error;
-    type Future = MeteredBandwidthFuture<S::Future, ResBody, S::Error, MM::Hooks>;
+    type Future = MeteredBandwidthFuture<S::Future, ResBody, S::Error, MM::BandwidthMeteredHooks>;
 
     /// Delegates readiness to the wrapped inner service.
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -280,13 +328,13 @@ where
     /// so byte emission can be observed frame by frame.
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
         let (parts, body) = request.into_parts();
-
+        self.metered_manager.on_method(&parts);
         let hooks = self.metered_manager.build_hooks(&parts);
         let request = Request::from_parts(parts, body);
         let future = self.inner.call(request);
         MeteredBandwidthFuture {
             future,
-            metered_hooks: Some(hooks),
+            metered_hooks: hooks,
             traffic_reporting_threshold: self.traffic_reporting_threshold,
             _marker: std::marker::PhantomData,
         }
@@ -328,15 +376,52 @@ mod tests {
         last_path: Arc<Mutex<Option<String>>>,
     }
 
-    impl MeteredBandwidthManager for TestManager {
-        type Hooks = TestHooks;
+    impl MeteredManager for TestManager {
+        type BandwidthMeteredHooks = TestHooks;
 
-        fn build_hooks(&self, parts: &Parts) -> Self::Hooks {
+        fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
             self.build_hooks_calls.fetch_add(1, Ordering::Relaxed);
             *self.last_path.lock().expect("poisoned mutex") = Some(parts.uri.path().to_owned());
-            TestHooks {
+            Some(TestHooks {
                 total_bytes: Arc::clone(&self.total_bytes),
-            }
+            })
+        }
+    }
+
+    struct TestManagerWithMethodHooks {
+        total_bytes: Arc<AtomicU64>,
+        build_hooks_calls: Arc<AtomicUsize>,
+        method_calls: Arc<AtomicUsize>,
+        last_build_path: Arc<Mutex<Option<String>>>,
+        last_method_path: Arc<Mutex<Option<String>>>,
+    }
+
+    impl MeteredManager for TestManagerWithMethodHooks {
+        type BandwidthMeteredHooks = TestHooks;
+
+        fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
+            self.build_hooks_calls.fetch_add(1, Ordering::Relaxed);
+            *self.last_build_path.lock().expect("poisoned mutex") =
+                Some(parts.uri.path().to_owned());
+            Some(TestHooks {
+                total_bytes: Arc::clone(&self.total_bytes),
+            })
+        }
+
+        fn on_method(&self, method: &Parts) {
+            self.method_calls.fetch_add(1, Ordering::Relaxed);
+            *self.last_method_path.lock().expect("poisoned mutex") =
+                Some(method.uri.path().to_owned());
+        }
+    }
+
+    struct NoHooksManager;
+
+    impl MeteredManager for NoHooksManager {
+        type BandwidthMeteredHooks = TestHooks;
+
+        fn build_hooks(&self, _parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
+            None
         }
     }
 
@@ -367,7 +452,7 @@ mod tests {
 
         let mut body = MeteredBandwidthBody {
             inner: Full::new(Bytes::from_static(b"hello")),
-            metered_hooks: hooks,
+            metered_hooks: Some(hooks),
             traffic_reporting_threshold: ByteSize::b(0),
             cumulative_bytes: 0,
         };
@@ -558,5 +643,206 @@ mod tests {
         assert_eq!(total_bytes_1.load(Ordering::Relaxed), 6);
         assert_eq!(total_bytes_2.load(Ordering::Relaxed), 6);
         assert_eq!(total_bytes_3.load(Ordering::Relaxed), 6);
+    }
+
+    #[test]
+    fn stack_metered_manager_new_fanouts_method_and_hooks() {
+        let total_bytes_1 = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls_1 = Arc::new(AtomicUsize::new(0));
+        let method_calls_1 = Arc::new(AtomicUsize::new(0));
+        let last_build_path_1 = Arc::new(Mutex::new(None));
+        let last_method_path_1 = Arc::new(Mutex::new(None));
+
+        let total_bytes_2 = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls_2 = Arc::new(AtomicUsize::new(0));
+        let method_calls_2 = Arc::new(AtomicUsize::new(0));
+        let last_build_path_2 = Arc::new(Mutex::new(None));
+        let last_method_path_2 = Arc::new(Mutex::new(None));
+
+        let manager_1 = TestManagerWithMethodHooks {
+            total_bytes: Arc::clone(&total_bytes_1),
+            build_hooks_calls: Arc::clone(&build_hooks_calls_1),
+            method_calls: Arc::clone(&method_calls_1),
+            last_build_path: Arc::clone(&last_build_path_1),
+            last_method_path: Arc::clone(&last_method_path_1),
+        };
+        let manager_2 = TestManagerWithMethodHooks {
+            total_bytes: Arc::clone(&total_bytes_2),
+            build_hooks_calls: Arc::clone(&build_hooks_calls_2),
+            method_calls: Arc::clone(&method_calls_2),
+            last_build_path: Arc::clone(&last_build_path_2),
+            last_method_path: Arc::clone(&last_method_path_2),
+        };
+
+        let stacked = StackMeteredManager::new(manager_1, manager_2);
+        let request = Request::builder()
+            .uri("http://localhost/direct")
+            .body(())
+            .expect("request should build");
+        let (parts, _) = request.into_parts();
+
+        stacked.on_method(&parts);
+        let mut hooks = stacked
+            .build_hooks(&parts)
+            .expect("stacked manager should return hooks");
+        hooks.on_emit_bytes(7, Instant::now(), SystemTime::now());
+
+        assert_eq!(method_calls_1.load(Ordering::Relaxed), 1);
+        assert_eq!(method_calls_2.load(Ordering::Relaxed), 1);
+        assert_eq!(build_hooks_calls_1.load(Ordering::Relaxed), 1);
+        assert_eq!(build_hooks_calls_2.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            last_method_path_1
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("method path should be captured"),
+            "/direct"
+        );
+        assert_eq!(
+            last_method_path_2
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("method path should be captured"),
+            "/direct"
+        );
+        assert_eq!(
+            last_build_path_1
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("build path should be captured"),
+            "/direct"
+        );
+        assert_eq!(
+            last_build_path_2
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("build path should be captured"),
+            "/direct"
+        );
+
+        assert_eq!(total_bytes_1.load(Ordering::Relaxed), 7);
+        assert_eq!(total_bytes_2.load(Ordering::Relaxed), 7);
+    }
+
+    #[test]
+    fn stack_metered_manager_returns_some_if_one_manager_has_hooks() {
+        let total_bytes = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls = Arc::new(AtomicUsize::new(0));
+        let last_path = Arc::new(Mutex::new(None));
+
+        let manager_with_hooks = TestManager {
+            total_bytes: Arc::clone(&total_bytes),
+            build_hooks_calls: Arc::clone(&build_hooks_calls),
+            last_path: Arc::clone(&last_path),
+        };
+
+        let stacked = StackMeteredManager::new(manager_with_hooks, NoHooksManager);
+        let request = Request::builder()
+            .uri("http://localhost/partial")
+            .body(())
+            .expect("request should build");
+        let (parts, _) = request.into_parts();
+
+        let mut hooks = stacked
+            .build_hooks(&parts)
+            .expect("stacked manager should return Some when one side has hooks");
+        hooks.on_emit_bytes(9, Instant::now(), SystemTime::now());
+
+        assert_eq!(build_hooks_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            last_path
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("path should be captured"),
+            "/partial"
+        );
+        assert_eq!(total_bytes.load(Ordering::Relaxed), 9);
+    }
+
+    #[tokio::test]
+    async fn optional_metered_manager_none_is_noop() {
+        let maybe_manager: Option<TestManager> = None;
+        let inner = TestInnerService {
+            body_data: b"optional",
+        };
+        let mut service = MeteredBandwidthService {
+            inner,
+            metered_manager: Arc::new(maybe_manager),
+            traffic_reporting_threshold: ByteSize::b(0),
+        };
+
+        let request = Request::builder()
+            .uri("http://localhost/optional-none")
+            .body(())
+            .expect("request should build");
+        let response = service
+            .call(request)
+            .await
+            .expect("service call should succeed");
+        let mut body = response.into_body();
+
+        let frame = body
+            .frame()
+            .await
+            .expect("expected first frame")
+            .expect("expected successful frame");
+        assert_eq!(
+            frame.data_ref().expect("expected data frame").remaining(),
+            8
+        );
+    }
+
+    #[tokio::test]
+    async fn optional_metered_manager_some_forwards_hooks() {
+        let total_bytes = Arc::new(AtomicU64::new(0));
+        let build_hooks_calls = Arc::new(AtomicUsize::new(0));
+        let last_path = Arc::new(Mutex::new(None));
+
+        let maybe_manager = Some(TestManager {
+            total_bytes: Arc::clone(&total_bytes),
+            build_hooks_calls: Arc::clone(&build_hooks_calls),
+            last_path: Arc::clone(&last_path),
+        });
+
+        let inner = TestInnerService {
+            body_data: b"optional",
+        };
+        let mut service = MeteredBandwidthService {
+            inner,
+            metered_manager: Arc::new(maybe_manager),
+            traffic_reporting_threshold: ByteSize::b(0),
+        };
+
+        let request = Request::builder()
+            .uri("http://localhost/optional-some")
+            .body(())
+            .expect("request should build");
+        let response = service
+            .call(request)
+            .await
+            .expect("service call should succeed");
+        let mut body = response.into_body();
+        let _ = body
+            .frame()
+            .await
+            .expect("expected first frame")
+            .expect("expected successful frame");
+
+        assert_eq!(build_hooks_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            last_path
+                .lock()
+                .expect("poisoned mutex")
+                .as_deref()
+                .expect("path should be captured"),
+            "/optional-some"
+        );
+        assert_eq!(total_bytes.load(Ordering::Relaxed), 8);
     }
 }
