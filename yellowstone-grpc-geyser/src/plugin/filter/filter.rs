@@ -585,7 +585,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::account(message, accounts_data_slice.clone()),
+            FilteredUpdateOneof::account(Arc::clone(message), accounts_data_slice.clone()),
             message.created_at
         )
     }
@@ -1079,9 +1079,10 @@ impl FilterTransactions {
         filtered_updates_once_owned!(
             filters,
             match self.filter_type {
-                FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
+                FilterTransactionsType::Transaction =>
+                    FilteredUpdateOneof::transaction(Arc::clone(message)),
                 FilterTransactionsType::TransactionStatus => {
-                    FilteredUpdateOneof::transaction_status(message)
+                    FilteredUpdateOneof::transaction_status(Arc::clone(message))
                 }
             },
             message.created_at

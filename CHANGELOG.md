@@ -10,9 +10,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-## 2026-07-22
+## 2026-07-24
 
 - yellowstone-grpc-geyser 14.2.2
+
+### Fixed
+
+- Fixed `yellowstone_grpc_geyser_concurrent_subscribe_per_subscriber_id` when `subscription_limit_enforce` is set to false.
 
 ### Misc
 
