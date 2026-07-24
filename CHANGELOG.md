@@ -12,6 +12,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2026-07-22
 
+- yellowstone-grpc-geyser 14.2.2
+
+### Misc
+
+- plugin perf: moved Arc<> to outer objects in Message enum type, reducing overall size of each send() and recv()
+
+## 2026-07-22
+
 - yellowstone-grpc-geyser 14.2.1
 
 ### Fixes
