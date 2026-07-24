@@ -403,15 +403,12 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
             continue;
         };
 
-        match update_oneof {
-            UpdateOneof::Block(slot) => {
-                log::info!("received block update for slot {}", slot.slot);
-                remaining_slot_to_visit.retain(|s| *s != slot.slot);
-                if !visited.insert(slot.slot) {
-                    bail!("received duplicate block update for slot {}", slot.slot);
-                }
+        if let UpdateOneof::Block(slot) = update_oneof {
+            log::info!("received block update for slot {}", slot.slot);
+            remaining_slot_to_visit.retain(|s| *s != slot.slot);
+            if !visited.insert(slot.slot) {
+                bail!("received duplicate block update for slot {}", slot.slot);
             }
-            _ => {}
         }
     }
     ensure!(
