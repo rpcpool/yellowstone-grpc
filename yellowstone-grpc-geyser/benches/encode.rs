@@ -2,16 +2,16 @@ use {
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
     prost::Message as _,
     prost_types::Timestamp,
-    std::time::{Duration, SystemTime},
-    yellowstone_grpc_geyser::plugin::{
-        filter::message::{
-            tests::{
-                create_accounts, create_message_filters, load_predefined_blocks,
-                load_predefined_transactions,
-            },
-            FilteredUpdate, FilteredUpdateOneof,
+    std::{
+        sync::Arc,
+        time::{Duration, SystemTime},
+    },
+    yellowstone_grpc_geyser::plugin::filter::message::{
+        tests::{
+            create_accounts, create_message_filters, load_predefined_blocks,
+            load_predefined_transactions,
         },
-        message::MessageTransaction,
+        FilteredUpdate, FilteredUpdateOneof,
     },
 };
 
@@ -41,7 +41,7 @@ fn bench_account(c: &mut Criterion) {
         .into_iter()
         .map(|(msg, data_slice)| FilteredUpdate {
             filters: filters.clone(),
-            message: FilteredUpdateOneof::account(&msg, data_slice),
+            message: FilteredUpdateOneof::account(Arc::new(msg), data_slice),
             created_at: Timestamp::from(SystemTime::now()),
         })
         .collect::<Vec<_>>();
@@ -51,11 +51,7 @@ fn bench_account(c: &mut Criterion) {
         .into_iter()
         .map(|transaction| FilteredUpdate {
             filters: filters.clone(),
-            message: FilteredUpdateOneof::transaction(&MessageTransaction {
-                transaction,
-                slot: 42,
-                created_at: Timestamp::from(SystemTime::now()),
-            }),
+            message: FilteredUpdateOneof::transaction(transaction),
             created_at: Timestamp::from(SystemTime::now()),
         })
         .collect::<Vec<_>>();
