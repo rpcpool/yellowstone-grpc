@@ -351,9 +351,9 @@ pub enum FilteredUpdateOneof {
 }
 
 impl FilteredUpdateOneof {
-    pub fn account(message: &Arc<MessageAccount>, data_slice: FilterAccountsDataSlice) -> Self {
+    pub fn account(message: Arc<MessageAccount>, data_slice: FilterAccountsDataSlice) -> Self {
         Self::Account(FilteredUpdateAccount {
-            account: Arc::clone(message),
+            account: message,
             data_slice,
         })
     }
@@ -362,16 +362,16 @@ impl FilteredUpdateOneof {
         Self::Slot(FilteredUpdateSlot(message))
     }
 
-    pub fn transaction(message: &Arc<MessageTransaction>) -> Self {
+    pub fn transaction(message: Arc<MessageTransaction>) -> Self {
         Self::Transaction(FilteredUpdateTransaction {
-            transaction: Arc::clone(message),
             slot: message.slot,
+            transaction: message,
         })
     }
 
-    pub fn transaction_status(message: &Arc<MessageTransaction>) -> Self {
+    pub fn transaction_status(message: Arc<MessageTransaction>) -> Self {
         Self::TransactionStatus(FilteredUpdateTransactionStatus {
-            transaction: Arc::clone(message),
+            transaction: message,
         })
     }
 
@@ -1673,7 +1673,7 @@ pub mod tests {
     fn test_message_account() {
         for (msg, data_slice) in create_accounts() {
             let msg_arc = Arc::new(msg);
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::account(&msg_arc, data_slice));
+            encode_decode_cmp(&["123"], FilteredUpdateOneof::account(msg_arc, data_slice));
         }
     }
 
@@ -1793,10 +1793,13 @@ pub mod tests {
     #[test]
     fn test_message_transaction() {
         for transaction in load_predefined_transactions() {
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction(&transaction));
             encode_decode_cmp(
                 &["123"],
-                FilteredUpdateOneof::transaction_status(&transaction),
+                FilteredUpdateOneof::transaction(Arc::clone(&transaction)),
+            );
+            encode_decode_cmp(
+                &["123"],
+                FilteredUpdateOneof::transaction_status(transaction),
             );
         }
     }
