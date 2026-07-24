@@ -397,13 +397,15 @@ type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<Replayed
 struct SubscriptionTracker {
     counters: Arc<StdMutex<HashMap<String, usize>>>,
     subscription_limit: NonZeroUsize,
+    limit_enforce: bool,
 }
 
 impl SubscriptionTracker {
-    fn new(subscription_limit: NonZeroUsize) -> Self {
+    fn new(subscription_limit: NonZeroUsize, limit_enforce: bool) -> Self {
         Self {
             counters: Arc::new(StdMutex::new(HashMap::new())),
             subscription_limit,
+            limit_enforce,
         }
     }
 }
@@ -453,7 +455,15 @@ impl SubscriptionTracker {
             .expect("subscription_tracker mutex poisoned");
         let count = tracker.entry(subscriber_id.clone()).or_insert(0);
         if *count >= self.subscription_limit.get() {
-            return Err(());
+            subscription_limit_exceeded_inc(&subscriber_id);
+            if self.limit_enforce {
+                return Err(());
+            } else {
+                info!(
+                    "subscriber {subscriber_id:?} over limit, not enforcing (limit: {})",
+                    self.subscription_limit
+                );
+            }
         }
         *count = count.saturating_add(1);
         metrics::set_grpc_concurrent_subscribe_per_subscriber_id(&subscriber_id, *count as u64);
@@ -629,8 +639,6 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
-    subscription_limit: NonZeroUsize,
-    subscription_limit_enforce: bool,
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
     subscribe_id: Arc<AtomicUsize>,
@@ -1004,9 +1012,10 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
-            subscription_limit: config.subscription_limit,
-            subscription_limit_enforce: config.subscription_limit_enforce,
-            subscription_tracker: SubscriptionTracker::new(config.subscription_limit),
+            subscription_tracker: SubscriptionTracker::new(
+                config.subscription_limit,
+                config.subscription_limit_enforce,
+            ),
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
@@ -1972,17 +1981,9 @@ impl Geyser for GrpcService {
             match self.subscription_tracker.try_insert(id.to_owned()) {
                 Ok(permit) => Some(permit),
                 Err(_) => {
-                    subscription_limit_exceeded_inc(id);
-                    if self.subscription_limit_enforce {
-                        return Err(Status::resource_exhausted(
-                            "max subscription limit exceeded",
-                        ));
-                    }
-                    info!(
-                        "subscriber {id:?} over limit, not enforcing (limit: {})",
-                        self.subscription_limit
-                    );
-                    None
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
                 }
             }
         } else {
@@ -2159,17 +2160,9 @@ impl Geyser for GrpcService {
             match self.subscription_tracker.try_insert(id.to_owned()) {
                 Ok(permit) => Some(permit),
                 Err(_) => {
-                    subscription_limit_exceeded_inc(id);
-                    if self.subscription_limit_enforce {
-                        return Err(Status::resource_exhausted(
-                            "max subscription limit exceeded",
-                        ));
-                    }
-                    info!(
-                        "subscriber {id:?} over limit, not enforcing (limit: {})",
-                        self.subscription_limit
-                    );
-                    None
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
                 }
             }
         } else {
@@ -2516,7 +2509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscription_tracker_decrements_on_session_drop() {
-        let tracker = SubscriptionTracker::new(NonZeroUsize::new(10).unwrap());
+        let tracker = SubscriptionTracker::new(NonZeroUsize::new(10).unwrap(), true);
 
         // simulate what subscribe() does: acquire two permits
         let _permit_a = tracker.try_insert("sub-1".to_owned()).unwrap();
