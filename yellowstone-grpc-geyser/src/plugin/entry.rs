@@ -403,9 +403,13 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
-            inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
-                message.clone(),
-            ));
+
+            // It's super important that block-meta message goes to the geyser loop message channel,
+            // and not straight to block-reconstruction.
+            // The reason why is during block freeze, in agave, some account update are emitted really late, but before block-meta.
+            // In order to guarantee those account update are seen by the block-reconstruction state machine and all downstream customer,
+            // we must send the block-meta message to the geyser loop, so that it be emitted to the block-reconstruction loop after all account update messages have been processed.
+            inner.send_message(message.clone());
             inner.send_blocks_meta_message(message);
 
             Ok(())
