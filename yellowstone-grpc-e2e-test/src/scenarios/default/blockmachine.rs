@@ -3,6 +3,7 @@ use {
     anyhow::ensure,
     futures::StreamExt,
     solana_commitment_config::CommitmentLevel,
+    solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
         collections::{HashMap, HashSet},
@@ -132,6 +133,13 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
         }
     }
 
+    // The last part of the test make sure that the slot history account was visited in each block, which is important for downstream consumers of the block stream.
+    // Why? Because SlotHistoryAccount is emitted right before the block is frozen, and if it is not visited,
+    // then it means that some account update were not emitted to the block stream, which is a bug.
+    // TLDR: if we see `SysvarS1otHistory11111111111111111111111111` in the block, it means that all account update were emitted to the block stream, which is what we want.
+    const SLOT_HISTORY_ACCOUNT_ID: Pubkey =
+        Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111");
+
     for (slot, block) in block_map {
         let Some(block_meta) = blockmeta_map.remove(&slot) else {
             continue;
@@ -154,6 +162,30 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
         ensure!(
             block_meta.entries_count as usize == block.events.entry_len(),
             "Block meta entries count does not match block entries count"
+        );
+
+        let mut slot_history_account_visited = false;
+        for ev in block.events.iter() {
+            let Some(update) = ev.update_oneof.as_ref() else {
+                continue;
+            };
+
+            if let UpdateOneof::Account(subscribe_update_account) = update {
+                let Some(account) = subscribe_update_account.account.as_ref() else {
+                    continue;
+                };
+
+                if account.pubkey == SLOT_HISTORY_ACCOUNT_ID.to_bytes() {
+                    slot_history_account_visited = true;
+                    break;
+                }
+            }
+        }
+
+        ensure!(
+            slot_history_account_visited,
+            "Slot history account was not visited in block {}",
+            slot
         );
     }
     Ok(())

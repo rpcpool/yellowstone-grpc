@@ -24,7 +24,7 @@ use {
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
-        stream::{tokio::BatchStreamUnboundedReceiver, BatchInto, BatchStream, BatchStreamExt},
+        stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -313,13 +313,6 @@ impl BlockMetaStorage {
 pub enum BlockReconstructionMessage {
     Single(Message),
     Batch(Arc<Vec<Message>>),
-}
-
-impl BatchInto<BlockReconstructionMessage> for BlockReconstructionMessage {
-    fn batch_into(self, batch: &mut Vec<BlockReconstructionMessage>, count: &mut usize) {
-        batch.push(self);
-        *count += 1;
-    }
 }
 
 pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
@@ -1226,32 +1219,61 @@ impl GrpcService {
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
-        let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        struct PartitionedBuffer {
+            message_batch: Vec<Message>,
+            blockmeta_batch: Option<Message>,
+        }
+        impl Buffer<Message> for PartitionedBuffer {
+            fn accumulate(&mut self, item: Message) -> Result<(), Message> {
+                if self.message_batch.len() == self.message_batch.capacity() {
+                    return Err(item);
+                }
+                match item {
+                    Message::BlockMeta(_) => self.blockmeta_batch = Some(item),
+                    _ => self.message_batch.push(item),
+                }
+                Ok(())
+            }
 
+            fn ready(&self) -> bool {
+                self.message_batch.len() < self.message_batch.capacity()
+                    && self.blockmeta_batch.is_none()
+            }
+        }
+        let mut buffer = PartitionedBuffer {
+            message_batch: Vec::with_capacity(MESSAGE_BATCH_SIZE),
+            blockmeta_batch: None,
+        };
         loop {
-            let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
+            let batch_size_maybe = messages_rx.next_batch(&mut buffer).await;
             let Some(_) = batch_size_maybe else {
                 info!("Geyser loop: messages channel closed");
                 break;
             };
 
-            if message_batch.is_empty() {
-                continue;
+            if !buffer.message_batch.is_empty() {
+                metrics::message_queue_size_dec_by(buffer.message_batch.len() as i64);
+                let message_batch_arc = Arc::new(std::mem::take(&mut buffer.message_batch));
+                let _ =
+                    broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
+                buffer.message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Batch(message_batch_arc))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
 
-            metrics::message_queue_size_dec_by(message_batch.len() as i64);
-
-            let message_batch_arc = Arc::new(message_batch);
-            let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
-
-            if block_reconstruction_tx
-                .send(BlockReconstructionMessage::Batch(message_batch_arc))
-                .is_ok()
-            {
-                metrics::block_reconstruction_queue_size_inc();
+            if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Single(blockmeta_message))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
-
-            message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         }
     }
 

@@ -366,9 +366,10 @@ impl FilteredUpdateOneof {
     }
 
     pub fn transaction(message: Arc<MessageTransaction>) -> Self {
+        let slot = message.slot;
         Self::Transaction(FilteredUpdateTransaction {
-            slot: message.slot,
             transaction: message,
+            slot,
         })
     }
 
