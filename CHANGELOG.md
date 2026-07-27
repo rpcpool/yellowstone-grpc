@@ -17,6 +17,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixed
 
 - Fixed `yellowstone_grpc_geyser_concurrent_subscribe_per_subscriber_id` when `subscription_limit_enforce` is set to false.
+- The `BlockMeta` message is now handle and only sent to geyser loop before being delegated to the block-reconstruction loop, this ensure we see all account updates before block-meta since on block `freeze` new account update are emitted really late, so a race could happen and cause lost account updates.
 
 ### Misc
 
