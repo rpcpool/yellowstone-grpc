@@ -4,12 +4,15 @@ use prost_types::Timestamp;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 use yellowstone_grpc_proto::prelude as proto;
 use yellowstone_shmem_client::codec::{DecodeError, ShmemDecoder};
+use yellowstone_shmem_common::wire::AccountPayload;
 use yellowstone_shmem_common::{
     EventType, GeyserMessage, SlotStatus, HEADER_SIZE, PAYLOAD_VERSION,
 };
 
+use crate::metrics;
 use crate::plugin::message::{
     Message, MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry, MessageSlot,
     MessageTransaction, MessageTransactionInfo,
@@ -42,7 +45,9 @@ impl ShmemDecoder for ProstShmemDecoder {
         let et = EventType::try_from(event_type)
             .map_err(|_| DecodeError::DecodeError(format!("unknown event_type: {event_type}")))?;
 
-        match et {
+        let started = Instant::now();
+
+        let result = match et {
             EventType::Slot => decode_slot(body),
             EventType::Account => decode_account(body, plugin_ts_ns),
             EventType::Transaction => decode_transaction(slot, body),
@@ -51,7 +56,15 @@ impl ShmemDecoder for ProstShmemDecoder {
             EventType::EndOfStartup => Err(DecodeError::DecodeError(
                 "EndOfStartup reached live decoder".into(),
             )),
+        };
+
+        if result.is_ok() {
+            let elapsed = started.elapsed();
+            metrics::shmem_message_observed(et.as_str(), bytes.len());
+            metrics::shmem_decode_observe(bytes.len(), elapsed);
         }
+
+        result
     }
 }
 
@@ -76,74 +89,22 @@ fn decode_slot(bytes: &[u8]) -> Result<GeyserMessage, DecodeError> {
 }
 
 fn decode_account(bytes: &[u8], created_at_ns: i64) -> Result<GeyserMessage, DecodeError> {
-    // Minimum size: fixed fields with no data and always-present 64-byte sig slot.
-    const MIN_SIZE: usize = 32 + 8 + 32 + 1 + 8 + 8 + 1 + 64 + 8 + 8;
-    if bytes.len() < MIN_SIZE {
-        return Err(DecodeError::DecodeError(format!(
-            "decode_account: buffer too small: {} < {MIN_SIZE}",
-            bytes.len()
-        )));
-    }
-
-    let mut o = 0usize;
-
-    fn read_u8(bytes: &[u8], o: &mut usize) -> u8 {
-        let v = bytes[*o];
-        *o += 1;
-        v
-    }
-
-    fn read_u64(bytes: &[u8], o: &mut usize) -> u64 {
-        let v = u64::from_le_bytes(bytes[*o..*o + 8].try_into().unwrap());
-        *o += 8;
-        v
-    }
-
-    fn read_bytes(bytes: &[u8], o: &mut usize, len: usize) -> Vec<u8> {
-        let v = bytes[*o..*o + len].to_vec();
-        *o += len;
-        v
-    }
-
-    let pubkey = read_bytes(bytes, &mut o, 32);
-    let lamports = read_u64(bytes, &mut o);
-    let owner = read_bytes(bytes, &mut o, 32);
-    let executable = read_u8(bytes, &mut o) != 0;
-    let rent_epoch = read_u64(bytes, &mut o);
-    let write_version = read_u64(bytes, &mut o);
-
-    let txn_signature = if read_u8(bytes, &mut o) != 0 {
-        Some(read_bytes(bytes, &mut o, 64))
-    } else {
-        o += 64; // skip zeroed bytes
-        None
-    };
-
-    let data_len = read_u64(bytes, &mut o) as usize;
-
-    if o + data_len > bytes.len() {
-        return Err(DecodeError::DecodeError(format!(
-            "decode_account: data_len {data_len} exceeds buffer length {}",
-            bytes.len()
-        )));
-    }
-
-    let data = read_bytes(bytes, &mut o, data_len);
-    let slot = read_u64(bytes, &mut o);
+    let payload: AccountPayload<'_> = wincode::deserialize(bytes)
+        .map_err(|e| DecodeError::DecodeError(format!("decode_account: {e}")))?;
 
     Ok(GeyserMessage::Account(
         yellowstone_shmem_common::MessageAccount {
             account: yellowstone_shmem_common::MessageAccountInfo {
-                pubkey,
-                lamports,
-                owner,
-                executable,
-                rent_epoch,
-                data,
-                write_version,
-                txn_signature,
+                pubkey: payload.pubkey.to_vec(),
+                lamports: payload.lamports,
+                owner: payload.owner.to_vec(),
+                executable: payload.executable,
+                rent_epoch: payload.rent_epoch,
+                data: payload.data.to_vec(),
+                write_version: payload.write_version,
+                txn_signature: payload.txn_signature.map(|s| s.to_vec()),
             },
-            slot,
+            slot: payload.slot,
             created_at_ns,
         },
     ))

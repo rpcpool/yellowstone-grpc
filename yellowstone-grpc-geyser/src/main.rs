@@ -8,10 +8,15 @@ use tokio_rustls::rustls;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use yellowstone_grpc_geyser::metrics;
 use yellowstone_grpc_geyser::plugin::shmem::{
     decoder::ProstShmemDecoder, stream::ShmemBatchStream,
 };
-use yellowstone_grpc_geyser::{config::Config, grpc::GrpcService, metrics::PrometheusService};
+use yellowstone_grpc_geyser::{
+    config::{Config, ConfigShmem},
+    grpc::GrpcService,
+    metrics::PrometheusService,
+};
 use yellowstone_shmem_client::ShmemClient;
 
 fn main() -> anyhow::Result<()> {
@@ -24,28 +29,15 @@ fn main() -> anyhow::Result<()> {
     solana_logger::setup_with_default(&config.log.level);
     log::info!("starting yellowstone-grpc server");
 
-    // Open conduit ring
     let shmem = config
         .shmem
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("config: grpc.shmem_path is required"))?;
-
-    let client = ShmemClient::open(Path::new(&shmem.path), ProstShmemDecoder)?;
-    let checker = client.restart_checker();
-    let source = ShmemBatchStream::with_restart_check(
-        client,
-        Duration::from_secs(shmem.health_interval_secs),
-        move || checker.check(),
-        Duration::from_secs(shmem.restart_check_interval_secs),
-    );
-
-    let snapshot_path = shmem.snapshot_path.clone();
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("config: shmem section is required"))?;
 
     let mut builder = Builder::new_multi_thread();
     if let Some(worker_threads) = config.tokio.worker_threads {
         builder.worker_threads(worker_threads);
     }
-
     let runtime = builder
         .thread_name("yellowstone-grpc")
         .enable_all()
@@ -57,6 +49,11 @@ fn main() -> anyhow::Result<()> {
     });
 
     runtime.block_on(async move {
+        // Built inside the runtime: the stream's timers are tokio Intervals,
+        // which require a live runtime to construct.
+        let source = open_ring(&shmem)?;
+        let snapshot_path = shmem.snapshot_path.clone();
+
         let cancellation_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
 
@@ -80,29 +77,7 @@ fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-        let cancel = cancellation_token.clone();
-        task_tracker.spawn(async move {
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm =
-                    signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        log::info!("received SIGINT, shutting down");
-                    }
-                    _ = sigterm.recv() => {
-                        log::info!("received SIGTERM, shutting down");
-                    }
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                tokio::signal::ctrl_c().await.ok();
-                log::info!("received SIGINT, shutting down");
-            }
-            cancel.cancel();
-        });
+        task_tracker.spawn(shutdown_signal(cancellation_token.clone()));
 
         task_tracker.close();
         task_tracker.wait().await;
@@ -112,4 +87,44 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     Ok(())
+}
+
+/// Opens the live ring and wraps it in a batch stream that watches for the
+/// producer replacing the region underneath us.
+fn open_ring(
+    shmem: &ConfigShmem,
+) -> anyhow::Result<
+    ShmemBatchStream<ShmemClient<ProstShmemDecoder>, impl Fn() -> Result<bool, std::io::Error>>,
+> {
+    let client = ShmemClient::open(Path::new(&shmem.path), ProstShmemDecoder)?;
+
+    metrics::shmem_dcache_capacity_set(client.capacity());
+
+    let checker = client.restart_checker();
+    Ok(ShmemBatchStream::with_generation_check(
+        client,
+        Duration::from_secs(shmem.health_interval_secs),
+        move || checker.check(),
+        Duration::from_secs(shmem.restart_check_interval_secs),
+    ))
+}
+
+/// Cancels the token on SIGINT or SIGTERM.
+async fn shutdown_signal(cancel: CancellationToken) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => log::info!("received SIGINT, shutting down"),
+            _ = sigterm.recv() => log::info!("received SIGTERM, shutting down"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+        log::info!("received SIGINT, shutting down");
+    }
+    cancel.cancel();
 }

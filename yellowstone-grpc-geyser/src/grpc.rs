@@ -1027,7 +1027,10 @@ impl GrpcService {
                         }
                     }
 
+                    let encode_start = std::time::Instant::now();
                     encode_messages(&processed_messages);
+                    metrics::geyser_encode_observe(encode_start.elapsed());
+
                     GEYSER_BATCH_SIZE.observe(processed_messages.len() as f64);
 
                     let processed_messages_arc = Arc::new(processed_messages);

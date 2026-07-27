@@ -17,8 +17,8 @@ use {
     },
     log::{debug, error, info},
     prometheus::{
-        Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
-        TextEncoder,
+        Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
+        Opts, Registry, TextEncoder,
     },
     solana_clock::Slot,
     std::{
@@ -190,6 +190,103 @@ lazy_static::lazy_static! {
     ).unwrap();
 }
 
+lazy_static::lazy_static! {
+    /// Total shmem messages read, by event type.
+    static ref SHMEM_MESSAGES_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("shmem_messages_total", "Total shmem messages read"),
+        &["event_type"],
+    )
+    .unwrap();
+
+    /// Total shmem bytes read, by event type.
+    static ref SHMEM_BYTES_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("shmem_bytes_total", "Total shmem payload bytes read"),
+        &["event_type"],
+    )
+    .unwrap();
+
+/// Producer lead over the consumer, sampled every poll. Histogram not
+    /// gauge: the ring can fill in ~136ms at 30k msg/s, far below the
+    /// health tick, so a point sample misses the event that kills us.
+    static ref SHMEM_GAP: Histogram = Histogram::with_opts(
+        HistogramOpts::new("shmem_gap_entries", "Producer lead over consumer, per poll")
+            .buckets(vec![
+                1.0, 10.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+                2000.0, 3000.0, 3500.0, 4000.0, 4096.0,
+            ]),
+    )
+    .unwrap();
+
+    /// Time between consecutive drain loop polls. The 0.1 bucket is the
+    /// cliff: longer than that at 30k msg/s and the ring has lapped.
+    static ref SHMEM_POLL_INTERVAL_SECONDS: Histogram = Histogram::with_opts(
+        HistogramOpts::new("shmem_poll_interval_seconds", "Time between drain loop polls")
+            .buckets(vec![
+                0.000_010, 0.000_100, 0.001, 0.005, 0.010,
+                0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0,
+            ]),
+    )
+    .unwrap();
+
+    /// Time spent in `encode_messages`, which runs inline on the geyser
+    /// task. Anything here is time the drain loop is not polling.
+    static ref GEYSER_ENCODE_SECONDS: Histogram = Histogram::with_opts(
+        HistogramOpts::new("geyser_encode_seconds", "Time in encode_messages")
+            .buckets(vec![
+                0.000_010, 0.000_100, 0.001, 0.005, 0.010,
+                0.025, 0.050, 0.100, 0.250, 0.500, 1.0,
+            ]),
+    )
+    .unwrap();
+
+    /// dcache capacity, stamped at open. Constant per run; lets the dashboard
+    /// compute gap-as-percentage without hardcoding the value.
+    static ref SHMEM_DCACHE_CAPACITY: IntGauge = IntGauge::new(
+        "shmem_dcache_capacity",
+        "Ring descriptor cache capacity",
+    )
+    .unwrap();
+
+    /// Entries overwritten before this consumer reached them. Any non-zero
+    /// value means loss occurred; rate of change is the loss rate.
+    static ref SHMEM_LAGGED_TOTAL: IntCounter = IntCounter::new(
+        "shmem_lagged_total",
+        "Total entries lost due to consumer lag",
+    )
+    .unwrap();
+
+    /// Time spent in `ShmemDecoder::decode`: header parse plus body decode.
+    /// Bucketed by payload size so a 10 MB account is distinguishable from
+    /// a 200 B one.
+    static ref SHMEM_DECODE_SECONDS: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "shmem_decode_seconds",
+            "Per-message decode time",
+        )
+        .buckets(vec![
+            0.000_001, 0.000_010, 0.000_100,
+            0.001, 0.010, 0.100, 1.0,
+        ]),
+        &["size_bucket"],
+    )
+    .unwrap();
+
+    /// Time spent converting a `GeyserMessage` into a dragons mouth
+    /// `Message`. No size label: the stream does not carry the ring byte
+    /// count.
+    static ref SHMEM_CONVERT_SECONDS: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "shmem_convert_seconds",
+            "Per-message GeyserMessage to Message conversion time",
+        )
+        .buckets(vec![
+            0.000_001, 0.000_010, 0.000_100,
+            0.001, 0.010, 0.100, 1.0,
+        ]),
+    )
+    .unwrap();
+}
+
 #[derive(Debug)]
 pub enum DebugClientMessage {
     UpdateFilter { id: usize, filter: Box<Filter> },
@@ -350,6 +447,15 @@ impl PrometheusService {
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
             register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
             register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
+            register!(SHMEM_MESSAGES_TOTAL);
+            register!(SHMEM_BYTES_TOTAL);
+            register!(SHMEM_GAP);
+            register!(SHMEM_DCACHE_CAPACITY);
+            register!(SHMEM_LAGGED_TOTAL);
+            register!(SHMEM_DECODE_SECONDS);
+            register!(SHMEM_CONVERT_SECONDS);
+            register!(SHMEM_POLL_INTERVAL_SECONDS);
+            register!(GEYSER_ENCODE_SECONDS);
 
             VERSION
                 .with_label_values(&[
@@ -514,6 +620,55 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
         .with_label_values(&[reason.as_ref()])
         .inc();
     INVALID_FULL_BLOCKS.with_label_values(&["all"]).inc();
+}
+
+/// Records a successfully read message.
+pub fn shmem_message_observed(event_type: &str, size: usize) {
+    SHMEM_MESSAGES_TOTAL.with_label_values(&[event_type]).inc();
+    SHMEM_BYTES_TOTAL
+        .with_label_values(&[event_type])
+        .inc_by(size as u64);
+}
+
+pub fn shmem_gap_observe(gap: u64) {
+    SHMEM_GAP.observe(gap as f64);
+}
+
+pub fn shmem_poll_interval_observe(elapsed: std::time::Duration) {
+    SHMEM_POLL_INTERVAL_SECONDS.observe(elapsed.as_secs_f64());
+}
+
+pub fn geyser_encode_observe(elapsed: std::time::Duration) {
+    GEYSER_ENCODE_SECONDS.observe(elapsed.as_secs_f64());
+}
+
+/// Set once at consumer construction so the dashboard knows the ring size.
+pub fn shmem_dcache_capacity_set(capacity: u64) {
+    SHMEM_DCACHE_CAPACITY.set(capacity as i64);
+}
+
+/// Records entries lost to lag.
+pub fn shmem_lagged_observed(n: u64) {
+    SHMEM_LAGGED_TOTAL.inc_by(n);
+}
+
+pub fn shmem_decode_observe(size: usize, elapsed: std::time::Duration) {
+    SHMEM_DECODE_SECONDS
+        .with_label_values(&[size_bucket(size)])
+        .observe(elapsed.as_secs_f64());
+}
+
+pub fn shmem_convert_observe(elapsed: std::time::Duration) {
+    SHMEM_CONVERT_SECONDS.observe(elapsed.as_secs_f64());
+}
+
+fn size_bucket(size: usize) -> &'static str {
+    match size {
+        0..=1023 => "lt_1kb",
+        1024..=102_399 => "lt_100kb",
+        102_400..=1_048_575 => "lt_1mb",
+        _ => "gte_1mb",
+    }
 }
 
 pub fn message_queue_size_inc() {

@@ -94,7 +94,7 @@ tonic-prost-build = "0.14.0"
 tonic-health = "0.14.0"
 uuid = "1"
 vergen = "9.0.6"
-wincode = "0.4.4"
+wincode = "0.6.0"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "~4.0.0-beta.2"

@@ -27,6 +27,7 @@ bench = ["dep:prost_011", "dep:solana-storage-proto"]
 [dependencies]
 tikv-jemallocator = { version = "0.6.1", features = ["disable_initial_exec_tls"] }
 foldhash = { workspace = true }
+wincode = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
@@ -91,8 +92,8 @@ prost_011 = { workspace = true, optional = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-block-machine = { workspace = true, default-features = false }
 yellowstone-grpc-tools = { workspace = true }
-yellowstone-shmem-client = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
-yellowstone-shmem-common = { git = "https://github.com/rpcpool/yellowstone-shmem.git", branch = "main" }
+yellowstone-shmem-client = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-client" }
+yellowstone-shmem-common = { path = "../../yellowstone-shmem/crates/yellowstone-shmem-common" }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # wrapped in mod cpu_core_affinity

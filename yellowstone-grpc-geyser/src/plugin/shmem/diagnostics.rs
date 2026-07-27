@@ -1,85 +1,84 @@
-use crate::plugin::{message::Message, shmem::ProstShmemDecoder};
+use crate::plugin::message::Message;
 use std::time::Duration;
-use yellowstone_shmem_client::ShmemClient;
 
-pub struct ShmemHealthReporter {
+/// Message counts since the last report.
+#[derive(Default)]
+struct Counts {
     accounts: u64,
     transactions: u64,
     slots: u64,
     entries: u64,
     block_meta: u64,
     lagged: u64,
-    pub interval: tokio::time::Interval,
-    enabled: bool,
+}
+
+/// Periodic health logging for the shmem consumer loop.
+///
+/// Counts messages as they pass through and logs a summary when the caller
+/// decides a period has elapsed. It owns neither a timer nor a client: the
+/// consumer loop owns both and passes the ring positions in. That keeps this
+/// type constructible outside a Tokio runtime and free of a second cursor on
+/// the ring.
+pub struct ShmemHealthReporter {
+    counts: Counts,
+    /// Zero disables reporting entirely.
+    period: Duration,
 }
 
 impl ShmemHealthReporter {
-    pub fn new(period_secs: Duration) -> Self {
-        if period_secs.is_zero() {
-            Self {
-                accounts: 0,
-                transactions: 0,
-                slots: 0,
-                entries: 0,
-                block_meta: 0,
-                lagged: 0,
-                interval: tokio::time::interval(Duration::from_secs(u64::MAX)),
-                enabled: false,
-            }
-        } else {
-            Self {
-                accounts: 0,
-                transactions: 0,
-                slots: 0,
-                entries: 0,
-                block_meta: 0,
-                lagged: 0,
-                interval: tokio::time::interval(period_secs),
-                enabled: true,
-            }
+    pub fn new(period: Duration) -> Self {
+        Self {
+            counts: Counts::default(),
+            period,
         }
+    }
+
+    pub fn enabled(&self) -> bool {
+        !self.period.is_zero()
+    }
+
+    /// Reporting period. The caller drives the clock.
+    pub fn period(&self) -> Duration {
+        self.period
     }
 
     #[inline]
     pub fn observe(&mut self, message: &Message) {
-        if !self.enabled {
+        if !self.enabled() {
             return;
         }
         match message {
-            Message::Account(_) => self.accounts += 1,
-            Message::Transaction(_) => self.transactions += 1,
-            Message::Slot(_) => self.slots += 1,
-            Message::Entry(_) => self.entries += 1,
-            Message::BlockMeta(_) => self.block_meta += 1,
+            Message::Account(_) => self.counts.accounts += 1,
+            Message::Transaction(_) => self.counts.transactions += 1,
+            Message::Slot(_) => self.counts.slots += 1,
+            Message::Entry(_) => self.counts.entries += 1,
+            Message::BlockMeta(_) => self.counts.block_meta += 1,
             _ => {}
         }
     }
 
     #[inline]
     pub fn observe_lagged(&mut self, n: u64) {
-        if !self.enabled {
+        if !self.enabled() {
             return;
         }
-        self.lagged += n;
+        self.counts.lagged += n;
     }
 
-    pub fn report(&mut self, client: &ShmemClient<ProstShmemDecoder>) {
-        if !self.enabled {
+    pub fn report(&mut self) {
+        if !self.enabled() {
             return;
         }
-        let head = client.writer_head();
-        let tail = client.tail();
+        let c = &self.counts;
         log::info!(
-            "shmem health: head={} tail={} gap={} | accounts={} tx={} slots={} entries={} blockmeta={} lagged={}",
-            head, tail, head.saturating_sub(tail),
-            self.accounts, self.transactions, self.slots,
-            self.entries, self.block_meta, self.lagged,
+            "shmem health: accounts={} tx={} slots={} entries={} blockmeta={} lagged={}",
+            c.accounts,
+            c.transactions,
+            c.slots,
+            c.entries,
+            c.block_meta,
+            c.lagged,
         );
-        self.accounts = 0;
-        self.transactions = 0;
-        self.slots = 0;
-        self.entries = 0;
-        self.block_meta = 0;
-        self.lagged = 0;
+        self.counts = Counts::default();
     }
 }
