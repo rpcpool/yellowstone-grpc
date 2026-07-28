@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 13.2.2
+
+### Fixed
+
+- Dedup dropped every message that arrived after its slot's `BlockMeta`. Such a message was quarantined pending a second `BlockMeta` that only a replay produces, so in steady state it was never delivered. Quarantining is now limited to a replay window, opened on reconnect and closed once the stream passes the highest slot known at that point. Outside the window a late message, notably the freeze-time account writes noted on 2026-07-24, is forwarded. Anything still held when the window closes is released.
+- `DedupState.sealed` grew without bound. A slot whose first message is `BlockMeta` was never added to `slot_order`, and `prune()` only evicts what it pops from there. Affects subscriptions where no payload precedes `block_meta` for a slot, such as blocks_meta-only.
+- `DedupKey` was positional for transactions, transaction statuses and entries, and keyed blocks on the slot, so two blocks for one slot produced colliding keys. Keys are now content-addressed by signature, entry hash, blockhash and account `write_version`. This also stops separate writes to one account within a slot being collapsed into one.
+- Slots still in flight at reconnect lost their delivered keys, leaving no blockhash to compare against, so their replayed content was flushed wholesale and re-delivered as duplicates. The keys now survive promotion, and the first `BlockMeta` seen for such a slot is delivered rather than consumed as a replay verdict.
+- After a replay verdict settled, further replayed payloads for that slot were quarantined again and flushed as duplicates. They are now deduped against what was delivered, so content the disconnect cut off still reaches the user.
+
+### Misc
+
+- Added end-to-end reconnect coverage driving the client against an in-process gRPC server across forced disconnects, sweeping the disconnect point over the message timeline and asserting no loss and no duplicates.
+
 ## 2026-07-24
 
 - yellowstone-grpc-geyser 14.2.2
