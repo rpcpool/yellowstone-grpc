@@ -24,7 +24,7 @@ use {
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
-        stream::{tokio::BatchStreamUnboundedReceiver, BatchInto, BatchStream, BatchStreamExt},
+        stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
         util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
         version::GrpcVersionInfo,
     },
@@ -315,13 +315,6 @@ pub enum BlockReconstructionMessage {
     Batch(Arc<Vec<Message>>),
 }
 
-impl BatchInto<BlockReconstructionMessage> for BlockReconstructionMessage {
-    fn batch_into(self, batch: &mut Vec<BlockReconstructionMessage>, count: &mut usize) {
-        batch.push(self);
-        *count += 1;
-    }
-}
-
 pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<Message>>);
 
 /// Messages broadcast on the deshred channel. Deshred is a pre-execution
@@ -397,13 +390,15 @@ type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<Replayed
 struct SubscriptionTracker {
     counters: Arc<StdMutex<HashMap<String, usize>>>,
     subscription_limit: NonZeroUsize,
+    limit_enforce: bool,
 }
 
 impl SubscriptionTracker {
-    fn new(subscription_limit: NonZeroUsize) -> Self {
+    fn new(subscription_limit: NonZeroUsize, limit_enforce: bool) -> Self {
         Self {
             counters: Arc::new(StdMutex::new(HashMap::new())),
             subscription_limit,
+            limit_enforce,
         }
     }
 }
@@ -453,7 +448,15 @@ impl SubscriptionTracker {
             .expect("subscription_tracker mutex poisoned");
         let count = tracker.entry(subscriber_id.clone()).or_insert(0);
         if *count >= self.subscription_limit.get() {
-            return Err(());
+            subscription_limit_exceeded_inc(&subscriber_id);
+            if self.limit_enforce {
+                return Err(());
+            } else {
+                info!(
+                    "subscriber {subscriber_id:?} over limit, not enforcing (limit: {})",
+                    self.subscription_limit
+                );
+            }
         }
         *count = count.saturating_add(1);
         metrics::set_grpc_concurrent_subscribe_per_subscriber_id(&subscriber_id, *count as u64);
@@ -629,8 +632,6 @@ pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
     config_channel_capacity: usize,
     config_filter_limits: Arc<FilterLimits>,
-    subscription_limit: NonZeroUsize,
-    subscription_limit_enforce: bool,
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
     subscribe_id: Arc<AtomicUsize>,
@@ -1004,9 +1005,10 @@ impl GrpcService {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             config_channel_capacity: config.channel_capacity,
             config_filter_limits: Arc::new(config.filter_limits),
-            subscription_limit: config.subscription_limit,
-            subscription_limit_enforce: config.subscription_limit_enforce,
-            subscription_tracker: SubscriptionTracker::new(config.subscription_limit),
+            subscription_tracker: SubscriptionTracker::new(
+                config.subscription_limit,
+                config.subscription_limit_enforce,
+            ),
             blocks_meta: blocks_meta.map(Arc::new),
             subscribe_id: Arc::new(AtomicUsize::new(0)),
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
@@ -1217,32 +1219,61 @@ impl GrpcService {
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
-        let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        struct PartitionedBuffer {
+            message_batch: Vec<Message>,
+            blockmeta_batch: Option<Message>,
+        }
+        impl Buffer<Message> for PartitionedBuffer {
+            fn accumulate(&mut self, item: Message) -> Result<(), Message> {
+                if self.message_batch.len() == self.message_batch.capacity() {
+                    return Err(item);
+                }
+                match item {
+                    Message::BlockMeta(_) => self.blockmeta_batch = Some(item),
+                    _ => self.message_batch.push(item),
+                }
+                Ok(())
+            }
 
+            fn ready(&self) -> bool {
+                self.message_batch.len() < self.message_batch.capacity()
+                    && self.blockmeta_batch.is_none()
+            }
+        }
+        let mut buffer = PartitionedBuffer {
+            message_batch: Vec::with_capacity(MESSAGE_BATCH_SIZE),
+            blockmeta_batch: None,
+        };
         loop {
-            let batch_size_maybe = messages_rx.next_batch(&mut message_batch).await;
+            let batch_size_maybe = messages_rx.next_batch(&mut buffer).await;
             let Some(_) = batch_size_maybe else {
                 info!("Geyser loop: messages channel closed");
                 break;
             };
 
-            if message_batch.is_empty() {
-                continue;
+            if !buffer.message_batch.is_empty() {
+                metrics::message_queue_size_dec_by(buffer.message_batch.len() as i64);
+                let message_batch_arc = Arc::new(std::mem::take(&mut buffer.message_batch));
+                let _ =
+                    broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
+                buffer.message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Batch(message_batch_arc))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
 
-            metrics::message_queue_size_dec_by(message_batch.len() as i64);
-
-            let message_batch_arc = Arc::new(message_batch);
-            let _ = broadcast_tx.send((CommitmentLevel::Processed, Arc::clone(&message_batch_arc)));
-
-            if block_reconstruction_tx
-                .send(BlockReconstructionMessage::Batch(message_batch_arc))
-                .is_ok()
-            {
-                metrics::block_reconstruction_queue_size_inc();
+            if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Single(blockmeta_message))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
-
-            message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
         }
     }
 
@@ -1972,17 +2003,9 @@ impl Geyser for GrpcService {
             match self.subscription_tracker.try_insert(id.to_owned()) {
                 Ok(permit) => Some(permit),
                 Err(_) => {
-                    subscription_limit_exceeded_inc(id);
-                    if self.subscription_limit_enforce {
-                        return Err(Status::resource_exhausted(
-                            "max subscription limit exceeded",
-                        ));
-                    }
-                    info!(
-                        "subscriber {id:?} over limit, not enforcing (limit: {})",
-                        self.subscription_limit
-                    );
-                    None
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
                 }
             }
         } else {
@@ -2159,17 +2182,9 @@ impl Geyser for GrpcService {
             match self.subscription_tracker.try_insert(id.to_owned()) {
                 Ok(permit) => Some(permit),
                 Err(_) => {
-                    subscription_limit_exceeded_inc(id);
-                    if self.subscription_limit_enforce {
-                        return Err(Status::resource_exhausted(
-                            "max subscription limit exceeded",
-                        ));
-                    }
-                    info!(
-                        "subscriber {id:?} over limit, not enforcing (limit: {})",
-                        self.subscription_limit
-                    );
-                    None
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
                 }
             }
         } else {
@@ -2516,7 +2531,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscription_tracker_decrements_on_session_drop() {
-        let tracker = SubscriptionTracker::new(NonZeroUsize::new(10).unwrap());
+        let tracker = SubscriptionTracker::new(NonZeroUsize::new(10).unwrap(), true);
 
         // simulate what subscribe() does: acquire two permits
         let _permit_a = tracker.try_insert("sub-1".to_owned()).unwrap();
