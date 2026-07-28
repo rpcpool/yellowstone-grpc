@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `yellowstone_grpc_geyser_message_queue_size` leaking one count per slot: since [#838](https://github.com/rpcpool/yellowstone-grpc/pull/838) `BlockMeta` messages are diverted into a separate partition in the geyser loop, but the drain path only decremented the gauge for the regular message batch, so the gauge grew unboundedly (~2.5/s) and stopped reflecting real queue depth. Closes [#840](https://github.com/rpcpool/yellowstone-grpc/issues/840)
+
 ## 2026-07-24
 
 - yellowstone-grpc-geyser 14.2.2
