@@ -68,8 +68,8 @@ dependencies = [
 
 [[package]]
 name = "agave-feature-set"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -82,8 +82,8 @@ dependencies = [
 
 [[package]]
 name = "agave-geyser-plugin-interface"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "log",
  "solana-clock",
@@ -97,8 +97,8 @@ dependencies = [
 
 [[package]]
 name = "agave-reserved-account-keys"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "agave-feature-set",
  "solana-pubkey 4.2.0",
@@ -3786,8 +3786,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "Inflector",
  "base64",
@@ -3828,8 +3828,8 @@ dependencies = [
 
 [[package]]
 name = "solana-account-decoder-client-types"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "base64",
  "bs58",
@@ -4567,8 +4567,8 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-proto"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "bs58",
  "prost",
@@ -4592,8 +4592,8 @@ dependencies = [
 
 [[package]]
 name = "solana-svm-feature-set"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 
 [[package]]
 name = "solana-system-interface"
@@ -4694,8 +4694,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-context"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "bincode",
  "serde",
@@ -4724,8 +4724,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "Inflector",
  "agave-reserved-account-keys",
@@ -4766,8 +4766,8 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-status-client-types"
-version = "4.2.0-beta.2"
-source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-beta.2#0b13aac0269c549ce4034d11567f68ed22105a51"
+version = "4.2.0-rc.0"
+source = "git+https://github.com/anza-xyz/agave?tag=v4.2.0-rc.0#48fcc6fc30f9329e6037a8dde652b429bf6ff5a0"
 dependencies = [
  "base64",
  "bincode",
@@ -6343,7 +6343,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "15.0.0-rc2+solana.4.2.0.beta.2"
+version = "15.0.0-rc3+solana.4.2.0.rc.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
