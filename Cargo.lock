@@ -6292,7 +6292,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.2.1"
+version = "13.2.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6303,6 +6303,7 @@ dependencies = [
  "pin-project",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tower",
