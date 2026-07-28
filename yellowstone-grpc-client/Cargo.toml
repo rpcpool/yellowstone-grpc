@@ -34,7 +34,8 @@ tower = { workspace = true, features = ["util"] }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-stream = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true
