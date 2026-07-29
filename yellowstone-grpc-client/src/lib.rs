@@ -3,40 +3,21 @@ mod reconnect;
 
 use {
     crate::{
-        dedup::DEFAULT_SLOT_RETENTION,
-        reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
-    },
-    arc_swap::ArcSwap,
-    bytes::Bytes,
-    futures::{
+        dedup::DEFAULT_SLOT_RETENTION, reconnect::{AUTORECONNECT_FILTER_KEY, TonicGeyserClientOptions},
+    }, arc_swap::ArcSwap, bytes::Bytes, futures::{
         channel::mpsc,
         sink::{Sink, SinkExt},
         stream::Stream,
-    },
-    std::{
+    }, std::{
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
-    },
-    tokio::net::UnixStream,
-    tonic::{
-        codec::{CompressionEncoding, Streaming},
-        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
-        service::interceptor::InterceptedService,
-        transport::{
-            channel::{Channel, Endpoint},
-            Uri,
+    }, tokio::net::UnixStream, tonic::{
+        Request, Response, Status, codec::{CompressionEncoding, Streaming}, metadata::{AsciiMetadataValue, MetadataValue, errors::InvalidMetadataValue}, service::interceptor::InterceptedService, transport::{
+            Uri, channel::{Channel, Endpoint},
         },
-        Request, Response, Status,
-    },
-    tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
-    yellowstone_grpc_proto::prelude::{
-        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
-        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
-        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
-        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
-        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
+    }, tonic_health::pb::{HealthCheckRequest, HealthCheckResponse, health_client::HealthClient}, yellowstone_grpc_proto::prelude::{
+        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred, geyser_client::GeyserClient,
     },
 };
 pub use {
@@ -83,36 +64,37 @@ pub enum GeyserGrpcClientError {
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone, Debug)]
+pub enum ReconnectionPolicy {
+    NoReplay,
+    Replay { slot_retention: usize },
+}
+
+#[derive(Clone, Debug)]
 /// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
     pub backoff: Backoff,
-    pub slot_retention: usize,
+    pub policy: ReconnectionPolicy,
 }
 
 impl Default for ReconnectConfig {
     fn default() -> Self {
         Self {
             backoff: Backoff::default(),
-            slot_retention: DEFAULT_SLOT_RETENTION,
+            policy: ReconnectionPolicy::Replay {
+                slot_retention: DEFAULT_SLOT_RETENTION,
+            },
         }
     }
 }
 
 impl ReconnectConfig {
-    pub const fn no_reconnect() -> Self {
-        Self {
-            backoff: Backoff::new(Duration::from_millis(0), 1.0, 0),
-            slot_retention: 0,
-        }
-    }
-
     pub const fn with_backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
         self
     }
 
     pub const fn with_slot_retention(mut self, slot_retention: usize) -> Self {
-        self.slot_retention = slot_retention;
+        self.policy = ReconnectionPolicy::Replay { slot_retention };
         self
     }
 }
@@ -124,7 +106,7 @@ impl ReconnectConfig {
 pub struct GeyserGrpcClient {
     pub health: HealthClient<InterceptedService<Channel, InterceptorXToken>>,
     pub geyser: GeyserClient<InterceptedService<Channel, InterceptorXToken>>,
-    reconnect_config: ReconnectConfig,
+    reconnect_config: Option<ReconnectConfig>,
     geyser_client_opts: TonicGeyserClientOptions,
     reconnect_endpoint: Option<Endpoint>,
     reconnect_x_token: Option<AsciiMetadataValue>,
@@ -196,7 +178,13 @@ impl Sink<SubscribeDeshredRequest> for SubscribeDeshredRequestSink {
 /// The stream yields [`SubscribeUpdate`] from the server.
 ///
 pub struct GeyserStream {
-    inner: AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>,
+    inner: InnerStream,
+}
+
+enum InnerStream {
+    NoReconnect(Streaming<SubscribeUpdate>),
+    Replay(DedupStream<AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>>),
+    NoReplay(AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>),
 }
 
 ///
@@ -226,7 +214,11 @@ impl Stream for GeyserStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+        match &mut self.inner {
+            InnerStream::NoReconnect(stream) => std::pin::Pin::new(stream).poll_next(cx),
+            InnerStream::Replay(stream) => std::pin::Pin::new(stream).poll_next(cx),
+            InnerStream::NoReplay(stream) => std::pin::Pin::new(stream).poll_next(cx),
+        }
     }
 }
 
@@ -278,11 +270,8 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
             .lock()
             .expect("subscribe request sink mutex poisoned");
 
-        if item.blocks_meta.is_empty() {
-            item.blocks_meta
-                .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
-            item.slots
-                .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
+        if self.shared.load().blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY) {
+            reconnect::inject_autoreconnect_filter(&mut item);
         }
 
         inner
@@ -323,7 +312,7 @@ impl GeyserGrpcClient {
         Self {
             health,
             geyser,
-            reconnect_config: ReconnectConfig::no_reconnect(),
+            reconnect_config: None,
             reconnect_endpoint: None,
             reconnect_x_token: None,
             geyser_client_opts: TonicGeyserClientOptions {
@@ -368,27 +357,26 @@ impl GeyserGrpcClient {
     ) -> GeyserGrpcClientResult<(SubscribeRequestSink, Streaming<SubscribeUpdate>)> {
         let (mut subscribe_tx, subscribe_rx) = mpsc::channel(1000);
 
-        let request = request.map(|mut req| {
-            if req.blocks_meta.is_empty() {
-                req.blocks_meta
-                    .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
-                req.slots
-                    .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
-            }
-            req
-        });
+        let mut request = request.unwrap_or_default();
 
-        if let Some(request) = request.clone() {
-            subscribe_tx
-                .send(request)
-                .await
-                .expect("channel cannot be disconnected or full at this point");
+        if matches!(
+            self.reconnect_config.as_ref().map(|c| &c.policy),
+            Some(ReconnectionPolicy::Replay { .. })
+        ) {
+            reconnect::inject_autoreconnect_filter(&mut request);
         }
+
+        subscribe_tx
+            .send(request.clone())
+            .await
+            .expect("channel cannot be disconnected or full at this point");
+
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
+
         let sink = SubscribeRequestSink {
             inner: Arc::new(Mutex::new(subscribe_tx)),
-            shared: Arc::new(ArcSwap::new(Arc::new(request.unwrap_or_default()))),
+            shared: Arc::new(ArcSwap::new(Arc::new(request))),
         };
         Ok((sink, response.into_inner()))
     }
@@ -403,26 +391,38 @@ impl GeyserGrpcClient {
             .clone()
             .unwrap_or_else(|| Endpoint::from_static("http://127.0.0.1:0"));
         let reconnect_x_token = self.reconnect_x_token.clone();
+        let client_opts = self.geyser_client_opts.clone();
 
         self.subscribe_raw(request.clone())
             .await
             .map(|(sink, stream)| {
-                let connector = TonicGrpcConnector::new(
-                    endpoint,
-                    reconnect_config.clone(),
-                    reconnect_x_token,
-                    self.geyser_client_opts.clone(),
-                    Arc::clone(&sink.inner),
-                );
-                let inner = AutoReconnect::new(
-                    DedupStream::new(
-                        stream,
-                        DedupState::with_slot_retention(reconnect_config.slot_retention),
-                    ),
-                    connector,
-                    Arc::clone(&sink.shared),
-                    reconnect_config.backoff.clone(),
-                );
+                let inner = match reconnect_config {
+                    None => InnerStream::NoReconnect(stream),
+                    Some(config) => {
+                        let connector = TonicGrpcConnector::new(
+                            endpoint,
+                            config.clone(),
+                            reconnect_x_token,
+                            client_opts,
+                            Arc::clone(&sink.inner),
+                        );
+                        let reconnect_stream = AutoReconnect::new(
+                            stream,
+                            connector,
+                            Arc::clone(&sink.shared),
+                            config.backoff.clone(),
+                        );
+                        match config.policy {
+                            ReconnectionPolicy::NoReplay => InnerStream::NoReplay(reconnect_stream),
+                            ReconnectionPolicy::Replay { slot_retention } => {
+                                InnerStream::Replay(DedupStream::new(
+                                    reconnect_stream,
+                                    DedupState::with_slot_retention(slot_retention),
+                                ))
+                            }
+                        }
+                    }
+                };
                 (sink, GeyserStream { inner })
             })
     }
@@ -571,7 +571,7 @@ pub struct GeyserGrpcBuilder {
     pub accept_compressed: Option<CompressionEncoding>,
     pub max_decoding_message_size: Option<usize>,
     pub max_encoding_message_size: Option<usize>,
-    pub reconnect_config: ReconnectConfig,
+    pub reconnect_config: Option<ReconnectConfig>,
 }
 
 impl GeyserGrpcBuilder {
@@ -585,7 +585,7 @@ impl GeyserGrpcBuilder {
             accept_compressed: None,
             max_decoding_message_size: None,
             max_encoding_message_size: None,
-            reconnect_config: ReconnectConfig::no_reconnect(),
+            reconnect_config: None,
         }
     }
 
@@ -836,7 +836,7 @@ impl GeyserGrpcBuilder {
 
     pub fn set_reconnect_config(self, config: ReconnectConfig) -> Self {
         Self {
-            reconnect_config: config,
+            reconnect_config: Some(config),
             ..self
         }
     }
@@ -845,10 +845,7 @@ impl GeyserGrpcBuilder {
 #[cfg(test)]
 mod tests {
     use {
-        super::{GeyserGrpcClient, SubscribeRequest, SubscribeRequestSink},
-        arc_swap::ArcSwap,
-        futures::{channel::mpsc, FutureExt, SinkExt, StreamExt},
-        std::sync::{Arc, Mutex},
+        super::{GeyserGrpcClient, SubscribeRequest, SubscribeRequestSink}, crate::reconnect::{AUTORECONNECT_FILTER_KEY, inject_autoreconnect_filter}, arc_swap::ArcSwap, futures::{FutureExt, SinkExt, StreamExt, channel::mpsc}, std::sync::{Arc, Mutex},
     };
 
     #[tokio::test]
@@ -964,5 +961,35 @@ mod tests {
             Some(Some(_)) => panic!("old receiver must not get requests after sender swap"),
         }
         assert_eq!(shared.load_full().from_slot, Some(22));
+    }
+
+    #[tokio::test]
+    async fn test_sink_preserves_autoreconnect_filter_across_sends() {
+        let (tx, mut rx) = mpsc::channel(8);
+
+        // shared starts with the injected key, as subscribe_raw would leave it
+        let mut initial = SubscribeRequest::default();
+        inject_autoreconnect_filter(&mut initial);
+
+        let shared = Arc::new(ArcSwap::new(Arc::new(initial)));
+        let mut sink = SubscribeRequestSink {
+            inner: Arc::new(Mutex::new(tx)),
+            shared: Arc::clone(&shared),
+        };
+
+        // user sends a request that does not carry the key
+        sink.send(SubscribeRequest::default())
+            .await
+            .expect("send must succeed");
+
+        let sent = rx.next().await.expect("receiver should get the request");
+        assert!(
+            sent.blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY),
+            "internal filter must survive a user filter change on the wire"
+        );
+        assert!(
+            shared.load().blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY),
+            "internal filter must survive in stored state, reconnect reads this"
+        );
     }
 }

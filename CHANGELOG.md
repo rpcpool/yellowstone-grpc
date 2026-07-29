@@ -10,6 +10,21 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 13.3.0
+
+### Features
+
+- Added `ReconnectionPolicy::NoReplay` so a subscription can auto-reconnect from the tip without paying for replay or dedup.
+
+### Fixes
+
+- Fixed the internal `__autoreconnect` filter being stripped from the stored subscription when a user changed filters mid-stream, which silently disabled checkpointing for every subsequent reconnect.
+
+### Breaking
+- Changed `AutoReconnect::new` to take the raw stream instead of `DedupStream<S>`; `DedupStream` now wraps `AutoReconnect` rather than being wrapped by it.
+- Changed `reconnect_config` to `Option<ReconnectConfig>` and removed `ReconnectConfig::no_reconnect()`; `None` now expresses "no reconnect".
+- Moved `slot_retention` from `ReconnectConfig` into `ReconnectionPolicy::Replay`.
+
 ## 2026-07-24
 
 - yellowstone-grpc-geyser 14.2.2

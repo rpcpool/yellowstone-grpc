@@ -1,8 +1,5 @@
 use {
-    crate::{
-        dedup::{DedupState, DedupStream},
-        GeyserGrpcClientError, InterceptorXToken, ReconnectConfig,
-    },
+    crate::{dedup::ReconnectCounter, GeyserGrpcClientError, InterceptorXToken, ReconnectConfig},
     arc_swap::ArcSwap,
     futures::{channel::mpsc, sink::SinkExt, stream::Stream},
     std::{
@@ -31,7 +28,7 @@ const CHECKPOINT_SLOT_BUFFER: u64 = 2;
 pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
 
 type ConnectFuture<S> =
-    Pin<Box<dyn Future<Output = Result<DedupStream<S>, GeyserGrpcClientError>> + Send + 'static>>;
+    Pin<Box<dyn Future<Output = Result<S, GeyserGrpcClientError>> + Send + 'static>>;
 
 #[derive(Debug, Clone)]
 pub struct Backoff {
@@ -352,8 +349,9 @@ pub struct AutoReconnect<GrpcStream, Connector> {
     stop: bool,
     connector: Connector,
     backoff: Backoff,
-    inner_stream: Option<DedupStream<GrpcStream>>,
+    inner_stream: Option<GrpcStream>,
     pending_connecting_task: Option<ConnectFuture<GrpcStream>>,
+    reconnect_count: u32,
 }
 
 impl<S, Connector> AutoReconnect<S, Connector>
@@ -362,7 +360,7 @@ where
     Connector: GrpcConnector<Stream = S, ConnectError = GeyserGrpcClientError>,
 {
     pub fn new(
-        stream: DedupStream<S>,
+        stream: S,
         connector: Connector,
         request: Arc<ArcSwap<SubscribeRequest>>,
         backoff: Backoff,
@@ -375,18 +373,22 @@ where
             stop: false,
             connector,
             backoff,
+            reconnect_count: 0,
         }
     }
 
-    fn make_connection_future(&self, dedup_state: DedupState) -> ConnectFuture<S> {
+    fn make_connection_future(&self) -> ConnectFuture<S> {
         let connector = self.connector.clone();
         let request = self.request.load_full();
         let from_slot = self.last_checkpoint;
-        let fut = async move {
-            let stream = connector.connect(request, from_slot).await?;
-            Ok(DedupStream::new(stream, dedup_state))
-        };
+        let fut = async move { connector.connect(request, from_slot).await };
         Box::pin(fut)
+    }
+}
+
+impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
+    fn reconnect_count(&self) -> u32 {
+        self.reconnect_count
     }
 }
 
@@ -460,9 +462,7 @@ where
                             me.last_checkpoint
                         );
 
-                        let mut dedup_state = stream.state;
-                        dedup_state.prepare_for_replay();
-                        me.pending_connecting_task = Some(me.make_connection_future(dedup_state));
+                        me.pending_connecting_task = Some(me.make_connection_future());
                     }
                     Poll::Ready(Some(Err(e))) => {
                         me.stop = true;
@@ -483,6 +483,7 @@ where
                 match fut.as_mut().poll(cx) {
                     Poll::Ready(result) => match result {
                         Ok(stream) => {
+                            me.reconnect_count += 1;
                             me.inner_stream = Some(stream);
                         }
                         Err(error) => {
@@ -554,10 +555,20 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
     }
 }
 
+pub(crate) fn inject_autoreconnect_filter(req: &mut SubscribeRequest) {
+    if req.blocks_meta.is_empty() {
+        req.blocks_meta
+            .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
+        req.slots
+            .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::*,
+        crate::{DedupState, DedupStream},
         futures::{stream, StreamExt},
         std::{
             collections::VecDeque,
@@ -644,6 +655,27 @@ mod tests {
 
     fn request_state(request: SubscribeRequest) -> Arc<ArcSwap<SubscribeRequest>> {
         Arc::new(ArcSwap::new(Arc::new(request)))
+    }
+
+    fn make_account_msg(slot: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![],
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                account: Some(SubscribeUpdateAccountInfo {
+                    pubkey: vec![1; 32],
+                    lamports: 100,
+                    owner: vec![0; 32],
+                    executable: false,
+                    rent_epoch: 0,
+                    data: vec![].into(),
+                    write_version: 1,
+                    txn_signature: Some(vec![0; 64]),
+                }),
+                slot,
+                is_startup: false,
+            })),
+            created_at: None,
+        }
     }
 
     #[test]
@@ -870,7 +902,7 @@ mod tests {
         }]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -890,7 +922,7 @@ mod tests {
         let connector = MockGrpcConnector::new(vec![]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(0),
@@ -950,7 +982,7 @@ mod tests {
         }]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -982,11 +1014,14 @@ mod tests {
             ]),
         }]);
 
-        let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
-            connector.clone(),
-            request_state(SubscribeRequest::default()),
-            backoff_with_retries(1),
+        let mut auto = DedupStream::new(
+            AutoReconnect::new(
+                initial,
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            ),
+            DedupState::default(),
         );
 
         let msg1 = auto
@@ -1005,6 +1040,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_interrupted_slot_payload_quarantined_not_dropped() {
+        // slot 100 is inflight (account seen, no BlockMeta) when the connection dies
+        let initial = stream::iter(vec![
+            Ok(make_account_msg(100)),
+            Err(Status::unavailable("disconnect")),
+        ])
+        .boxed();
+
+        // replay re-sends the same account, then the BlockMeta that settles slot 100
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: None,
+            result: Ok(vec![
+                Ok(make_account_msg(100)),
+                Ok(make_block_meta_msg(100)),
+                Ok(make_slot_msg(101, 0)),
+            ]),
+        }]);
+
+        let mut stream = DedupStream::new(
+            AutoReconnect::new(
+                initial,
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            ),
+            DedupState::default(),
+        );
+
+        let m1 = stream.next().await.expect("item").expect("ok");
+        assert!(matches!(m1.update_oneof, Some(UpdateOneof::Account(_))));
+
+        // Without prepare_for_replay, slot 100 is still inflight and this account
+        // matches the existing key -> dropped as Duplicate. With it, slot 100 is
+        // sealed with blockhash None, so the account is quarantined and released
+        // when the BlockMeta arrives (no stored hash -> always flush).
+        let m2 = stream.next().await.expect("item").expect("ok");
+        assert!(matches!(m2.update_oneof, Some(UpdateOneof::Account(_))));
+
+        let m3 = stream.next().await.expect("item").expect("ok");
+        assert!(matches!(m3.update_oneof, Some(UpdateOneof::BlockMeta(_))));
+
+        let m4 = stream.next().await.expect("item").expect("ok");
+        assert_eq!(extract_slot(&m4), Some(101));
+    }
+
+    #[tokio::test]
     async fn test_autoreconnect_checkpoint_buffer() {
         let block_meta_msg = make_block_meta_msg(100);
 
@@ -1020,7 +1101,7 @@ mod tests {
         }]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -1049,7 +1130,7 @@ mod tests {
         let connector = MockGrpcConnector::new(vec![]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -1100,7 +1181,7 @@ mod tests {
         }]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -1142,7 +1223,7 @@ mod tests {
         }]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(1),
@@ -1182,7 +1263,7 @@ mod tests {
         ]);
 
         let mut auto = AutoReconnect::new(
-            DedupStream::new(initial, DedupState::default()),
+            initial,
             connector.clone(),
             request_state(SubscribeRequest::default()),
             backoff_with_retries(2), // 2 retries allowed
