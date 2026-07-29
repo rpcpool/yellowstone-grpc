@@ -119,7 +119,7 @@ pub enum ReconnectionPolicy {
 /// - `backoff`: 10 ms initial interval, 2.0 multiplier, 3 retries
 ///   (10 ms, 20 ms, 40 ms, then give up)
 /// - `policy`: [`ReconnectionPolicy::RecoverMissedData`] default
-///     recovers data lost during the reconnection gap with a slot_retention number of 250
+///   recovers data lost during the reconnection gap with a slot_retention number of 250
 ///
 /// # Example
 ///
@@ -248,6 +248,7 @@ pub struct GeyserStream {
     inner: InnerStream,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum InnerStream {
     NoReconnect(Streaming<SubscribeUpdate>),
     Replay(DedupStream<AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>>),

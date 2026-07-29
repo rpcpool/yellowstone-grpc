@@ -585,4 +585,5 @@ module.exports.decodeTxError = nativeBinding.decodeTxError
 module.exports.encodeDeshredTx = nativeBinding.encodeDeshredTx
 module.exports.encodeTx = nativeBinding.encodeTx
 module.exports.JsCompressionAlgorithm = nativeBinding.JsCompressionAlgorithm
+module.exports.JsReconnectPolicy = nativeBinding.JsReconnectPolicy
 module.exports.WasmUiTransactionEncoding = nativeBinding.WasmUiTransactionEncoding

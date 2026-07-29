@@ -47,6 +47,13 @@ pub struct JsChannelOptions {
   pub grpc_tcp_nodelay: Option<bool>,
 }
 
+#[napi(string_enum)]
+#[derive(Deserialize, Debug, Clone)]
+pub enum JsReconnectPolicy {
+  RecoverMissedData,
+  SkipMissedData,
+}
+
 #[napi(object)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct JsReconnectBackoff {
@@ -63,6 +70,8 @@ pub struct JsReconnectConfig {
   pub enabled: Option<bool>,
   pub backoff: Option<JsReconnectBackoff>,
   pub slot_retention: Option<u32>,
+  /// Omitted defaults to RecoverMissedData.
+  pub policy: Option<JsReconnectPolicy>,
 }
 
 impl Default for JsChannelOptions {

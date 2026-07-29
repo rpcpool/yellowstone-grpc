@@ -18,7 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- Fixed the internal `__autoreconnect` filter being stripped from the stored subscription when a user changed filters mid-stream, which silently disabled checkpointing for every subsequent reconnect.
+- Fixed the internal `__autoreconnect` filter being stripped from the stored subscription when a user changed filters mid-stream, which silently prevented data recovery on every subsequent reconnect.
 
 ### Breaking
 - Changed `AutoReconnect::new` to take the raw stream instead of `DedupStream<S>`; `DedupStream` now wraps `AutoReconnect` rather than being wrapped by it.
