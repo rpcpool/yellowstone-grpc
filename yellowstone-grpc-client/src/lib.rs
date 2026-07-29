@@ -3,21 +3,40 @@ mod reconnect;
 
 use {
     crate::{
-        dedup::DEFAULT_SLOT_RETENTION, reconnect::{AUTORECONNECT_FILTER_KEY, TonicGeyserClientOptions},
-    }, arc_swap::ArcSwap, bytes::Bytes, futures::{
+        dedup::DEFAULT_SLOT_RETENTION,
+        reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
+    },
+    arc_swap::ArcSwap,
+    bytes::Bytes,
+    futures::{
         channel::mpsc,
         sink::{Sink, SinkExt},
         stream::Stream,
-    }, std::{
+    },
+    std::{
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
-    }, tokio::net::UnixStream, tonic::{
-        Request, Response, Status, codec::{CompressionEncoding, Streaming}, metadata::{AsciiMetadataValue, MetadataValue, errors::InvalidMetadataValue}, service::interceptor::InterceptedService, transport::{
-            Uri, channel::{Channel, Endpoint},
+    },
+    tokio::net::UnixStream,
+    tonic::{
+        codec::{CompressionEncoding, Streaming},
+        metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
+        service::interceptor::InterceptedService,
+        transport::{
+            channel::{Channel, Endpoint},
+            Uri,
         },
-    }, tonic_health::pb::{HealthCheckRequest, HealthCheckResponse, health_client::HealthClient}, yellowstone_grpc_proto::prelude::{
-        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred, geyser_client::GeyserClient,
+        Request, Response, Status,
+    },
+    tonic_health::pb::{health_client::HealthClient, HealthCheckRequest, HealthCheckResponse},
+    yellowstone_grpc_proto::prelude::{
+        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
+        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
+        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
+        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
+        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
+        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
     },
 };
 pub use {
@@ -65,14 +84,62 @@ pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
 #[derive(Clone, Debug)]
 pub enum ReconnectionPolicy {
-    NoReplay,
-    Replay { slot_retention: usize },
+    /// Resumes at the latest slot after a disconnect.
+    ///
+    /// # Warning
+    ///
+    /// Data produced during the outage is not delivered and cannot be recovered
+    /// later. Only use this when your application acts on the current tip and has
+    /// no use for history.
+    SkipMissedData,
+    /// Re-requests data produced during the outage and filters the duplicates
+    /// this creates. Costs per-message bookkeeping over `slot_retention` slots.
+    RecoverMissedData { slot_retention: usize },
 }
 
+/// Configuration for automatic reconnect on a subscribe stream.
+///
+/// Pass to [`GeyserGrpcBuilder::set_reconnect_config`]. When no config is set,
+/// the stream ends when the connection drops.
+///
+/// # Choosing a policy
+///
+/// [`ReconnectionPolicy::RecoverMissedData`] re-requests whatever the server
+/// produced while you were disconnected, so the stream has no gap. Costs
+/// per-message bookkeeping and holds state for `slot_retention` slots.
+///
+/// [`ReconnectionPolicy::SkipMissedData`] reconnects and continues from the
+/// newest data. Anything produced during the outage is lost. Use this when
+/// your application only acts on current data.
+///
+/// # Defaults
+///
+/// [`ReconnectConfig::default`] uses:
+///
+/// - `backoff`: 10 ms initial interval, 2.0 multiplier, 3 retries
+///   (10 ms, 20 ms, 40 ms, then give up)
+/// - `policy`: [`ReconnectionPolicy::RecoverMissedData`] default
+///     recovers data lost during the reconnection gap with a slot_retention number of 250
+///
+/// # Example
+///
+/// ```no_run
+/// # use std::time::Duration;
+/// # use yellowstone_grpc_client::{Backoff, ReconnectConfig, ReconnectionPolicy};
+/// let default = ReconnectConfig::default();
+///
+/// let no_gap_reconnection = ReconnectConfig {
+///     backoff: Backoff::new(Duration::from_millis(50), 2.0, 5),
+///     policy: ReconnectionPolicy::SkipMissedData,
+/// };
+/// ```
 #[derive(Clone, Debug)]
-/// Configuration for automatic subscribe reconnect behavior.
 pub struct ReconnectConfig {
+    /// Retry schedule for reconnect attempts. Resets after each successful
+    /// connection, so the budget is per outage, not per stream.
     pub backoff: Backoff,
+
+    /// Whether data produced during an outage is recovered or skipped.
     pub policy: ReconnectionPolicy,
 }
 
@@ -80,7 +147,7 @@ impl Default for ReconnectConfig {
     fn default() -> Self {
         Self {
             backoff: Backoff::default(),
-            policy: ReconnectionPolicy::Replay {
+            policy: ReconnectionPolicy::RecoverMissedData {
                 slot_retention: DEFAULT_SLOT_RETENTION,
             },
         }
@@ -94,7 +161,7 @@ impl ReconnectConfig {
     }
 
     pub const fn with_slot_retention(mut self, slot_retention: usize) -> Self {
-        self.policy = ReconnectionPolicy::Replay { slot_retention };
+        self.policy = ReconnectionPolicy::RecoverMissedData { slot_retention };
         self
     }
 }
@@ -270,7 +337,12 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
             .lock()
             .expect("subscribe request sink mutex poisoned");
 
-        if self.shared.load().blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY) {
+        if self
+            .shared
+            .load()
+            .blocks_meta
+            .contains_key(AUTORECONNECT_FILTER_KEY)
+        {
             reconnect::inject_autoreconnect_filter(&mut item);
         }
 
@@ -361,7 +433,7 @@ impl GeyserGrpcClient {
 
         if matches!(
             self.reconnect_config.as_ref().map(|c| &c.policy),
-            Some(ReconnectionPolicy::Replay { .. })
+            Some(ReconnectionPolicy::RecoverMissedData { .. })
         ) {
             reconnect::inject_autoreconnect_filter(&mut request);
         }
@@ -413,8 +485,10 @@ impl GeyserGrpcClient {
                             config.backoff.clone(),
                         );
                         match config.policy {
-                            ReconnectionPolicy::NoReplay => InnerStream::NoReplay(reconnect_stream),
-                            ReconnectionPolicy::Replay { slot_retention } => {
+                            ReconnectionPolicy::SkipMissedData => {
+                                InnerStream::NoReplay(reconnect_stream)
+                            }
+                            ReconnectionPolicy::RecoverMissedData { slot_retention } => {
                                 InnerStream::Replay(DedupStream::new(
                                     reconnect_stream,
                                     DedupState::with_slot_retention(slot_retention),
@@ -845,7 +919,11 @@ impl GeyserGrpcBuilder {
 #[cfg(test)]
 mod tests {
     use {
-        super::{GeyserGrpcClient, SubscribeRequest, SubscribeRequestSink}, crate::reconnect::{AUTORECONNECT_FILTER_KEY, inject_autoreconnect_filter}, arc_swap::ArcSwap, futures::{FutureExt, SinkExt, StreamExt, channel::mpsc}, std::sync::{Arc, Mutex},
+        super::{GeyserGrpcClient, SubscribeRequest, SubscribeRequestSink},
+        crate::reconnect::{inject_autoreconnect_filter, AUTORECONNECT_FILTER_KEY},
+        arc_swap::ArcSwap,
+        futures::{channel::mpsc, FutureExt, SinkExt, StreamExt},
+        std::sync::{Arc, Mutex},
     };
 
     #[tokio::test]
@@ -988,7 +1066,10 @@ mod tests {
             "internal filter must survive a user filter change on the wire"
         );
         assert!(
-            shared.load().blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY),
+            shared
+                .load()
+                .blocks_meta
+                .contains_key(AUTORECONNECT_FILTER_KEY),
             "internal filter must survive in stored state, reconnect reads this"
         );
     }

@@ -14,7 +14,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- Added `ReconnectionPolicy::NoReplay` so a subscription can auto-reconnect from the tip without paying for replay or dedup.
+- Added `ReconnectionPolicy` so a subscription can choose whether or not to auto-reconnect from the tip without paying for replay or dedup.
 
 ### Fixes
 

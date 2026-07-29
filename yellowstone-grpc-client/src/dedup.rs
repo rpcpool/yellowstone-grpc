@@ -74,7 +74,7 @@ pub struct DedupStream<S, T = SubscribeUpdate> {
     pub(crate) state: DedupState,
     inner: S,
     replay: ReplayBuffer<T>,
-    last_reconnect_count: u32, 
+    last_reconnect_count: u32,
 }
 
 impl<S, T> DedupStream<S, T> {
@@ -83,7 +83,7 @@ impl<S, T> DedupStream<S, T> {
             state,
             inner,
             replay: ReplayBuffer::new(),
-            last_reconnect_count: 0
+            last_reconnect_count: 0,
         }
     }
 }
@@ -383,7 +383,6 @@ mod tests {
         }
     }
 
-
     impl<S> ReconnectCounter for TestStream<S> {
         fn reconnect_count(&self) -> u32 {
             self.count
@@ -591,7 +590,10 @@ mod tests {
             Ok(make_slot_msg(101, 0)),
         ];
 
-        let inner = TestStream { inner: stream::iter(messages).boxed(), count: 0 };
+        let inner = TestStream {
+            inner: stream::iter(messages).boxed(),
+            count: 0,
+        };
 
         let mut dedup = DedupStream::new(inner, DedupState::default());
 
