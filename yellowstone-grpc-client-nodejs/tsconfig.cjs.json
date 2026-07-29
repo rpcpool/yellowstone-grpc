@@ -7,8 +7,9 @@
     "preserveConstEnums": true,
     "sourceMap": true,
     "allowJs": true,
-    "outDir": "dist/cjs",
-    "moduleResolution": "Node"
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist/cjs"
   },
   "files": ["src/index.ts"],
   "include": ["src/**/*"],
