@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "12.3.0"
+version = "12.3.1"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -14,7 +14,6 @@ name = "client"
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
 bs58 = { workspace = true }
 chrono = { workspace = true }
@@ -39,7 +38,7 @@ solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 
 # Yellowstone
-yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
+yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-geyser = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
