@@ -6314,6 +6314,7 @@ name = "yellowstone-grpc-client-simple"
 version = "12.3.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "backoff",
  "bs58",
  "chrono",

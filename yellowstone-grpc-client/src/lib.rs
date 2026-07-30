@@ -487,7 +487,7 @@ impl GeyserGrpcClient {
                         );
                         match config.policy {
                             ReconnectionPolicy::SkipMissedData => {
-                                InnerStream::NoReplay(reconnect_stream)
+                                InnerStream::NoReplay(reconnect_stream.without_checkpoint())
                             }
                             ReconnectionPolicy::RecoverMissedData { slot_retention } => {
                                 InnerStream::Replay(DedupStream::new(

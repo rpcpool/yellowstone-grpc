@@ -352,6 +352,7 @@ pub struct AutoReconnect<GrpcStream, Connector> {
     inner_stream: Option<GrpcStream>,
     pending_connecting_task: Option<ConnectFuture<GrpcStream>>,
     reconnect_count: u32,
+    resume_from_checkpoint: bool,
 }
 
 impl<S, Connector> AutoReconnect<S, Connector>
@@ -374,13 +375,18 @@ where
             connector,
             backoff,
             reconnect_count: 0,
+            resume_from_checkpoint: true,
         }
     }
 
     fn make_connection_future(&self) -> ConnectFuture<S> {
         let connector = self.connector.clone();
         let request = self.request.load_full();
-        let from_slot = self.last_checkpoint;
+        let from_slot = if self.resume_from_checkpoint {
+            self.last_checkpoint
+        } else {
+            None
+        };
         let fut = async move { connector.connect(request, from_slot).await };
         Box::pin(fut)
     }
@@ -389,6 +395,14 @@ where
 impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
     fn reconnect_count(&self) -> u32 {
         self.reconnect_count
+    }
+}
+
+impl<S, Connector> AutoReconnect<S, Connector> {
+    /// Never resume from a checkpoint. Reconnects start from the live head.
+    pub const fn without_checkpoint(mut self) -> Self {
+        self.resume_from_checkpoint = false;
+        self
     }
 }
 
@@ -458,8 +472,12 @@ where
                         }
 
                         log::warn!(
-                            "stream error: {status}. starting reconnect from slot {:?}",
-                            me.last_checkpoint
+                            "stream error: {status}. reconnecting from slot {:?}",
+                            if me.resume_from_checkpoint {
+                                me.last_checkpoint
+                            } else {
+                                None
+                            }
                         );
 
                         me.pending_connecting_task = Some(me.make_connection_future());
@@ -1276,5 +1294,36 @@ mod tests {
 
         // Stream should end
         assert!(auto.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_skip_missed_data_never_sends_from_slot() {
+        let initial = stream::iter(vec![
+            Ok(make_block_meta_msg(100)),
+            Err(Status::unavailable("disconnect")),
+        ])
+        .boxed();
+
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(None),
+            result: Ok(vec![Ok(make_slot_msg(105, 0))]),
+        }]);
+
+        let mut auto = AutoReconnect::new(
+            initial,
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        )
+        .without_checkpoint();
+
+        let _ = auto.next().await;
+        let _ = auto.next().await;
+
+        assert_eq!(
+            connector.calls(),
+            vec![None],
+            "SkipMissedData must not replay even after a BlockMeta set a checkpoint"
+        );
     }
 }
