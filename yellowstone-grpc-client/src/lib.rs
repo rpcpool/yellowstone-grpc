@@ -2,9 +2,7 @@ mod dedup;
 mod reconnect;
 
 use {
-    crate::{
-        reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
-    },
+    crate::reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
     arc_swap::ArcSwap,
     bytes::Bytes,
     futures::{
