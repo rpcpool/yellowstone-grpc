@@ -6288,7 +6288,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.2.1"
+version = "13.3.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6307,7 +6307,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client-simple"
-version = "12.3.0"
+version = "12.3.1"
 dependencies = [
  "anyhow",
  "backoff",

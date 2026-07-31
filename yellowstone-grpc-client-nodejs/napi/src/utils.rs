@@ -1,7 +1,11 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
+use crate::bindings::{
+  JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig, JsReconnectPolicy,
+};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
+use yellowstone_grpc_client::{
+  Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig, ReconnectionPolicy,
+};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -38,13 +42,20 @@ fn reconnect_config_from_js(
 
   let mut native_config = ReconnectConfig::default();
 
-  if let Some(slot_retention) = reconnect_config.slot_retention {
+  if matches!(
+    reconnect_config.policy,
+    Some(JsReconnectPolicy::SkipMissedData)
+  ) {
+    native_config.policy = ReconnectionPolicy::SkipMissedData;
+  } else if let Some(slot_retention) = reconnect_config.slot_retention {
     if slot_retention == 0 {
       return Err(invalid_arg(
         "invalid reconnect.slotRetention: expected a positive integer",
       ));
     }
-    native_config = native_config.with_slot_retention(slot_retention as usize);
+    native_config.policy = ReconnectionPolicy::RecoverMissedData {
+      slot_retention: slot_retention as usize,
+    };
   }
 
   if let Some(backoff) = reconnect_config.backoff {
@@ -247,6 +258,7 @@ pub async fn get_client_builder(
 #[cfg(test)]
 mod tests {
   use super::get_client_builder;
+  use yellowstone_grpc_client::ReconnectionPolicy;
 
   #[tokio::test]
   async fn get_client_builder_invalid_endpoint_includes_cause() {
@@ -302,18 +314,25 @@ mod tests {
           max_retries: Some(8),
         }),
         slot_retention: Some(300),
+        policy: None,
       }),
     )
     .await
     .expect("valid reconnect config should build");
 
-    assert_eq!(
-      builder.reconnect_config.backoff.initial_interval,
-      Duration::from_millis(125)
-    );
-    assert_eq!(builder.reconnect_config.backoff.multiplier, 1.5);
-    assert_eq!(builder.reconnect_config.backoff.max_retries, 8);
-    assert_eq!(builder.reconnect_config.slot_retention, 300);
+    let config = builder
+      .reconnect_config
+      .expect("reconnect config must be set");
+
+    assert_eq!(config.backoff.initial_interval, Duration::from_millis(125));
+    assert_eq!(config.backoff.multiplier, 1.5);
+    assert_eq!(config.backoff.max_retries, 8);
+    assert!(matches!(
+      config.policy,
+      ReconnectionPolicy::RecoverMissedData {
+        slot_retention: 300
+      }
+    ));
   }
 
   #[tokio::test]
@@ -332,6 +351,7 @@ mod tests {
           max_retries: None,
         }),
         slot_retention: None,
+        policy: None,
       }),
     )
     .await

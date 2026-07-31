@@ -15,7 +15,7 @@ use {
     },
 };
 
-pub(crate) const DEFAULT_SLOT_RETENTION: usize = 250;
+pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;
 
@@ -65,11 +65,16 @@ impl<T> ReplayBuffer<T> {
     }
 }
 
+pub trait ReconnectCounter {
+    fn reconnect_count(&self) -> u32;
+}
+
 /// Wrapper stream that filters out duplicate subscribe updates.
 pub struct DedupStream<S, T = SubscribeUpdate> {
     pub(crate) state: DedupState,
     inner: S,
     replay: ReplayBuffer<T>,
+    last_reconnect_count: u32,
 }
 
 impl<S, T> DedupStream<S, T> {
@@ -78,6 +83,7 @@ impl<S, T> DedupStream<S, T> {
             state,
             inner,
             replay: ReplayBuffer::new(),
+            last_reconnect_count: 0,
         }
     }
 }
@@ -85,7 +91,7 @@ impl<S, T> DedupStream<S, T> {
 impl<S, T> Stream for DedupStream<S, T>
 where
     T: Dedupable + Unpin,
-    S: Stream<Item = Result<T, Status>> + Unpin,
+    S: Stream<Item = Result<T, Status>> + ReconnectCounter + Unpin,
 {
     type Item = Result<T, Status>;
 
@@ -100,25 +106,33 @@ where
             }
 
             match this.inner.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(msg))) => match msg.extract_key() {
-                    None => return Poll::Ready(Some(Ok(msg))),
-                    Some((slot, key)) => match this.state.observe(slot, key) {
-                        Observation::New => return Poll::Ready(Some(Ok(msg))),
-                        Observation::Duplicate => continue,
-                        Observation::Replay => {
-                            this.replay.hold(slot, msg);
-                            continue;
-                        }
-                        Observation::ReplayComplete { same: true } => {
-                            this.replay.discard(slot);
-                            continue;
-                        }
-                        Observation::ReplayComplete { same: false } => {
-                            this.replay.flush(slot, msg);
-                            continue;
-                        }
-                    },
-                },
+                Poll::Ready(Some(Ok(msg))) => {
+                    let count = this.inner.reconnect_count();
+                    if count != this.last_reconnect_count {
+                        this.state.prepare_for_replay();
+                        this.last_reconnect_count = count;
+                    }
+
+                    match msg.extract_key() {
+                        None => return Poll::Ready(Some(Ok(msg))),
+                        Some((slot, key)) => match this.state.observe(slot, key) {
+                            Observation::New => return Poll::Ready(Some(Ok(msg))),
+                            Observation::Duplicate => continue,
+                            Observation::Replay => {
+                                this.replay.hold(slot, msg);
+                                continue;
+                            }
+                            Observation::ReplayComplete { same: true } => {
+                                this.replay.discard(slot);
+                                continue;
+                            }
+                            Observation::ReplayComplete { same: false } => {
+                                this.replay.flush(slot, msg);
+                                continue;
+                            }
+                        },
+                    }
+                }
                 other => return other,
             }
         }
@@ -353,6 +367,28 @@ mod tests {
         },
     };
 
+    struct TestStream<S> {
+        inner: S,
+        count: u32,
+    }
+
+    impl<S: Stream + Unpin> Stream for TestStream<S> {
+        type Item = S::Item;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            std::pin::Pin::new(&mut self.inner).poll_next(cx)
+        }
+    }
+
+    impl<S> ReconnectCounter for TestStream<S> {
+        fn reconnect_count(&self) -> u32 {
+            self.count
+        }
+    }
+
     fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
         SubscribeUpdate {
             filters: vec![],
@@ -554,7 +590,11 @@ mod tests {
             Ok(make_slot_msg(101, 0)),
         ];
 
-        let inner = stream::iter(messages).boxed();
+        let inner = TestStream {
+            inner: stream::iter(messages).boxed(),
+            count: 0,
+        };
+
         let mut dedup = DedupStream::new(inner, DedupState::default());
 
         let msg1 = dedup

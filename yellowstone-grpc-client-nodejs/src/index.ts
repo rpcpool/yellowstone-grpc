@@ -110,6 +110,7 @@ export interface ReconnectOptions {
     maxRetries?: number;
   };
   slotRetention?: number;
+  policy?: napi.JsReconnectPolicy;
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
