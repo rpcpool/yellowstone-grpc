@@ -3,7 +3,6 @@ mod reconnect;
 
 use {
     crate::{
-        dedup::DEFAULT_SLOT_RETENTION,
         reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
     },
     arc_swap::ArcSwap,
@@ -41,7 +40,7 @@ use {
 };
 pub use {
     crate::{
-        dedup::{DedupState, DedupStream},
+        dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
         reconnect::{AutoReconnect, Backoff, GrpcConnector, TonicGrpcConnector},
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
@@ -118,15 +117,15 @@ pub enum ReconnectionPolicy {
 ///
 /// - `backoff`: 10 ms initial interval, 2.0 multiplier, 3 retries
 ///   (10 ms, 20 ms, 40 ms, then give up)
-/// - `policy`: [`ReconnectionPolicy::RecoverMissedData`] default
-///   recovers data lost during the reconnection gap with a slot_retention number of 250
+/// - `policy`: [`ReconnectionPolicy::RecoverMissedData`] with a `slot_retention`
+///   of [`DEFAULT_SLOT_RETENTION`]
 ///
 /// # Example
 ///
 /// ```no_run
 /// # use std::time::Duration;
 /// # use yellowstone_grpc_client::{Backoff, ReconnectConfig, ReconnectionPolicy};
-/// let default = ReconnectConfig::default();
+/// let default = ReconnectConfig::default(); // Recovers messages in the gap by default
 ///
 /// let no_gap_reconnection = ReconnectConfig {
 ///     backoff: Backoff::new(Duration::from_millis(50), 2.0, 5),

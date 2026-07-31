@@ -15,7 +15,7 @@ use {
     },
 };
 
-pub(crate) const DEFAULT_SLOT_RETENTION: usize = 250;
+pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;
 

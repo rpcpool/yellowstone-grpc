@@ -3,7 +3,7 @@ use {
     futures::stream::StreamExt,
     log::info,
     std::collections::HashMap,
-    yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectionPolicy},
+    yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectionPolicy, DEFAULT_SLOT_RETENTION},
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
@@ -51,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
         backoff: Backoff::default(),
         policy: match args.policy {
             Policy::Recover => ReconnectionPolicy::RecoverMissedData {
-                slot_retention: 250,
+                slot_retention: DEFAULT_SLOT_RETENTION,
             },
             Policy::Skip => ReconnectionPolicy::SkipMissedData,
         },
