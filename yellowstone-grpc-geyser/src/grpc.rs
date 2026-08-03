@@ -1314,6 +1314,8 @@ impl GrpcService {
             }
 
             if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
+                metrics::message_queue_size_dec();
+
                 if block_reconstruction_tx
                     .send(BlockReconstructionMessage::Single(blockmeta_message))
                     .is_ok()
