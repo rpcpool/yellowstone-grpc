@@ -305,6 +305,15 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub channel_capacity: usize,
+    /// Capacity of the processed broadcast ring, defaults to `channel_capacity`
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub processed_broadcast_capacity: Option<usize>,
+    /// Capacity of the confirmed broadcast ring, defaults to `channel_capacity`
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub confirmed_broadcast_capacity: Option<usize>,
+    /// Capacity of the finalized broadcast ring, defaults to `channel_capacity`
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub finalized_broadcast_capacity: Option<usize>,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
