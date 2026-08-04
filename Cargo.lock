@@ -6343,7 +6343,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "15.0.0-rc3+solana.4.2.0.rc.0"
+version = "15.0.0-rc4+solana.4.2.0.rc.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
