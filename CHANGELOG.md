@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-04
+
+- yellowstone-grpc-geyser 14.2.3
+
+### Fixed
+
+- Fixed queue size metric, previously ignored block_meta message
+
+### Misc
+
+- plugin perf: separated commitment level messages to subscribers into separate channels to reduce wakeups
+
+## 2026-07-31
+
 - yellowstone-grpc-client 13.3.0
 - yellowstone-grpc-client-simple-12.3.1
 - yellowstone-grpc-client-nodejs-5.1.0
