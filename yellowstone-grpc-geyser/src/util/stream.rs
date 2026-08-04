@@ -101,10 +101,9 @@ impl<T> LoadAwareReceiver<T> {
     }
 
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let shared = Arc::clone(&self.shared);
         self.inner.poll_recv(cx).map(|maybe| {
             if maybe.is_some() {
-                shared.decr_load();
+                self.shared.decr_load();
             }
             maybe
         })
