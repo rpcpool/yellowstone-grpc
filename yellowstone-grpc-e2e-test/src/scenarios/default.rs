@@ -23,6 +23,7 @@ use {
 pub mod blockmachine;
 pub mod deshred;
 pub mod misc;
+pub mod reconnect;
 
 /// Subscribes to account updates and verifies only SysvarClock updates are returned.
 #[test_helper(name = "sysvar-account")]
