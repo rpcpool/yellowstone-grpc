@@ -1,0 +1,155 @@
+---
+name: Yellowstone GRPC Integration Test
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+  push:
+    # branches:
+    #   - 'master'
+    #   - 'v1.16'
+    #   - 'v1.17'
+    #   - 'v1.18'
+    #   - 'v2.0'
+    #   - 'v2.1'
+    #   - 'v2.2'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+    runs-on: ["${{ matrix.os }}"]
+    steps:
+      - name: baseline
+        run: |
+          free -h
+          df -h
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set rust version
+        run: |
+          RUST_VERSION="$(grep -oP 'channel = "\K\d\.\d+\.\d+(?=")' rust-toolchain.toml)"
+          echo "RUST_STABLE=$RUST_VERSION" >> $GITHUB_ENV
+
+      - name: Set env vars
+        run: |
+          source ci/env.sh
+          echo "GEYSER_PLUGIN_NAME=$plugin_name" >> $GITHUB_ENV
+          echo "GEYSER_PLUGIN_LIB=lib${plugin_lib_name}" >> $GITHUB_ENV
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          docker system prune --all --force
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsasl2-dev protobuf-compiler jq
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              ./target
+          key: v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            v0001-${{ matrix.os }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+
+      # For testing: use prebuilt release instead of building
+      # - name: Build geyser plugin
+      #   run: cargo build --release -p yellowstone-grpc-geyser
+
+      - name: Download yellowstone-grpc release
+        run: |
+          curl -sSL -o yellowstone-grpc-release.tar.bz2 "https://github.com/rpcpool/yellowstone-grpc/releases/download/v12.0.0%2Bsolana.3.1.8/yellowstone-grpc-geyser-release22-x86_64-unknown-linux-gnu.tar.bz2"
+          tar -xjf yellowstone-grpc-release.tar.bz2
+          # Tarball extracts to yellowstone-grpc-geyser-release/ (no arch prefix in dir name)
+          GEYSER_SO_PATH="$PWD/yellowstone-grpc-geyser-release/lib/libyellowstone_grpc_geyser.so"
+          echo "GEYSER_SO_PATH=$GEYSER_SO_PATH" >> $GITHUB_ENV
+          test -f "$GEYSER_SO_PATH" || (echo "Plugin .so not found at $GEYSER_SO_PATH" && ls -la yellowstone-grpc-geyser-release/lib/ 2>/dev/null || true && exit 1)
+
+      - name: Download Agave
+        run: |
+          curl -sSL -o solana-release.tar.bz2 "https://github.com/anza-xyz/agave/releases/download/v3.1.8/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+          tar -xjf solana-release.tar.bz2
+          export PATH="$PWD/solana-release/bin:$PATH"
+          echo "PATH=$PWD/solana-release/bin:$PATH" >> $GITHUB_ENV
+          solana-test-validator --version
+
+      - name: Prepare geyser config
+        run: |
+          jq -n \
+            --arg lib "${GEYSER_SO_PATH}" \
+            '{ libpath: $lib, log: { level: "info" }, grpc: { address: "0.0.0.0:10000", channel_capacity: "1_000_000", compression: { accept: ["gzip","zstd"], send: ["gzip","zstd"] }, max_decoding_message_size: "1_000_000_000", replay_stored_slots: "0", unary_concurrency_limit: "100" }, prometheus: { address: "0.0.0.0:9123" } }' \
+            > /tmp/geyser-config.json
+          echo "GEYSER_CONFIG=/tmp/geyser-config.json" >> $GITHUB_ENV
+
+      - name: Install grpcurl
+        run: |
+          GRPCURL_VERSION="1.8.9"
+          curl -sSL -o grpcurl.tar.gz "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
+          tar -xzf grpcurl.tar.gz
+          sudo mv grpcurl /usr/local/bin/
+          grpcurl -version
+
+      - name: Start Solana test validator with gRPC
+        uses: JarvusInnovations/background-action@v1
+        with:
+          run: solana-test-validator --geyser-plugin-config "$GEYSER_CONFIG" --limit-ledger-size 50000000 &
+          wait-on: tcp:localhost:10000
+          wait-for: 60s
+
+      - name: Run gRPC tests
+        run: |
+          set -e
+          PROTO="-import-path yellowstone-grpc-proto/proto -proto geyser.proto"
+          ADDR="-plaintext localhost:10000"
+          echo "GetVersion"
+          grpcurl $PROTO $ADDR geyser.Geyser/GetVersion
+
+          echo "Ping"
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/Ping
+
+          echo "GetSlot"
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetSlot
+
+          echo "GetBlockHeight"
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetBlockHeight
+
+          echo "GetLatestBlockhash"
+          grpcurl $PROTO -d '{}' $ADDR geyser.Geyser/GetLatestBlockhash
