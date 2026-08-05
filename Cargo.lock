@@ -794,6 +794,15 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db05ffb6856bf0ecdf6367558a76a0e8a77b1713044eb92845c692100ed50190"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
@@ -2465,11 +2474,11 @@ dependencies = [
 
 [[package]]
 name = "napi-derive-backend"
-version = "5.1.2"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "514281397bcddd9ea9a876c7a21a57bff2374237a000ca9a64ea0211ec1993e2"
+checksum = "77c36636292fe04366a1eec028adc25bc72f4fd7cce35bdcc310499ef74fb7de"
 dependencies = [
- "convert_case 0.11.0",
+ "convert_case 0.9.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -6498,7 +6507,6 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dashmap",
- "fastrand",
  "foldhash 0.2.0",
  "futures",
  "git-version",
@@ -6564,12 +6572,11 @@ name = "yellowstone-grpc-intg-test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
+ "arc-swap",
  "clap",
  "dotenvy",
  "env_logger",
  "futures",
- "git-version",
  "humantime-serde",
  "hyper",
  "hyper-util",
@@ -6578,7 +6585,6 @@ dependencies = [
  "log",
  "num_cpus",
  "serde",
- "serde_json",
  "solana-commitment-config",
  "solana-hash",
  "solana-pubkey 4.2.1",
@@ -6587,7 +6593,6 @@ dependencies = [
  "tokio-stream",
  "toml 0.8.23",
  "tower",
- "vergen",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",
  "yellowstone-grpc-e2e-macros",
@@ -6611,7 +6616,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "napi-derive-backend 5.1.2",
+ "napi-derive-backend 3.0.2",
  "napi-sys",
  "parking_lot",
  "prost",
@@ -6626,7 +6631,6 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "tokio-stream",
- "tonic",
  "uuid",
  "wincode",
  "yellowstone-grpc-client",
@@ -6635,7 +6639,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.7.0"
+version = "12.6.0"
 dependencies = [
  "anyhow",
  "bytes",
