@@ -576,6 +576,10 @@ impl FilterAccounts {
         message: &Arc<MessageAccount>,
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
+        if self.aggregates.is_empty() {
+            return FilteredUpdates::new();
+        }
+
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
@@ -922,9 +926,9 @@ struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
-    account_include: Vec<Pubkey>,
-    account_exclude: Vec<Pubkey>,
-    account_required: Vec<Pubkey>,
+    account_include: FoldHashSet<Pubkey>,
+    account_exclude: FoldHashSet<Pubkey>,
+    account_required: FoldHashSet<Pubkey>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -983,21 +987,15 @@ impl FilterTransactions {
                     account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
-                    )?
-                    .into_iter()
-                    .collect(),
+                    )?,
                     account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
                         &FoldHashSet::new(),
-                    )?
-                    .into_iter()
-                    .collect(),
+                    )?,
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &FoldHashSet::new(),
-                    )?
-                    .into_iter()
-                    .collect(),
+                    )?,
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -1058,17 +1056,30 @@ impl FilterTransactions {
                         || token_owners.is_some_and(|set| set.contains(pubkey))
                 };
 
+                // Iterate the transaction's keys, not the filter's lists.
+                // A tx carries tens of keys; include/exclude lists reach
+                // tens of thousands.
+                let effective_keys = || {
+                    message
+                        .transaction
+                        .account_keys
+                        .iter()
+                        .chain(token_owners.into_iter().flatten())
+                };
+
                 if !inner.account_required.iter().all(in_effective_set) {
                     return None;
                 }
 
                 if !inner.account_include.is_empty()
-                    && !inner.account_include.iter().any(in_effective_set)
+                    && !effective_keys().any(|k| inner.account_include.contains(k))
                 {
                     return None;
                 }
 
-                if inner.account_exclude.iter().any(in_effective_set) {
+                if !inner.account_exclude.is_empty()
+                    && effective_keys().any(|k| inner.account_exclude.contains(k))
+                {
                     return None;
                 }
 
@@ -1742,8 +1753,8 @@ mod tests {
                 name::{FilterName, FilterNames},
             },
             message::{
-                Message, MessageDeshredTransaction, MessageDeshredTransactionInfo,
-                MessageTransaction, MessageTransactionInfo,
+                Message, MessageAccount, MessageAccountInfo, MessageDeshredTransaction,
+                MessageDeshredTransactionInfo, MessageTransaction, MessageTransactionInfo,
             },
         },
         prost_types::Timestamp,
@@ -1761,8 +1772,8 @@ mod tests {
         },
         yellowstone_grpc_proto::geyser::{
             SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterTransactions,
-            SubscribeRequestPing,
+            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeRequestPing,
         },
     };
 
@@ -1823,6 +1834,31 @@ mod tests {
                 token_owners_changed: OnceLock::new(),
             },
             slot: 100,
+            created_at: Timestamp::from(SystemTime::now()),
+        })
+    }
+
+    pub(super) fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
+        use {
+            bytes::Bytes,
+            prost_types::Timestamp,
+            std::{sync::Arc, time::SystemTime},
+        };
+
+        Arc::new(MessageAccount {
+            account: MessageAccountInfo {
+                pubkey,
+                lamports: 1000,
+                owner,
+                executable: false,
+                rent_epoch: 0,
+                data: Bytes::new(),
+                write_version: 1,
+                txn_signature: None,
+                pre_encoded: std::sync::OnceLock::new(),
+            },
+            slot: 100,
+            is_startup: false,
             created_at: Timestamp::from(SystemTime::now()),
         })
     }
@@ -2588,13 +2624,36 @@ mod tests {
             assert!(message.filters.is_empty());
         }
     }
+
+    #[test]
+    fn no_account_filters_yields_no_updates() {
+        let mut slots = HashMap::new();
+        slots.insert("s".to_owned(), SubscribeRequestFilterSlots::default());
+
+        let filter = Filter::new(
+            &SubscribeRequest {
+                slots,
+                ..Default::default()
+            },
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let message = create_message_account(Pubkey::new_unique(), Pubkey::new_unique());
+        assert!(filter
+            .get_updates(&Message::Account(message), None)
+            .is_empty());
+    }
 }
 
 #[cfg(test)]
 mod cuckoo_tests {
     use {
-        super::{tests::create_filter_names, *},
-        crate::plugin::message::MessageAccountInfo,
+        super::{
+            tests::{create_filter_names, create_message_account},
+            *,
+        },
         yellowstone_grpc_proto::{cuckoo::CuckooFilter, geyser::CuckooFilter as ProtoCuckooFilter},
     };
 
@@ -2604,31 +2663,6 @@ mod cuckoo_tests {
             filter.insert(&pk.to_bytes()).unwrap();
         }
         ProtoCuckooFilter::from(&filter)
-    }
-
-    fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
-        use {
-            bytes::Bytes,
-            prost_types::Timestamp,
-            std::{sync::Arc, time::SystemTime},
-        };
-
-        Arc::new(MessageAccount {
-            account: MessageAccountInfo {
-                pubkey,
-                lamports: 1000,
-                owner,
-                executable: false,
-                rent_epoch: 0,
-                data: Bytes::new(),
-                write_version: 1,
-                txn_signature: None,
-                pre_encoded: std::sync::OnceLock::new(),
-            },
-            slot: 100,
-            is_startup: false,
-            created_at: Timestamp::from(SystemTime::now()),
-        })
     }
 
     #[test]
