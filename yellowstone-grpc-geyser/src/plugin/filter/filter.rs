@@ -1597,7 +1597,7 @@ impl FilterBlocksInner {
         false
     }
 
-   fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
+    fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
         if self.account_include.is_empty() && self.account_cuckoo.is_none() {
             return true;
         }

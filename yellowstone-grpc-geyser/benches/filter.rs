@@ -19,8 +19,7 @@ use {
         convert_to,
         filter::{limits::FilterLimits, name::FilterNames, Filter},
         message::{
-            Message, MessageAccount, MessageAccountInfo, MessageTransaction,
-            MessageTransactionInfo,
+            Message, MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
         },
     },
     yellowstone_grpc_proto::geyser::{
