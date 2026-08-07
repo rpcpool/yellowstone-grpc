@@ -19,13 +19,13 @@ use {
         convert_to,
         filter::{limits::FilterLimits, name::FilterNames, Filter},
         message::{
-            Message, MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
-            MessageBlock, MessageBlockMeta, MessageEntry
+            Message, MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
+            MessageEntry, MessageTransaction, MessageTransactionInfo,
         },
     },
     yellowstone_grpc_proto::geyser::{
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions, SubscribeRequestFilterBlocks, SubscribeUpdateBlockMeta
+        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdateBlockMeta,
     },
 };
 
@@ -190,7 +190,6 @@ fn one_account_filter(c: &mut Criterion) {
         b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
     });
 }
-
 
 fn sweep_account_include(c: &mut Criterion) {
     let keypair = Keypair::new();

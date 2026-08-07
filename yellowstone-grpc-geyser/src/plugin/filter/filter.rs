@@ -782,6 +782,9 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_cuckoo(&mut self, pubkey: &Pubkey) {
+        if self.filter.account_cuckoo.is_empty() {
+            return;
+        }
         let bytes = pubkey.to_bytes();
         for (name, cuckoo) in &self.filter.account_cuckoo {
             if cuckoo.contains(&bytes) {
@@ -1072,26 +1075,24 @@ impl FilterTransactions {
                 }
 
                 if !inner.account_include.is_empty() {
-                    let hit = if inner.account_include.len()
-                        <= message.transaction.account_keys.len()
-                    {
-                        inner.account_include.iter().any(in_effective_set)
-                    } else {
-                        effective_keys().any(|k| inner.account_include.contains(k))
-                    };
+                    let hit =
+                        if inner.account_include.len() <= message.transaction.account_keys.len() {
+                            inner.account_include.iter().any(in_effective_set)
+                        } else {
+                            effective_keys().any(|k| inner.account_include.contains(k))
+                        };
                     if !hit {
                         return None;
                     }
                 }
 
                 if !inner.account_exclude.is_empty() {
-                    let hit = if inner.account_exclude.len()
-                        <= message.transaction.account_keys.len()
-                    {
-                        inner.account_exclude.iter().any(in_effective_set)
-                    } else {
-                        effective_keys().any(|k| inner.account_exclude.contains(k))
-                    };
+                    let hit =
+                        if inner.account_exclude.len() <= message.transaction.account_keys.len() {
+                            inner.account_exclude.iter().any(in_effective_set)
+                        } else {
+                            effective_keys().any(|k| inner.account_exclude.contains(k))
+                        };
                     if hit {
                         return None;
                     }
@@ -1613,7 +1614,10 @@ impl FilterBlocksInner {
         }
 
         if let Some(cuckoo) = &self.account_cuckoo {
-            if account_keys.iter().any(|pk| cuckoo.contains(&pk.to_bytes())) {
+            if account_keys
+                .iter()
+                .any(|pk| cuckoo.contains(&pk.to_bytes()))
+            {
                 return true;
             }
         }
