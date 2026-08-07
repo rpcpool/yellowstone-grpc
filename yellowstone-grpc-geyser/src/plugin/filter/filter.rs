@@ -1601,21 +1601,19 @@ impl FilterBlocksInner {
             return true;
         }
 
-        if !self.account_include.is_empty()
-            && self
-                .account_include
-                .intersection(account_keys)
-                .next()
-                .is_some()
-        {
-            return true;
+        if !self.account_include.is_empty() {
+            let (small, large) = if self.account_include.len() <= account_keys.len() {
+                (&self.account_include, account_keys)
+            } else {
+                (account_keys, &self.account_include)
+            };
+            if small.iter().any(|k| large.contains(k)) {
+                return true;
+            }
         }
 
         if let Some(cuckoo) = &self.account_cuckoo {
-            if account_keys
-                .iter()
-                .any(|pk| cuckoo.contains(&pk.to_bytes()))
-            {
+            if account_keys.iter().any(|pk| cuckoo.contains(&pk.to_bytes())) {
                 return true;
             }
         }
