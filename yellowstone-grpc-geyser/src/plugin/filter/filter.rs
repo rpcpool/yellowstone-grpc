@@ -1597,20 +1597,19 @@ impl FilterBlocksInner {
         false
     }
 
-    fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
+   fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
         if self.account_include.is_empty() && self.account_cuckoo.is_none() {
             return true;
         }
 
-        if !self.account_include.is_empty() {
-            let (small, large) = if self.account_include.len() <= account_keys.len() {
-                (&self.account_include, account_keys)
-            } else {
-                (account_keys, &self.account_include)
-            };
-            if small.iter().any(|k| large.contains(k)) {
-                return true;
-            }
+        if !self.account_include.is_empty()
+            && self
+                .account_include
+                .intersection(account_keys)
+                .next()
+                .is_some()
+        {
+            return true;
         }
 
         if let Some(cuckoo) = &self.account_cuckoo {
