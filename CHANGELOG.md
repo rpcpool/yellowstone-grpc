@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-06
+
+- yellowstone-grpc-geyser 14.2.4
+
+### Misc
+
+- plugin perf: use tonic's vectored writes for less overhead and copying when using TLS
+
 ## 2026-08-04
 
 - yellowstone-grpc-geyser 14.2.3
