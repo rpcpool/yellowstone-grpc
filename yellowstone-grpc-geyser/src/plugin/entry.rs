@@ -12,6 +12,7 @@ use {
             },
         },
         stream::tokio::BatchStreamUnboundedReceiver,
+        version::VERSION,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -165,6 +166,7 @@ impl GeyserPlugin for Plugin {
                 config.prometheus,
                 prometheus_cancellation_token,
                 prometheus_task_tracker,
+                &VERSION,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
