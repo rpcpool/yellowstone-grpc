@@ -46,6 +46,45 @@ use {
     },
 };
 
+/// Solana caps a transaction at 64 account keys, so a filter list at or
+/// below this is never longer than the transaction it is compared against.
+const MAX_TX_ACCOUNT_KEYS: usize = 64;
+
+#[derive(Debug, Clone)]
+enum HybridSet<T> {
+    /// Cheap to walk.
+    Contiguous(Vec<T>),
+    /// Cheap to probe.
+    Hashed(FoldHashSet<T>),
+}
+
+impl<T: Eq + std::hash::Hash> HybridSet<T> {
+    /// `contiguous_max` is the size of the collection this set will be
+    /// compared against. At or below it, walking this set is never worse
+    /// than walking the other, so keep the contiguous form.
+    fn new(set: FoldHashSet<T>, contiguous_max: usize) -> Self {
+        if set.len() <= contiguous_max {
+            Self::Contiguous(set.into_iter().collect())
+        } else {
+            Self::Hashed(set)
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Contiguous(v) => v.is_empty(),
+            Self::Hashed(s) => s.is_empty(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Contiguous(v) => v.len(),
+            Self::Hashed(s) => s.len(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FilterError {
     #[error(transparent)]
@@ -929,8 +968,8 @@ struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
-    account_include: FoldHashSet<Pubkey>,
-    account_exclude: FoldHashSet<Pubkey>,
+    account_include: HybridSet<Pubkey>,
+    account_exclude: HybridSet<Pubkey>,
     account_required: FoldHashSet<Pubkey>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
@@ -987,14 +1026,20 @@ impl FilterTransactions {
                             signature_str.parse().map_err(FilterError::InvalidSignature)
                         })
                         .transpose()?,
-                    account_include: Filter::decode_pubkeys_into_set(
-                        &filter.account_include,
-                        &limits.account_include_reject,
-                    )?,
-                    account_exclude: Filter::decode_pubkeys_into_set(
-                        &filter.account_exclude,
-                        &FoldHashSet::new(),
-                    )?,
+                    account_include: HybridSet::new(
+                        Filter::decode_pubkeys_into_set(
+                            &filter.account_include,
+                            &limits.account_include_reject,
+                        )?,
+                        MAX_TX_ACCOUNT_KEYS,
+                    ),
+                    account_exclude: HybridSet::new(
+                        Filter::decode_pubkeys_into_set(
+                            &filter.account_exclude,
+                            &FoldHashSet::new(),
+                        )?,
+                        MAX_TX_ACCOUNT_KEYS,
+                    ),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &FoldHashSet::new(),
@@ -1074,25 +1119,21 @@ impl FilterTransactions {
                     return None;
                 }
 
-                if !inner.account_include.is_empty() {
-                    let hit =
-                        if inner.account_include.len() <= message.transaction.account_keys.len() {
-                            inner.account_include.iter().any(in_effective_set)
-                        } else {
-                            effective_keys().any(|k| inner.account_include.contains(k))
-                        };
+              if !inner.account_include.is_empty() {
+                    let hit = match &inner.account_include {
+                        HybridSet::Contiguous(v) => v.iter().any(in_effective_set),
+                        HybridSet::Hashed(s) => effective_keys().any(|k| s.contains(k)),
+                    };
                     if !hit {
                         return None;
                     }
                 }
 
                 if !inner.account_exclude.is_empty() {
-                    let hit =
-                        if inner.account_exclude.len() <= message.transaction.account_keys.len() {
-                            inner.account_exclude.iter().any(in_effective_set)
-                        } else {
-                            effective_keys().any(|k| inner.account_exclude.contains(k))
-                        };
+                    let hit = match &inner.account_exclude {
+                        HybridSet::Contiguous(v) => v.iter().any(in_effective_set),
+                        HybridSet::Hashed(s) => effective_keys().any(|k| s.contains(k)),
+                    };
                     if hit {
                         return None;
                     }
