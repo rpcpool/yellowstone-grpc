@@ -83,6 +83,19 @@ impl<T: Eq + std::hash::Hash> HybridSet<T> {
             Self::Hashed(s) => s.len(),
         }
     }
+
+    /// True if any element of this set is also in `other`. Walks whichever
+    /// side is cheaper given this set's representation.
+    fn overlaps<'a, I>(&self, contains_other: impl Fn(&T) -> bool, other: impl Fn() -> I) -> bool
+    where
+        I: Iterator<Item = &'a T>,
+        T: 'a,
+    {
+        match self {
+            Self::Contiguous(v) => v.iter().any(contains_other),
+            Self::Hashed(s) => other().any(|k| s.contains(k)),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1119,24 +1132,20 @@ impl FilterTransactions {
                     return None;
                 }
 
-              if !inner.account_include.is_empty() {
-                    let hit = match &inner.account_include {
-                        HybridSet::Contiguous(v) => v.iter().any(in_effective_set),
-                        HybridSet::Hashed(s) => effective_keys().any(|k| s.contains(k)),
-                    };
-                    if !hit {
-                        return None;
-                    }
+                if !inner.account_include.is_empty()
+                    && !inner
+                        .account_include
+                        .overlaps(in_effective_set, effective_keys)
+                {
+                    return None;
                 }
 
-                if !inner.account_exclude.is_empty() {
-                    let hit = match &inner.account_exclude {
-                        HybridSet::Contiguous(v) => v.iter().any(in_effective_set),
-                        HybridSet::Hashed(s) => effective_keys().any(|k| s.contains(k)),
-                    };
-                    if hit {
-                        return None;
-                    }
+                if !inner.account_exclude.is_empty()
+                    && inner
+                        .account_exclude
+                        .overlaps(in_effective_set, effective_keys)
+                {
+                    return None;
                 }
 
                 Some(name.clone())
