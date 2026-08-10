@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "15.0.0-rc4+solana.4.2.0.rc.1"
+version = "15.0.0-rc6+solana.4.2.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -116,7 +116,7 @@ criterion = { workspace = true }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
-solana-storage-proto = { workspace = true }
+solana-storage-proto = { workspace = true, features = ["agave-unstable-api"] }
 solana-transaction = { workspace = true, features = ["wincode", "blake3"] }
 
 [lints]

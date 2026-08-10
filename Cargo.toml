@@ -103,19 +103,19 @@ wincode = "0.5.0"
 notify = "8.2.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "agave-geyser-plugin-interface" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-account-decoder" }
+agave-geyser-plugin-interface = "4.2.0" # { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "agave-geyser-plugin-interface" }
+solana-account-decoder = "4.2.0" # { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-account-decoder" }
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-storage-proto", features = ["agave-unstable-api"] }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-transaction-context" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-transaction-status" }
+solana-storage-proto = "4.2.0" #{ git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-storage-proto", features = ["agave-unstable-api"] }
+solana-transaction-context = "4.2.0" # { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-transaction-context" }
+solana-transaction-status = "4.2.0" # { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-rc.1", package = "solana-transaction-status" }
 
 # Solana SDK
 # Left this has a documentation where the version is pinned to 2.6.1 because the solana-address crate has updated its wincode to 0.6.0 which break many other crates.
-solana-address = "=2.6.1"
-solana-instruction-error = "=2.4.0"
-# On message 4.5.0, it moves to wincode 0.6.0
-solana-message = "=4.4.0"
+# solana-address = "=2.6.1"
+# solana-instruction-error = "2.4.0"
+# # On message 4.5.0, it moves to wincode 0.6.0
+solana-message = "4.4.0"
 solana-short-vec = "=3.2.2"
 
 solana-account = "4.0.0"
@@ -137,7 +137,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.9.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.3.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.0.0-rc4+solana.4.2.0.rc.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.0.0-rc6+solana.4.2.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
