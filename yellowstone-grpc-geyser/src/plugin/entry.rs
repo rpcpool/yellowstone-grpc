@@ -2,7 +2,7 @@ use {
     crate::{
         config::Config,
         file_watcher::FileWatcher,
-        grpc::{BlockReconstructionMessage, BroadcastedMessage, GrpcService},
+        grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
@@ -44,7 +44,7 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
     deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
     block_reconstruction_channel: mpsc::UnboundedSender<BlockReconstructionMessage>, // block_reconstruction_loop
-    broadcast_channel: broadcast::Sender<BroadcastedMessage>,                        // client_loop
+    broadcast_channel: SubscriberChannels,                                           // client_loop
     blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
@@ -74,8 +74,8 @@ impl PluginInner {
     }
 
     // Sends messages to all subscribed clients if their filter matches the message.
-    fn send_broadcast_message(&self, message: BroadcastedMessage) {
-        let _ = self.broadcast_channel.send(message);
+    fn send_broadcast_message(&self, commitment: CommitmentLevel, messages: Arc<Vec<Message>>) {
+        self.broadcast_channel.send(commitment, messages);
     }
 
     // Sends messages to block meta storage
@@ -201,7 +201,7 @@ impl GeyserPlugin for Plugin {
             grpc_channel: grpc_channel_tx,
             deshred_channel: grpc_service_result.deshred_broadcast_tx,
             block_reconstruction_channel: grpc_service_result.block_reconstruction_tx,
-            broadcast_channel: grpc_service_result.broadcast_tx,
+            broadcast_channel: grpc_service_result.broadcast,
             blocks_meta_tx: grpc_service_result.blocks_meta_tx,
             plugin_cancellation_token,
             plugin_task_tracker,
@@ -327,11 +327,8 @@ impl GeyserPlugin for Plugin {
                     // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
                     // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
                     let messages = Arc::new(vec![message.clone()]);
-                    inner.send_broadcast_message((
-                        CommitmentLevel::Confirmed,
-                        Arc::clone(&messages),
-                    ));
-                    inner.send_broadcast_message((CommitmentLevel::Finalized, messages));
+                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
+                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
                 }
             }
 
