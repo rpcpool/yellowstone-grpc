@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-10
+
+- yellowstone-grpc-geyser 14.2.5
+
+### Misc
+
+- plugin perf: match transaction `account_include`/`account_exclude` against the shorter of the transaction keys or the filter list, and skip the account path when a subscriber has no account filters
+
 ## 2026-08-06
 
 - yellowstone-grpc-geyser 14.2.4
@@ -20,7 +28,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2026-08-04
 
-- yellowstone-grpc-geyser 14.2.5
+- yellowstone-grpc-geyser 14.2.3
 
 ### Fixed
 
@@ -29,7 +37,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Misc
 
 - plugin perf: separated commitment level messages to subscribers into separate channels to reduce wakeups
-- plugin perf: match transaction `account_include`/`account_exclude` against the shorter of the transaction keys or the filter list, and skip the account path when a subscriber has no account filters
 
 ## 2026-07-31
 
