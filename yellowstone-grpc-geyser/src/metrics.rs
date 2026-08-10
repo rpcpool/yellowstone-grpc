@@ -5,7 +5,7 @@ use {
             filter::{Filter, FilterStats},
             message::SlotStatus,
         },
-        version::VERSION as VERSION_INFO,
+        version::Version,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
@@ -234,6 +234,7 @@ impl PrometheusService {
         config: Option<ConfigPrometheus>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        version: &Version,
     ) -> std::io::Result<()> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
@@ -276,13 +277,13 @@ impl PrometheusService {
 
             VERSION
                 .with_label_values(&[
-                    VERSION_INFO.buildts,
-                    VERSION_INFO.git,
-                    VERSION_INFO.package,
-                    VERSION_INFO.proto,
-                    VERSION_INFO.rustc,
-                    VERSION_INFO.solana,
-                    VERSION_INFO.version,
+                    version.buildts,
+                    version.git,
+                    version.package,
+                    version.proto,
+                    version.rustc,
+                    version.solana,
+                    version.version,
                 ])
                 .inc();
         });
