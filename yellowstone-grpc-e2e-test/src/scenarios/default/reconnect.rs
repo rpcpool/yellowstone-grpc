@@ -6,12 +6,13 @@ use {
     std::{
         collections::{HashMap, HashSet},
         sync::{Arc, Mutex},
-        time::Duration,
+        time::{Duration, Instant},
     },
     tokio_stream::StreamExt,
     yellowstone_grpc_client::{
         test_tools::UnstableConnector, AutoReconnect, Backoff, DedupState, DedupStream,
-        GrpcConnector, ReconnectConfig, ReconnectionPolicy, TonicGrpcConnector, DEFAULT_SLOT_RETENTION,
+        GrpcConnector, ReconnectConfig, ReconnectionPolicy, TonicGrpcConnector,
+        DEFAULT_SLOT_RETENTION,
     },
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_proto::{
@@ -25,6 +26,7 @@ use {
 
 const DROP_INTERVAL: Duration = Duration::from_secs(5);
 const SLOTS_TO_OBSERVE: usize = 40;
+const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Slots plus blocks_meta. BlockMeta sets the checkpoint, so without it neither
 /// policy ever replays and the scenario proves nothing.
@@ -84,6 +86,7 @@ fn connector(
 struct Observed {
     seen: HashSet<(u64, i32)>,
     duplicates: u64,
+    slots: HashSet<u64>,
 }
 
 impl Observed {
@@ -91,7 +94,6 @@ impl Observed {
     fn slots(&self) -> Vec<u64> {
         let mut slots: Vec<u64> = self.seen.iter().map(|(slot, _)| *slot).collect();
         slots.sort_unstable();
-        slots.dedup();
         slots
     }
 
@@ -107,12 +109,11 @@ impl Observed {
 /// Consumes until `SLOTS_TO_OBSERVE` distinct slots have been seen, recording
 /// every (slot, status) pair. Duplicates fail both policies: Recover dedups them,
 /// Skip never replays.
-async fn observe<S>(mut stream: S) -> Result<Observed>
+async fn observe<S>(stream: &mut S) -> Result<Observed>
 where
     S: futures::Stream<Item = Result<SubscribeUpdate, Status>> + Unpin,
 {
     let mut observed = Observed::default();
-    let mut distinct = 0usize;
 
     while let Some(update) = stream.next().await {
         let update = update.context("stream should yield updates without error")?;
@@ -121,18 +122,26 @@ where
         };
 
         if observed.seen.insert((slot.slot, slot.status)) {
-            distinct = observed.slots().len();
+            observed.slots.insert(slot.slot);
         } else {
             observed.duplicates += 1;
             log::warn!("duplicate: slot={} status={}", slot.slot, slot.status);
         }
 
-        if distinct >= SLOTS_TO_OBSERVE {
+        if observed.slots.len() >= SLOTS_TO_OBSERVE {
             break;
         }
     }
 
     Ok(observed)
+}
+
+fn ensure_disconnects_fired(elapsed: Duration) -> Result<()> {
+    ensure!(
+        elapsed > DROP_INTERVAL * 2,
+        "run finished in {elapsed:?}, shorter than two drop intervals; no disconnect fired"
+    );
+    Ok(())
 }
 
 /// Auto-reconnect replays missed slots after forced disconnects, without duplicates.
@@ -150,12 +159,17 @@ pub async fn reconnect_should_recover_missed_slots(config: &RunConfig) -> Result
         .await
         .context("initial connection should succeed")?;
 
-    let stream = DedupStream::new(
+    let mut stream = DedupStream::new(
         AutoReconnect::new(first, connector, request, Backoff::default()),
         DedupState::with_slot_retention(DEFAULT_SLOT_RETENTION),
     );
 
-    let observed = observe(stream).await?;
+    let started = Instant::now();
+    let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream))
+        .await
+        .context("scenario timed out")??;
+
+    ensure_disconnects_fired(started.elapsed())?;
     ensure!(
         observed.duplicates == 0,
         "{} duplicates delivered",
@@ -180,10 +194,15 @@ pub async fn reconnect_should_skip_missed_slots(config: &RunConfig) -> Result<()
         .await
         .context("initial connection should succeed")?;
 
-    let stream =
+    let mut stream =
         AutoReconnect::new(first, connector, request, Backoff::default()).without_checkpoint();
 
-    let observed = observe(stream).await?;
+    let started = Instant::now();
+    let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream))
+        .await
+        .context("scenario timed out")??;
+
+    ensure_disconnects_fired(started.elapsed())?;
     ensure!(
         observed.duplicates == 0,
         "{} duplicates delivered",
@@ -191,7 +210,7 @@ pub async fn reconnect_should_skip_missed_slots(config: &RunConfig) -> Result<()
     );
     ensure!(
         !observed.gaps().is_empty(),
-        "skip policy should leave gaps; disconnects may not have fired"
+        "skip policy should leave gaps but found none"
     );
 
     Ok(())
