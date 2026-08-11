@@ -46,46 +46,29 @@ use {
     },
 };
 
-/// Solana caps a transaction at 64 account keys. Used as the contiguous
-/// storage threshold, since it bounds the other side of every comparison.
-const MAX_TX_ACCOUNT_KEYS: usize = 64;
-
 #[derive(Debug, Clone)]
-enum HybridSet<T> {
-    /// Cheap to walk.
-    Contiguous(Vec<T>),
-    /// Cheap to probe.
-    Hashed(FoldHashSet<T>),
+struct HybridSet<T> {
+    vec: Vec<T>,
+    set: FoldHashSet<T>,
 }
 
-impl<T: Eq + std::hash::Hash> HybridSet<T> {
-    /// `contiguous_max` is the size of the collection this set will be
-    /// compared against. At or below it, walking this set is never worse
-    /// than walking the other, so keep the contiguous form.
-    fn new(set: FoldHashSet<T>, contiguous_max: usize) -> Self {
-        if set.len() <= contiguous_max {
-            Self::Contiguous(set.into_iter().collect())
-        } else {
-            Self::Hashed(set)
-        }
+impl<T: Eq + std::hash::Hash> HybridSet<T>
+where
+    T: Clone,
+{
+    fn new_with_set(set: FoldHashSet<T>) -> Self {
+        let vec = set.iter().cloned().collect();
+        Self { vec, set }
     }
 
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Contiguous(v) => v.is_empty(),
-            Self::Hashed(s) => s.is_empty(),
-        }
+    const fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 
-    fn len(&self) -> usize {
-        match self {
-            Self::Contiguous(v) => v.len(),
-            Self::Hashed(s) => s.len(),
-        }
+    const fn len(&self) -> usize {
+        self.vec.len()
     }
 
-    /// True if any element of this set is also in `other`. Walks whichever
-    /// side is cheaper given this set's representation.
     fn overlaps<'a, I>(
         &self,
         other_len: usize,
@@ -96,10 +79,11 @@ impl<T: Eq + std::hash::Hash> HybridSet<T> {
         I: Iterator<Item = &'a T>,
         T: 'a,
     {
-        match self {
-            Self::Contiguous(v) if v.len() <= other_len => v.iter().any(contains_other),
-            Self::Contiguous(v) => other().any(|k| v.contains(k)),
-            Self::Hashed(s) => other().any(|k| s.contains(k)),
+        /* iterate vec if we are smaller than the other collection */
+        if self.vec.len() <= other_len {
+            self.vec.iter().any(contains_other)
+        } else {
+            other().any(|k| self.set.contains(k))
         }
     }
 }
@@ -989,7 +973,7 @@ struct FilterTransactionsInner {
     signature: Option<Signature>,
     account_include: HybridSet<Pubkey>,
     account_exclude: HybridSet<Pubkey>,
-    account_required: FoldHashSet<Pubkey>,
+    account_required: Vec<Pubkey>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -1045,24 +1029,20 @@ impl FilterTransactions {
                             signature_str.parse().map_err(FilterError::InvalidSignature)
                         })
                         .transpose()?,
-                    account_include: HybridSet::new(
-                        Filter::decode_pubkeys_into_set(
-                            &filter.account_include,
-                            &limits.account_include_reject,
-                        )?,
-                        MAX_TX_ACCOUNT_KEYS,
-                    ),
-                    account_exclude: HybridSet::new(
-                        Filter::decode_pubkeys_into_set(
-                            &filter.account_exclude,
-                            &FoldHashSet::new(),
-                        )?,
-                        MAX_TX_ACCOUNT_KEYS,
-                    ),
+                    account_include: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
+                        &filter.account_include,
+                        &limits.account_include_reject,
+                    )?),
+                    account_exclude: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
+                        &filter.account_exclude,
+                        &FoldHashSet::new(),
+                    )?),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &FoldHashSet::new(),
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -1126,6 +1106,7 @@ impl FilterTransactions {
                 // Iterate the transaction's keys, not the filter's lists.
                 // A tx carries tens of keys; include/exclude lists reach
                 // tens of thousands.
+                // NOTE: We can have duplicate entries between account_keys and token_owners here, worth revisiting at some point.
                 let effective_keys = || {
                     message
                         .transaction
