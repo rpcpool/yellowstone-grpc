@@ -46,8 +46,8 @@ use {
     },
 };
 
-/// Solana caps a transaction at 64 account keys, so a filter list at or
-/// below this is never longer than the transaction it is compared against.
+/// Solana caps a transaction at 64 account keys. Used as the contiguous
+/// storage threshold, since it bounds the other side of every comparison.
 const MAX_TX_ACCOUNT_KEYS: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -86,13 +86,19 @@ impl<T: Eq + std::hash::Hash> HybridSet<T> {
 
     /// True if any element of this set is also in `other`. Walks whichever
     /// side is cheaper given this set's representation.
-    fn overlaps<'a, I>(&self, contains_other: impl Fn(&T) -> bool, other: impl Fn() -> I) -> bool
+    fn overlaps<'a, I>(
+        &self,
+        other_len: usize,
+        contains_other: impl Fn(&T) -> bool,
+        other: impl Fn() -> I,
+    ) -> bool
     where
         I: Iterator<Item = &'a T>,
         T: 'a,
     {
         match self {
-            Self::Contiguous(v) => v.iter().any(contains_other),
+            Self::Contiguous(v) if v.len() <= other_len => v.iter().any(contains_other),
+            Self::Contiguous(v) => other().any(|k| v.contains(k)),
             Self::Hashed(s) => other().any(|k| s.contains(k)),
         }
     }
@@ -1133,17 +1139,21 @@ impl FilterTransactions {
                 }
 
                 if !inner.account_include.is_empty()
-                    && !inner
-                        .account_include
-                        .overlaps(in_effective_set, effective_keys)
+                    && !inner.account_include.overlaps(
+                        message.transaction.account_keys.len(),
+                        in_effective_set,
+                        effective_keys,
+                    )
                 {
                     return None;
                 }
 
                 if !inner.account_exclude.is_empty()
-                    && inner
-                        .account_exclude
-                        .overlaps(in_effective_set, effective_keys)
+                    && inner.account_exclude.overlaps(
+                        message.transaction.account_keys.len(),
+                        in_effective_set,
+                        effective_keys,
+                    )
                 {
                     return None;
                 }
