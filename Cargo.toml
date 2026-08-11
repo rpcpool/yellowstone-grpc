@@ -103,34 +103,36 @@ wincode = "0.5.0"
 notify = "8.2.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "4.1.0"
-solana-account-decoder = "4.1.0"
+agave-geyser-plugin-interface = "4.2.0"
+solana-account-decoder = "4.2.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { version = "4.1.0", features = ["agave-unstable-api"] }
-solana-transaction-context = "4.1.0"
-solana-transaction-status = "4.1.0"
+solana-storage-proto = "4.2.0"
+solana-transaction-context = "4.2.0"
+solana-transaction-status = "4.2.0"
 
 # Solana SDK
+solana-message = "4.4.1"
+
 solana-account = "4.0.0"
 solana-clock = "3.0.0"
 solana-commitment-config = "3.0.0"
 solana-hash = "4.3.0"
 solana-keypair = "3.0.0"
-solana-message = "4.1.0"
+
 solana-pubkey = "4.0.0"
 solana-signature = "3.0.0"
 solana-signer = "3.0.0"
 solana-transaction = "4.0.0"
 # We need to pin this to 3.2.0 because introduce a breaking changing in 3.3.0 which prevents compilation of solana-storage-proto.
-solana-transaction-error = "=3.2.0"
+solana-transaction-error = "3.3.1"
 
 # Solana Misc
 spl-token-2022-interface = "2.1.0"
 
 # Yellowstone
 yellowstone-block-machine = { version = "0.9.0", default-features = false }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "14.2.4" }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.3.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.0.0+solana.4.2.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.5.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
