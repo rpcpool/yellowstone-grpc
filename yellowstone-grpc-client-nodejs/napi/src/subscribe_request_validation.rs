@@ -418,6 +418,7 @@ mod tests {
         account_include: vec!["acc_i".to_string()],
         account_exclude: vec!["acc_x".to_string()],
         account_required: vec!["acc_r".to_string()],
+        cuckoo_account_include: None,
         token_accounts: None,
       },
     );
@@ -432,6 +433,7 @@ mod tests {
         account_include: vec!["status_i".to_string()],
         account_exclude: vec!["status_x".to_string()],
         account_required: vec!["status_r".to_string()],
+        cuckoo_account_include: None,
         token_accounts: None,
       },
     );

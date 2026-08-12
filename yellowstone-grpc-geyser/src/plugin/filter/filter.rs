@@ -974,6 +974,7 @@ struct FilterTransactionsInner {
     account_include: HybridSet<Pubkey>,
     account_exclude: HybridSet<Pubkey>,
     account_required: Vec<Pubkey>,
+    account_cuckoo: Option<Arc<CuckooFilter<[u8; 32]>>>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -999,6 +1000,7 @@ impl FilterTransactions {
                 filter.vote.is_none()
                     && filter.failed.is_none()
                     && filter.account_include.is_empty()
+                    && filter.cuckoo_account_include.is_none()
                     && filter.account_exclude.is_empty()
                     && filter.account_required.is_empty()
                     && filter.token_accounts.is_none(),
@@ -1016,6 +1018,13 @@ impl FilterTransactions {
                 filter.account_required.len(),
                 limits.account_required_max,
             )?;
+
+            let account_cuckoo = if let Some(proto_cuckoo) = &filter.cuckoo_account_include {
+                FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
+                Some(Arc::new(CuckooFilter::from(proto_cuckoo)))
+            } else {
+                None
+            };
 
             filters.insert(
                 names.get(name)?,
@@ -1043,6 +1052,7 @@ impl FilterTransactions {
                     )?
                     .into_iter()
                     .collect(),
+                    account_cuckoo,
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -1119,19 +1129,31 @@ impl FilterTransactions {
                     return None;
                 }
 
-                if !inner.account_include.is_empty()
-                    && !inner.account_include.overlaps(
-                        message.transaction.account_keys.len(),
-                        in_effective_set,
-                        effective_keys,
-                    )
-                {
-                    return None;
+                let effective_len = message.transaction.account_keys.len()
+                    + token_owners.map_or(0, |set| set.len());
+
+                if !(inner.account_include.is_empty() && inner.account_cuckoo.is_none()) {
+                    let include_hit = !inner.account_include.is_empty()
+                        && inner.account_include.overlaps(
+                            effective_len,
+                            in_effective_set,
+                            effective_keys,
+                        );
+
+                    let cuckoo_hit = || {
+                        inner.account_cuckoo.as_ref().is_some_and(|cuckoo| {
+                            effective_keys().any(|pk| cuckoo.contains(&pk.to_bytes()))
+                        })
+                    };
+
+                    if !include_hit && !cuckoo_hit() {
+                        return None;
+                    }
                 }
 
                 if !inner.account_exclude.is_empty()
                     && inner.account_exclude.overlaps(
-                        message.transaction.account_keys.len(),
+                        effective_len,
                         in_effective_set,
                         effective_keys,
                     )
@@ -1988,6 +2010,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2024,6 +2047,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2066,6 +2090,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2132,6 +2157,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2198,6 +2224,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude,
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2250,6 +2277,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2653,6 +2681,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -3114,6 +3143,7 @@ mod cuckoo_tests {
                     .into_iter()
                     .map(|k| k.to_string())
                     .collect(),
+                cuckoo_account_include: None,
                 token_accounts: mode.map(|m| m as i32),
             }
         }
@@ -3697,6 +3727,7 @@ mod cuckoo_tests {
                     account_include: vec![Pubkey::new_unique().to_string()],
                     account_exclude: vec![],
                     account_required: vec![],
+                    cuckoo_account_include: None,
                     token_accounts: Some(99),
                 },
             );

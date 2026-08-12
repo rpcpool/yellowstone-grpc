@@ -12,7 +12,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2026-08-10
 
-- yellowstone-grpc-geyser 15.0.1
+- yellowstone-grpc-proto 12.6.0
+- yellowstone-grpc-geyser 15.1.0
+
+### Features
+
+- proto/plugin: support `cuckoo_account_include` on transaction subscriptions so clients can filter large address sets without sending every pubkey
 
 ### Misc
 

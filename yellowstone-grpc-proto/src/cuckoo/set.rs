@@ -22,7 +22,7 @@ use {
     },
     crate::geyser::{
         CuckooFilter as ProtoCuckooFilter, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocks, SubscribeRequestFilterTransactions,
     },
     solana_pubkey::Pubkey,
     std::collections::HashSet,
@@ -326,6 +326,39 @@ impl CompressedAccountFilterSet {
         }
     }
 
+    /// Returns a [`SubscribeRequestFilterTransactions`] that carries only this
+    /// cuckoo filter, no explicit account include list, no vote/failed/signature
+    /// predicates, no token account expansion.
+    ///
+    /// Use this when you want full transaction details for a large address set
+    /// without sending every pubkey on the wire. The same filter works for
+    /// `transactions` and `transactions_status`:
+    ///
+    /// ```no_run
+    /// use {
+    ///     solana_pubkey::Pubkey,
+    ///     yellowstone_grpc_proto::{cuckoo::CompressedAccountFilterSet, geyser::SubscribeRequest},
+    /// };
+    ///
+    /// let mut map = CompressedAccountFilterSet::with_capacity(1000).unwrap();
+    /// map.insert(Pubkey::new_from_array([1u8; 32])).unwrap();
+    ///
+    /// let mut req = SubscribeRequest::default();
+    /// req.transactions.insert("txs".to_string(), map.to_transaction_filter());
+    /// ```
+    pub fn to_transaction_filter(&self) -> SubscribeRequestFilterTransactions {
+        SubscribeRequestFilterTransactions {
+            vote: None,
+            failed: None,
+            signature: None,
+            account_include: vec![],
+            account_exclude: vec![],
+            account_required: vec![],
+            cuckoo_account_include: Some(self.to_proto()),
+            token_accounts: None,
+        }
+    }
+
     /// Inserts this cuckoo filter into `req.accounts` under the given name.
     ///
     /// Existing entries in `req.accounts` are preserved. If an entry already
@@ -380,6 +413,38 @@ impl CompressedAccountFilterSet {
     /// ```
     pub fn insert_into_block_subscribe_request(&mut self, req: &mut SubscribeRequest, name: &str) {
         req.blocks.insert(name.to_string(), self.to_block_filter());
+        self.dirty = false;
+    }
+
+    /// Inserts this cuckoo filter into `req.transactions` under the given name.
+    ///
+    /// Existing entries in `req.transactions` are preserved. If an entry already
+    /// exists under `name`, it is replaced. Other fields of `req` are untouched.
+    ///
+    /// Marks the map as clean, subsequent mutations will flip the dirty flag
+    /// back to `true` for the next transmission cycle.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use {
+    ///     solana_pubkey::Pubkey,
+    ///     yellowstone_grpc_proto::{cuckoo::CompressedAccountFilterSet, geyser::SubscribeRequest},
+    /// };
+    ///
+    /// let mut map = CompressedAccountFilterSet::with_capacity(1000).unwrap();
+    /// map.insert(Pubkey::new_from_array([1u8; 32])).unwrap();
+    ///
+    /// let mut req = SubscribeRequest::default();
+    /// map.insert_into_transaction_subscribe_request(&mut req, "tracked_txs");
+    /// ```
+    pub fn insert_into_transaction_subscribe_request(
+        &mut self,
+        req: &mut SubscribeRequest,
+        name: &str,
+    ) {
+        req.transactions
+            .insert(name.to_string(), self.to_transaction_filter());
         self.dirty = false;
     }
 }
@@ -535,6 +600,59 @@ mod tests {
 
         let mut req = SubscribeRequest::default();
         filter.insert_into_block_subscribe_request(&mut req, "blocks");
+
+        assert!(!filter.is_dirty());
+    }
+
+    #[test]
+    fn to_transaction_filter_carries_cuckoo_and_no_other_matchers() {
+        let mut filter = CompressedAccountFilterSet::with_capacity(100).unwrap();
+        filter.insert(key(1)).unwrap();
+
+        let f = filter.to_transaction_filter();
+
+        assert!(f.cuckoo_account_include.is_some());
+        assert!(f.account_include.is_empty());
+        assert!(f.account_exclude.is_empty());
+        assert!(f.account_required.is_empty());
+        assert_eq!(f.vote, None);
+        assert_eq!(f.failed, None);
+        assert_eq!(f.signature, None);
+        assert_eq!(f.token_accounts, None);
+    }
+
+    #[test]
+    fn insert_into_transaction_subscribe_request_uses_given_name_and_preserves_other_filters() {
+        let mut filter = CompressedAccountFilterSet::with_capacity(100).unwrap();
+        filter.insert(key(1)).unwrap();
+
+        let mut req = SubscribeRequest::default();
+        req.transactions.insert(
+            "pre_existing".to_string(),
+            SubscribeRequestFilterTransactions::default(),
+        );
+
+        filter.insert_into_transaction_subscribe_request(&mut req, "tracked_txs");
+
+        assert!(req.transactions.contains_key("tracked_txs"));
+        assert!(req.transactions.contains_key("pre_existing"));
+        assert_eq!(req.transactions.len(), 2);
+        assert!(req
+            .transactions
+            .get("tracked_txs")
+            .unwrap()
+            .cuckoo_account_include
+            .is_some());
+    }
+
+    #[test]
+    fn insert_into_transaction_subscribe_request_clears_dirty_flag() {
+        let mut filter = CompressedAccountFilterSet::with_capacity(100).unwrap();
+        filter.insert(key(1)).unwrap();
+        assert!(filter.is_dirty());
+
+        let mut req = SubscribeRequest::default();
+        filter.insert_into_transaction_subscribe_request(&mut req, "txs");
 
         assert!(!filter.is_dirty());
     }

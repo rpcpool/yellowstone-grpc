@@ -125,6 +125,8 @@ pub struct FilterLimitsTransactions {
     pub account_exclude_max: usize,
     #[serde(deserialize_with = "deserialize_usize_str")]
     pub account_required_max: usize,
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub cuckoo_max_size: usize,
 }
 
 impl Default for FilterLimitsTransactions {
@@ -136,6 +138,7 @@ impl Default for FilterLimitsTransactions {
             account_include_reject: FoldHashSet::new(),
             account_exclude_max: usize::MAX,
             account_required_max: usize::MAX,
+            cuckoo_max_size: usize::MAX,
         }
     }
 }

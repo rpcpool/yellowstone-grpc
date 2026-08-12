@@ -10,19 +10,53 @@ use {
     tokio_stream::StreamExt,
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_geyser::plugin::message::CommitmentLevel,
-    yellowstone_grpc_proto::geyser::{
-        subscribe_request_filter_accounts_filter::Filter, subscribe_update::UpdateOneof,
-        SlotStatus, SubscribeRequest, SubscribeRequestFilterAccounts,
-        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
-        SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeUpdateAccount,
-        SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-        SubscribeUpdateTransaction, TokenAccountExpansionControlFlag,
+    yellowstone_grpc_proto::{
+        cuckoo::CompressedAccountFilterSet,
+        geyser::{
+            subscribe_request_filter_accounts_filter::Filter, subscribe_update::UpdateOneof,
+            SlotStatus, SubscribeRequest, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
+            SubscribeUpdateAccount, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
+            SubscribeUpdateEntry, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            TokenAccountExpansionControlFlag,
+        },
     },
 };
 
 pub mod blockmachine;
 pub mod deshred;
 pub mod misc;
+
+fn all_account_keys(info: &SubscribeUpdateTransactionInfo) -> Result<Vec<Pubkey>> {
+    let mut keys = Vec::new();
+
+    if let Some(tx) = &info.transaction {
+        if let Some(msg) = &tx.message {
+            for k in &msg.account_keys {
+                let Ok(pk) = Pubkey::try_from(k.as_slice()) else {
+                    bail!("invalid account key bytes");
+                };
+                keys.push(pk);
+            }
+        }
+    }
+
+    if let Some(meta) = &info.meta {
+        for k in meta
+            .loaded_writable_addresses
+            .iter()
+            .chain(meta.loaded_readonly_addresses.iter())
+        {
+            let Ok(pk) = Pubkey::try_from(k.as_slice()) else {
+                bail!("invalid loaded address bytes");
+            };
+            keys.push(pk);
+        }
+    }
+
+    Ok(keys)
+}
 
 /// Subscribes to account updates and verifies only SysvarClock updates are returned.
 #[test_helper(name = "sysvar-account")]
@@ -946,6 +980,112 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
         }
     }
 
+    Ok(())
+}
+
+/// guarantees that a cuckoo filter on `transactions.cuckoo_account_include`
+/// matches transactions touching the tracked pubkeys, and that a cuckoo built
+/// from unrelated pubkeys never matches.
+#[test_helper(name = "filter-transactions-cuckoo")]
+pub async fn subscribe_should_filter_transactions_by_cuckoo(config: &RunConfig) -> Result<()> {
+    let mut client = crate::grpc::new_client(config).await?;
+
+    // HumidiFi markets, among the most frequently touched accounts in every block.
+    let tracked = vec![
+        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu", // PENGU-USDC
+        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH", // HYPE-USDC
+        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy", // 2Z-USDC
+        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa", // ZEC-USDC
+        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH", // WSOL-USDC
+    ]
+    .into_iter()
+    .map(|s| s.parse::<Pubkey>().expect("valid pubkey"))
+    .collect::<Vec<_>>();
+
+    let mut tracked_set = CompressedAccountFilterSet::with_capacity(tracked.len())
+        .context("cuckoo set should build")?;
+    for pk in &tracked {
+        tracked_set
+            .insert(*pk)
+            .context("cuckoo insert should succeed")?;
+    }
+
+    // A cuckoo over pubkeys that never appear on chain; must never match.
+    let mut absent_set =
+        CompressedAccountFilterSet::with_capacity(4).context("cuckoo set should build")?;
+    for _ in 0..4 {
+        absent_set
+            .insert(Pubkey::new_unique())
+            .context("cuckoo insert should succeed")?;
+    }
+
+    let subscription = SubscribeRequest {
+        transactions: HashMap::from([
+            (
+                "valid_filter".to_string(),
+                tracked_set.to_transaction_filter(),
+            ),
+            (
+                "invalid_filter".to_string(),
+                absent_set.to_transaction_filter(),
+            ),
+        ]),
+        commitment: Some(CommitmentLevel::Processed as i32),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    const MAX_UPDATES: usize = 15;
+
+    let mut count = 0;
+    while let Some(update) = stream.next().await {
+        if count >= MAX_UPDATES {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Transaction(tx) => {
+                if update.filters.is_empty() {
+                    bail!("transaction update should have filters applied");
+                }
+
+                if !update.filters.iter().all(|f| f == "valid_filter") {
+                    bail!(
+                        "transaction update received a filter which should never come through {:?}",
+                        update.filters
+                    );
+                }
+
+                let slot = tx.slot;
+                let Some(info) = &tx.transaction else {
+                    bail!("transaction update should have transaction field");
+                };
+
+                // The cuckoo is probabilistic, so a hit does not prove the key is
+                // present. Confirm exactly against the tracked set instead.
+                let keys = all_account_keys(info)?;
+                ensure!(
+                    keys.iter().any(|k| tracked_set.contains(*k)),
+                    "transaction carried no tracked pubkey; cuckoo matched a false positive \
+                     or the filter is matching everything"
+                );
+
+                count += 1;
+                log::info!("received transaction update for slot {slot}, {count}/{MAX_UPDATES}");
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+            _ => continue,
+        }
+    }
+
+    ensure!(count > 0, "no transaction updates received");
     Ok(())
 }
 
