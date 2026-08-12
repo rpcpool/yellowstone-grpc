@@ -12,7 +12,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## 2026-08-10
 
-- yellowstone-grpc-geyser 15.0.1
+- yellowstone-grpc-geyser 14.2.5
 
 ### Misc
 
