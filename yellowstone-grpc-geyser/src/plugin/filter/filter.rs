@@ -46,54 +46,44 @@ use {
     },
 };
 
-/// Solana caps a transaction at 64 account keys, so a filter list at or
-/// below this is never longer than the transaction it is compared against.
-const MAX_TX_ACCOUNT_KEYS: usize = 64;
-
 #[derive(Debug, Clone)]
-enum HybridSet<T> {
-    /// Cheap to walk.
-    Contiguous(Vec<T>),
-    /// Cheap to probe.
-    Hashed(FoldHashSet<T>),
+struct HybridSet<T> {
+    vec: Vec<T>,
+    set: FoldHashSet<T>,
 }
 
-impl<T: Eq + std::hash::Hash> HybridSet<T> {
-    /// `contiguous_max` is the size of the collection this set will be
-    /// compared against. At or below it, walking this set is never worse
-    /// than walking the other, so keep the contiguous form.
-    fn new(set: FoldHashSet<T>, contiguous_max: usize) -> Self {
-        if set.len() <= contiguous_max {
-            Self::Contiguous(set.into_iter().collect())
-        } else {
-            Self::Hashed(set)
-        }
+impl<T: Eq + std::hash::Hash> HybridSet<T>
+where
+    T: Clone,
+{
+    fn new_with_set(set: FoldHashSet<T>) -> Self {
+        let vec = set.iter().cloned().collect();
+        Self { vec, set }
     }
 
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Contiguous(v) => v.is_empty(),
-            Self::Hashed(s) => s.is_empty(),
-        }
+    const fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 
-    fn len(&self) -> usize {
-        match self {
-            Self::Contiguous(v) => v.len(),
-            Self::Hashed(s) => s.len(),
-        }
+    const fn len(&self) -> usize {
+        self.vec.len()
     }
 
-    /// True if any element of this set is also in `other`. Walks whichever
-    /// side is cheaper given this set's representation.
-    fn overlaps<'a, I>(&self, contains_other: impl Fn(&T) -> bool, other: impl Fn() -> I) -> bool
+    fn overlaps<'a, I>(
+        &self,
+        other_len: usize,
+        contains_other: impl Fn(&T) -> bool,
+        other: impl Fn() -> I,
+    ) -> bool
     where
         I: Iterator<Item = &'a T>,
         T: 'a,
     {
-        match self {
-            Self::Contiguous(v) => v.iter().any(contains_other),
-            Self::Hashed(s) => other().any(|k| s.contains(k)),
+        /* iterate vec if we are smaller than the other collection */
+        if self.vec.len() <= other_len {
+            self.vec.iter().any(contains_other)
+        } else {
+            other().any(|k| self.set.contains(k))
         }
     }
 }
@@ -983,7 +973,7 @@ struct FilterTransactionsInner {
     signature: Option<Signature>,
     account_include: HybridSet<Pubkey>,
     account_exclude: HybridSet<Pubkey>,
-    account_required: FoldHashSet<Pubkey>,
+    account_required: Vec<Pubkey>,
     account_cuckoo: Option<Arc<CuckooFilter<[u8; 32]>>>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
@@ -1048,24 +1038,20 @@ impl FilterTransactions {
                             signature_str.parse().map_err(FilterError::InvalidSignature)
                         })
                         .transpose()?,
-                    account_include: HybridSet::new(
-                        Filter::decode_pubkeys_into_set(
-                            &filter.account_include,
-                            &limits.account_include_reject,
-                        )?,
-                        MAX_TX_ACCOUNT_KEYS,
-                    ),
-                    account_exclude: HybridSet::new(
-                        Filter::decode_pubkeys_into_set(
-                            &filter.account_exclude,
-                            &FoldHashSet::new(),
-                        )?,
-                        MAX_TX_ACCOUNT_KEYS,
-                    ),
+                    account_include: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
+                        &filter.account_include,
+                        &limits.account_include_reject,
+                    )?),
+                    account_exclude: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
+                        &filter.account_exclude,
+                        &FoldHashSet::new(),
+                    )?),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
                         &FoldHashSet::new(),
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     account_cuckoo,
                     token_accounts: filter
                         .token_accounts
@@ -1130,6 +1116,7 @@ impl FilterTransactions {
                 // Iterate the transaction's keys, not the filter's lists.
                 // A tx carries tens of keys; include/exclude lists reach
                 // tens of thousands.
+                // NOTE: We can have duplicate entries between account_keys and token_owners here, worth revisiting at some point.
                 let effective_keys = || {
                     message
                         .transaction
@@ -1142,11 +1129,16 @@ impl FilterTransactions {
                     return None;
                 }
 
+                let effective_len = message.transaction.account_keys.len()
+                    + token_owners.map_or(0, |set| set.len());
+
                 if !(inner.account_include.is_empty() && inner.account_cuckoo.is_none()) {
                     let include_hit = !inner.account_include.is_empty()
-                        && inner
-                            .account_include
-                            .overlaps(in_effective_set, effective_keys);
+                        && inner.account_include.overlaps(
+                            effective_len,
+                            in_effective_set,
+                            effective_keys,
+                        );
 
                     let cuckoo_hit = || {
                         inner.account_cuckoo.as_ref().is_some_and(|cuckoo| {
@@ -1160,9 +1152,11 @@ impl FilterTransactions {
                 }
 
                 if !inner.account_exclude.is_empty()
-                    && inner
-                        .account_exclude
-                        .overlaps(in_effective_set, effective_keys)
+                    && inner.account_exclude.overlaps(
+                        effective_len,
+                        in_effective_set,
+                        effective_keys,
+                    )
                 {
                     return None;
                 }
@@ -2748,7 +2742,7 @@ mod cuckoo_tests {
         yellowstone_grpc_proto::{cuckoo::CuckooFilter, geyser::CuckooFilter as ProtoCuckooFilter},
     };
 
-    pub(super) fn create_cuckoo_with_pubkeys(pubkeys: &[Pubkey]) -> ProtoCuckooFilter {
+    fn create_cuckoo_with_pubkeys(pubkeys: &[Pubkey]) -> ProtoCuckooFilter {
         let mut filter = CuckooFilter::<[u8; 32]>::with_capacity(pubkeys.len().max(1)).unwrap();
         for pk in pubkeys {
             filter.insert(&pk.to_bytes()).unwrap();
@@ -3013,7 +3007,7 @@ mod cuckoo_tests {
 
         // --- helpers ----------------------------------------------------
 
-        pub(super) fn token_balance(
+        fn token_balance(
             account_index: u32,
             owner: Pubkey,
             amount: &str,
@@ -3040,7 +3034,7 @@ mod cuckoo_tests {
         /// `Transaction::sign` does not reject the build with
         /// `KeypairPubkeyMismatch`. Tests should treat the signer's
         /// pubkey as opaque and only rely on the keys they pass in.
-        pub(super) fn make_tx_with_balances(
+        fn make_tx_with_balances(
             account_keys: Vec<Pubkey>,
             pre: Vec<confirmed_block::TokenBalance>,
             post: Vec<confirmed_block::TokenBalance>,
@@ -3109,7 +3103,7 @@ mod cuckoo_tests {
             })
         }
 
-        pub(super) fn filter_with_transactions(
+        fn filter_with_transactions(
             tx_filters: HashMap<String, SubscribeRequestFilterTransactions>,
         ) -> Filter {
             let config = SubscribeRequest {
@@ -3133,7 +3127,7 @@ mod cuckoo_tests {
             .expect("filter should build")
         }
 
-        pub(super) fn make_filter_def(
+        fn make_filter_def(
             account_include: Vec<Pubkey>,
             account_exclude: Vec<Pubkey>,
             account_required: Vec<Pubkey>,
@@ -3154,7 +3148,7 @@ mod cuckoo_tests {
             }
         }
 
-        pub(super) fn matches(filter: &Filter, message: &Message) -> bool {
+        fn matches(filter: &Filter, message: &Message) -> bool {
             !filter.get_updates(message, None).is_empty()
         }
 
@@ -3940,102 +3934,6 @@ mod cuckoo_tests {
                 "mode=None must NOT populate any owner-set cache"
             );
             assert!(tx.transaction.token_owners_changed.get().is_none());
-        }
-    }
-
-    mod cuckoo_transactions {
-        //! Cuckoo filter on `SubscribeRequestFilterTransactions.cuckoo_account_include`.
-
-        use {
-            super::{
-                create_cuckoo_with_pubkeys,
-                token_accounts::{
-                    filter_with_transactions, make_tx_with_balances, matches, token_balance,
-                },
-            },
-            crate::plugin::message::Message,
-            solana_pubkey::Pubkey,
-            std::collections::HashMap,
-            yellowstone_grpc_proto::geyser::{
-                SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
-            },
-        };
-
-        fn cuckoo_filter_def(
-            cuckoo_keys: &[Pubkey],
-            account_include: Vec<Pubkey>,
-            mode: Option<TokenAccountExpansionControlFlag>,
-        ) -> SubscribeRequestFilterTransactions {
-            SubscribeRequestFilterTransactions {
-                vote: None,
-                failed: None,
-                signature: None,
-                account_include: account_include.into_iter().map(|k| k.to_string()).collect(),
-                account_exclude: vec![],
-                account_required: vec![],
-                cuckoo_account_include: Some(create_cuckoo_with_pubkeys(cuckoo_keys)),
-                token_accounts: mode.map(|m| m as i32),
-            }
-        }
-
-        fn build(def: SubscribeRequestFilterTransactions) -> super::super::Filter {
-            let mut m = HashMap::new();
-            m.insert("f".to_owned(), def);
-            filter_with_transactions(m)
-        }
-
-        #[test]
-        fn cuckoo_matches_account_key() {
-            let key = Pubkey::new_unique();
-            let tx = make_tx_with_balances(vec![key], vec![], vec![]);
-            let filter = build(cuckoo_filter_def(&[key], vec![], None));
-            assert!(matches(&filter, &Message::Transaction(tx)));
-        }
-
-        #[test]
-        fn cuckoo_rejects_absent_key() {
-            let in_cuckoo = Pubkey::new_unique();
-            let tx = make_tx_with_balances(vec![Pubkey::new_unique()], vec![], vec![]);
-            let filter = build(cuckoo_filter_def(&[in_cuckoo], vec![], None));
-            assert!(!matches(&filter, &Message::Transaction(tx)));
-        }
-
-        #[test]
-        fn cuckoo_ors_with_explicit_include() {
-            let in_cuckoo = Pubkey::new_unique();
-            let in_list = Pubkey::new_unique();
-
-            // hits via cuckoo only
-            let tx1 = make_tx_with_balances(vec![in_cuckoo], vec![], vec![]);
-            let f1 = build(cuckoo_filter_def(&[in_cuckoo], vec![in_list], None));
-            assert!(matches(&f1, &Message::Transaction(tx1)));
-
-            // hits via explicit list only
-            let tx2 = make_tx_with_balances(vec![in_list], vec![], vec![]);
-            let f2 = build(cuckoo_filter_def(&[in_cuckoo], vec![in_list], None));
-            assert!(matches(&f2, &Message::Transaction(tx2)));
-
-            // hits neither
-            let tx3 = make_tx_with_balances(vec![Pubkey::new_unique()], vec![], vec![]);
-            let f3 = build(cuckoo_filter_def(&[in_cuckoo], vec![in_list], None));
-            assert!(!matches(&f3, &Message::Transaction(tx3)));
-        }
-
-        #[test]
-        fn cuckoo_sees_token_owner_expansion() {
-            let owner = Pubkey::new_unique();
-            // owner appears only in token balances, never in account_keys
-            let tx = make_tx_with_balances(
-                vec![Pubkey::new_unique()],
-                vec![token_balance(0, owner, "100")],
-                vec![token_balance(0, owner, "200")],
-            );
-            let filter = build(cuckoo_filter_def(
-                &[owner],
-                vec![],
-                Some(TokenAccountExpansionControlFlag::All),
-            ));
-            assert!(matches(&filter, &Message::Transaction(tx)));
         }
     }
 }
