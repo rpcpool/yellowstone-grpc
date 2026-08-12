@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-10
+
+- yellowstone-grpc-geyser 15.0.1
+
+### Misc
+
+- plugin perf: match transaction `account_include`/`account_exclude` against the shorter of the transaction keys or the filter list, and skip the account path when a subscriber has no account filters
+
 ## 2026-08-06
 
 - yellowstone-grpc-geyser 14.2.4
