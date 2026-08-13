@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Fixes
+
+- plugin: reconstruct V1 messages in `convert_from::create_message` instead of downgrading them to V0. `convert_to` already emits `Message.config` for V1, but `convert_from` only checked the `versioned` boolean, which is true for both V0 and V1
+
 ## 2026-08-10
 
 - yellowstone-grpc-proto 12.6.0
