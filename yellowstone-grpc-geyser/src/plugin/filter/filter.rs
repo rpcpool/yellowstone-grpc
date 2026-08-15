@@ -1,23 +1,26 @@
 use {
-    crate::plugin::{
-        filter::{
-            limits::{
-                FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
-                FilterLimitsCheckError, FilterLimitsDeshredTransactions, FilterLimitsEntries,
-                FilterLimitsSlots, FilterLimitsTransactions,
+    crate::{
+        plugin::{
+            filter::{
+                limits::{
+                    FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
+                    FilterLimitsCheckError, FilterLimitsDeshredTransactions, FilterLimitsEntries,
+                    FilterLimitsSlots, FilterLimitsTransactions,
+                },
+                message::{
+                    FilteredUpdate, FilteredUpdateBlock, FilteredUpdateDeshred,
+                    FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof,
+                    FilteredUpdates, FilteredUpdatesDeshred,
+                },
+                name::{FilterName, FilterNameError, FilterNames},
             },
             message::{
-                FilteredUpdate, FilteredUpdateBlock, FilteredUpdateDeshred,
-                FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof,
-                FilteredUpdates, FilteredUpdatesDeshred,
+                CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
+                MessageBlockMeta, MessageDeshredTransaction, MessageEntry, MessageSlot,
+                MessageTransaction, SlotStatus,
             },
-            name::{FilterName, FilterNameError, FilterNames},
         },
-        message::{
-            CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
-            MessageBlockMeta, MessageDeshredTransaction, MessageEntry, MessageSlot,
-            MessageTransaction, SlotStatus,
-        },
+        pubkey_collections::{PubkeyHashSet, PubkeyRefHashSet},
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
@@ -471,19 +474,21 @@ impl FilterAccountAggregate {
         true
     }
 
-    fn match_account(&self, pubkey: &Pubkey) -> bool {
+    fn match_account(&self, pubkey: &Pubkey, matched_account: Option<bool>) -> bool {
         if self.accounts.is_none() && self.accounts_cuckoo.is_none() {
             return true;
         }
 
-        if !self
-            .accounts
+        if !self.accounts.as_ref().is_some_and(|accounts| {
+            if let Some(matched_account) = matched_account {
+                return matched_account;
+            }
+
+            accounts.contains(pubkey)
+        }) && !self
+            .accounts_cuckoo
             .as_ref()
-            .is_some_and(|accounts| accounts.contains(pubkey))
-            && !self
-                .accounts_cuckoo
-                .as_ref()
-                .is_some_and(|accounts_cuckoo| accounts_cuckoo.contains(&pubkey.to_bytes()))
+            .is_some_and(|accounts_cuckoo| accounts_cuckoo.contains(&pubkey.to_bytes()))
         {
             return false;
         }
@@ -491,8 +496,12 @@ impl FilterAccountAggregate {
         true
     }
 
-    fn match_owner(&self, pubkey: &Pubkey) -> bool {
+    fn match_owner(&self, pubkey: &Pubkey, matched_owner: Option<bool>) -> bool {
         if let Some(owners) = &self.owners {
+            if let Some(matched_owner) = matched_owner {
+                return matched_owner;
+            }
+
             if !owners.contains(pubkey) {
                 return false;
             }
@@ -514,16 +523,21 @@ impl FilterAccountAggregate {
     // This is used to determine if a filter should be included in the filtered updates.
     // If a filter is not included, it means that the filter's requirements are not satisfied by the current message.
     // If no filters are satisfied by the current message, then the update will not be sent to the client.
-    pub fn match_filter(&self, account: &MessageAccountInfo) -> Option<FilterName> {
+    pub fn match_filter(
+        &self,
+        account: &MessageAccountInfo,
+        matched_account: Option<bool>,
+        matched_owner: Option<bool>,
+    ) -> Option<FilterName> {
         if !self.match_txn_signature(&account.txn_signature) {
             return None;
         }
 
-        if !self.match_account(&account.pubkey) {
+        if !self.match_account(&account.pubkey, matched_account) {
             return None;
         }
 
-        if !self.match_owner(&account.owner) {
+        if !self.match_owner(&account.owner, matched_owner) {
             return None;
         }
 
@@ -535,9 +549,159 @@ impl FilterAccountAggregate {
     }
 }
 
+#[derive(Debug, Clone)]
+struct FilterBitSet(Box<[u64]>);
+
+impl FilterBitSet {
+    const BITS_PER_WORD: usize = u64::BITS as usize;
+
+    fn new(bits: usize) -> Self {
+        Self(vec![0; bits.div_ceil(Self::BITS_PER_WORD)].into_boxed_slice())
+    }
+
+    fn insert(&mut self, index: usize) {
+        self.0[index / Self::BITS_PER_WORD] |= 1 << (index % Self::BITS_PER_WORD);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.iter().all(|word| *word == 0)
+    }
+
+    fn word(&self, index: usize) -> u64 {
+        self.0[index]
+    }
+
+    #[cfg(test)]
+    fn contains(&self, index: usize) -> bool {
+        self.word(index / Self::BITS_PER_WORD) & (1 << (index % Self::BITS_PER_WORD)) != 0
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FilterAccountsIndex {
+    accounts: FoldHashMap<Pubkey, FilterBitSet>,
+    owners: FoldHashMap<Pubkey, FilterBitSet>,
+    account_fallback: FilterBitSet,
+    owner_fallback: FilterBitSet,
+}
+
+impl FilterAccountsIndex {
+    const MAX_BITSET_BYTES: usize = 16 * 1024 * 1024;
+
+    fn new(aggregates: &[FilterAccountAggregate]) -> Option<Self> {
+        if aggregates.len() <= 1 {
+            return None;
+        }
+
+        let word_bytes = aggregates
+            .len()
+            .div_ceil(FilterBitSet::BITS_PER_WORD)
+            .saturating_mul(std::mem::size_of::<u64>());
+        let memberships = aggregates.iter().fold(0usize, |count, aggregate| {
+            count
+                .saturating_add(
+                    aggregate
+                        .accounts
+                        .as_ref()
+                        .map_or(0, |accounts| accounts.len()),
+                )
+                .saturating_add(aggregate.owners.as_ref().map_or(0, |owners| owners.len()))
+        });
+        if word_bytes.saturating_mul(memberships.saturating_add(2)) > Self::MAX_BITSET_BYTES {
+            return None;
+        }
+
+        let mut this = Self {
+            accounts: FoldHashMap::default(),
+            owners: FoldHashMap::default(),
+            account_fallback: FilterBitSet::new(aggregates.len()),
+            owner_fallback: FilterBitSet::new(aggregates.len()),
+        };
+
+        for (index, aggregate) in aggregates.iter().enumerate() {
+            if let Some(accounts) = &aggregate.accounts {
+                for account in accounts {
+                    this.accounts
+                        .entry(*account)
+                        .or_insert_with(|| FilterBitSet::new(aggregates.len()))
+                        .insert(index);
+                }
+            }
+
+            if aggregate.accounts.is_none() || aggregate.accounts_cuckoo.is_some() {
+                this.account_fallback.insert(index);
+            }
+
+            if let Some(owners) = &aggregate.owners {
+                for owner in owners {
+                    this.owners
+                        .entry(*owner)
+                        .or_insert_with(|| FilterBitSet::new(aggregates.len()))
+                        .insert(index);
+                }
+            } else {
+                this.owner_fallback.insert(index);
+            }
+        }
+
+        if this.accounts.is_empty() && this.owners.is_empty() {
+            None
+        } else {
+            Some(this)
+        }
+    }
+
+    fn get_filters(
+        &self,
+        aggregates: &[FilterAccountAggregate],
+        account: &MessageAccountInfo,
+    ) -> FilteredUpdateFilters {
+        let matched_accounts = self.accounts.get(&account.pubkey);
+        if matched_accounts.is_none() && self.account_fallback.is_empty() {
+            return FilteredUpdateFilters::new();
+        }
+
+        let matched_owners = self.owners.get(&account.owner);
+        if matched_owners.is_none() && self.owner_fallback.is_empty() {
+            return FilteredUpdateFilters::new();
+        }
+
+        let mut filters = FilteredUpdateFilters::new();
+        for word_index in 0..self.account_fallback.0.len() {
+            let matched_accounts_word = matched_accounts
+                .map(|bitset| bitset.word(word_index))
+                .unwrap_or_default();
+            let matched_owners_word = matched_owners
+                .map(|bitset| bitset.word(word_index))
+                .unwrap_or_default();
+            let mut candidates = (matched_accounts_word | self.account_fallback.word(word_index))
+                & (matched_owners_word | self.owner_fallback.word(word_index));
+
+            while candidates != 0 {
+                let bit_index = candidates.trailing_zeros() as usize;
+                let aggregate_index = word_index * FilterBitSet::BITS_PER_WORD + bit_index;
+                let bit = 1 << bit_index;
+
+                if let Some(filter) = aggregates[aggregate_index].match_filter(
+                    account,
+                    Some(matched_accounts_word & bit != 0),
+                    Some(matched_owners_word & bit != 0),
+                ) {
+                    filters.push(filter);
+                }
+
+                candidates &= candidates - 1;
+            }
+        }
+
+        filters
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct FilterAccounts {
     aggregates: Vec<FilterAccountAggregate>,
+    index: Option<Arc<FilterAccountsIndex>>,
 }
 
 impl FilterAccounts {
@@ -596,6 +760,9 @@ impl FilterAccounts {
             filter_accounts_result.aggregates.push(filter_aggregate);
         }
 
+        filter_accounts_result.index =
+            FilterAccountsIndex::new(&filter_accounts_result.aggregates).map(Arc::new);
+
         Ok(filter_accounts_result)
     }
 
@@ -608,19 +775,20 @@ impl FilterAccounts {
             return FilteredUpdates::new();
         }
 
-        let filters = self.get_filters(&message.account);
+        let filters = if let Some(index) = &self.index {
+            index.get_filters(&self.aggregates, &message.account)
+        } else {
+            self.aggregates
+                .iter()
+                .filter_map(|aggregate| aggregate.match_filter(&message.account, None, None))
+                .collect()
+        };
+
         filtered_updates_once_owned!(
             filters,
             FilteredUpdateOneof::account(Arc::clone(message), accounts_data_slice.clone()),
             message.created_at
         )
-    }
-
-    fn get_filters(&self, account_info: &MessageAccountInfo) -> FilteredUpdateFilters {
-        self.aggregates
-            .iter()
-            .filter_map(|filter_aggregate| filter_aggregate.match_filter(account_info))
-            .collect()
     }
 }
 
@@ -1002,7 +1170,7 @@ impl FilterTransactions {
                 // the pre/post scan runs at most once per (tx, mode) across
                 // all filters evaluating against this tx. A `None`
                 // configured mode skips the scan entirely.
-                let token_owners: Option<&FoldHashSet<Pubkey>> =
+                let token_owners: Option<&PubkeyHashSet> =
                     inner.token_accounts.map(|mode| match mode {
                         TokenAccountsMode::All => message
                             .transaction
@@ -1085,9 +1253,11 @@ impl FilterTransactions {
 }
 
 /// Owners of every parseable pre OR post token balance on the tx.
-fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> FoldHashSet<Pubkey> {
-    let mut owners =
-        FoldHashSet::with_capacity(meta.pre_token_balances.len() + meta.post_token_balances.len());
+fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> PubkeyHashSet {
+    let mut owners = PubkeyHashSet::with_capacity_and_hasher(
+        meta.pre_token_balances.len() + meta.post_token_balances.len(),
+        Default::default(),
+    );
     for balance in meta
         .pre_token_balances
         .iter()
@@ -1102,12 +1272,10 @@ fn owners_in_any_balance(meta: &confirmed_block::TransactionStatusMeta) -> FoldH
 
 /// Owners whose token balance changed (compared by `account_index`) between
 /// pre and post, OR whose account was closed (present in pre, missing in post).
-fn owners_with_changed_balance(
-    meta: &confirmed_block::TransactionStatusMeta,
-) -> FoldHashSet<Pubkey> {
+fn owners_with_changed_balance(meta: &confirmed_block::TransactionStatusMeta) -> PubkeyHashSet {
     let pre_by_index = index_pre_token_balances(&meta.pre_token_balances);
 
-    let mut changed = FoldHashSet::new();
+    let mut changed = PubkeyHashSet::default();
     let mut seen_in_post = FoldHashSet::with_capacity(meta.post_token_balances.len());
 
     for bal in &meta.post_token_balances {
@@ -1262,7 +1430,7 @@ impl FilterDeshredTransactions {
                 }
 
                 if !inner.account_required.is_empty() {
-                    let all_keys: FoldHashSet<&Pubkey> = tx.all_account_keys().collect();
+                    let all_keys: PubkeyRefHashSet<'_> = tx.all_account_keys().collect();
                     if !inner
                         .account_required
                         .iter()
@@ -1565,18 +1733,21 @@ impl FilterBlocksInner {
         false
     }
 
-    fn matches_any_in_set(&self, account_keys: &FoldHashSet<Pubkey>) -> bool {
+    fn matches_any_in_set(&self, account_keys: &PubkeyHashSet) -> bool {
         if self.account_include.is_empty() && self.account_cuckoo.is_none() {
             return true;
         }
 
-        if !self.account_include.is_empty()
-            && self
-                .account_include
-                .intersection(account_keys)
-                .next()
-                .is_some()
-        {
+        let explicit_match = if self.account_include.len() <= account_keys.len() {
+            self.account_include
+                .iter()
+                .any(|pubkey| account_keys.contains(pubkey))
+        } else {
+            account_keys
+                .iter()
+                .any(|pubkey| self.account_include.contains(pubkey))
+        };
+        if explicit_match {
             return true;
         }
 
@@ -1727,19 +1898,25 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
-        super::{DeshredFilter, Filter},
-        crate::plugin::{
-            convert_to,
-            filter::{
-                limits::FilterLimits,
-                message::{FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof},
-                name::{FilterName, FilterNames},
+        super::{DeshredFilter, Filter, FilterBitSet, FilterBlocksInner},
+        crate::{
+            plugin::{
+                convert_to,
+                filter::{
+                    limits::FilterLimits,
+                    message::{
+                        FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof,
+                    },
+                    name::{FilterName, FilterNames},
+                },
+                message::{
+                    Message, MessageAccount, MessageAccountInfo, MessageDeshredTransaction,
+                    MessageDeshredTransactionInfo, MessageTransaction, MessageTransactionInfo,
+                },
             },
-            message::{
-                Message, MessageAccount, MessageAccountInfo, MessageDeshredTransaction,
-                MessageDeshredTransactionInfo, MessageTransaction, MessageTransactionInfo,
-            },
+            pubkey_collections::PubkeyHashSet,
         },
+        foldhash::HashSet as FoldHashSet,
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_keypair::Keypair,
@@ -1762,6 +1939,59 @@ mod tests {
 
     pub(super) fn create_filter_names() -> FilterNames {
         FilterNames::new(64, 1024, Duration::from_secs(1))
+    }
+
+    #[test]
+    fn filter_bitset_word_boundaries() {
+        for len in [1, 63, 64, 65, 127, 128, 129, 1023, 1024, 1025] {
+            let mut bitset = FilterBitSet::new(len);
+            let indexes = [0, len / 2, len - 1];
+            for index in indexes {
+                bitset.insert(index);
+            }
+
+            for index in 0..len {
+                assert_eq!(bitset.contains(index), indexes.contains(&index));
+            }
+        }
+    }
+
+    #[test]
+    fn block_explicit_account_matching_works_across_hashers() {
+        let shared = Pubkey::new_unique();
+        let other_filter_keys = [Pubkey::new_unique(), Pubkey::new_unique()];
+        let other_message_keys = [Pubkey::new_unique(), Pubkey::new_unique()];
+
+        // Probe the transaction-local set when the client filter is smaller.
+        let small_filter = FilterBlocksInner {
+            account_include: [shared].into_iter().collect::<FoldHashSet<_>>(),
+            account_cuckoo: None,
+            include_transactions: None,
+            include_accounts: None,
+            include_entries: None,
+        };
+        let message_keys = [shared, other_message_keys[0], other_message_keys[1]]
+            .into_iter()
+            .collect::<PubkeyHashSet>();
+        assert!(small_filter.matches_any_in_set(&message_keys));
+
+        // Probe the collision-resistant client filter when it is larger.
+        let large_filter = FilterBlocksInner {
+            account_include: [shared, other_filter_keys[0], other_filter_keys[1]]
+                .into_iter()
+                .collect::<FoldHashSet<_>>(),
+            account_cuckoo: None,
+            include_transactions: None,
+            include_accounts: None,
+            include_entries: None,
+        };
+        let matching_message_keys = [shared].into_iter().collect::<PubkeyHashSet>();
+        assert!(large_filter.matches_any_in_set(&matching_message_keys));
+
+        let nonmatching_message_keys = [Pubkey::new_unique()]
+            .into_iter()
+            .collect::<PubkeyHashSet>();
+        assert!(!large_filter.matches_any_in_set(&nonmatching_message_keys));
     }
 
     fn create_message_transaction(
@@ -2635,6 +2865,140 @@ mod tests {
             .get_updates(&Message::Account(message), None)
             .is_empty());
     }
+
+    #[test]
+    fn account_bitset_index_matches_original_semantics() {
+        let account = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let other_account = Pubkey::new_unique();
+        let other_owner = Pubkey::new_unique();
+
+        let accounts = HashMap::from([
+            (
+                "account".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![account.to_string()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "account-and-owner".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![account.to_string()],
+                    owner: vec![owner.to_string()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "owner".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    owner: vec![owner.to_string()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "other".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![other_account.to_string()],
+                    owner: vec![other_owner.to_string()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let request = SubscribeRequest {
+            accounts: accounts.clone(),
+            ..Default::default()
+        };
+        let filter = Filter::new(
+            &request,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let index = filter.accounts.index.as_ref().unwrap();
+        let account_matches = index.accounts.get(&account).unwrap();
+        let owner_matches = index.owners.get(&owner).unwrap();
+        assert_eq!(
+            account_matches
+                .0
+                .iter()
+                .map(|word| word.count_ones())
+                .sum::<u32>(),
+            2
+        );
+        assert_eq!(
+            owner_matches
+                .0
+                .iter()
+                .map(|word| word.count_ones())
+                .sum::<u32>(),
+            2
+        );
+
+        for (aggregate_index, aggregate) in filter.accounts.aggregates.iter().enumerate() {
+            assert_eq!(
+                index.account_fallback.contains(aggregate_index),
+                aggregate.accounts.is_none() || aggregate.accounts_cuckoo.is_some()
+            );
+            assert_eq!(
+                index.owner_fallback.contains(aggregate_index),
+                aggregate.owners.is_none()
+            );
+        }
+
+        let matched_names = |account, owner| {
+            let message = create_message_account(account, owner);
+            let updates = filter.get_updates(&Message::Account(message), None);
+            let mut names = updates
+                .first()
+                .map(|update| {
+                    update
+                        .filters
+                        .iter()
+                        .map(|name| name.as_ref().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            names.sort_unstable();
+            names
+        };
+
+        assert_eq!(
+            matched_names(account, owner),
+            [
+                "account".to_owned(),
+                "account-and-owner".to_owned(),
+                "owner".to_owned(),
+            ]
+        );
+        assert_eq!(
+            matched_names(account, Pubkey::new_unique()),
+            ["account".to_owned()]
+        );
+        assert_eq!(
+            matched_names(other_account, other_owner),
+            ["other".to_owned()]
+        );
+        assert!(matched_names(Pubkey::new_unique(), Pubkey::new_unique()).is_empty());
+
+        let single_filter = Filter::new(
+            &SubscribeRequest {
+                accounts: HashMap::from([(
+                    "single".to_owned(),
+                    SubscribeRequestFilterAccounts {
+                        account: vec![account.to_string()],
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+        assert!(single_filter.accounts.index.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -2750,6 +3114,7 @@ mod cuckoo_tests {
     fn test_cuckoo_or_explicit_account() {
         let pk_in_cuckoo = Pubkey::new_unique();
         let pk_in_list = Pubkey::new_unique();
+        let pk_in_other_filter = Pubkey::new_unique();
         let cuckoo = create_cuckoo_with_pubkeys(&[pk_in_cuckoo]);
 
         let mut accounts = HashMap::new();
@@ -2761,6 +3126,13 @@ mod cuckoo_tests {
                 filters: vec![],
                 nonempty_txn_signature: None,
                 cuckoo_accounts_filter: Some(cuckoo),
+            },
+        );
+        accounts.insert(
+            "other".to_string(),
+            SubscribeRequestFilterAccounts {
+                account: vec![pk_in_other_filter.to_string()],
+                ..Default::default()
             },
         );
 

@@ -8,6 +8,7 @@ pub mod grpc;
 pub mod metered;
 pub mod metrics;
 pub mod plugin;
+pub mod pubkey_collections;
 pub(crate) mod ratelimit;
 pub mod stream;
 pub mod util;

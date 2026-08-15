@@ -1,12 +1,12 @@
 use {
     super::convert_to,
+    crate::pubkey_collections::PubkeyHashSet,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
         ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
         ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
-    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::Slot,
     solana_hash::{Hash, HASH_BYTES},
@@ -293,15 +293,15 @@ pub struct MessageTransactionInfo {
     pub transaction: confirmed_block::Transaction,
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
-    pub account_keys: FoldHashSet<Pubkey>,
+    pub account_keys: PubkeyHashSet,
     pub pre_encoded: OnceLock<Vec<u8>>,
     /// Per-tx cache of token-balance owners under `TokenAccountsMode::All`.
     /// Lazily built on first read; shared across all filters evaluating
     /// against this tx so the pre/post scan runs at most once per tx.
-    pub token_owners_all: OnceLock<FoldHashSet<Pubkey>>,
+    pub token_owners_all: OnceLock<PubkeyHashSet>,
     /// Per-tx cache of token-balance owners under
     /// `TokenAccountsMode::BalanceChanged`. Same laziness as above.
-    pub token_owners_changed: OnceLock<FoldHashSet<Pubkey>>,
+    pub token_owners_changed: OnceLock<PubkeyHashSet>,
 }
 
 impl MessageTransactionInfo {
@@ -349,7 +349,7 @@ impl MessageTransactionInfo {
                 .ok_or("transaction message should be defined")?,
             meta: msg.meta.ok_or("meta message should be defined")?,
             index: msg.index as usize,
-            account_keys: FoldHashSet::new(),
+            account_keys: PubkeyHashSet::default(),
             pre_encoded: OnceLock::new(),
             token_owners_all: OnceLock::new(),
             token_owners_changed: OnceLock::new(),
@@ -357,7 +357,7 @@ impl MessageTransactionInfo {
     }
 
     pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
-        let mut account_keys = FoldHashSet::new();
+        let mut account_keys = PubkeyHashSet::default();
 
         // static
         if let Some(pubkeys) = self
@@ -441,7 +441,7 @@ pub struct MessageDeshredTransactionInfo {
     pub signature: Signature,
     pub is_vote: bool,
     pub transaction: confirmed_block::Transaction,
-    pub static_account_keys: FoldHashSet<Pubkey>,
+    pub static_account_keys: PubkeyHashSet,
     pub loaded_writable_addresses: Vec<Pubkey>,
     pub loaded_readonly_addresses: Vec<Pubkey>,
     pub completed_data_set_starting_shred_index: u32,
@@ -450,7 +450,7 @@ pub struct MessageDeshredTransactionInfo {
 
 impl MessageDeshredTransactionInfo {
     pub fn from_geyser(info: &ReplicaDeshredTransactionInfo<'_>) -> Self {
-        let static_account_keys: FoldHashSet<Pubkey> = info
+        let static_account_keys: PubkeyHashSet = info
             .transaction
             .message
             .static_account_keys()
@@ -476,7 +476,7 @@ impl MessageDeshredTransactionInfo {
     }
 
     pub fn from_geyser_v2(info: &ReplicaDeshredTransactionInfoV2<'_>) -> Self {
-        let static_account_keys: FoldHashSet<Pubkey> = info
+        let static_account_keys: PubkeyHashSet = info
             .transaction
             .message
             .static_account_keys()

@@ -13,12 +13,12 @@ use {
                 MessageSlot, MessageTransaction, MessageTransactionInfo,
             },
         },
+        pubkey_collections::PubkeyHashSet,
     },
     bytes::{
         buf::{Buf, BufMut},
         Bytes,
     },
-    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -294,7 +294,7 @@ impl FilteredUpdate {
                                 ..confirmed_block::TransactionStatusMeta::default()
                             },
                             index: msg.index as usize,
-                            account_keys: FoldHashSet::new(),
+                            account_keys: PubkeyHashSet::default(),
                             pre_encoded: OnceLock::new(),
                             token_owners_all: OnceLock::new(),
                             token_owners_changed: OnceLock::new(),
@@ -1314,8 +1314,8 @@ pub mod tests {
                 MessageTransaction, MessageTransactionInfo,
             },
         },
+        crate::pubkey_collections::PubkeyHashSet,
         bytes::Bytes,
-        foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost::Message,
         prost_types::Timestamp,
         solana_hash::Hash,
@@ -1495,7 +1495,7 @@ pub mod tests {
                                 transaction: convert_to::create_transaction(&tx.transaction),
                                 meta: convert_to::create_transaction_meta(&tx.meta),
                                 index,
-                                account_keys: FoldHashSet::new(),
+                                account_keys: PubkeyHashSet::default(),
                                 pre_encoded: OnceLock::new(),
                                 token_owners_all: OnceLock::new(),
                                 token_owners_changed: OnceLock::new(),
