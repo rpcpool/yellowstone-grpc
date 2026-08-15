@@ -558,11 +558,13 @@ impl BlockMachineStorage {
 mod tests {
     use {
         super::*,
-        crate::plugin::message::{
-            MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, MessageTransaction,
-            MessageTransactionInfo, SlotStatus,
+        crate::{
+            plugin::message::{
+                MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, MessageTransaction,
+                MessageTransactionInfo, SlotStatus,
+            },
+            pubkey_collections::PubkeyHashSet,
         },
-        crate::pubkey_collections::PubkeyHashSet,
         bytes::Bytes,
         prost_types::Timestamp,
         solana_hash::Hash,

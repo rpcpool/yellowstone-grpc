@@ -117,6 +117,7 @@ vergen = { workspace = true, features = ["build", "rustc"] }
 [dev-dependencies]
 bytes = { workspace = true }
 criterion = { workspace = true }
+fastrand = { workspace = true }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }

@@ -6508,6 +6508,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dashmap",
+ "fastrand",
  "foldhash 0.2.0",
  "futures",
  "git-version",

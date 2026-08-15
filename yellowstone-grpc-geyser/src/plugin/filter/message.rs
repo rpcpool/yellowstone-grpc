@@ -1306,15 +1306,17 @@ pub mod tests {
     use yellowstone_grpc_proto::geyser::SubscribeUpdate;
     use {
         super::{FilteredUpdateBlock, FilteredUpdateFilters},
-        crate::plugin::{
-            convert_to,
-            filter::{name::FilterName, FilterAccountsDataSlice},
-            message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageTransaction, MessageTransactionInfo,
+        crate::{
+            plugin::{
+                convert_to,
+                filter::{name::FilterName, FilterAccountsDataSlice},
+                message::{
+                    MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                    MessageTransaction, MessageTransactionInfo,
+                },
             },
+            pubkey_collections::PubkeyHashSet,
         },
-        crate::pubkey_collections::PubkeyHashSet,
         bytes::Bytes,
         prost::Message,
         prost_types::Timestamp,

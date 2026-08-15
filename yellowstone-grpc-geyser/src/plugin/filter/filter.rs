@@ -586,7 +586,7 @@ struct FilterAccountsIndex {
 }
 
 impl FilterAccountsIndex {
-    const MAX_BITSET_BYTES: usize = 16 * 1024 * 1024;
+    const MAX_BITSET_BYTES: usize = 512 * 1024 * 1024;
 
     fn new(aggregates: &[FilterAccountAggregate]) -> Option<Self> {
         if aggregates.len() <= 1 {
@@ -3002,6 +3002,1633 @@ mod tests {
 }
 
 #[cfg(test)]
+mod account_filter_regression_tests {
+    use {
+        super::*,
+        bytes::Bytes,
+        prost_types::Timestamp,
+        std::sync::OnceLock,
+        yellowstone_grpc_proto::{
+            cuckoo::CuckooFilter,
+            geyser::{
+                CuckooFilter as ProtoCuckooFilter, SubscribeRequestFilterAccountsFilterLamports,
+                SubscribeRequestFilterAccountsFilterMemcmp,
+            },
+        },
+    };
+
+    const DATA_LEN: usize = 165;
+    const MEMCMP_OFFSET: usize = 4;
+    const MEMCMP_BYTES: &[u8] = b"match";
+
+    fn create_cuckoo(pubkeys: &[Pubkey]) -> ProtoCuckooFilter {
+        let mut filter = CuckooFilter::<[u8; 32]>::with_capacity(pubkeys.len().max(1)).unwrap();
+        for pubkey in pubkeys {
+            filter.insert(&pubkey.to_bytes()).unwrap();
+        }
+        ProtoCuckooFilter::from(&filter)
+    }
+
+    fn memcmp_filter(data: AccountsFilterMemcmpOneof) -> SubscribeRequestFilterAccountsFilter {
+        SubscribeRequestFilterAccountsFilter {
+            filter: Some(AccountsFilterDataOneof::Memcmp(
+                SubscribeRequestFilterAccountsFilterMemcmp {
+                    offset: MEMCMP_OFFSET as u64,
+                    data: Some(data),
+                },
+            )),
+        }
+    }
+
+    fn datasize_filter(size: usize) -> SubscribeRequestFilterAccountsFilter {
+        SubscribeRequestFilterAccountsFilter {
+            filter: Some(AccountsFilterDataOneof::Datasize(size as u64)),
+        }
+    }
+
+    fn token_state_filter() -> SubscribeRequestFilterAccountsFilter {
+        SubscribeRequestFilterAccountsFilter {
+            filter: Some(AccountsFilterDataOneof::TokenAccountState(true)),
+        }
+    }
+
+    fn lamports_filter(cmp: AccountsFilterLamports) -> SubscribeRequestFilterAccountsFilter {
+        SubscribeRequestFilterAccountsFilter {
+            filter: Some(AccountsFilterDataOneof::Lamports(
+                SubscribeRequestFilterAccountsFilterLamports { cmp: Some(cmp) },
+            )),
+        }
+    }
+
+    fn valid_token_data() -> Vec<u8> {
+        let mut data = vec![0; DATA_LEN];
+        data[MEMCMP_OFFSET..MEMCMP_OFFSET + MEMCMP_BYTES.len()].copy_from_slice(MEMCMP_BYTES);
+        data[108] = 1;
+        data
+    }
+
+    fn account_info(
+        pubkey: Pubkey,
+        owner: Pubkey,
+        data: Vec<u8>,
+        lamports: u64,
+        has_signature: bool,
+    ) -> MessageAccountInfo {
+        MessageAccountInfo {
+            pubkey,
+            lamports,
+            owner,
+            executable: false,
+            rent_epoch: 0,
+            data: Bytes::from(data),
+            write_version: 7,
+            txn_signature: has_signature.then(Signature::default),
+            pre_encoded: OnceLock::new(),
+        }
+    }
+
+    fn sorted_matches(filter: &Filter, account: MessageAccountInfo) -> Vec<String> {
+        let message = Arc::new(MessageAccount {
+            account,
+            slot: 42,
+            is_startup: false,
+            created_at: Timestamp::default(),
+        });
+        let updates = filter.get_updates(&Message::Account(message), None);
+        assert!(updates.len() <= 1);
+
+        let mut names = updates
+            .first()
+            .map(|update| {
+                update
+                    .filters
+                    .iter()
+                    .map(|name| name.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        names.sort_unstable();
+        names
+    }
+
+    #[test]
+    fn account_filter_truth_table_preserves_baseline_semantics() {
+        let account = Pubkey::new_from_array([1; 32]);
+        let cuckoo_account = Pubkey::new_from_array([2; 32]);
+        let other_account = Pubkey::new_from_array([3; 32]);
+        let owner = Pubkey::new_from_array([4; 32]);
+        let other_owner = Pubkey::new_from_array([5; 32]);
+        let data = valid_token_data();
+        let memcmp_base58 = bs58::encode(MEMCMP_BYTES).into_string();
+        let memcmp_base64 = base64_engine.encode(MEMCMP_BYTES);
+
+        let account_filter = |account: Vec<String>| SubscribeRequestFilterAccounts {
+            account,
+            ..Default::default()
+        };
+        let owner_filter = |owner: Vec<String>| SubscribeRequestFilterAccounts {
+            owner,
+            ..Default::default()
+        };
+        let state_filter = |filter| SubscribeRequestFilterAccounts {
+            filters: vec![filter],
+            ..Default::default()
+        };
+
+        let accounts = HashMap::from([
+            (
+                "wildcard".to_owned(),
+                SubscribeRequestFilterAccounts::default(),
+            ),
+            (
+                "account".to_owned(),
+                account_filter(vec![account.to_string()]),
+            ),
+            (
+                "account-duplicate".to_owned(),
+                account_filter(vec![account.to_string(), account.to_string()]),
+            ),
+            ("owner".to_owned(), owner_filter(vec![owner.to_string()])),
+            (
+                "owner-duplicate".to_owned(),
+                owner_filter(vec![owner.to_string(), owner.to_string()]),
+            ),
+            (
+                "account-or-cuckoo".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![account.to_string()],
+                    cuckoo_accounts_filter: Some(create_cuckoo(&[cuckoo_account])),
+                    ..Default::default()
+                },
+            ),
+            (
+                "signature-present".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    nonempty_txn_signature: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "signature-absent".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    nonempty_txn_signature: Some(false),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datasize".to_owned(),
+                state_filter(datasize_filter(DATA_LEN)),
+            ),
+            (
+                "memcmp-bytes".to_owned(),
+                state_filter(memcmp_filter(AccountsFilterMemcmpOneof::Bytes(
+                    MEMCMP_BYTES.to_vec(),
+                ))),
+            ),
+            (
+                "memcmp-base58".to_owned(),
+                state_filter(memcmp_filter(AccountsFilterMemcmpOneof::Base58(
+                    memcmp_base58,
+                ))),
+            ),
+            (
+                "memcmp-base64".to_owned(),
+                state_filter(memcmp_filter(AccountsFilterMemcmpOneof::Base64(
+                    memcmp_base64,
+                ))),
+            ),
+            ("token-state".to_owned(), state_filter(token_state_filter())),
+            (
+                "lamports-eq".to_owned(),
+                state_filter(lamports_filter(AccountsFilterLamports::Eq(100))),
+            ),
+            (
+                "lamports-ne".to_owned(),
+                state_filter(lamports_filter(AccountsFilterLamports::Ne(99))),
+            ),
+            (
+                "lamports-lt".to_owned(),
+                state_filter(lamports_filter(AccountsFilterLamports::Lt(101))),
+            ),
+            (
+                "lamports-gt".to_owned(),
+                state_filter(lamports_filter(AccountsFilterLamports::Gt(99))),
+            ),
+            (
+                "combined".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    nonempty_txn_signature: Some(true),
+                    account: vec![account.to_string()],
+                    owner: vec![owner.to_string()],
+                    filters: vec![
+                        datasize_filter(DATA_LEN),
+                        memcmp_filter(AccountsFilterMemcmpOneof::Bytes(MEMCMP_BYTES.to_vec())),
+                        token_state_filter(),
+                        lamports_filter(AccountsFilterLamports::Eq(100)),
+                    ],
+                    cuckoo_accounts_filter: None,
+                },
+            ),
+        ]);
+        let filter = Filter::new(
+            &SubscribeRequest {
+                accounts,
+                ..Default::default()
+            },
+            &FilterLimits::default(),
+            &mut tests::create_filter_names(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            sorted_matches(
+                &filter,
+                account_info(account, owner, data.clone(), 100, true)
+            ),
+            [
+                "account",
+                "account-duplicate",
+                "account-or-cuckoo",
+                "combined",
+                "datasize",
+                "lamports-eq",
+                "lamports-gt",
+                "lamports-lt",
+                "lamports-ne",
+                "memcmp-base58",
+                "memcmp-base64",
+                "memcmp-bytes",
+                "owner",
+                "owner-duplicate",
+                "signature-present",
+                "token-state",
+                "wildcard",
+            ]
+        );
+        assert_eq!(
+            sorted_matches(
+                &filter,
+                account_info(cuckoo_account, owner, data.clone(), 100, true)
+            ),
+            [
+                "account-or-cuckoo",
+                "datasize",
+                "lamports-eq",
+                "lamports-gt",
+                "lamports-lt",
+                "lamports-ne",
+                "memcmp-base58",
+                "memcmp-base64",
+                "memcmp-bytes",
+                "owner",
+                "owner-duplicate",
+                "signature-present",
+                "token-state",
+                "wildcard",
+            ]
+        );
+        assert_eq!(
+            sorted_matches(
+                &filter,
+                account_info(account, other_owner, vec![0; 3], 99, false)
+            ),
+            [
+                "account",
+                "account-duplicate",
+                "account-or-cuckoo",
+                "lamports-lt",
+                "signature-absent",
+                "wildcard",
+            ]
+        );
+        assert_eq!(
+            sorted_matches(
+                &filter,
+                account_info(other_account, other_owner, vec![0; 3], 101, false)
+            ),
+            ["lamports-gt", "lamports-ne", "signature-absent", "wildcard",]
+        );
+    }
+
+    fn aggregate_for_index(
+        index: usize,
+        account: Pubkey,
+        other_account: Pubkey,
+        owner: Pubkey,
+        other_owner: Pubkey,
+        cuckoo: &Arc<CuckooFilter<[u8; 32]>>,
+    ) -> FilterAccountAggregate {
+        let mut aggregate = FilterAccountAggregate::new(FilterName::new(format!("filter-{index}")));
+        match index % 16 {
+            0 => {}
+            1 => aggregate.accounts = Some([account].into_iter().collect()),
+            2 => aggregate.accounts = Some([other_account].into_iter().collect()),
+            3 => aggregate.owners = Some([owner].into_iter().collect()),
+            4 => aggregate.owners = Some([other_owner].into_iter().collect()),
+            5 => {
+                aggregate.accounts = Some([account].into_iter().collect());
+                aggregate.owners = Some([owner].into_iter().collect());
+            }
+            6 => {
+                aggregate.accounts = Some([account].into_iter().collect());
+                aggregate.owners = Some([other_owner].into_iter().collect());
+            }
+            7 => aggregate.accounts_cuckoo = Some(Arc::clone(cuckoo)),
+            8 => {
+                aggregate.accounts = Some([other_account].into_iter().collect());
+                aggregate.accounts_cuckoo = Some(Arc::clone(cuckoo));
+            }
+            9 => aggregate.txn_signature = Some(true),
+            10 => aggregate.txn_signature = Some(false),
+            11 => {
+                aggregate.account_state = Some(FilterAccountsState {
+                    memcmp: vec![(MEMCMP_OFFSET, MEMCMP_BYTES.to_vec())],
+                    datasize: Some(DATA_LEN),
+                    token_account_state: false,
+                    lamports: vec![],
+                });
+            }
+            12 => {
+                aggregate.account_state = Some(FilterAccountsState {
+                    memcmp: vec![],
+                    datasize: None,
+                    token_account_state: true,
+                    lamports: vec![],
+                });
+            }
+            13 => {
+                aggregate.account_state = Some(FilterAccountsState {
+                    memcmp: vec![],
+                    datasize: None,
+                    token_account_state: false,
+                    lamports: vec![
+                        FilterAccountsLamports::Eq(100),
+                        FilterAccountsLamports::Ne(99),
+                        FilterAccountsLamports::Lt(101),
+                        FilterAccountsLamports::Gt(99),
+                    ],
+                });
+            }
+            14 => {
+                aggregate.accounts = Some([account].into_iter().collect());
+                aggregate.owners = Some([owner].into_iter().collect());
+                aggregate.txn_signature = Some(true);
+                aggregate.account_state = Some(FilterAccountsState {
+                    memcmp: vec![(MEMCMP_OFFSET, MEMCMP_BYTES.to_vec())],
+                    datasize: Some(DATA_LEN),
+                    token_account_state: true,
+                    lamports: vec![FilterAccountsLamports::Eq(100)],
+                });
+            }
+            15 => {
+                aggregate.accounts = Some([other_account].into_iter().collect());
+                aggregate.accounts_cuckoo = Some(Arc::clone(cuckoo));
+                aggregate.owners = Some([owner].into_iter().collect());
+                aggregate.txn_signature = Some(true);
+                aggregate.account_state = Some(FilterAccountsState {
+                    memcmp: vec![(MEMCMP_OFFSET, MEMCMP_BYTES.to_vec())],
+                    datasize: Some(DATA_LEN),
+                    token_account_state: true,
+                    lamports: vec![FilterAccountsLamports::Eq(100)],
+                });
+            }
+            _ => unreachable!(),
+        }
+        aggregate
+    }
+
+    #[test]
+    fn account_bitset_index_matches_direct_scan_for_all_predicates_and_boundaries() {
+        let account = Pubkey::new_from_array([11; 32]);
+        let other_account = Pubkey::new_from_array([12; 32]);
+        let cuckoo_account = Pubkey::new_from_array([13; 32]);
+        let owner = Pubkey::new_from_array([14; 32]);
+        let other_owner = Pubkey::new_from_array([15; 32]);
+        let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(1).unwrap();
+        cuckoo.insert(&cuckoo_account.to_bytes()).unwrap();
+        let cuckoo = Arc::new(cuckoo);
+        let data = valid_token_data();
+
+        let messages = [
+            account_info(account, owner, data.clone(), 100, true),
+            account_info(account, owner, data.clone(), 100, false),
+            account_info(account, other_owner, data.clone(), 100, true),
+            account_info(other_account, owner, data.clone(), 100, true),
+            account_info(cuckoo_account, owner, data.clone(), 100, true),
+            account_info(account, owner, vec![0; DATA_LEN], 100, true),
+            account_info(account, owner, data.clone(), 99, true),
+            account_info(
+                Pubkey::new_from_array([16; 32]),
+                Pubkey::new_from_array([17; 32]),
+                vec![0; 3],
+                101,
+                false,
+            ),
+        ];
+
+        for count in [
+            0, 1, 2, 3, 15, 16, 17, 63, 64, 65, 127, 128, 129, 1023, 1024, 1025,
+        ] {
+            let aggregates = (0..count)
+                .map(|index| {
+                    aggregate_for_index(index, account, other_account, owner, other_owner, &cuckoo)
+                })
+                .collect::<Vec<_>>();
+            let index = FilterAccountsIndex::new(&aggregates);
+            assert_eq!(index.is_some(), count > 1, "filter count {count}");
+
+            for (message_index, message) in messages.iter().enumerate() {
+                let expected = aggregates
+                    .iter()
+                    .filter_map(|aggregate| aggregate.match_filter(message, None, None))
+                    .collect::<FilteredUpdateFilters>();
+                let actual = index.as_ref().map_or_else(
+                    || {
+                        aggregates
+                            .iter()
+                            .filter_map(|aggregate| aggregate.match_filter(message, None, None))
+                            .collect()
+                    },
+                    |index| index.get_filters(&aggregates, message),
+                );
+                assert_eq!(
+                    actual, expected,
+                    "filter count {count}, message {message_index}"
+                );
+            }
+        }
+    }
+
+    fn linear_scan(
+        aggregates: &[FilterAccountAggregate],
+        message: &MessageAccountInfo,
+    ) -> FilteredUpdateFilters {
+        aggregates
+            .iter()
+            .filter_map(|aggregate| aggregate.match_filter(message, None, None))
+            .collect()
+    }
+
+    fn aggregate_with_accounts(name: String, accounts: &[Pubkey]) -> FilterAccountAggregate {
+        let mut aggregate = FilterAccountAggregate::new(FilterName::new(name));
+        aggregate.accounts = Some(accounts.iter().copied().collect());
+        aggregate
+    }
+
+    #[test]
+    fn index_is_disabled_when_no_filter_constrains_a_pubkey() {
+        let cuckoo_account = Pubkey::new_from_array([21; 32]);
+        let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(1).unwrap();
+        cuckoo.insert(&cuckoo_account.to_bytes()).unwrap();
+        let cuckoo = Arc::new(cuckoo);
+
+        let mut aggregates = vec![
+            FilterAccountAggregate::new(FilterName::new("wildcard")),
+            FilterAccountAggregate::new(FilterName::new("signature")),
+            FilterAccountAggregate::new(FilterName::new("state")),
+            FilterAccountAggregate::new(FilterName::new("cuckoo-only")),
+        ];
+        aggregates[1].txn_signature = Some(true);
+        aggregates[2].account_state = Some(FilterAccountsState {
+            memcmp: vec![],
+            datasize: Some(DATA_LEN),
+            token_account_state: false,
+            lamports: vec![],
+        });
+        aggregates[3].accounts_cuckoo = Some(Arc::clone(&cuckoo));
+
+        assert!(FilterAccountsIndex::new(&aggregates).is_none());
+
+        let owner = Pubkey::new_from_array([22; 32]);
+        let data = valid_token_data();
+        assert_eq!(
+            linear_scan(
+                &aggregates,
+                &account_info(cuckoo_account, owner, data.clone(), 100, true),
+            )
+            .as_slice(),
+            [
+                FilterName::new("wildcard"),
+                FilterName::new("signature"),
+                FilterName::new("state"),
+                FilterName::new("cuckoo-only"),
+            ]
+        );
+        assert_eq!(
+            linear_scan(
+                &aggregates,
+                &account_info(
+                    Pubkey::new_from_array([23; 32]),
+                    owner,
+                    vec![0; 3],
+                    100,
+                    false
+                ),
+            )
+            .as_slice(),
+            [FilterName::new("wildcard")]
+        );
+
+        aggregates.push(aggregate_with_accounts(
+            "explicit".to_owned(),
+            &[Pubkey::new_from_array([24; 32])],
+        ));
+        assert!(FilterAccountsIndex::new(&aggregates).is_some());
+    }
+
+    #[test]
+    fn fully_constrained_filters_leave_both_fallbacks_empty() {
+        let accounts = fixtures_pool(30, 4);
+        let owners = fixtures_pool(31, 2);
+
+        let aggregates = (0..8)
+            .map(|i| {
+                let mut aggregate = aggregate_with_accounts(format!("both-{i}"), &accounts);
+                aggregate.owners = Some(owners.iter().copied().collect());
+                aggregate
+            })
+            .collect::<Vec<_>>();
+        let index = FilterAccountsIndex::new(&aggregates).expect("index builds");
+        assert!(
+            index.account_fallback.is_empty(),
+            "no filter is account-unconstrained, so nothing may sit in the account fallback"
+        );
+        assert!(
+            index.owner_fallback.is_empty(),
+            "no filter is owner-unconstrained, so nothing may sit in the owner fallback"
+        );
+
+        let stranger = Pubkey::new_from_array([250; 32]);
+        let miss = account_info(stranger, stranger, vec![0; 3], 100, false);
+        assert!(index.get_filters(&aggregates, &miss).is_empty());
+        assert!(linear_scan(&aggregates, &miss).is_empty());
+
+        let mut mixed = aggregates.clone();
+        mixed.push(FilterAccountAggregate::new(FilterName::new("wildcard")));
+        let mixed_index = FilterAccountsIndex::new(&mixed).expect("index builds");
+        assert!(!mixed_index.account_fallback.is_empty());
+        assert!(!mixed_index.owner_fallback.is_empty());
+        assert_eq!(
+            mixed_index.get_filters(&mixed, &miss).as_slice(),
+            [FilterName::new("wildcard")]
+        );
+    }
+
+    fn fixtures_pool(tag: u8, n: usize) -> Vec<Pubkey> {
+        crate::plugin::filter::fixtures::deterministic_pubkeys(tag, n)
+    }
+
+    #[test]
+    fn index_is_disabled_when_bitset_budget_is_exceeded() {
+        const AGGREGATES: usize = 32_768;
+        let word_bytes = AGGREGATES.div_ceil(FilterBitSet::BITS_PER_WORD) * size_of::<u64>();
+
+        let budget_memberships = FilterAccountsIndex::MAX_BITSET_BYTES / word_bytes - 2;
+        let per_filter_under = budget_memberships / AGGREGATES;
+        let per_filter_over = per_filter_under + 1;
+        assert!(
+            per_filter_under >= 1,
+            "AGGREGATES is too large for the current budget to be straddled"
+        );
+
+        let pool = fixtures_pool(101, per_filter_over);
+
+        let build = |per_filter: usize| {
+            (0..AGGREGATES)
+                .map(|i| aggregate_with_accounts(format!("filter-{i}"), &pool[..per_filter]))
+                .collect::<Vec<_>>()
+        };
+
+        let under_budget = build(per_filter_under);
+        assert!(
+            word_bytes * (AGGREGATES * per_filter_under + 2)
+                <= FilterAccountsIndex::MAX_BITSET_BYTES
+        );
+        assert!(
+            FilterAccountsIndex::new(&under_budget).is_some(),
+            "{per_filter_under} pubkeys per filter is under MAX_BITSET_BYTES and must still index"
+        );
+
+        let over_budget = build(per_filter_over);
+        assert!(
+            word_bytes * (AGGREGATES * per_filter_over + 2) > FilterAccountsIndex::MAX_BITSET_BYTES
+        );
+        assert!(
+            FilterAccountsIndex::new(&over_budget).is_none(),
+            "{per_filter_over} pubkeys per filter exceeds MAX_BITSET_BYTES and must fall back"
+        );
+
+        for (filters, per_filter, label) in [
+            (256usize, 10_000usize, "bench: 256 x 10k"),
+            (10, 100_000, "production: 10 x 100k"),
+            (20, 100_000, "production headroom: 20 x 100k"),
+        ] {
+            let bytes = filters.div_ceil(FilterBitSet::BITS_PER_WORD)
+                * size_of::<u64>()
+                * (filters * per_filter + 2);
+            assert!(
+                bytes <= FilterAccountsIndex::MAX_BITSET_BYTES,
+                "{label} estimates {bytes} bytes and would fall back to a linear scan"
+            );
+        }
+
+        let owner = Pubkey::new_from_array([200; 32]);
+        let hit = account_info(pool[0], owner, vec![0; 3], 100, false);
+        let indexed = FilterAccountsIndex::new(&under_budget).unwrap();
+        assert_eq!(
+            indexed.get_filters(&under_budget, &hit),
+            linear_scan(&under_budget, &hit)
+        );
+        assert_eq!(linear_scan(&over_budget, &hit).len(), AGGREGATES);
+
+        let miss = account_info(
+            Pubkey::new_from_array([201; 32]),
+            owner,
+            vec![0; 3],
+            100,
+            false,
+        );
+        assert!(linear_scan(&over_budget, &miss).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod parity_oracle {
+    use {
+        super::*,
+        crate::plugin::filter::fixtures,
+        yellowstone_grpc_proto::geyser::{
+            CuckooFilter as ProtoCuckooFilter, SubscribeRequestFilterAccountsFilterMemcmp,
+        },
+    };
+
+    #[derive(Debug)]
+    struct MasterAggregate {
+        filter_name: FilterName,
+        require_non_empty_txn_signature: bool,
+        require_account: bool,
+        require_cuckoo: bool,
+        require_owner: bool,
+        require_state_check: bool,
+    }
+
+    #[derive(Debug, Default)]
+    struct MasterAccountsOracle {
+        nonempty_txn_signature: Vec<(FilterName, Option<bool>)>,
+        account: FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+        account_cuckoo: FoldHashMap<FilterName, Arc<CuckooFilter<[u8; 32]>>>,
+        owner: FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+        state_check: FoldHashMap<FilterName, FilterAccountsState>,
+        aggregates: Vec<MasterAggregate>,
+    }
+
+    impl MasterAccountsOracle {
+        fn new(
+            configs: &HashMap<String, SubscribeRequestFilterAccounts>,
+            limits: &FilterLimitsAccounts,
+            names: &mut FilterNames,
+        ) -> FilterResult<Self> {
+            FilterLimits::check_max(configs.len(), limits.max)?;
+
+            let mut this = Self::default();
+            for (name, filter) in configs {
+                let has_filter_criteria = !filter.account.is_empty()
+                    || !filter.owner.is_empty()
+                    || filter.cuckoo_accounts_filter.is_some();
+
+                FilterLimits::check_any(!has_filter_criteria, limits.any)?;
+                FilterLimits::check_pubkey_max(filter.account.len(), limits.account_max)?;
+                FilterLimits::check_pubkey_max(filter.owner.len(), limits.owner_max)?;
+
+                let filter_name = names.get(name)?;
+
+                if filter.nonempty_txn_signature.is_some() {
+                    this.nonempty_txn_signature
+                        .push((filter_name.clone(), filter.nonempty_txn_signature));
+                }
+
+                Self::set(
+                    &mut this.account,
+                    filter_name.clone(),
+                    Filter::decode_pubkeys(&filter.account, &limits.account_reject),
+                )?;
+                Self::set(
+                    &mut this.owner,
+                    filter_name.clone(),
+                    Filter::decode_pubkeys(&filter.owner, &limits.owner_reject),
+                )?;
+
+                let state = FilterAccountsState::new(&filter.filters)?;
+                let require_state_check = !state.is_empty();
+                if require_state_check {
+                    this.state_check.insert(filter_name.clone(), state);
+                }
+
+                let mut require_cuckoo = false;
+                if let Some(proto_cuckoo) = &filter.cuckoo_accounts_filter {
+                    FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
+                    this.account_cuckoo.insert(
+                        filter_name.clone(),
+                        Arc::new(CuckooFilter::from(proto_cuckoo)),
+                    );
+                    require_cuckoo = true;
+                }
+
+                this.aggregates.push(MasterAggregate {
+                    filter_name,
+                    require_non_empty_txn_signature: filter.nonempty_txn_signature.is_some(),
+                    require_account: !filter.account.is_empty(),
+                    require_cuckoo,
+                    require_owner: !filter.owner.is_empty(),
+                    require_state_check,
+                });
+            }
+
+            Ok(this)
+        }
+
+        fn set(
+            map: &mut FoldHashMap<Pubkey, FoldHashSet<FilterName>>,
+            filter_name: FilterName,
+            keys: impl Iterator<Item = FilterResult<Pubkey>>,
+        ) -> FilterResult<()> {
+            for maybe_key in keys {
+                map.entry(maybe_key?)
+                    .or_default()
+                    .insert(filter_name.clone());
+            }
+            Ok(())
+        }
+
+        fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+            let mut nonempty_txn_signature = FoldHashSet::default();
+            for (name, filter) in self.nonempty_txn_signature.iter() {
+                if let Some(required) = filter {
+                    if *required == account.txn_signature.is_some() {
+                        nonempty_txn_signature.insert(name.as_ref());
+                    }
+                }
+            }
+
+            let matched_account = self.account.get(&account.pubkey);
+
+            let mut cuckoo = FoldHashSet::default();
+            if !self.account_cuckoo.is_empty() {
+                let bytes = account.pubkey.to_bytes();
+                for (name, filter) in &self.account_cuckoo {
+                    if filter.contains(&bytes) {
+                        cuckoo.insert(name.as_ref());
+                    }
+                }
+            }
+
+            let matched_owner = self.owner.get(&account.owner);
+
+            let mut data = FoldHashSet::default();
+            for (name, account_state) in self.state_check.iter() {
+                if account_state.is_match(&account.data, account.lamports) {
+                    data.insert(name.as_ref());
+                }
+            }
+
+            self.aggregates
+                .iter()
+                .filter_map(|aggregate| {
+                    if aggregate.require_non_empty_txn_signature
+                        && !nonempty_txn_signature.contains(aggregate.filter_name.as_ref())
+                    {
+                        return None;
+                    }
+
+                    let needs_pubkey = aggregate.require_account || aggregate.require_cuckoo;
+                    if needs_pubkey
+                        && (!matched_account.is_some_and(|accounts| {
+                            accounts.contains(aggregate.filter_name.as_ref())
+                        }) && !cuckoo.contains(aggregate.filter_name.as_ref()))
+                    {
+                        return None;
+                    }
+
+                    if aggregate.require_owner
+                        && !matched_owner
+                            .is_some_and(|owners| owners.contains(aggregate.filter_name.as_ref()))
+                    {
+                        return None;
+                    }
+
+                    if aggregate.require_state_check
+                        && !data.contains(aggregate.filter_name.as_ref())
+                    {
+                        return None;
+                    }
+
+                    Some(aggregate.filter_name.clone())
+                })
+                .collect()
+        }
+    }
+
+    const ACCOUNT_POOL: usize = 10;
+    const OWNER_POOL: usize = 5;
+    const MAX_STATE_FILTERS: usize = 4;
+    const MEMCMP_NEEDLE: &[u8] = b"needle";
+
+    struct Scenario {
+        request: SubscribeRequest,
+        messages: Vec<Arc<MessageAccount>>,
+    }
+
+    fn pick<'a, T>(rng: &mut fastrand::Rng, items: &'a [T]) -> &'a T {
+        &items[rng.usize(..items.len())]
+    }
+
+    fn gen_state_filters(
+        rng: &mut fastrand::Rng,
+        data_len: usize,
+    ) -> Vec<SubscribeRequestFilterAccountsFilter> {
+        let mut filters = Vec::new();
+        let mut datasize_used = false;
+
+        while filters.len() < MAX_STATE_FILTERS && rng.bool() {
+            let choice = rng.u8(0..4);
+            let filter = match choice {
+                0 if !datasize_used => {
+                    datasize_used = true;
+                    AccountsFilterDataOneof::Datasize(data_len as u64)
+                }
+                0 | 1 => {
+                    let offset = rng.u64(0..8);
+                    let data = match rng.u8(0..3) {
+                        0 => AccountsFilterMemcmpOneof::Bytes(MEMCMP_NEEDLE.to_vec()),
+                        1 => AccountsFilterMemcmpOneof::Base58(
+                            bs58::encode(MEMCMP_NEEDLE).into_string(),
+                        ),
+                        _ => AccountsFilterMemcmpOneof::Base64(base64_engine.encode(MEMCMP_NEEDLE)),
+                    };
+                    AccountsFilterDataOneof::Memcmp(SubscribeRequestFilterAccountsFilterMemcmp {
+                        offset,
+                        data: Some(data),
+                    })
+                }
+                2 => AccountsFilterDataOneof::TokenAccountState(true),
+                _ => AccountsFilterDataOneof::Lamports(
+                    SubscribeRequestFilterAccountsFilterLamports {
+                        cmp: Some(match rng.u8(0..4) {
+                            0 => AccountsFilterLamports::Eq(rng.u64(98..102)),
+                            1 => AccountsFilterLamports::Ne(rng.u64(98..102)),
+                            2 => AccountsFilterLamports::Lt(rng.u64(98..102)),
+                            _ => AccountsFilterLamports::Gt(rng.u64(98..102)),
+                        }),
+                    },
+                ),
+            };
+            filters.push(SubscribeRequestFilterAccountsFilter {
+                filter: Some(filter),
+            });
+        }
+
+        filters
+    }
+
+    fn gen_scenario(rng: &mut fastrand::Rng) -> Scenario {
+        let accounts_pool = fixtures::deterministic_pubkeys(1, ACCOUNT_POOL);
+        let owners_pool = fixtures::deterministic_pubkeys(2, OWNER_POOL);
+        let strangers = fixtures::deterministic_pubkeys(3, 4);
+
+        let filter_count = match rng.u8(0..10) {
+            0 => 0,
+            1 => 1,
+            2..=7 => rng.usize(2..9),
+            8 => rng.usize(63..67),
+            _ => rng.usize(127..130),
+        };
+
+        let mut accounts = HashMap::new();
+        for i in 0..filter_count {
+            let account = (0..rng.usize(0..4))
+                .map(|_| pick(rng, &accounts_pool).to_string())
+                .collect::<Vec<_>>();
+            let owner = (0..rng.usize(0..3))
+                .map(|_| pick(rng, &owners_pool).to_string())
+                .collect::<Vec<_>>();
+
+            let cuckoo_accounts_filter = (rng.u8(0..4) == 0).then(|| {
+                let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(4).unwrap();
+                for _ in 0..rng.usize(1..4) {
+                    cuckoo
+                        .insert(&pick(rng, &accounts_pool).to_bytes())
+                        .unwrap();
+                }
+                ProtoCuckooFilter::from(&cuckoo)
+            });
+
+            let nonempty_txn_signature = match rng.u8(0..3) {
+                0 => None,
+                1 => Some(true),
+                _ => Some(false),
+            };
+
+            accounts.insert(
+                format!("filter-{i}"),
+                SubscribeRequestFilterAccounts {
+                    account,
+                    owner,
+                    filters: gen_state_filters(rng, fixtures::TOKEN_ACCOUNT_LEN),
+                    nonempty_txn_signature,
+                    cuckoo_accounts_filter,
+                },
+            );
+        }
+
+        let messages = (0..14)
+            .map(|_| {
+                let pubkey = if rng.bool() {
+                    *pick(rng, &accounts_pool)
+                } else {
+                    *pick(rng, &strangers)
+                };
+                let owner = match rng.u8(0..3) {
+                    0 => *pick(rng, &owners_pool),
+                    1 => *pick(rng, &accounts_pool),
+                    _ => *pick(rng, &strangers),
+                };
+                let data_len = *pick(rng, &[0usize, 4, 107, 108, 164, 165, 166, 2048]);
+                let mut data = vec![0u8; data_len];
+                if data_len > fixtures::TOKEN_ACCOUNT_STATE_OFFSET && rng.bool() {
+                    data[fixtures::TOKEN_ACCOUNT_STATE_OFFSET] = 1;
+                }
+                if data_len >= MEMCMP_NEEDLE.len() + 8 && rng.bool() {
+                    let offset = rng.usize(0..8);
+                    data[offset..offset + MEMCMP_NEEDLE.len()].copy_from_slice(MEMCMP_NEEDLE);
+                }
+                let lamports = *pick(rng, &[0u64, 98, 99, 100, 101, u64::MAX]);
+                let txn_signature = rng.bool().then(Signature::default);
+
+                fixtures::message_account(fixtures::account_info(
+                    pubkey,
+                    owner,
+                    data,
+                    lamports,
+                    txn_signature,
+                ))
+            })
+            .collect();
+
+        Scenario {
+            request: SubscribeRequest {
+                accounts,
+                ..Default::default()
+            },
+            messages,
+        }
+    }
+
+    const SEEDS: [u64; 24] = [
+        0x0000_0000_0000_0001,
+        0x0000_0000_0000_0002,
+        0x0000_0000_0000_0003,
+        0xdead_beef_cafe_f00d,
+        0x0123_4567_89ab_cdef,
+        0xfedc_ba98_7654_3210,
+        0x5555_5555_5555_5555,
+        0xaaaa_aaaa_aaaa_aaaa,
+        0x1111_2222_3333_4444,
+        0x9e37_79b9_7f4a_7c15,
+        0x6a09_e667_f3bc_c908,
+        0xbb67_ae85_84ca_a73b,
+        0x3c6e_f372_fe94_f82b,
+        0xa54f_f53a_5f1d_36f1,
+        0x510e_527f_ade6_82d1,
+        0x9b05_688c_2b3e_6c1f,
+        0x1f83_d9ab_fb41_bd6b,
+        0x5be0_cd19_137e_2179,
+        0x0000_0000_ffff_ffff,
+        0xffff_ffff_0000_0000,
+        0x7fff_ffff_ffff_ffff,
+        0x8000_0000_0000_0000,
+        0x0f0f_0f0f_0f0f_0f0f,
+        0xf0f0_f0f0_f0f0_f0f0,
+    ];
+    const SCENARIOS_PER_SEED: usize = 8;
+
+    #[test]
+    fn account_matching_is_identical_to_master_semantics() {
+        let limits = FilterLimits::default();
+        let mut checked = 0usize;
+        let mut matched = 0usize;
+
+        for seed in SEEDS {
+            let mut rng = fastrand::Rng::with_seed(seed);
+
+            for scenario_index in 0..SCENARIOS_PER_SEED {
+                let scenario = gen_scenario(&mut rng);
+                let where_ = |message_index: usize| {
+                    format!(
+                        "seed={seed:#x} scenario={scenario_index} message={message_index} \
+                         filters={}",
+                        scenario.request.accounts.len()
+                    )
+                };
+
+                let filter = Filter::new(&scenario.request, &limits, &mut fixtures::filter_names())
+                    .unwrap_or_else(|err| panic!("{}: Filter::new failed: {err}", where_(0)));
+
+                let oracle = MasterAccountsOracle::new(
+                    &scenario.request.accounts,
+                    &limits.accounts,
+                    &mut fixtures::filter_names(),
+                )
+                .unwrap_or_else(|err| panic!("{}: oracle build failed: {err}", where_(0)));
+
+                for (message_index, message) in scenario.messages.iter().enumerate() {
+                    let account = &message.account;
+                    let expected = oracle.get_filters(account);
+
+                    let updates = filter.get_updates(&Message::Account(Arc::clone(message)), None);
+                    assert!(
+                        updates.len() <= 1,
+                        "{}: account messages yield at most one update, got {}",
+                        where_(message_index),
+                        updates.len()
+                    );
+                    let actual = updates
+                        .first()
+                        .map(|update| update.filters.clone())
+                        .unwrap_or_default();
+                    assert_eq!(
+                        actual,
+                        expected,
+                        "{}: public output diverged from master semantics",
+                        where_(message_index)
+                    );
+
+                    let linear = filter
+                        .accounts
+                        .aggregates
+                        .iter()
+                        .filter_map(|aggregate| aggregate.match_filter(account, None, None))
+                        .collect::<FilteredUpdateFilters>();
+                    assert_eq!(
+                        linear,
+                        expected,
+                        "{}: linear scan diverged from master semantics",
+                        where_(message_index)
+                    );
+
+                    if let Some(index) = &filter.accounts.index {
+                        assert_eq!(
+                            index.get_filters(&filter.accounts.aggregates, account),
+                            expected,
+                            "{}: indexed lookup diverged from master semantics",
+                            where_(message_index)
+                        );
+                    }
+
+                    let mut names = actual.iter().map(|n| n.as_ref()).collect::<Vec<_>>();
+                    let before = names.len();
+                    names.sort_unstable();
+                    names.dedup();
+                    assert_eq!(
+                        names.len(),
+                        before,
+                        "{}: duplicate filter names in output",
+                        where_(message_index)
+                    );
+
+                    if !updates.is_empty() {
+                        assert_eq!(
+                            updates[0].created_at,
+                            message.created_at,
+                            "{}: created_at not propagated",
+                            where_(message_index)
+                        );
+                        matched += 1;
+                    }
+                    checked += 1;
+                }
+            }
+        }
+
+        assert!(
+            matched * 5 > checked,
+            "generator produced too few matches to be meaningful: {matched}/{checked}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pubkey_hasher_windows {
+    use {super::*, crate::plugin::filter::fixtures};
+
+    fn transactions_filter(
+        include: &[Pubkey],
+        exclude: &[Pubkey],
+        required: &[Pubkey],
+    ) -> HashMap<String, SubscribeRequestFilterTransactions> {
+        HashMap::from([(
+            "t".to_owned(),
+            SubscribeRequestFilterTransactions {
+                account_include: include.iter().map(|k| k.to_string()).collect(),
+                account_exclude: exclude.iter().map(|k| k.to_string()).collect(),
+                account_required: required.iter().map(|k| k.to_string()).collect(),
+                ..Default::default()
+            },
+        )])
+    }
+
+    fn transaction_with_window(offset: usize, account_keys: &[Pubkey]) -> Arc<MessageTransaction> {
+        let message = fixtures::message_transaction(
+            Signature::default(),
+            account_keys.to_vec(),
+            false,
+            Default::default(),
+        );
+        let mut info = message.transaction.clone();
+        info.account_keys = fixtures::pubkey_set_with_window(offset, account_keys.iter().copied());
+        Arc::new(MessageTransaction {
+            transaction: info,
+            slot: message.slot,
+            created_at: message.created_at,
+        })
+    }
+
+    #[test]
+    fn transaction_include_matching_is_window_independent() {
+        let keys = fixtures::window_colliding_pubkeys(32);
+        let hit = keys[19];
+        let miss = Pubkey::new_from_array([0xAA; 32]);
+
+        for (label, include, expect_match) in [("hit", hit, true), ("miss", miss, false)] {
+            let filter = Filter::new(
+                &SubscribeRequest {
+                    transactions: transactions_filter(&[include], &[], &[]),
+                    ..Default::default()
+                },
+                &FilterLimits::default(),
+                &mut fixtures::filter_names(),
+            )
+            .unwrap();
+
+            for offset in 0..fixtures::PUBKEY_HASHER_WINDOWS {
+                let message = transaction_with_window(offset, &keys);
+                let updates = filter.get_updates(&Message::Transaction(message), None);
+                assert_eq!(
+                    !updates.is_empty(),
+                    expect_match,
+                    "{label}: window offset {offset} changed the result"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn required_and_exclude_matching_is_window_independent() {
+        let keys = fixtures::window_colliding_pubkeys(32);
+        let present = [keys[0], keys[31]];
+        let absent = Pubkey::new_from_array([0xBB; 32]);
+
+        let cases = [
+            (
+                "required all present",
+                vec![],
+                vec![],
+                present.to_vec(),
+                true,
+            ),
+            (
+                "required one absent",
+                vec![],
+                vec![],
+                vec![present[0], absent],
+                false,
+            ),
+            ("exclude hits", vec![], vec![keys[5]], vec![], false),
+            ("exclude misses", vec![], vec![absent], vec![], true),
+            (
+                "large exclude misses",
+                vec![],
+                fixtures::deterministic_pubkeys(9, 200),
+                vec![],
+                true,
+            ),
+        ];
+
+        for (label, include, exclude, required, expected) in cases {
+            let filter = Filter::new(
+                &SubscribeRequest {
+                    transactions: transactions_filter(&include, &exclude, &required),
+                    ..Default::default()
+                },
+                &FilterLimits::default(),
+                &mut fixtures::filter_names(),
+            )
+            .unwrap();
+
+            for offset in 0..fixtures::PUBKEY_HASHER_WINDOWS {
+                let message = transaction_with_window(offset, &keys);
+                let updates = filter.get_updates(&Message::Transaction(message), None);
+                assert_eq!(
+                    !updates.is_empty(),
+                    expected,
+                    "{label}: window offset {offset} changed the result"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod filter_kind_coverage {
+    use {
+        super::*,
+        crate::plugin::filter::fixtures,
+        yellowstone_grpc_proto::geyser::{
+            CuckooFilter as ProtoCuckooFilter, SubscribeRequestFilterEntry,
+        },
+    };
+
+    fn matched_names(updates: &FilteredUpdates) -> Vec<String> {
+        let mut names = updates
+            .iter()
+            .flat_map(|update| update.filters.iter())
+            .map(|name| name.as_ref().to_owned())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    }
+
+    fn build(request: SubscribeRequest) -> Filter {
+        Filter::new(
+            &request,
+            &FilterLimits::default(),
+            &mut fixtures::filter_names(),
+        )
+        .expect("filter builds")
+    }
+
+    const ALL_SLOT_STATUSES: [SlotStatus; 7] = [
+        SlotStatus::Processed,
+        SlotStatus::Confirmed,
+        SlotStatus::Finalized,
+        SlotStatus::FirstShredReceived,
+        SlotStatus::Completed,
+        SlotStatus::CreatedBank,
+        SlotStatus::Dead,
+    ];
+
+    fn slots_request(
+        filter_by_commitment: Option<bool>,
+        interslot_updates: Option<bool>,
+    ) -> SubscribeRequest {
+        SubscribeRequest {
+            slots: HashMap::from([(
+                "s".to_owned(),
+                SubscribeRequestFilterSlots {
+                    filter_by_commitment,
+                    interslot_updates,
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn slot_status_and_interslot_updates_gate_delivery() {
+        for interslot in [None, Some(false), Some(true)] {
+            let filter = build(slots_request(None, interslot));
+            let wants_all = interslot == Some(true);
+
+            for status in ALL_SLOT_STATUSES {
+                let updates = filter.get_updates(
+                    &Message::Slot(Arc::new(fixtures::message_slot(42, status))),
+                    None,
+                );
+                let commitment_bearing = matches!(
+                    status,
+                    SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
+                );
+                assert_eq!(
+                    !updates.is_empty(),
+                    wants_all || commitment_bearing,
+                    "interslot={interslot:?} status={status:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slot_filter_by_commitment_requires_matching_commitment() {
+        let filter = build(slots_request(Some(true), Some(true)));
+
+        for status in ALL_SLOT_STATUSES {
+            let message = Message::Slot(Arc::new(fixtures::message_slot(42, status)));
+
+            assert!(
+                filter.get_updates(&message, None).is_empty(),
+                "status={status:?} with no commitment"
+            );
+
+            for commitment in [
+                CommitmentLevel::Processed,
+                CommitmentLevel::Confirmed,
+                CommitmentLevel::Finalized,
+            ] {
+                let updates = filter.get_updates(&message, Some(commitment));
+                assert_eq!(
+                    !updates.is_empty(),
+                    commitment == status,
+                    "status={status:?} commitment={commitment:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn entry_filter_matches_every_entry_and_absence_yields_nothing() {
+        let filter = build(SubscribeRequest {
+            entry: HashMap::from([("e".to_owned(), SubscribeRequestFilterEntry {})]),
+            ..Default::default()
+        });
+        let updates = filter.get_updates(&Message::Entry(fixtures::message_entry(42, 3)), None);
+        assert_eq!(matched_names(&updates), ["e"]);
+
+        let empty = build(SubscribeRequest::default());
+        assert!(empty
+            .get_updates(&Message::Entry(fixtures::message_entry(42, 3)), None)
+            .is_empty());
+    }
+
+    #[test]
+    fn blocks_meta_filter_matches_and_reports_every_subscribed_name() {
+        let filter = build(SubscribeRequest {
+            blocks_meta: HashMap::from([
+                ("a".to_owned(), SubscribeRequestFilterBlocksMeta {}),
+                ("b".to_owned(), SubscribeRequestFilterBlocksMeta {}),
+            ]),
+            ..Default::default()
+        });
+
+        let updates =
+            filter.get_updates(&Message::BlockMeta(fixtures::message_block_meta(42)), None);
+        assert_eq!(updates.len(), 1, "one update carrying both filter names");
+        assert_eq!(matched_names(&updates), ["a", "b"]);
+
+        let empty = build(SubscribeRequest::default());
+        assert!(empty
+            .get_updates(&Message::BlockMeta(fixtures::message_block_meta(42)), None)
+            .is_empty());
+    }
+
+    fn blocks_request(
+        include_transactions: Option<bool>,
+        include_accounts: Option<bool>,
+        include_entries: Option<bool>,
+        account_include: Vec<String>,
+        cuckoo_account_include: Option<ProtoCuckooFilter>,
+    ) -> SubscribeRequest {
+        SubscribeRequest {
+            blocks: HashMap::from([(
+                "b".to_owned(),
+                SubscribeRequestFilterBlocks {
+                    account_include,
+                    include_transactions,
+                    include_accounts,
+                    include_entries,
+                    cuckoo_account_include,
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    fn block_payload(update: &FilteredUpdate) -> &FilteredUpdateBlock {
+        match &update.message {
+            FilteredUpdateOneof::Block(block) => block,
+            other => panic!("expected a block payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_include_toggles_control_which_children_are_carried() {
+        let keys = fixtures::deterministic_pubkeys(4, 3);
+        let transactions = vec![fixtures::message_transaction(
+            Signature::default(),
+            keys.clone(),
+            false,
+            Default::default(),
+        )];
+        let accounts = vec![fixtures::simple_message_account(keys[0], keys[1])];
+        let entries = vec![fixtures::message_entry(42, 0)];
+
+        for (include_transactions, include_accounts, include_entries) in [
+            (None, None, None),
+            (Some(true), Some(true), Some(true)),
+            (Some(false), Some(false), Some(false)),
+            (Some(false), Some(true), None),
+        ] {
+            let filter = build(blocks_request(
+                include_transactions,
+                include_accounts,
+                include_entries,
+                vec![],
+                None,
+            ));
+            let block = fixtures::message_block(
+                42,
+                transactions.clone(),
+                accounts.clone(),
+                entries.clone(),
+            );
+            let updates = filter.get_updates(&Message::Block(block), None);
+            assert_eq!(updates.len(), 1);
+            let payload = block_payload(&updates[0]);
+
+            let label =
+                format!("txs={include_transactions:?} accts={include_accounts:?} entries={include_entries:?}");
+            assert_eq!(
+                payload.transactions.len(),
+                usize::from(matches!(include_transactions, None | Some(true))),
+                "{label}: transactions"
+            );
+            assert_eq!(
+                payload.accounts.len(),
+                usize::from(include_accounts == Some(true)),
+                "{label}: accounts"
+            );
+            assert_eq!(
+                payload.entries.len(),
+                usize::from(include_entries == Some(true)),
+                "{label}: entries"
+            );
+            assert_eq!(payload.updated_account_count, 1, "{label}: account count");
+        }
+    }
+
+    #[test]
+    fn block_account_include_selects_children_without_suppressing_the_update() {
+        let keys = fixtures::deterministic_pubkeys(5, 4);
+        let wanted = keys[1];
+        let transactions = vec![
+            fixtures::message_transaction(
+                Signature::default(),
+                vec![wanted, keys[2]],
+                false,
+                Default::default(),
+            ),
+            fixtures::message_transaction(
+                Signature::default(),
+                vec![keys[2], keys[3]],
+                false,
+                Default::default(),
+            ),
+        ];
+        let accounts = vec![
+            fixtures::simple_message_account(wanted, keys[0]),
+            fixtures::simple_message_account(keys[3], keys[0]),
+        ];
+
+        let filter = build(blocks_request(
+            Some(true),
+            Some(true),
+            None,
+            vec![wanted.to_string()],
+            None,
+        ));
+        let updates = filter.get_updates(
+            &Message::Block(fixtures::message_block(42, transactions, accounts, vec![])),
+            None,
+        );
+
+        assert_eq!(matched_names(&updates), ["b"]);
+        let payload = block_payload(&updates[0]);
+        assert_eq!(payload.transactions.len(), 1, "only the matching tx");
+        assert_eq!(payload.accounts.len(), 1, "only the matching account");
+        assert_eq!(payload.accounts[0].account.pubkey, wanted);
+    }
+
+    #[test]
+    fn block_explicit_and_cuckoo_account_lists_are_ored() {
+        let keys = fixtures::deterministic_pubkeys(6, 4);
+        let explicit = keys[0];
+        let via_cuckoo = keys[1];
+        let unrelated = keys[2];
+
+        let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(4).unwrap();
+        cuckoo.insert(&via_cuckoo.to_bytes()).unwrap();
+        assert!(
+            !cuckoo.contains(&unrelated.to_bytes()),
+            "precondition: the unrelated key must not be a cuckoo false positive"
+        );
+        let proto_cuckoo = ProtoCuckooFilter::from(&cuckoo);
+
+        let filter = build(blocks_request(
+            Some(true),
+            None,
+            None,
+            vec![explicit.to_string()],
+            Some(proto_cuckoo),
+        ));
+
+        let transactions = vec![
+            fixtures::message_transaction(
+                Signature::default(),
+                vec![explicit],
+                false,
+                Default::default(),
+            ),
+            fixtures::message_transaction(
+                Signature::default(),
+                vec![via_cuckoo],
+                false,
+                Default::default(),
+            ),
+            fixtures::message_transaction(
+                Signature::default(),
+                vec![unrelated],
+                false,
+                Default::default(),
+            ),
+        ];
+
+        let updates = filter.get_updates(
+            &Message::Block(fixtures::message_block(42, transactions, vec![], vec![])),
+            None,
+        );
+        let payload = block_payload(&updates[0]);
+        assert_eq!(
+            payload.transactions.len(),
+            2,
+            "the explicit list and the cuckoo each contribute one transaction"
+        );
+    }
+
+    #[test]
+    fn account_data_slice_validation_rejects_disorder_and_overlap() {
+        let slice = |offset: u64, length: u64| SubscribeRequestAccountsDataSlice { offset, length };
+
+        assert!(FilterAccountsDataSlice::new(&[], usize::MAX).is_ok());
+        assert!(FilterAccountsDataSlice::new(&[slice(0, 4), slice(8, 4)], usize::MAX).is_ok());
+        assert!(matches!(
+            FilterAccountsDataSlice::new(&[slice(8, 4), slice(0, 4)], usize::MAX),
+            Err(FilterError::CreateDataSliceOutOfOrder)
+        ));
+        assert!(matches!(
+            FilterAccountsDataSlice::new(&[slice(0, 8), slice(4, 4)], usize::MAX),
+            Err(FilterError::CreateDataSliceOverlap)
+        ));
+        assert!(matches!(
+            FilterAccountsDataSlice::new(&[slice(0, 4), slice(4, 4), slice(2, 2)], usize::MAX),
+            Err(FilterError::CreateDataSliceOutOfOrder)
+        ));
+        assert!(matches!(
+            FilterAccountsDataSlice::new(&[slice(0, 4)], 0),
+            Err(FilterError::LimitsCheck(_))
+        ));
+    }
+
+    #[test]
+    fn account_data_slice_extraction_and_length_agree() {
+        let source = (0..16u8).collect::<Vec<_>>();
+
+        for slices in [
+            vec![],
+            vec![(0u64, 4u64)],
+            vec![(4, 4)],
+            vec![(0, 4), (8, 4)],
+            vec![(12, 4)],
+            vec![(13, 4)],
+            vec![(0, 4), (100, 4)],
+        ] {
+            let protos = slices
+                .iter()
+                .map(|&(offset, length)| SubscribeRequestAccountsDataSlice { offset, length })
+                .collect::<Vec<_>>();
+            let data_slice = FilterAccountsDataSlice::new(&protos, usize::MAX).unwrap();
+
+            let extracted = data_slice.get_slice(&source);
+            assert_eq!(
+                extracted.len(),
+                data_slice.get_slice_len(&source),
+                "slices {slices:?}: get_slice_len disagrees with get_slice"
+            );
+
+            let expected = if slices.is_empty() {
+                source.clone()
+            } else {
+                slices
+                    .iter()
+                    .filter(|&&(offset, length)| source.len() as u64 >= offset + length)
+                    .flat_map(|&(offset, length)| {
+                        source[offset as usize..(offset + length) as usize].to_vec()
+                    })
+                    .collect()
+            };
+            assert_eq!(extracted, expected, "slices {slices:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod cuckoo_tests {
     use {
         super::{
@@ -3068,8 +4695,20 @@ mod cuckoo_tests {
 
     #[test]
     fn test_cuckoo_filter_no_match() {
-        let in_filter = Pubkey::new_unique();
-        let not_in_filter = Pubkey::new_unique();
+        let in_filter = Pubkey::new_from_array([0x11; 32]);
+        let not_in_filter = Pubkey::new_from_array([0x22; 32]);
+
+        let mut probe = CuckooFilter::<[u8; 32]>::with_capacity(1).unwrap();
+        probe.insert(&in_filter.to_bytes()).unwrap();
+        assert!(
+            probe.contains(&in_filter.to_bytes()),
+            "cuckoo filters have no false negatives"
+        );
+        assert!(
+            !probe.contains(&not_in_filter.to_bytes()),
+            "precondition: the chosen absent key must not be a false positive of this filter"
+        );
+
         let cuckoo = create_cuckoo_with_pubkeys(&[in_filter]);
 
         let mut accounts = HashMap::new();
@@ -3104,7 +4743,7 @@ mod cuckoo_tests {
             &mut create_filter_names(),
         )
         .unwrap();
-        let message = create_message_account(not_in_filter, Pubkey::new_unique());
+        let message = create_message_account(not_in_filter, Pubkey::new_from_array([0x33; 32]));
         let updates = filter.get_updates(&Message::Account(message), None);
 
         assert!(updates.is_empty());
