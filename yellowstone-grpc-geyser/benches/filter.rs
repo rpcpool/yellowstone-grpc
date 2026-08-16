@@ -1,128 +1,158 @@
 use {
-    bytes::Bytes,
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
-    prost_types::Timestamp,
-    solana_hash::Hash,
-    solana_keypair::Keypair,
-    solana_message::{Message as SolMessage, MessageHeader},
     solana_pubkey::Pubkey,
-    solana_signer::Signer,
-    solana_transaction::{versioned::VersionedTransaction, Transaction},
-    solana_transaction_status::TransactionStatusMeta,
-    std::{
-        collections::HashMap,
-        hint::black_box,
-        sync::{Arc, OnceLock},
-        time::{Duration, SystemTime},
-    },
+    solana_signature::Signature,
+    std::{collections::HashMap, hint::black_box, time::Duration},
     yellowstone_grpc_geyser::plugin::{
-        convert_to,
-        filter::{limits::FilterLimits, name::FilterNames, Filter},
-        message::{
-            Message, MessageAccount, MessageAccountInfo, MessageTransaction, MessageTransactionInfo,
-        },
+        filter::{fixtures, limits::FilterLimits, Filter},
+        message::Message,
     },
-    yellowstone_grpc_proto::geyser::{
-        SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
-        SubscribeRequestFilterTransactions,
+    yellowstone_grpc_proto::{
+        cuckoo::CuckooFilter,
+        geyser::{
+            CuckooFilter as ProtoCuckooFilter, SubscribeRequest, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
+        },
     },
 };
 
-fn filter_names() -> FilterNames {
-    FilterNames::new(64, 1024, Duration::from_secs(1))
+const FILTER_COUNTS: [usize; 6] = [1, 2, 8, 64, 65, 256];
+const PUBKEYS_PER_FILTER: [usize; 3] = [1, 100, 10_000];
+
+fn unlimited() -> FilterLimits {
+    FilterLimits::default()
 }
 
-fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
-    Arc::new(MessageAccount {
-        account: MessageAccountInfo {
-            pubkey,
-            lamports: 1000,
-            owner,
-            executable: false,
-            rent_epoch: 0,
-            data: Bytes::new(),
-            write_version: 1,
-            txn_signature: None,
-            pre_encoded: OnceLock::new(),
-        },
-        slot: 100,
-        is_startup: false,
-        created_at: Timestamp::from(SystemTime::now()),
-    })
+fn build_filter(request: SubscribeRequest) -> Filter {
+    Filter::new(&request, &unlimited(), &mut fixtures::filter_names()).expect("filter builds")
 }
 
-fn create_message_transaction(
-    keypair: &Keypair,
-    account_keys: Vec<Pubkey>,
-) -> Arc<MessageTransaction> {
-    let message = SolMessage {
-        header: MessageHeader {
-            num_required_signatures: 1,
-            ..MessageHeader::default()
-        },
-        account_keys,
-        ..SolMessage::default()
-    };
-    let versioned_transaction =
-        VersionedTransaction::from(Transaction::new(&[keypair], message, Hash::default()));
-    let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
-        status: Ok(()),
-        ..TransactionStatusMeta::default()
-    });
-    let sig = *versioned_transaction
-        .signatures
-        .first()
-        .expect("no signature");
-    let account_keys = versioned_transaction
-        .message
-        .static_account_keys()
-        .iter()
-        .copied()
-        .collect();
-
-    Arc::new(MessageTransaction {
-        transaction: MessageTransactionInfo {
-            signature: sig,
-            is_vote: false,
-            transaction: convert_to::create_transaction(&versioned_transaction),
-            meta,
-            index: 1,
-            account_keys,
-            pre_encoded: OnceLock::new(),
-            token_owners_all: OnceLock::new(),
-            token_owners_changed: OnceLock::new(),
-        },
-        slot: 100,
-        created_at: Timestamp::from(SystemTime::now()),
-    })
+fn account_request(
+    n_filters: usize,
+    pubkeys_per_filter: usize,
+    pool: &[Pubkey],
+    owner: Pubkey,
+) -> SubscribeRequest {
+    let mut accounts = HashMap::with_capacity(n_filters);
+    for i in 0..n_filters {
+        let start = (i * pubkeys_per_filter) % pool.len();
+        let keys = (0..pubkeys_per_filter)
+            .map(|k| pool[(start + k) % pool.len()].to_string())
+            .collect::<Vec<_>>();
+        accounts.insert(
+            format!("filter-{i}"),
+            SubscribeRequestFilterAccounts {
+                account: keys,
+                owner: vec![owner.to_string()],
+                ..Default::default()
+            },
+        );
+    }
+    SubscribeRequest {
+        accounts,
+        ..Default::default()
+    }
 }
 
-fn tx_with_30_keys(keypair: &Keypair) -> Vec<Pubkey> {
-    let mut keys = vec![keypair.pubkey()];
-    keys.extend((0..29).map(|_| Pubkey::new_unique()));
-    keys
+fn accounts_by_filter_count(c: &mut Criterion) {
+    let pool = fixtures::deterministic_pubkeys(1, 20_000);
+    let owner = Pubkey::new_from_array([9; 32]);
+    let stranger = Pubkey::new_from_array([8; 32]);
+
+    for pubkeys_per_filter in PUBKEYS_PER_FILTER {
+        let mut group = c.benchmark_group(format!("accounts/scan_{pubkeys_per_filter}"));
+        for n_filters in FILTER_COUNTS {
+            let filter = build_filter(account_request(n_filters, pubkeys_per_filter, &pool, owner));
+
+            let hit = Message::Account(fixtures::simple_message_account(pool[0], owner));
+            let miss = Message::Account(fixtures::simple_message_account(stranger, stranger));
+            let near_miss = Message::Account(fixtures::simple_message_account(stranger, owner));
+
+            for (label, message) in [("hit", &hit), ("miss", &miss), ("near_miss", &near_miss)] {
+                group.bench_with_input(BenchmarkId::new(label, n_filters), &n_filters, |b, _| {
+                    b.iter(|| black_box(filter.get_updates(black_box(message), None)))
+                });
+            }
+        }
+        group.finish();
+    }
 }
 
-/// Client subscribed to slots only. Account updates still reach its
-/// client_loop, so the account path runs and returns empty every time.
-/// This is the case the early return skips.
-fn slots_only_client(c: &mut Criterion) {
-    let mut slots = HashMap::new();
-    slots.insert("s".to_owned(), SubscribeRequestFilterSlots::default());
+fn accounts_with_cuckoo(c: &mut Criterion) {
+    let pool = fixtures::deterministic_pubkeys(2, 10_000);
+    let owner = Pubkey::new_from_array([9; 32]);
+    let stranger = Pubkey::new_from_array([8; 32]);
 
-    let filter = Filter::new(
-        &SubscribeRequest {
-            slots,
+    let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(pool.len()).unwrap();
+    for key in &pool {
+        cuckoo.insert(&key.to_bytes()).unwrap();
+    }
+    let proto = ProtoCuckooFilter::from(&cuckoo);
+
+    let mut group = c.benchmark_group("accounts/cuckoo");
+    for n_filters in [1usize, 8, 64] {
+        let mut accounts = HashMap::new();
+        for i in 0..n_filters {
+            accounts.insert(
+                format!("filter-{i}"),
+                SubscribeRequestFilterAccounts {
+                    cuckoo_accounts_filter: Some(proto.clone()),
+                    ..Default::default()
+                },
+            );
+        }
+        let filter = build_filter(SubscribeRequest {
+            accounts,
             ..Default::default()
-        },
-        &FilterLimits::default(),
-        &mut filter_names(),
-    )
-    .unwrap();
+        });
 
-    let message = Message::Account(create_message_account(
-        Pubkey::new_unique(),
-        Pubkey::new_unique(),
+        let hit = Message::Account(fixtures::simple_message_account(pool[0], owner));
+        let miss = Message::Account(fixtures::simple_message_account(stranger, stranger));
+        for (label, message) in [("hit", &hit), ("miss", &miss)] {
+            group.bench_with_input(BenchmarkId::new(label, n_filters), &n_filters, |b, _| {
+                b.iter(|| black_box(filter.get_updates(black_box(message), None)))
+            });
+        }
+    }
+    group.finish();
+}
+
+fn subscribe_filter_new(c: &mut Criterion) {
+    let pool = fixtures::deterministic_pubkeys(3, 100_000);
+    let owner = Pubkey::new_from_array([9; 32]);
+
+    let mut group = c.benchmark_group("subscribe/filter_new");
+    group.sample_size(20);
+    for (n_filters, pubkeys_per_filter) in [(1usize, 1_000usize), (1, 10_000), (10, 10_000)] {
+        let request = account_request(n_filters, pubkeys_per_filter, &pool, owner);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{n_filters}x{pubkeys_per_filter}")),
+            &request,
+            |b, request| {
+                b.iter(|| {
+                    black_box(
+                        Filter::new(
+                            black_box(request),
+                            &unlimited(),
+                            &mut fixtures::filter_names(),
+                        )
+                        .unwrap(),
+                    )
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
+fn slots_only_client(c: &mut Criterion) {
+    let filter = build_filter(SubscribeRequest {
+        slots: HashMap::from([("s".to_owned(), SubscribeRequestFilterSlots::default())]),
+        ..Default::default()
+    });
+    let message = Message::Account(fixtures::simple_message_account(
+        Pubkey::new_from_array([1; 32]),
+        Pubkey::new_from_array([2; 32]),
     ));
 
     c.bench_function("slots_only/account", |b| {
@@ -130,117 +160,64 @@ fn slots_only_client(c: &mut Criterion) {
     });
 }
 
-/// Control for the early return: a client that does have account filters
-/// must not pay for the guard.
-fn one_account_filter(c: &mut Criterion) {
-    let owner = Pubkey::new_unique();
-
-    let mut accounts = HashMap::new();
-    accounts.insert(
-        "a".to_owned(),
-        SubscribeRequestFilterAccounts {
-            owner: vec![owner.to_string()],
-            ..Default::default()
-        },
-    );
-
-    let filter = Filter::new(
-        &SubscribeRequest {
-            accounts,
-            ..Default::default()
-        },
-        &FilterLimits::default(),
-        &mut filter_names(),
-    )
-    .unwrap();
-
-    let message = Message::Account(create_message_account(Pubkey::new_unique(), owner));
-
-    c.bench_function("one_account_filter/account", |b| {
-        b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
-    });
+fn transaction_keys() -> Vec<Pubkey> {
+    fixtures::deterministic_pubkeys(4, 30)
 }
 
-/// One transaction filter whose account_include holds N pubkeys, matched
-/// against a 30-key transaction containing none of them. Worst case: no
-/// short-circuit, so the full comparison runs.
-fn sweep_account_include(c: &mut Criterion) {
-    let keypair = Keypair::new();
-    let message = Message::Transaction(create_message_transaction(
-        &keypair,
-        tx_with_30_keys(&keypair),
+fn transaction_account_include(c: &mut Criterion) {
+    let keys = transaction_keys();
+    let message = Message::Transaction(fixtures::message_transaction(
+        Signature::default(),
+        keys.clone(),
+        false,
+        Default::default(),
     ));
+    let pool = fixtures::deterministic_pubkeys(5, 10_000);
 
-    let mut group = c.benchmark_group("sweep/account_include");
+    let mut group = c.benchmark_group("transactions/account_include");
     for n in [1usize, 10, 100, 1_000, 10_000] {
-        let include: Vec<String> = (0..n).map(|_| Pubkey::new_unique().to_string()).collect();
-
-        let mut transactions = HashMap::new();
-        transactions.insert(
-            "t".to_owned(),
-            SubscribeRequestFilterTransactions {
-                account_include: include,
+        for (label, include) in [
+            (
+                "miss",
+                pool[..n].iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            ),
+            (
+                "hit",
+                pool[..n.saturating_sub(1)]
+                    .iter()
+                    .map(|k| k.to_string())
+                    .chain(std::iter::once(keys[15].to_string()))
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            let filter = build_filter(SubscribeRequest {
+                transactions: HashMap::from([(
+                    "t".to_owned(),
+                    SubscribeRequestFilterTransactions {
+                        account_include: include,
+                        ..Default::default()
+                    },
+                )]),
                 ..Default::default()
-            },
-        );
-
-        let mut limits = FilterLimits::default();
-        limits.transactions.account_include_max = usize::MAX;
-
-        let filter = Filter::new(
-            &SubscribeRequest {
-                transactions,
-                ..Default::default()
-            },
-            &limits,
-            &mut filter_names(),
-        )
-        .unwrap();
-
-        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
-        });
+            });
+            group.bench_with_input(BenchmarkId::new(label, n), &n, |b, _| {
+                b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
+            });
+        }
     }
     group.finish();
 }
 
-/// A one-pubkey include list that the transaction does touch,
-/// so the comparison short-circuits on the hit.
-fn small_include_matching(c: &mut Criterion) {
-    let keypair = Keypair::new();
-    let tx_keys = tx_with_30_keys(&keypair);
-    let hit = tx_keys[15];
-    let message = Message::Transaction(create_message_transaction(&keypair, tx_keys));
-
-    let mut transactions = HashMap::new();
-    transactions.insert(
-        "t".to_owned(),
-        SubscribeRequestFilterTransactions {
-            account_include: vec![hit.to_string()],
-            ..Default::default()
-        },
-    );
-
-    let filter = Filter::new(
-        &SubscribeRequest {
-            transactions,
-            ..Default::default()
-        },
-        &FilterLimits::default(),
-        &mut filter_names(),
-    )
-    .unwrap();
-
-    c.bench_function("small_include/matching", |b| {
-        b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
-    });
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3));
+    targets =
+        accounts_by_filter_count,
+        accounts_with_cuckoo,
+        subscribe_filter_new,
+        slots_only_client,
+        transaction_account_include,
 }
-
-criterion_group!(
-    benches,
-    slots_only_client,
-    one_account_filter,
-    sweep_account_include,
-    small_include_matching,
-);
 criterion_main!(benches);

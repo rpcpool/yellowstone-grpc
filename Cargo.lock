@@ -6491,7 +6491,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "15.1.1"
+version = "15.1.2"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -6506,6 +6506,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dashmap",
+ "fastrand",
  "foldhash 0.2.0",
  "futures",
  "git-version",

@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-17
+
+- yellowstone-grpc-geyser 15.1.2
+
+### Fixes
+
+- plugin: performance optimization of account update filtering
+
+## 2026-08-13
+
 - yellowstone-grpc-geyser 15.1.1
 
 ### Fixes
