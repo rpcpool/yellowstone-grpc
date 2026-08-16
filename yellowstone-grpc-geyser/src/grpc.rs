@@ -55,6 +55,7 @@ use {
     tokio::{
         io::{AsyncRead, AsyncWrite},
         net::UnixListener,
+        runtime::Handle,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
         time::{sleep, Duration},
     },
@@ -666,6 +667,38 @@ impl interceptor::Interceptor for XTokenInterceptor {
     }
 }
 
+pub struct ClientHop {
+    session: ClientSession,
+    stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+    client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+    hop_tx: mpsc::UnboundedSender<ClientHop>,
+    on_block: bool,
+}
+
+#[derive(Clone)]
+pub struct Runtimes {
+    main: Handle,
+    block: Handle,
+}
+
+impl Runtimes {
+    pub const fn new(main: Handle, block: Handle) -> Self {
+        Self { main, block }
+    }
+
+    const fn on_block(commitment: CommitmentLevel) -> bool {
+        !matches!(commitment, CommitmentLevel::Processed)
+    }
+
+    const fn handle(&self, on_block: bool) -> &Handle {
+        if on_block {
+            &self.block
+        } else {
+            &self.main
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
@@ -681,6 +714,7 @@ pub struct GrpcService {
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    hop_tx: mpsc::UnboundedSender<ClientHop>,
     filter_name_size_limit: usize,
     filter_names_size_limit: usize,
     filter_names_cleanup_interval: Duration,
@@ -838,10 +872,13 @@ impl GrpcService {
         task_tracker: TaskTracker,
         file_watcher: Arc<FileWatcher>,
         messages_rx: St,
+        block_runtime: Handle,
     ) -> anyhow::Result<GrpcServiceResult>
     where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
+        let runtimes = Runtimes::new(Handle::current(), block_runtime);
+
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
 
@@ -1047,6 +1084,31 @@ impl GrpcService {
         let initial_connection_window_size = config.server_initial_connection_window_size;
         let initial_stream_window_size = config.server_initial_stream_window_size;
 
+        let (hop_tx, mut hop_rx) = mpsc::unbounded_channel::<ClientHop>();
+        {
+            let broadcast = broadcast.clone();
+            let replay_stored_slots_tx = replay_stored_slots_tx.clone();
+            let runtimes = runtimes.clone();
+            let tracker = task_tracker.clone();
+            task_tracker.spawn(async move {
+                while let Some(hop) = hop_rx.recv().await {
+                    runtimes
+                        .handle(hop.on_block)
+                        .spawn(tracker.track_future(Self::client_loop(
+                            hop.session,
+                            hop.stream_tx,
+                            hop.client_rx,
+                            None,
+                            broadcast.clone(),
+                            replay_stored_slots_tx.clone(),
+                            tracker.clone(),
+                            hop.hop_tx,
+                            hop.on_block,
+                        )));
+                }
+            });
+        }
+
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
@@ -1066,6 +1128,7 @@ impl GrpcService {
             replay_first_available_slot: replay_first_available_slot.clone(),
             cancellation_token: service_cancellation_token.clone(),
             task_tracker: task_tracker.clone(),
+            hop_tx,
             filter_name_size_limit: config.filter_name_size_limit,
             filter_names_size_limit: config.filter_names_size_limit,
             filter_names_cleanup_interval: config.filter_names_cleanup_interval,
@@ -1091,7 +1154,7 @@ impl GrpcService {
         {
             let broadcast = broadcast.clone();
 
-            task_tracker.spawn(async move {
+            runtimes.block.spawn(task_tracker.track_future(async move {
                 Self::block_reconstruction_loop(
                     BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                     broadcast,
@@ -1100,7 +1163,7 @@ impl GrpcService {
                     config.replay_stored_slots,
                 )
                 .await;
-            });
+            }));
         }
 
         {
@@ -1490,6 +1553,8 @@ impl GrpcService {
         broadcast: SubscriberChannels,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         task_tracker: TaskTracker,
+        hop_tx: mpsc::UnboundedSender<ClientHop>,
+        on_block: bool,
     ) {
         let cancellation_token = session.cancellation_token.clone();
 
@@ -1526,8 +1591,14 @@ impl GrpcService {
 
         let mut commitment = session.filter.get_commitment_level();
         let mut messages_rx = broadcast.subscribe(commitment);
+        let mut hop = false;
 
         'outer: loop {
+            if Runtimes::on_block(commitment) != on_block {
+                hop = true;
+                break 'outer;
+            }
+
             observe_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size(), "normal");
 
             tokio::select! {
@@ -1566,6 +1637,7 @@ impl GrpcService {
                             if let Some(from_slot) = from_slot {
                                 let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
                                     info!("client #{}: from_slot is not supported", session.subscriber_id);
+                                    let stream_tx = stream_tx.clone();
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
                                     });
@@ -1576,6 +1648,7 @@ impl GrpcService {
                                 let (tx, rx) = oneshot::channel();
                                 if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
                                     error!("client #{}: failed to send from_slot request", session.subscriber_id);
+                                    let stream_tx = stream_tx.clone();
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
                                     });
@@ -1587,6 +1660,7 @@ impl GrpcService {
                                     Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
+                                        let stream_tx = stream_tx.clone();
                                         task_tracker.spawn(async move {
                                             let message = format!(
                                                 "broadcast from {from_slot} is not available, last available: {slot}"
@@ -1598,6 +1672,7 @@ impl GrpcService {
                                     },
                                     Err(_error) => {
                                         error!("client #{}: failed to get replay response", session.subscriber_id);
+                                        let stream_tx = stream_tx.clone();
                                         task_tracker.spawn(async move {
                                             let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                         });
@@ -1644,6 +1719,7 @@ impl GrpcService {
                         },
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             info!("client #{}: lagged to receive geyser messages", session.subscriber_id);
+                            let stream_tx = stream_tx.clone();
                             task_tracker.spawn(async move {
                                 let _ = stream_tx.send(Err(Status::internal("lagged to receive geyser messages"))).await;
                             });
@@ -1660,6 +1736,7 @@ impl GrpcService {
                                 }
                                 Err(mpsc::error::TrySendError::Full(_)) => {
                                     error!("client #{}: lagged to send an update", session.subscriber_id);
+                                    let stream_tx = stream_tx.clone();
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
                                     });
@@ -1676,6 +1753,16 @@ impl GrpcService {
                     }
                 }
             }
+        }
+
+        if hop {
+            let _ = hop_tx.clone().send(ClientHop {
+                session,
+                stream_tx,
+                client_rx,
+                hop_tx,
+                on_block: !on_block,
+            });
         }
     }
 
@@ -2209,6 +2296,8 @@ impl Geyser for GrpcService {
             self.broadcast.clone(),
             self.replay_stored_slots_tx.clone(),
             self.task_tracker.clone(),
+            self.hop_tx.clone(),
+            false,
         ));
 
         Ok(Response::new(stream_rx))
@@ -2542,6 +2631,26 @@ mod tests {
         LoadAwareReceiver<TonicResult<FilteredUpdate>>,
     );
 
+    fn spawn_hop_dispatcher(broadcast: SubscriberChannels) -> mpsc::UnboundedSender<ClientHop> {
+        let (hop_tx, mut hop_rx) = mpsc::unbounded_channel::<ClientHop>();
+        tokio::spawn(async move {
+            while let Some(hop) = hop_rx.recv().await {
+                tokio::spawn(GrpcService::client_loop(
+                    hop.session,
+                    hop.stream_tx,
+                    hop.client_rx,
+                    None,
+                    broadcast.clone(),
+                    None,
+                    TaskTracker::new(),
+                    hop.hop_tx,
+                    hop.on_block,
+                ));
+            }
+        });
+        hop_tx
+    }
+
     fn spawn_client_loop(broadcast: SubscriberChannels, ct: CancellationToken) -> ClientHandles {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(64);
@@ -2551,9 +2660,11 @@ mod tests {
             stream_tx,
             client_rx,
             None,
-            broadcast,
+            broadcast.clone(),
             None,
             TaskTracker::new(),
+            spawn_hop_dispatcher(broadcast),
+            false,
         ));
         (client_tx, stream_rx)
     }
@@ -2675,6 +2786,8 @@ mod tests {
             broadcast.clone(),
             None,
             tt.clone(),
+            mpsc::unbounded_channel().0,
+            false,
         ));
 
         // yield so incoming_handler sends the filter and client_loop

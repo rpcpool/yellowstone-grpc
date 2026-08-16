@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::Config,
+        config::{Config, ConfigTokio},
         file_watcher::FileWatcher,
         grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
@@ -39,6 +39,7 @@ use {
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
+    block_runtime: Runtime,
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     filter_limits: FilterLimits,
@@ -126,6 +127,13 @@ impl GeyserPlugin for Plugin {
         metrics::reset_metrics();
 
         // Create inner
+        let plugin_cancellation_token = CancellationToken::new();
+        let plugin_task_tracker = TaskTracker::new();
+        let prometheus_cancellation_token = plugin_cancellation_token.child_token();
+        let prometheus_task_tracker = plugin_task_tracker.clone();
+        let grpc_cancellation_token = plugin_cancellation_token.child_token();
+        let grpc_task_tracker = plugin_task_tracker.clone();
+
         let mut builder = Builder::new_multi_thread();
         if let Some(worker_threads) = config.tokio.worker_threads {
             builder.worker_threads(worker_threads);
@@ -136,18 +144,24 @@ impl GeyserPlugin for Plugin {
                     .expect("failed to set affinity")
             });
         }
-        let plugin_cancellation_token = CancellationToken::new();
-        let plugin_task_tracker = TaskTracker::new();
-        let prometheus_cancellation_token = plugin_cancellation_token.child_token();
-        let prometheus_task_tracker = plugin_task_tracker.clone();
-        let grpc_cancellation_token = plugin_cancellation_token.child_token();
-        let grpc_task_tracker = plugin_task_tracker.clone();
-
         let runtime = builder
             .thread_name_fn(crate::get_thread_name)
             .enable_all()
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+
+        let block_runtime = Builder::new_multi_thread()
+            .worker_threads(
+                config
+                    .tokio
+                    .block_worker_threads
+                    .unwrap_or(ConfigTokio::DEFAULT_BLOCK_WORKER_THREADS),
+            )
+            .thread_name_fn(crate::get_block_thread_name)
+            .enable_all()
+            .build()
+            .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+        let block_runtime_handle = block_runtime.handle().clone();
 
         let file_watcher = crate::file_watcher::FileWatcher::new().map_err(|error| {
             GeyserPluginError::Custom(format!("failed to create file watcher: {error:?}").into())
@@ -179,6 +193,7 @@ impl GeyserPlugin for Plugin {
                 grpc_task_tracker,
                 geyser_svc_file_watcher,
                 grpc_channel_rx,
+                block_runtime_handle,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
@@ -197,6 +212,7 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
+            block_runtime,
             snapshot_channel: Mutex::new(grpc_service_result.snapshot_tx),
             snapshot_channel_closed: AtomicBool::new(false),
             filter_limits,
@@ -227,8 +243,9 @@ impl GeyserPlugin for Plugin {
                 "waiting up to {:?} for plugin tasks to shut down",
                 SHUTDOWN_TIMEOUT
             );
+            inner.block_runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
             inner.runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
-            log::info!("tokio runtime shut down in {:?}", now.elapsed());
+            log::info!("tokio runtimes shut down in {:?}", now.elapsed());
             log::info!("plugin shutdown complete");
         }
     }

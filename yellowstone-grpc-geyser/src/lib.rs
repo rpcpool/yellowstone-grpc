@@ -15,10 +15,15 @@ pub mod util;
 pub mod version;
 pub use agave_geyser_plugin_interface as plugin_interface;
 
-pub fn get_thread_name() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
+static ATOMIC_ID: AtomicU64 = AtomicU64::new(0);
 
-    static ATOMIC_ID: AtomicU64 = AtomicU64::new(0);
+pub fn get_thread_name() -> String {
+    let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
+    format!("solGeyserGrpc{id:02}")
+}
+
+pub fn get_block_thread_name() -> String {
     let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
     format!("solGeyserGrpc{id:02}")
 }

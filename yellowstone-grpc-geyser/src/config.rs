@@ -81,9 +81,16 @@ pub struct ConfigTokio {
     /// Number of worker threads in Tokio runtime
     #[serde(default)]
     pub worker_threads: Option<usize>,
+    /// Number of worker threads in the block reconstruction Tokio runtime
+    #[serde(default)]
+    pub block_worker_threads: Option<usize>,
     /// Threads affinity
     #[serde(default, deserialize_with = "ConfigTokio::deserialize_affinity")]
     pub affinity: Option<Vec<usize>>,
+}
+
+impl ConfigTokio {
+    pub const DEFAULT_BLOCK_WORKER_THREADS: usize = 4;
 }
 
 impl ConfigTokio {
