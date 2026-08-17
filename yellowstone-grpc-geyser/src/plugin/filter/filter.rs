@@ -274,7 +274,7 @@ impl Filter {
         // filters would be missing if we iterated only account/owner maps.
         let accounts = self
             .accounts
-            .aggregates
+            .aggregates()
             .iter()
             .map(|aggregate| AccountFilterStats {
                 // `accounts.account` is indexed by pubkey -> set(filter_name).
@@ -381,7 +381,7 @@ impl Filter {
 
     pub fn get_metrics(&self) -> [(&'static str, usize); 8] {
         [
-            ("accounts", self.accounts.aggregates.len()),
+            ("accounts", self.accounts.aggregates().len()),
             ("slots", self.slots.filters.len()),
             ("transactions", self.transactions.filters.len()),
             (
@@ -393,7 +393,7 @@ impl Filter {
             ("blocks_meta", self.blocks_meta.filters.len()),
             (
                 "all",
-                self.accounts.aggregates.len()
+                self.accounts.aggregates().len()
                     + self.slots.filters.len()
                     + self.transactions.filters.len()
                     + self.transactions_status.filters.len()
@@ -574,8 +574,48 @@ impl FilterBitSet {
     }
 }
 
+/// Bitset-indexed matching: precomputes, per pubkey and per owner, which
+/// aggregate indices are candidates, so one incoming account update is
+/// checked in roughly O(aggregates / 64) instead of O(aggregates).
+///
+/// Every aggregate owns one bit. Two bitsets record exact hits (`accounts`,
+/// `owners`, keyed by pubkey), and two more (`account_fallback`,
+/// `owner_fallback`) record aggregates that are unconstrained on that axis —
+/// always a candidate, whatever pubkey/owner shows up. A lookup is then two
+/// ORs and an AND, done 64 aggregates at a time:
+///
+/// ```text
+///   account_candidates = accounts[pubkey]  (or all-zero if no exact hit)
+///                      | account_fallback
+///   owner_candidates   = owners[owner]     (or all-zero if no exact hit)
+///                      | owner_fallback
+///   candidates         = account_candidates & owner_candidates
+/// ```
+///
+/// Example: 5 aggregates, update arrives for `(pubkey=A, owner=X)`:
+///
+/// ```text
+///  idx  accounts wants   owners wants   account_fallback?  owner_fallback?
+///   0        {A}             --               no               yes
+///   1        {B}             {X}              no                no
+///   2        --              {X}              yes               no
+///   3      {A, B}            --               no               yes
+///   4        --              --               yes               yes
+///
+///  accounts[A] = {0,3}   account_fallback = {2,4}    -> account_candidates = {0,2,3,4}
+///  owners[X]   = {1,2}   owner_fallback   = {0,3,4}  -> owner_candidates   = {0,1,2,3,4}
+///  candidates  = {0,2,3,4} & {0,1,2,3,4} = {0,2,3,4}   (aggregate 1 excluded: wanted B, not A)
+/// ```
+///
+/// Only the surviving candidates go through the full per-aggregate
+/// `match_filter` check (cuckoo filter, txn signature, data/lamports state).
 #[derive(Debug, Clone)]
 struct FilterAccountsIndex {
+    // Owned so the index is self-sufficient: `get_filters` never needs a caller
+    // to hand back the exact slice it was built from (which risked mismatched
+    // aggregates/index pairs). Cloned once at construction, off the hot path.
+    aggregates: Vec<FilterAccountAggregate>,
+
     accounts: FoldHashMap<Pubkey, FilterBitSet>,
     owners: FoldHashMap<Pubkey, FilterBitSet>,
 
@@ -613,6 +653,8 @@ impl FilterAccountsIndex {
         }
 
         let mut this = Self {
+            aggregates: aggregates.to_vec(),
+
             accounts: FoldHashMap::default(),
             owners: FoldHashMap::default(),
 
@@ -658,11 +700,11 @@ impl FilterAccountsIndex {
         }
     }
 
-    fn get_filters(
-        &self,
-        aggregates: &[FilterAccountAggregate],
-        account: &MessageAccountInfo,
-    ) -> FilteredUpdateFilters {
+    fn aggregates(&self) -> &[FilterAccountAggregate] {
+        &self.aggregates
+    }
+
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
         let matched_accounts = self.accounts.get(&account.pubkey);
         if matched_accounts.is_none() && self.account_fallback_empty {
             return FilteredUpdateFilters::new();
@@ -689,7 +731,7 @@ impl FilterAccountsIndex {
                 let aggregate_index = word_index * FilterBitSet::BITS_PER_WORD + bit_index;
                 let bit = 1 << bit_index;
 
-                if let Some(filter) = aggregates[aggregate_index].match_filter(
+                if let Some(filter) = self.aggregates[aggregate_index].match_filter(
                     account,
                     Some(matched_accounts_word & bit != 0),
                     Some(matched_owners_word & bit != 0),
@@ -703,26 +745,6 @@ impl FilterAccountsIndex {
 
         filters
     }
-}
-
-#[derive(Debug, Default, Clone)]
-struct FilterAccounts {
-    aggregates: Vec<FilterAccountAggregate>,
-
-    // bitset matching algorithm, capped at 512MB of usage. if the requested filter goes above this, it will fall back to non indexed algo.
-    index: Option<Arc<FilterAccountsIndex>>,
-
-    // non indexed (slightly slower) algorithm, used when the index is not available or when the filter is too large to be indexed.
-    // query multiple filters by account, each usize inside of the Vec represents an 'aggregate' index in the FilterAccounts::aggregates Vec.
-    accounts: FoldHashMap<Pubkey, Vec<usize>>,
-    owners: FoldHashMap<Pubkey, Vec<usize>>,
-
-    // aggregates unconstrained on each axis, which therefore stay candidates for every
-    // message. one carrying a cuckoo belongs in account_any even when it also has an
-    // explicit account list, because match_account still probes the cuckoo after the
-    // explicit set misses.
-    account_any: Vec<usize>,
-    owner_any: Vec<usize>,
 }
 
 #[inline]
@@ -761,13 +783,434 @@ fn next_union(
     }
 }
 
-impl FilterAccounts {
+/// Linear scan over every aggregate — no lookup structure at all. Used when
+/// there are too few aggregates (`<= DIRECT_SCAN_LIMIT`) for a hashmap lookup
+/// to pay for itself, or when indexing wasn't possible/worth it.
+///
+/// ```text
+///  for aggregate in aggregates { aggregate.match_filter(account, None, None) }
+/// ```
+#[derive(Debug, Clone)]
+struct LinearScanFilter {
+    aggregates: Vec<FilterAccountAggregate>,
+}
+
+impl LinearScanFilter {
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        self.aggregates
+            .iter()
+            .filter_map(|aggregate| aggregate.match_filter(account, None, None))
+            .collect()
+    }
+}
+
+/// Every aggregate is a candidate on both axes regardless of the incoming
+/// message: each one is unconstrained (or carries a cuckoo filter alongside
+/// an explicit list) on both the account axis and the owner axis, so there's
+/// nothing to rule out — only annotating to do.
+///
+/// ```text
+///  for every aggregate: accounts == None  (or cuckoo-paired)  AND  owners == None
+///  => account_any.len() == owner_any.len() == aggregates.len()
+///  => walk 0..aggregates.len() directly; no merge, nothing can be excluded
+/// ```
+///
+/// Still worth keeping the `accounts`/`owners` maps: an aggregate can be
+/// "unconstrained" while also carrying an explicit account/owner list
+/// alongside a cuckoo filter, so exact hits are looked up anyway and passed
+/// to `match_filter` as `Some(bool)` so it can skip re-checking its own sets.
+#[derive(Debug, Clone)]
+struct AllUnconstrainedFilter {
+    aggregates: Vec<FilterAccountAggregate>,
+    accounts: FoldHashMap<Pubkey, Vec<usize>>,
+    owners: FoldHashMap<Pubkey, Vec<usize>>,
+}
+
+impl AllUnconstrainedFilter {
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        let account_hits = if self.accounts.is_empty() {
+            &[][..]
+        } else {
+            self.accounts
+                .get(&account.pubkey)
+                .map_or(&[][..], |v| v.as_slice())
+        };
+        let owner_hits = if self.owners.is_empty() {
+            &[][..]
+        } else {
+            self.owners
+                .get(&account.owner)
+                .map_or(&[][..], |v| v.as_slice())
+        };
+
+        let (mut account_hits_cursor, mut owner_hits_cursor) = (0usize, 0usize);
+        self.aggregates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, aggregate)| {
+                let matched_account = if account_hits_cursor < account_hits.len()
+                    && account_hits[account_hits_cursor] == index
+                {
+                    account_hits_cursor += 1;
+                    true
+                } else {
+                    false
+                };
+                let matched_owner = if owner_hits_cursor < owner_hits.len()
+                    && owner_hits[owner_hits_cursor] == index
+                {
+                    owner_hits_cursor += 1;
+                    true
+                } else {
+                    false
+                };
+                aggregate.match_filter(account, Some(matched_account), Some(matched_owner))
+            })
+            .collect()
+    }
+}
+
+/// Exactly one axis is unconstrained for every aggregate (say, owner — no
+/// aggregate restricts by owner at all), so that axis can never rule
+/// anything out. Only the bounded axis (account) needs a real
+/// hits-vs-unconstrained merge walk.
+///
+/// ```text
+///  bounded axis hits:      [2, 7, 9]     aggregates with an exact pubkey/owner match
+///  bounded axis "any":     [0, 4]        aggregates unconstrained on THIS axis too
+///  next_union walks both sorted lists together, in index order:
+///                          0, 2, 4, 7, 9
+/// ```
+///
+/// `unbounded_is_owner` records which axis was dropped, so the surviving
+/// axis's match result is passed to `match_filter` as the right one of
+/// `matched_account`/`matched_owner` — the other is hardcoded `false`, which
+/// `match_filter` ignores since that axis has no constraint to check anyway.
+#[derive(Debug, Clone)]
+struct SingleAxisMergeFilter {
+    aggregates: Vec<FilterAccountAggregate>,
+    unbounded_is_owner: bool,
+    bounded_hits: FoldHashMap<Pubkey, Vec<usize>>,
+    bounded_any: Vec<usize>,
+}
+
+impl SingleAxisMergeFilter {
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        let bounded_pubkey = if self.unbounded_is_owner {
+            &account.pubkey
+        } else {
+            &account.owner
+        };
+        let hits = if self.bounded_hits.is_empty() {
+            &[][..]
+        } else {
+            self.bounded_hits
+                .get(bounded_pubkey)
+                .map_or(&[][..], |v| v.as_slice())
+        };
+
+        if hits.is_empty() && self.bounded_any.is_empty() {
+            return FilteredUpdateFilters::new();
+        }
+
+        let (mut hits_cursor, mut any_cursor) = (0usize, 0usize);
+        let mut filters = FilteredUpdateFilters::new();
+        while let Some((index, matched)) =
+            next_union(hits, &self.bounded_any, &mut hits_cursor, &mut any_cursor)
+        {
+            let (matched_account, matched_owner) = if self.unbounded_is_owner {
+                (matched, false)
+            } else {
+                (false, matched)
+            };
+            if let Some(name) = self.aggregates[index].match_filter(
+                account,
+                Some(matched_account),
+                Some(matched_owner),
+            ) {
+                filters.push(name);
+            }
+        }
+        filters
+    }
+}
+
+/// Fully general case: neither axis is unconstrained for every aggregate —
+/// both the account axis and the owner axis can rule candidates out, so both
+/// need a hits-vs-unconstrained merge walk, advanced in lockstep. An
+/// aggregate is only checked when both cursors land on the same index.
+///
+/// ```text
+///  account_pos walks account_hits ∪ account_any:  0, 3, 5, 8, ...
+///  owner_pos   walks owner_hits   ∪ owner_any:    0, 2, 5, 9, ...
+///
+///  index 0:      both agree      -> match_filter(aggregates[0])
+///  3 vs 2:       owner is behind -> advance owner_pos only
+///  index 5:      both agree      -> match_filter(aggregates[5])
+///  8 vs 9:       account is behind -> advance account_pos only
+///  ...
+/// ```
+///
+/// Whichever cursor points at the smaller index advances alone — it can't be
+/// a candidate without the other axis agreeing on the same aggregate.
+#[derive(Debug, Clone)]
+struct DualAxisMergeFilter {
+    aggregates: Vec<FilterAccountAggregate>,
+    accounts: FoldHashMap<Pubkey, Vec<usize>>,
+    owners: FoldHashMap<Pubkey, Vec<usize>>,
+    account_any: Vec<usize>,
+    owner_any: Vec<usize>,
+}
+
+impl DualAxisMergeFilter {
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        let account_hits = if self.accounts.is_empty() {
+            &[][..]
+        } else {
+            self.accounts
+                .get(&account.pubkey)
+                .map_or(&[][..], |v| v.as_slice())
+        };
+        let owner_hits = if self.owners.is_empty() {
+            &[][..]
+        } else {
+            self.owners
+                .get(&account.owner)
+                .map_or(&[][..], |v| v.as_slice())
+        };
+
+        if (account_hits.is_empty() && self.account_any.is_empty())
+            || (owner_hits.is_empty() && self.owner_any.is_empty())
+        {
+            return FilteredUpdateFilters::new();
+        }
+
+        let mut account_hits_cursor = 0;
+        let mut account_any_cursor = 0;
+        let mut owner_hits_cursor = 0;
+        let mut owner_any_cursor = 0;
+        let mut account_pos = next_union(
+            account_hits,
+            &self.account_any,
+            &mut account_hits_cursor,
+            &mut account_any_cursor,
+        );
+        let mut owner_pos = next_union(
+            owner_hits,
+            &self.owner_any,
+            &mut owner_hits_cursor,
+            &mut owner_any_cursor,
+        );
+
+        let mut filters = FilteredUpdateFilters::new();
+        while let (Some((account_index, matched_account)), Some((owner_index, matched_owner))) =
+            (account_pos, owner_pos)
+        {
+            if account_index < owner_index {
+                account_pos = next_union(
+                    account_hits,
+                    &self.account_any,
+                    &mut account_hits_cursor,
+                    &mut account_any_cursor,
+                );
+            } else if owner_index < account_index {
+                owner_pos = next_union(
+                    owner_hits,
+                    &self.owner_any,
+                    &mut owner_hits_cursor,
+                    &mut owner_any_cursor,
+                );
+            } else {
+                if let Some(name) = self.aggregates[account_index].match_filter(
+                    account,
+                    Some(matched_account),
+                    Some(matched_owner),
+                ) {
+                    filters.push(name);
+                }
+                account_pos = next_union(
+                    account_hits,
+                    &self.account_any,
+                    &mut account_hits_cursor,
+                    &mut account_any_cursor,
+                );
+                owner_pos = next_union(
+                    owner_hits,
+                    &self.owner_any,
+                    &mut owner_hits_cursor,
+                    &mut owner_any_cursor,
+                );
+            }
+        }
+        filters
+    }
+}
+
+/// Which matching strategy an `accounts` filter set uses, decided once at
+/// construction from the shape of the parsed aggregates (never re-derived
+/// per message). Dispatch is a plain `match` (no trait object) so each arm
+/// stays a concrete, independently readable and testable type.
+///
+/// Chosen in this order:
+///
+/// ```text
+///  aggregates.is_empty()?
+///        |
+///  yes --+-- no
+///   |          |
+/// Empty   FilterAccountsIndex::new(&aggregates)
+///                |
+///        succeeds -+- fails
+///           |            |
+///        Indexed   aggregates.len() <= DIRECT_SCAN_LIMIT?
+///                        |
+///                yes ----+---- no
+///                 |             |
+///           LinearScan   build accounts/owners maps +
+///                        account_any/owner_any lists,
+///                        then pick by axis shape below
+/// ```
+///
+/// The final pick, once the maps above are built, depends on how many
+/// aggregates are unconstrained ("don't care") on each axis:
+///
+/// Both questions below mean "unconstrained for every aggregate in this
+/// filter set" (i.e. no aggregate restricts by that axis at all):
+///
+/// ```text
+///                    OWNER: yes           OWNER: no
+///              +--------------------+--------------------+
+/// ACCOUNT: yes |  AllUnconstrained  |  SingleAxisMerge   |
+///              +--------------------+--------------------+
+/// ACCOUNT: no  |  SingleAxisMerge   |   DualAxisMerge    |
+///              +--------------------+--------------------+
+/// ```
+#[derive(Debug, Clone, Default)]
+enum FilterAccountsStrategy {
+    #[default]
+    Empty,
+    LinearScan(LinearScanFilter),
+    Indexed(Arc<FilterAccountsIndex>),
+    AllUnconstrained(AllUnconstrainedFilter),
+    SingleAxisMerge(SingleAxisMergeFilter),
+    DualAxisMerge(DualAxisMergeFilter),
+}
+
+impl FilterAccountsStrategy {
     // Below this many aggregates the two hash lookups cost more than asking each
-    // aggregate directly. Construction and get_updates MUST test the same constant: if
-    // the lists are absent the candidate walk would see two empty unions and wrongly
-    // conclude that nothing can match.
+    // aggregate directly.
     const DIRECT_SCAN_LIMIT: usize = 4;
 
+    fn build(aggregates: Vec<FilterAccountAggregate>) -> Self {
+        if aggregates.is_empty() {
+            return Self::Empty;
+        }
+
+        // bitset matching algorithm, capped at 512MB of usage. if the requested
+        // filter goes above this, it falls back to one of the non-indexed
+        // strategies below.
+        if let Some(index) = FilterAccountsIndex::new(&aggregates) {
+            return Self::Indexed(Arc::new(index));
+        }
+
+        if aggregates.len() <= Self::DIRECT_SCAN_LIMIT {
+            return Self::LinearScan(LinearScanFilter { aggregates });
+        }
+
+        // non indexed (slightly slower) algorithm, used when the index is not
+        // available or when the filter is too large to be indexed. each usize
+        // inside of the maps/lists below represents an index into `aggregates`.
+        let mut accounts: FoldHashMap<Pubkey, Vec<usize>> = FoldHashMap::default();
+        let mut owners: FoldHashMap<Pubkey, Vec<usize>> = FoldHashMap::default();
+        // aggregates unconstrained on each axis, which therefore stay candidates
+        // for every message. one carrying a cuckoo belongs in account_any even
+        // when it also has an explicit account list, because match_account
+        // still probes the cuckoo after the explicit set misses.
+        let mut account_any = Vec::new();
+        let mut owner_any = Vec::new();
+
+        for (index, aggregate) in aggregates.iter().enumerate() {
+            if let Some(accs) = &aggregate.accounts {
+                for account in accs {
+                    accounts.entry(*account).or_default().push(index);
+                }
+            }
+
+            if aggregate.accounts.is_none() || aggregate.accounts_cuckoo.is_some() {
+                account_any.push(index);
+            }
+
+            if let Some(owns) = &aggregate.owners {
+                for owner in owns {
+                    owners.entry(*owner).or_default().push(index);
+                }
+            } else {
+                owner_any.push(index);
+            }
+        }
+
+        if account_any.len() == aggregates.len() && owner_any.len() == aggregates.len() {
+            return Self::AllUnconstrained(AllUnconstrainedFilter {
+                aggregates,
+                accounts,
+                owners,
+            });
+        }
+
+        let account_unbounded = account_any.len() == aggregates.len();
+        let owner_unbounded = owner_any.len() == aggregates.len();
+        if account_unbounded != owner_unbounded {
+            let (unbounded_is_owner, bounded_hits, bounded_any) = if owner_unbounded {
+                (true, accounts, account_any)
+            } else {
+                (false, owners, owner_any)
+            };
+            return Self::SingleAxisMerge(SingleAxisMergeFilter {
+                aggregates,
+                unbounded_is_owner,
+                bounded_hits,
+                bounded_any,
+            });
+        }
+
+        Self::DualAxisMerge(DualAxisMergeFilter {
+            aggregates,
+            accounts,
+            owners,
+            account_any,
+            owner_any,
+        })
+    }
+
+    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        match self {
+            Self::Empty => FilteredUpdateFilters::new(),
+            Self::LinearScan(strategy) => strategy.get_filters(account),
+            Self::Indexed(index) => index.get_filters(account),
+            Self::AllUnconstrained(strategy) => strategy.get_filters(account),
+            Self::SingleAxisMerge(strategy) => strategy.get_filters(account),
+            Self::DualAxisMerge(strategy) => strategy.get_filters(account),
+        }
+    }
+
+    fn aggregates(&self) -> &[FilterAccountAggregate] {
+        match self {
+            Self::Empty => &[],
+            Self::LinearScan(strategy) => &strategy.aggregates,
+            Self::Indexed(index) => index.aggregates(),
+            Self::AllUnconstrained(strategy) => &strategy.aggregates,
+            Self::SingleAxisMerge(strategy) => &strategy.aggregates,
+            Self::DualAxisMerge(strategy) => &strategy.aggregates,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct FilterAccounts {
+    strategy: FilterAccountsStrategy,
+}
+
+impl FilterAccounts {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
         limits: &FilterLimitsAccounts,
@@ -775,7 +1218,7 @@ impl FilterAccounts {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        let mut filter_accounts_result = Self::default();
+        let mut aggregates = Vec::new();
 
         for (name, filter) in configs {
             let has_filter_criteria = !filter.account.is_empty()
@@ -820,45 +1263,16 @@ impl FilterAccounts {
                 filter_aggregate.accounts_cuckoo = Some(Arc::new(CuckooFilter::from(proto_cuckoo)));
             }
 
-            filter_accounts_result.aggregates.push(filter_aggregate);
+            aggregates.push(filter_aggregate);
         }
 
-        filter_accounts_result.index =
-            FilterAccountsIndex::new(&filter_accounts_result.aggregates).map(Arc::new);
+        Ok(Self {
+            strategy: FilterAccountsStrategy::build(aggregates),
+        })
+    }
 
-        if filter_accounts_result.index.is_none()
-            && filter_accounts_result.aggregates.len() > Self::DIRECT_SCAN_LIMIT
-        {
-            for (index, aggregate) in filter_accounts_result.aggregates.iter().enumerate() {
-                if let Some(accounts) = &aggregate.accounts {
-                    for account in accounts {
-                        filter_accounts_result
-                            .accounts
-                            .entry(*account)
-                            .or_insert_with(Vec::new)
-                            .push(index);
-                    }
-                }
-
-                if aggregate.accounts.is_none() || aggregate.accounts_cuckoo.is_some() {
-                    filter_accounts_result.account_any.push(index);
-                }
-
-                if let Some(owners) = &aggregate.owners {
-                    for owner in owners {
-                        filter_accounts_result
-                            .owners
-                            .entry(*owner)
-                            .or_insert_with(Vec::new)
-                            .push(index);
-                    }
-                } else {
-                    filter_accounts_result.owner_any.push(index);
-                }
-            }
-        }
-
-        Ok(filter_accounts_result)
+    fn aggregates(&self) -> &[FilterAccountAggregate] {
+        self.strategy.aggregates()
     }
 
     fn get_updates(
@@ -866,177 +1280,7 @@ impl FilterAccounts {
         message: &Arc<MessageAccount>,
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
-        if self.aggregates.is_empty() {
-            return FilteredUpdates::new();
-        }
-
-        let filters = if let Some(index) = &self.index {
-            index.get_filters(&self.aggregates, &message.account)
-        } else if self.aggregates.len() <= Self::DIRECT_SCAN_LIMIT {
-            self.aggregates
-                .iter()
-                .filter_map(|aggregate| aggregate.match_filter(&message.account, None, None))
-                .collect()
-        } else if self.account_any.len() == self.aggregates.len()
-            && self.owner_any.len() == self.aggregates.len()
-        {
-            let account_hits = if self.accounts.is_empty() {
-                &[][..]
-            } else {
-                self.accounts
-                    .get(&message.account.pubkey)
-                    .map_or(&[][..], |v| v.as_slice())
-            };
-            let owner_hits = if self.owners.is_empty() {
-                &[][..]
-            } else {
-                self.owners
-                    .get(&message.account.owner)
-                    .map_or(&[][..], |v| v.as_slice())
-            };
-
-            let (mut account_hits_cursor, mut owner_hits_cursor) = (0usize, 0usize);
-            self.aggregates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, aggregate)| {
-                    let matched_account = if account_hits_cursor < account_hits.len()
-                        && account_hits[account_hits_cursor] == index
-                    {
-                        account_hits_cursor += 1;
-                        true
-                    } else {
-                        false
-                    };
-                    let matched_owner = if owner_hits_cursor < owner_hits.len()
-                        && owner_hits[owner_hits_cursor] == index
-                    {
-                        owner_hits_cursor += 1;
-                        true
-                    } else {
-                        false
-                    };
-                    aggregate.match_filter(
-                        &message.account,
-                        Some(matched_account),
-                        Some(matched_owner),
-                    )
-                })
-                .collect()
-        } else {
-            let account_hits = if self.accounts.is_empty() {
-                &[][..]
-            } else {
-                self.accounts
-                    .get(&message.account.pubkey)
-                    .map_or(&[][..], |v| v.as_slice())
-            };
-            let owner_hits = if self.owners.is_empty() {
-                &[][..]
-            } else {
-                self.owners
-                    .get(&message.account.owner)
-                    .map_or(&[][..], |v| v.as_slice())
-            };
-
-            if (account_hits.is_empty() && self.account_any.is_empty())
-                || (owner_hits.is_empty() && self.owner_any.is_empty())
-            {
-                return FilteredUpdates::new();
-            }
-
-            let account_unbounded = self.account_any.len() == self.aggregates.len();
-            let owner_unbounded = self.owner_any.len() == self.aggregates.len();
-            if account_unbounded != owner_unbounded {
-                let (hits, any, matched_is_account) = if owner_unbounded {
-                    (account_hits, self.account_any.as_slice(), true)
-                } else {
-                    (owner_hits, self.owner_any.as_slice(), false)
-                };
-                let (mut hits_cursor, mut any_cursor) = (0usize, 0usize);
-                let mut filters = FilteredUpdateFilters::new();
-                while let Some((index, matched)) =
-                    next_union(hits, any, &mut hits_cursor, &mut any_cursor)
-                {
-                    let (matched_account, matched_owner) = if matched_is_account {
-                        (matched, false)
-                    } else {
-                        (false, matched)
-                    };
-                    if let Some(name) = self.aggregates[index].match_filter(
-                        &message.account,
-                        Some(matched_account),
-                        Some(matched_owner),
-                    ) {
-                        filters.push(name);
-                    }
-                }
-                return filtered_updates_once_owned!(
-                    filters,
-                    FilteredUpdateOneof::account(Arc::clone(message), accounts_data_slice.clone()),
-                    message.created_at
-                );
-            }
-
-            let mut account_hits_cursor = 0;
-            let mut account_any_cursor = 0;
-            let mut owner_hits_cursor = 0;
-            let mut owner_any_cursor = 0;
-            let mut account = next_union(
-                account_hits,
-                &self.account_any,
-                &mut account_hits_cursor,
-                &mut account_any_cursor,
-            );
-            let mut owner = next_union(
-                owner_hits,
-                &self.owner_any,
-                &mut owner_hits_cursor,
-                &mut owner_any_cursor,
-            );
-
-            let mut filters = FilteredUpdateFilters::new();
-            while let (Some((account_index, matched_account)), Some((owner_index, matched_owner))) =
-                (account, owner)
-            {
-                if account_index < owner_index {
-                    account = next_union(
-                        account_hits,
-                        &self.account_any,
-                        &mut account_hits_cursor,
-                        &mut account_any_cursor,
-                    );
-                } else if owner_index < account_index {
-                    owner = next_union(
-                        owner_hits,
-                        &self.owner_any,
-                        &mut owner_hits_cursor,
-                        &mut owner_any_cursor,
-                    );
-                } else {
-                    if let Some(name) = self.aggregates[account_index].match_filter(
-                        &message.account,
-                        Some(matched_account),
-                        Some(matched_owner),
-                    ) {
-                        filters.push(name);
-                    }
-                    account = next_union(
-                        account_hits,
-                        &self.account_any,
-                        &mut account_hits_cursor,
-                        &mut account_any_cursor,
-                    );
-                    owner = next_union(
-                        owner_hits,
-                        &self.owner_any,
-                        &mut owner_hits_cursor,
-                        &mut owner_any_cursor,
-                    );
-                }
-            }
-            filters
-        };
+        let filters = self.strategy.get_filters(&message.account);
 
         filtered_updates_once_owned!(
             filters,
@@ -2152,7 +2396,7 @@ impl FilterAccountsDataSlice {
 #[cfg(test)]
 mod tests {
     use {
-        super::{DeshredFilter, Filter, FilterBitSet, FilterBlocksInner},
+        super::{DeshredFilter, Filter, FilterAccountsStrategy, FilterBitSet, FilterBlocksInner},
         crate::plugin::{
             convert_to,
             filter::{
@@ -3165,7 +3409,9 @@ mod tests {
         )
         .unwrap();
 
-        let index = filter.accounts.index.as_ref().unwrap();
+        let FilterAccountsStrategy::Indexed(index) = &filter.accounts.strategy else {
+            panic!("expected indexed strategy");
+        };
         let account_matches = index.accounts.get(&account).unwrap();
         let owner_matches = index.owners.get(&owner).unwrap();
         assert_eq!(
@@ -3185,7 +3431,7 @@ mod tests {
             2
         );
 
-        for (aggregate_index, aggregate) in filter.accounts.aggregates.iter().enumerate() {
+        for (aggregate_index, aggregate) in filter.accounts.aggregates().iter().enumerate() {
             assert_eq!(
                 index.account_fallback.contains(aggregate_index),
                 aggregate.accounts.is_none() || aggregate.accounts_cuckoo.is_some()
@@ -3246,7 +3492,10 @@ mod tests {
             &mut create_filter_names(),
         )
         .unwrap();
-        assert!(single_filter.accounts.index.is_none());
+        assert!(!matches!(
+            single_filter.accounts.strategy,
+            FilterAccountsStrategy::Indexed(_)
+        ));
     }
 }
 
@@ -3698,7 +3947,7 @@ mod account_filter_regression_tests {
                             .filter_map(|aggregate| aggregate.match_filter(message, None, None))
                             .collect()
                     },
-                    |index| index.get_filters(&aggregates, message),
+                    |index| index.get_filters(message),
                 );
                 assert_eq!(
                     actual, expected,
@@ -3809,7 +4058,7 @@ mod account_filter_regression_tests {
 
         let stranger = Pubkey::new_from_array([250; 32]);
         let miss = account_info(stranger, stranger, vec![0; 3], 100, false);
-        assert!(index.get_filters(&aggregates, &miss).is_empty());
+        assert!(index.get_filters(&miss).is_empty());
         assert!(linear_scan(&aggregates, &miss).is_empty());
 
         let mut mixed = aggregates.clone();
@@ -3818,7 +4067,7 @@ mod account_filter_regression_tests {
         assert!(!mixed_index.account_fallback.is_empty());
         assert!(!mixed_index.owner_fallback.is_empty());
         assert_eq!(
-            mixed_index.get_filters(&mixed, &miss).as_slice(),
+            mixed_index.get_filters(&miss).as_slice(),
             [FilterName::new("wildcard")]
         );
     }
@@ -3884,10 +4133,7 @@ mod account_filter_regression_tests {
         let owner = Pubkey::new_from_array([200; 32]);
         let hit = account_info(pool[0], owner, vec![0; 3], 100, false);
         let indexed = FilterAccountsIndex::new(&under_budget).unwrap();
-        assert_eq!(
-            indexed.get_filters(&under_budget, &hit),
-            linear_scan(&under_budget, &hit)
-        );
+        assert_eq!(indexed.get_filters(&hit), linear_scan(&under_budget, &hit));
         assert_eq!(linear_scan(&over_budget, &hit).len(), AGGREGATES);
 
         let miss = account_info(
@@ -4313,7 +4559,7 @@ mod parity_oracle {
 
                     let linear = filter
                         .accounts
-                        .aggregates
+                        .aggregates()
                         .iter()
                         .filter_map(|aggregate| aggregate.match_filter(account, None, None))
                         .collect::<FilteredUpdateFilters>();
@@ -4324,9 +4570,9 @@ mod parity_oracle {
                         where_(message_index)
                     );
 
-                    if let Some(index) = &filter.accounts.index {
+                    if let FilterAccountsStrategy::Indexed(index) = &filter.accounts.strategy {
                         assert_eq!(
-                            index.get_filters(&filter.accounts.aggregates, account),
+                            index.get_filters(account),
                             expected,
                             "{}: indexed lookup diverged from master semantics",
                             where_(message_index)
