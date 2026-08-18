@@ -145,6 +145,58 @@ npm start -- -e="https://api.rpcpool.com" \
   --transactions-account-include "<Pubkey>"
 ```
 
+### subscribe to transaction updates with a compressed account include set
+
+Use the same `subscribe` command and `--transactions-account-include` inputs.
+Adding `--transactions-compressed` sends those pubkeys as a compressed cuckoo
+filter. The other transaction options keep their existing behavior. Before
+printing a full transaction update, the example checks its static and loaded
+account keys against the exact local set to discard cuckoo false positives.
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --transactions \
+  --transactions-compressed \
+  --transactions-compressed-capacity 100000 \
+  --transactions-vote false \
+  --transactions-failed false \
+  --transactions-account-include "<Pubkey>"
+```
+
+### subscribe to transaction status updates
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --transactions-status \
+  --transactions-status-vote false \
+  --transactions-status-failed false \
+  --transactions-status-account-include "<Pubkey>"
+```
+
+### subscribe to transaction status updates with a compressed account include set
+
+Use the existing `--transactions-status-account-include` inputs with
+`--transactions-status-compressed`. Transaction status updates do not contain
+account keys, so cuckoo false positives cannot be removed from the status update
+alone. Use a full transaction subscription when exact local matching is
+required.
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --transactions-status \
+  --transactions-status-compressed \
+  --transactions-status-compressed-capacity 100000 \
+  --transactions-status-vote false \
+  --transactions-status-failed false \
+  --transactions-status-account-include "<Pubkey>"
+```
+
 ### subscribe to block updates with a compressed account include set
 
 Use the same `--blocks-account-include` input as the explicit block filter.
