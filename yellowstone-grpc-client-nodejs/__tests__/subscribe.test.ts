@@ -1,4 +1,8 @@
-import Client, { CommitmentLevel, CompressedAccountFilterSet } from "../src";
+import Client, {
+  CommitmentLevel,
+  CompressedAccountFilterSet,
+  TokenAccountExpansionControlFlag,
+} from "../src";
 import type { SubscribeRequest, SubscribeUpdate } from "../src";
 
 const ACTIVE_ACCOUNT_PUBKEY = "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989";
@@ -50,9 +54,12 @@ describeLive("Client.subscribe", () => {
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            tokenAccounts: TokenAccountExpansionControlFlag.ALL,
           },
-          compressedTransactionsClient:
-            compressedAccounts.toTransactionFilter(),
+          compressedTransactionsClient: {
+            ...compressedAccounts.toTransactionFilter(),
+            tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
+          },
         },
         transactionsStatus: {
           transactionsStatusClient: {
@@ -61,9 +68,12 @@ describeLive("Client.subscribe", () => {
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            tokenAccounts: TokenAccountExpansionControlFlag.ALL,
           },
-          compressedTransactionsStatusClient:
-            compressedAccounts.toTransactionFilter(),
+          compressedTransactionsStatusClient: {
+            ...compressedAccounts.toTransactionFilter(),
+            tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
+          },
         },
         blocks: {
           blocksClient: {

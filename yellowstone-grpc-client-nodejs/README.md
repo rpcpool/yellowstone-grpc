@@ -58,6 +58,7 @@ membership for false-positive filtering.
 import Client, {
   CompressedAccountFilterSet,
   SubscribeRequest,
+  TokenAccountExpansionControlFlag,
 } from "@triton-one/yellowstone-grpc";
 
 const accounts = new CompressedAccountFilterSet(2_000_000);
@@ -120,9 +121,32 @@ request.transactions.trackedTransactions = {
 };
 ```
 
-A compressed filter can return false positives. Check full transaction updates
-against the exact local set before processing them. Check static account keys and
-addresses loaded from address lookup tables:
+Transaction filters can also match token account owners.
+
+- `ALL` matches an owner listed before or after the transaction.
+- `BALANCE_CHANGED` matches an owner when its token balance changes. It also
+  matches when a token account is created or closed.
+
+This works with transaction and transaction status subscriptions. It applies to
+`accountInclude`, `accountExclude`, and `accountRequired`.
+
+```ts
+request.transactions.trackedTransactions = {
+  ...accounts.toTransactionFilter(),
+  tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
+};
+
+request.transactionsStatus.trackedTransactionStatuses = {
+  ...accounts.toTransactionFilter(),
+  tokenAccounts: TokenAccountExpansionControlFlag.ALL,
+};
+```
+
+If you do not set `tokenAccounts`, filters only match transaction account keys.
+
+A compressed filter can match an account that you did not add. Before using a
+full transaction update, check its account keys against your local set. If you
+set `tokenAccounts`, also check the token account owners:
 
 ```ts
 stream.on("data", (update) => {

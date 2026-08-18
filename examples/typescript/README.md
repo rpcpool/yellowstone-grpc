@@ -165,6 +165,26 @@ npm start -- -e="https://api.rpcpool.com" \
   --transactions-account-include "<Pubkey>"
 ```
 
+### subscribe to transactions by token-account owner
+
+`all` matches owners present in any pre/post token balance. `balance-changed`
+matches owners whose raw token amount changed or whose token account was created
+or closed. Expansion applies to the existing include, exclude, and required
+account filters.
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --transactions \
+  --transactions-token-accounts balance-changed \
+  --transactions-account-include "<OwnerPubkey>"
+```
+
+The option can be combined with `--transactions-compressed`. Because compressed
+filters can return false positives, applications that require exact matching
+should check the returned token-balance owners before processing the update.
+
 ### subscribe to transaction status updates
 
 ```shell
@@ -196,6 +216,21 @@ npm start -- -e="https://api.rpcpool.com" \
   --transactions-status-failed false \
   --transactions-status-account-include "<Pubkey>"
 ```
+
+### subscribe to transaction status updates by token-account owner
+
+```shell
+npm start -- -e="https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --transactions-status \
+  --transactions-status-token-accounts all \
+  --transactions-status-account-include "<OwnerPubkey>"
+```
+
+This option can be combined with `--transactions-status-compressed`, but status
+updates do not contain account keys or token balances. Cuckoo false positives
+therefore cannot be removed from a status update alone.
 
 ### subscribe to block updates with a compressed account include set
 

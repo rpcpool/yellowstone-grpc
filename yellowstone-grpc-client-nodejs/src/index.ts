@@ -52,6 +52,7 @@ export {
   CommitmentLevel,
   CuckooFilter,
   CuckooHashAlgorithm,
+  TokenAccountExpansionControlFlag,
   SubscribeDeshredRequest,
   SubscribeDeshredRequest_DeshredTransactionsEntry,
   SubscribeRequest,
