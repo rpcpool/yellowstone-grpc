@@ -1,31 +1,17 @@
-import { type GetTransactionApi } from "@solana/rpc-api";
-import { type Signature } from "@solana/keys";
+import type {
+  GetTransactionApiResponseBase58,
+  GetTransactionApiResponseBase64,
+  GetTransactionApiResponseJson,
+  GetTransactionApiResponseJsonParsed,
+} from "@solana/rpc-api";
 import { type TransactionError } from "@solana/rpc-types";
 
-type GetTransactionEncoding =
-  | "base58"
-  | "base64"
-  | "json"
-  | "jsonParsed";
-
-const fakeGetTransition: GetTransactionApi["getTransaction"] = (
-  signature: Signature,
-  config: {encoding: GetTransactionEncoding}
-): any => null;
-
-const signature = "" as Signature;
-
-const base58 = fakeGetTransition(signature, { encoding: "base58" });
-const base64 = fakeGetTransition(signature, { encoding: "base64" });
-const json = fakeGetTransition(signature, { encoding: "json" });
-const jsonParsed = fakeGetTransition(signature, { encoding: "jsonParsed" });
-
 export type MapTransactionEncodingToReturnType = {
-  0: typeof base58; // legacy (binary)
-  1: typeof base64;
-  2: typeof base58;
-  3: typeof json;
-  4: typeof jsonParsed;
+  0: GetTransactionApiResponseBase58 | null; // legacy (binary)
+  1: GetTransactionApiResponseBase64 | null;
+  2: GetTransactionApiResponseBase58 | null;
+  3: GetTransactionApiResponseJson | null;
+  4: GetTransactionApiResponseJsonParsed | null;
 };
 
 export type DeshredTransactionEncodingToReturnType<

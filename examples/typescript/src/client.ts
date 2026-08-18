@@ -1,4 +1,5 @@
 import { inspect } from "node:util";
+import type { Argv } from "yargs";
 import Client, {
   CommitmentLevel,
   CompressedAccountFilterSet,
@@ -11,6 +12,63 @@ import Client, {
   txErrDecode,
 } from "@triton-one/yellowstone-grpc";
 import type { ReconnectOptions } from "@triton-one/yellowstone-grpc";
+
+type CliArgs = {
+  _: Array<string | number>;
+  endpoint: string;
+  xToken?: string;
+  commitment?: string;
+  autoreconnect: boolean;
+  autoreconnectInitialIntervalMs: number;
+  autoreconnectMultiplier: number;
+  autoreconnectMaxRetries: number;
+  autoreconnectSlotRetention: number;
+  blockhash?: string;
+  accounts: boolean;
+  accountsAccount: string[];
+  accountsCompressed: boolean;
+  accountsCompressedCapacity?: number;
+  accountsOwner: string[];
+  accountsMemcmp: string[];
+  accountsDatasize?: number;
+  accountsTokenaccountstate: boolean;
+  accountsLamports: string[];
+  accountsNonemptytxnsignature?: boolean;
+  accountsDataslice: string[];
+  slots: boolean;
+  slotsFilterByCommitment: boolean;
+  transactions: boolean;
+  transactionsVote?: boolean;
+  transactionsFailed?: boolean;
+  transactionsSignature?: string;
+  transactionsAccountInclude: string[];
+  transactionsAccountExclude: string[];
+  transactionsAccountRequired: string[];
+  transactionsParsed: boolean;
+  transactionsDecodeErr: boolean;
+  transactionsStatus: boolean;
+  transactionsStatusVote?: boolean;
+  transactionsStatusFailed?: boolean;
+  transactionsStatusSignature?: string;
+  transactionsStatusAccountInclude: string[];
+  transactionsStatusAccountExclude: string[];
+  transactionsStatusAccountRequired: string[];
+  entry: boolean;
+  blocks: boolean;
+  blocksAccountInclude: string[];
+  blocksCompressed: boolean;
+  blocksCompressedCapacity?: number;
+  blocksIncludeTransactions: boolean;
+  blocksIncludeAccounts: boolean;
+  blocksIncludeEntries: boolean;
+  blocksMeta: boolean;
+  ping?: number;
+  deshredParsed: boolean;
+  deshredVote?: boolean;
+  deshredAccountInclude: string[];
+  deshredAccountExclude: string[];
+  deshredAccountRequired: string[];
+};
 
 async function main() {
   const args = await parseCommandLineArgs();
@@ -88,7 +146,7 @@ function parseCommitmentLevel(commitment: string | undefined) {
   return CommitmentLevel[typedCommitment];
 }
 
-function buildReconnectOptions(args): ReconnectOptions | undefined {
+function buildReconnectOptions(args: CliArgs): ReconnectOptions | undefined {
   if (!args.autoreconnect) {
     return undefined;
   }
@@ -151,7 +209,7 @@ type BuiltSubscribeRequest = {
   accountCompressedFilter?: CompressedAccountFilterSet;
 };
 
-function buildSubscribeRequest(args): BuiltSubscribeRequest {
+function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
   const request: SubscribeRequest = {
     accounts: {},
     slots: {},
@@ -318,7 +376,7 @@ function buildSubscribeRequest(args): BuiltSubscribeRequest {
   return { request, accountCompressedFilter };
 }
 
-async function subscribeCommand(client: Client, args) {
+async function subscribeCommand(client: Client, args: CliArgs) {
   // Create subscribe request based on provided arguments.
   const { request, accountCompressedFilter } = buildSubscribeRequest(args);
 
@@ -394,7 +452,7 @@ async function subscribeCommand(client: Client, args) {
   await streamClosed;
 }
 
-async function subscribeDeshredCommand(client: Client, args) {
+async function subscribeDeshredCommand(client: Client, args: CliArgs) {
   const stream = await client.subscribeDeshred();
 
   const streamClosed = new Promise<void>((resolve, reject) => {
@@ -468,7 +526,7 @@ async function subscribeDeshredCommand(client: Client, args) {
   await streamClosed;
 }
 
-async function parseCommandLineArgs() {
+async function parseCommandLineArgs(): Promise<CliArgs> {
   const { default: yargs } = await import("yargs");
 
   return yargs(process.argv.slice(2))
@@ -522,7 +580,7 @@ async function parseCommandLineArgs() {
     .command(
       "is-blockhash-valid",
       "check the validity of a given block hash",
-      (yargs) => {
+      (yargs: Argv) => {
         return yargs.options({
           blockhash: {
             type: "string",
@@ -531,7 +589,7 @@ async function parseCommandLineArgs() {
         });
       },
     )
-    .command("subscribe", "subscribe to events", (yargs) => {
+    .command("subscribe", "subscribe to events", (yargs: Argv) => {
       return yargs.options({
         accounts: {
           default: false,
@@ -731,7 +789,7 @@ async function parseCommandLineArgs() {
     .command(
       "subscribeDeshred",
       "subscribe to deshred transactions",
-      (yargs) => {
+      (yargs: Argv) => {
         return yargs.options({
           "deshred-parsed": {
             default: false,
@@ -770,7 +828,7 @@ async function parseCommandLineArgs() {
     )
     .demandCommand(1)
     .help()
-    .parseSync();
+    .parseSync() as unknown as CliArgs;
 }
 
 main();
