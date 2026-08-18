@@ -19,10 +19,8 @@ use {
     },
     yellowstone_grpc_proto::{
         geyser::{
-            subscribe_update::UpdateOneof, CommitmentLevel as CommitmentLevelProto,
-            SlotStatus as SlotStatusProto, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-            SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateEntry,
-            SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+            CommitmentLevel as CommitmentLevelProto, SlotStatus as SlotStatusProto,
+            SubscribeUpdateBlockMeta,
         },
         solana::storage::confirmed_block,
     },
@@ -168,21 +166,6 @@ impl MessageSlot {
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-
-    pub fn from_update_oneof(
-        msg: &SubscribeUpdateSlot,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            slot: msg.slot,
-            parent: msg.parent,
-            status: SlotStatusProto::try_from(msg.status)
-                .map_err(|_| "failed to parse slot status")?
-                .into(),
-            dead_error: msg.dead_error.clone(),
-            created_at,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,25 +198,6 @@ impl MessageAccountInfo {
         }
     }
 
-    pub fn from_update_oneof(msg: SubscribeUpdateAccountInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            pubkey: Pubkey::try_from(msg.pubkey.as_slice()).map_err(|_| "invalid pubkey length")?,
-            lamports: msg.lamports,
-            owner: Pubkey::try_from(msg.owner.as_slice()).map_err(|_| "invalid owner length")?,
-            executable: msg.executable,
-            rent_epoch: msg.rent_epoch,
-            data: msg.data,
-            write_version: msg.write_version,
-            txn_signature: msg
-                .txn_signature
-                .map(|sig| {
-                    Signature::try_from(sig.as_slice()).map_err(|_| "invalid signature length")
-                })
-                .transpose()?,
-            pre_encoded: OnceLock::new(),
-        })
-    }
-
     pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
         self.pre_encoded.get()
     }
@@ -255,34 +219,6 @@ impl MessageAccount {
             is_startup,
             created_at: Timestamp::from(SystemTime::now()),
         }
-    }
-
-    pub fn from_update_oneof(
-        msg: SubscribeUpdateAccount,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            account: MessageAccountInfo::from_update_oneof(
-                msg.account.ok_or("account message should be defined")?,
-            )?,
-            slot: msg.slot,
-            is_startup: msg.is_startup,
-            created_at,
-        })
-    }
-
-    pub fn from_update_oneof_block(
-        msg: SubscribeUpdateAccountInfo,
-        slot: u64,
-        is_startup: bool,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            account: MessageAccountInfo::from_update_oneof(msg)?,
-            slot,
-            is_startup,
-            created_at,
-        })
     }
 }
 
@@ -339,23 +275,6 @@ impl MessageTransactionInfo {
         }
     }
 
-    pub fn from_update_oneof(msg: SubscribeUpdateTransactionInfo) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            signature: Signature::try_from(msg.signature.as_slice())
-                .map_err(|_| "invalid signature length")?,
-            is_vote: msg.is_vote,
-            transaction: msg
-                .transaction
-                .ok_or("transaction message should be defined")?,
-            meta: msg.meta.ok_or("meta message should be defined")?,
-            index: msg.index as usize,
-            account_keys: FoldHashSet::new(),
-            pre_encoded: OnceLock::new(),
-            token_owners_all: OnceLock::new(),
-            token_owners_changed: OnceLock::new(),
-        })
-    }
-
     pub fn fill_account_keys(&mut self) -> FromUpdateOneofResult<()> {
         let mut account_keys = FoldHashSet::new();
 
@@ -407,32 +326,6 @@ impl MessageTransaction {
             slot,
             created_at: Timestamp::from(SystemTime::now()),
         }
-    }
-
-    pub fn from_update_oneof(
-        msg: SubscribeUpdateTransaction,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            transaction: MessageTransactionInfo::from_update_oneof(
-                msg.transaction
-                    .ok_or("transaction message should be defined")?,
-            )?,
-            slot: msg.slot,
-            created_at,
-        })
-    }
-
-    pub fn from_update_oneof_block(
-        msg: SubscribeUpdateTransactionInfo,
-        slot: u64,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            transaction: MessageTransactionInfo::from_update_oneof(msg)?,
-            slot,
-            created_at,
-        })
     }
 }
 
@@ -565,24 +458,6 @@ impl MessageEntry {
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-
-    pub fn from_update_oneof(
-        msg: &SubscribeUpdateEntry,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            slot: msg.slot,
-            index: msg.index as usize,
-            num_hashes: msg.num_hashes,
-            hash: Hash::new_from_array(
-                <[u8; HASH_BYTES]>::try_from(msg.hash.as_slice())
-                    .map_err(|_| "invalid hash length")?,
-            ),
-            executed_transaction_count: msg.executed_transaction_count,
-            starting_transaction_index: msg.starting_transaction_index,
-            created_at,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -663,51 +538,6 @@ impl MessageBlock {
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-
-    pub fn from_update_oneof(
-        msg: SubscribeUpdateBlock,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(Self {
-            meta: Arc::new(MessageBlockMeta {
-                block_meta: SubscribeUpdateBlockMeta {
-                    slot: msg.slot,
-                    blockhash: msg.blockhash,
-                    rewards: msg.rewards,
-                    block_time: msg.block_time,
-                    block_height: msg.block_height,
-                    parent_slot: msg.parent_slot,
-                    parent_blockhash: msg.parent_blockhash,
-                    executed_transaction_count: msg.executed_transaction_count,
-                    entries_count: msg.entries_count,
-                },
-                created_at,
-            }),
-            transactions: msg
-                .transactions
-                .into_iter()
-                .map(|tx| {
-                    MessageTransaction::from_update_oneof_block(tx, msg.slot, created_at)
-                        .map(Arc::new)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            updated_account_count: msg.updated_account_count,
-            accounts: msg
-                .accounts
-                .into_iter()
-                .map(|account| {
-                    MessageAccount::from_update_oneof_block(account, msg.slot, false, created_at)
-                        .map(Arc::new)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            entries: msg
-                .entries
-                .iter()
-                .map(|entry| MessageEntry::from_update_oneof(entry, created_at).map(Arc::new))
-                .collect::<Result<Vec<_>, _>>()?,
-            created_at,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -733,36 +563,5 @@ impl Message {
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
         }
-    }
-
-    pub fn from_update_oneof(
-        oneof: UpdateOneof,
-        created_at: Timestamp,
-    ) -> FromUpdateOneofResult<Self> {
-        Ok(match oneof {
-            UpdateOneof::Account(msg) => Self::Account(Arc::new(
-                MessageAccount::from_update_oneof(msg, created_at)?,
-            )),
-            UpdateOneof::Slot(msg) => {
-                Self::Slot(Arc::new(MessageSlot::from_update_oneof(&msg, created_at)?))
-            }
-            UpdateOneof::Transaction(msg) => Self::Transaction(Arc::new(
-                MessageTransaction::from_update_oneof(msg, created_at)?,
-            )),
-            UpdateOneof::TransactionStatus(_) => {
-                return Err("TransactionStatus message is not supported")
-            }
-            UpdateOneof::Block(msg) => {
-                Self::Block(Arc::new(MessageBlock::from_update_oneof(msg, created_at)?))
-            }
-            UpdateOneof::Ping(_) => return Err("Ping message is not supported"),
-            UpdateOneof::Pong(_) => return Err("Pong message is not supported"),
-            UpdateOneof::BlockMeta(msg) => Self::BlockMeta(Arc::new(
-                MessageBlockMeta::from_update_oneof(msg, created_at),
-            )),
-            UpdateOneof::Entry(msg) => {
-                Self::Entry(Arc::new(MessageEntry::from_update_oneof(&msg, created_at)?))
-            }
-        })
     }
 }
