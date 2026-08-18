@@ -129,6 +129,18 @@ where
         Pin::new(&mut this.wrappee).poll_write(cx, buf)
     }
 
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().wrappee).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.wrappee.is_write_vectored()
+    }
+
     /// Flushes the wrapped IO.
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
@@ -252,7 +264,11 @@ where
 mod tests {
     use {
         super::*,
-        std::{io, task::Poll},
+        std::{
+            io::{self, IoSlice},
+            task::Poll,
+        },
+        tokio::io::AsyncWriteExt,
     };
 
     #[derive(Default)]
@@ -297,6 +313,18 @@ mod tests {
             Poll::Ready(Ok(buf.len()))
         }
 
+        fn poll_write_vectored(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            bufs: &[IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(bufs.iter().map(|buf| buf.len()).sum()))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
         fn poll_flush(
             self: Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
@@ -310,6 +338,26 @@ mod tests {
         ) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    #[tokio::test]
+    async fn rate_limited_io_preserves_vectored_writes() {
+        let remote_addr: SocketAddr = "192.168.1.42:50051".parse().expect("valid socket addr");
+        let active_conn_map = Arc::new(Mutex::new(HashMap::new()));
+        let callbacks = NoopCallbacks;
+        let mut io = RateLimitedIO::try_new(
+            MockIo {
+                remote_addr: Some(remote_addr),
+            },
+            1,
+            active_conn_map,
+            &callbacks,
+        )
+        .expect("connection should be accepted");
+        let bufs = [IoSlice::new(b"hello"), IoSlice::new(b" world")];
+
+        assert!(io.is_write_vectored());
+        assert_eq!(io.write_vectored(&bufs).await.unwrap(), 11);
     }
 
     #[test]

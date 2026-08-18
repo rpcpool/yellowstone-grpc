@@ -445,6 +445,18 @@ impl AsyncWrite for TlsIO {
         self.project().inner.poll_write(cx, buf)
     }
 
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        self.project().inner.poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
         self.project().inner.poll_flush(cx)
     }
@@ -545,7 +557,7 @@ mod tests {
         super::*,
         std::{
             fs::{self, File},
-            io::{ErrorKind, Write},
+            io::{ErrorKind, IoSlice, Write},
             path::PathBuf,
             sync::{
                 atomic::{AtomicU64, Ordering},
@@ -553,7 +565,7 @@ mod tests {
             },
             time::{Duration, SystemTime, UNIX_EPOCH},
         },
-        tokio::io::AsyncWriteExt,
+        tokio::io::{AsyncReadExt, AsyncWriteExt},
         tokio_rustls::{
             rustls::{
                 self,
@@ -815,13 +827,19 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
             let server_name = ServerName::try_from("localhost")
                 .expect("localhost should be a valid TLS server name");
 
-            good_connector
+            let mut stream = good_connector
                 .connect(server_name, stream)
                 .await
                 .expect("TLS handshake should succeed");
+            let mut buf = [0; 11];
+            stream
+                .read_exact(&mut buf)
+                .await
+                .expect("TLS client should read server bytes");
+            assert_eq!(&buf, b"hello world");
         });
 
-        let accepted = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut accepted = tokio::time::timeout(Duration::from_secs(5), async {
             match tls_incoming.next().await {
                 Some(Ok(io)) => io,
                 Some(Err(err)) => panic!("unexpected stream error: {err}"),
@@ -830,6 +848,10 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
         })
         .await
         .expect("TlsIncoming should yield a successful stream in time");
+
+        assert!(accepted.is_write_vectored());
+        let bufs = [IoSlice::new(b"hello"), IoSlice::new(b" world")];
+        assert_eq!(accepted.write_vectored(&bufs).await.unwrap(), 11);
 
         bad_client
             .await

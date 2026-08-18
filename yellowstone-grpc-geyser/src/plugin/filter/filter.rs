@@ -27,12 +27,7 @@ use {
     spl_token_2022_interface::{
         generic_token_account::GenericTokenAccount, state::Account as TokenAccount,
     },
-    std::{
-        collections::{HashMap, HashSet},
-        ops::Range,
-        str::FromStr,
-        sync::Arc,
-    },
+    std::{collections::HashMap, ops::Range, str::FromStr, sync::Arc},
     yellowstone_grpc_proto::{
         cuckoo::CuckooFilter,
         geyser::{
@@ -50,6 +45,48 @@ use {
         solana::storage::confirmed_block,
     },
 };
+
+#[derive(Debug, Clone)]
+struct HybridSet<T> {
+    vec: Vec<T>,
+    set: FoldHashSet<T>,
+}
+
+impl<T: Eq + std::hash::Hash> HybridSet<T>
+where
+    T: Clone,
+{
+    fn new_with_set(set: FoldHashSet<T>) -> Self {
+        let vec = set.iter().cloned().collect();
+        Self { vec, set }
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
+
+    const fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    fn overlaps<'a, I>(
+        &self,
+        other_len: usize,
+        contains_other: impl Fn(&T) -> bool,
+        other: impl Fn() -> I,
+    ) -> bool
+    where
+        I: Iterator<Item = &'a T>,
+        T: 'a,
+    {
+        /* iterate vec if we are smaller than the other collection */
+        if self.vec.len() <= other_len {
+            self.vec.iter().any(contains_other)
+        } else {
+            other().any(|k| self.set.contains(k))
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FilterError {
@@ -347,7 +384,7 @@ impl Filter {
 
     fn decode_pubkeys<'a>(
         pubkeys: &'a [String],
-        limit: &'a HashSet<Pubkey>,
+        limit: &'a FoldHashSet<Pubkey>,
     ) -> impl Iterator<Item = FilterResult<Pubkey>> + 'a {
         pubkeys.iter().map(|value| {
             let pubkey = Pubkey::from_str(value)?;
@@ -358,7 +395,7 @@ impl Filter {
 
     fn decode_pubkeys_into_set(
         pubkeys: &[String],
-        limit: &HashSet<Pubkey>,
+        limit: &FoldHashSet<Pubkey>,
     ) -> FilterResult<FoldHashSet<Pubkey>> {
         Self::decode_pubkeys(pubkeys, limit).collect::<FilterResult<_>>()
     }
@@ -578,9 +615,13 @@ impl FilterAccounts {
 
     fn get_updates(
         &self,
-        message: &MessageAccount,
+        message: &Arc<MessageAccount>,
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
+        if self.aggregates.is_empty() {
+            return FilteredUpdates::new();
+        }
+
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_txn_signature(&message.account.txn_signature);
         filter.match_account(&message.account.pubkey);
@@ -590,7 +631,7 @@ impl FilterAccounts {
         let filters = filter.get_filters();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::account(message, accounts_data_slice.clone()),
+            FilteredUpdateOneof::account(Arc::clone(message), accounts_data_slice.clone()),
             message.created_at
         )
     }
@@ -783,6 +824,9 @@ impl<'a> FilterAccountsMatch<'a> {
     }
 
     fn match_cuckoo(&mut self, pubkey: &Pubkey) {
+        if self.filter.account_cuckoo.is_empty() {
+            return;
+        }
         let bytes = pubkey.to_bytes();
         for (name, cuckoo) in &self.filter.account_cuckoo {
             if cuckoo.contains(&bytes) {
@@ -927,9 +971,10 @@ struct FilterTransactionsInner {
     vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
-    account_include: Vec<Pubkey>,
-    account_exclude: Vec<Pubkey>,
+    account_include: HybridSet<Pubkey>,
+    account_exclude: HybridSet<Pubkey>,
     account_required: Vec<Pubkey>,
+    account_cuckoo: Option<Arc<CuckooFilter<[u8; 32]>>>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -955,6 +1000,7 @@ impl FilterTransactions {
                 filter.vote.is_none()
                     && filter.failed.is_none()
                     && filter.account_include.is_empty()
+                    && filter.cuckoo_account_include.is_none()
                     && filter.account_exclude.is_empty()
                     && filter.account_required.is_empty()
                     && filter.token_accounts.is_none(),
@@ -973,6 +1019,13 @@ impl FilterTransactions {
                 limits.account_required_max,
             )?;
 
+            let account_cuckoo = if let Some(proto_cuckoo) = &filter.cuckoo_account_include {
+                FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
+                Some(Arc::new(CuckooFilter::from(proto_cuckoo)))
+            } else {
+                None
+            };
+
             filters.insert(
                 names.get(name)?,
                 FilterTransactionsInner {
@@ -985,24 +1038,21 @@ impl FilterTransactions {
                             signature_str.parse().map_err(FilterError::InvalidSignature)
                         })
                         .transpose()?,
-                    account_include: Filter::decode_pubkeys_into_set(
+                    account_include: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
-                    )?
-                    .into_iter()
-                    .collect(),
-                    account_exclude: Filter::decode_pubkeys_into_set(
+                    )?),
+                    account_exclude: HybridSet::new_with_set(Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
-                        &HashSet::new(),
-                    )?
-                    .into_iter()
-                    .collect(),
+                        &FoldHashSet::new(),
+                    )?),
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?
                     .into_iter()
                     .collect(),
+                    account_cuckoo,
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -1016,7 +1066,7 @@ impl FilterTransactions {
         })
     }
 
-    pub fn get_updates(&self, message: &MessageTransaction) -> FilteredUpdates {
+    pub fn get_updates(&self, message: &Arc<MessageTransaction>) -> FilteredUpdates {
         let filters = self
             .filters
             .iter()
@@ -1063,17 +1113,51 @@ impl FilterTransactions {
                         || token_owners.is_some_and(|set| set.contains(pubkey))
                 };
 
+                // Iterate the transaction's keys, not the filter's lists.
+                // A tx carries tens of keys; include/exclude lists reach
+                // tens of thousands.
+                // NOTE: We can have duplicate entries between account_keys and token_owners here, worth revisiting at some point.
+                let effective_keys = || {
+                    message
+                        .transaction
+                        .account_keys
+                        .iter()
+                        .chain(token_owners.into_iter().flatten())
+                };
+
                 if !inner.account_required.iter().all(in_effective_set) {
                     return None;
                 }
 
-                if !inner.account_include.is_empty()
-                    && !inner.account_include.iter().any(in_effective_set)
-                {
-                    return None;
+                let effective_len = message.transaction.account_keys.len()
+                    + token_owners.map_or(0, |set| set.len());
+
+                if !(inner.account_include.is_empty() && inner.account_cuckoo.is_none()) {
+                    let include_hit = !inner.account_include.is_empty()
+                        && inner.account_include.overlaps(
+                            effective_len,
+                            in_effective_set,
+                            effective_keys,
+                        );
+
+                    let cuckoo_hit = || {
+                        inner.account_cuckoo.as_ref().is_some_and(|cuckoo| {
+                            effective_keys().any(|pk| cuckoo.contains(&pk.to_bytes()))
+                        })
+                    };
+
+                    if !include_hit && !cuckoo_hit() {
+                        return None;
+                    }
                 }
 
-                if inner.account_exclude.iter().any(in_effective_set) {
+                if !inner.account_exclude.is_empty()
+                    && inner.account_exclude.overlaps(
+                        effective_len,
+                        in_effective_set,
+                        effective_keys,
+                    )
+                {
                     return None;
                 }
 
@@ -1084,9 +1168,10 @@ impl FilterTransactions {
         filtered_updates_once_owned!(
             filters,
             match self.filter_type {
-                FilterTransactionsType::Transaction => FilteredUpdateOneof::transaction(message),
+                FilterTransactionsType::Transaction =>
+                    FilteredUpdateOneof::transaction(Arc::clone(message)),
                 FilterTransactionsType::TransactionStatus => {
-                    FilteredUpdateOneof::transaction_status(message)
+                    FilteredUpdateOneof::transaction_status(Arc::clone(message))
                 }
             },
             message.created_at
@@ -1230,11 +1315,11 @@ impl FilterDeshredTransactions {
                     )?,
                     account_exclude: Filter::decode_pubkeys_into_set(
                         &filter.account_exclude,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?,
                     account_required: Filter::decode_pubkeys_into_set(
                         &filter.account_required,
-                        &HashSet::new(),
+                        &FoldHashSet::new(),
                     )?,
                 },
             );
@@ -1242,7 +1327,7 @@ impl FilterDeshredTransactions {
         Ok(Self { filters })
     }
 
-    pub fn get_updates(&self, message: &MessageDeshredTransaction) -> FilteredUpdatesDeshred {
+    pub fn get_updates(&self, message: &Arc<MessageDeshredTransaction>) -> FilteredUpdatesDeshred {
         let filters = self
             .filters
             .iter()
@@ -1272,7 +1357,7 @@ impl FilterDeshredTransactions {
                 }
 
                 if !inner.account_required.is_empty() {
-                    let all_keys: HashSet<&Pubkey> = tx.all_account_keys().collect();
+                    let all_keys: FoldHashSet<&Pubkey> = tx.all_account_keys().collect();
                     if !inner
                         .account_required
                         .iter()
@@ -1503,7 +1588,7 @@ impl FilterBlocks {
                     .transactions
                     .iter()
                     .filter_map(|tx| {
-                        if inner.matches_any_in_set(&tx.account_keys) {
+                        if inner.matches_any_in_set(&tx.transaction.account_keys) {
                             Some(Arc::clone(tx))
                         } else {
                             None
@@ -1520,7 +1605,7 @@ impl FilterBlocks {
                     .accounts
                     .iter()
                     .filter_map(|account| {
-                        if inner.matches_account(&account.pubkey) {
+                        if inner.matches_account(&account.account.pubkey) {
                             Some(Arc::clone(account))
                         } else {
                             None
@@ -1746,8 +1831,8 @@ mod tests {
                 name::{FilterName, FilterNames},
             },
             message::{
-                Message, MessageDeshredTransaction, MessageDeshredTransactionInfo,
-                MessageTransaction, MessageTransactionInfo,
+                Message, MessageAccount, MessageAccountInfo, MessageDeshredTransaction,
+                MessageDeshredTransactionInfo, MessageTransaction, MessageTransactionInfo,
             },
         },
         prost_types::Timestamp,
@@ -1765,8 +1850,8 @@ mod tests {
         },
         yellowstone_grpc_proto::geyser::{
             SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterTransactions,
-            SubscribeRequestPing,
+            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeRequestPing,
         },
     };
 
@@ -1777,7 +1862,7 @@ mod tests {
     fn create_message_transaction(
         keypair: &Keypair,
         account_keys: Vec<Pubkey>,
-    ) -> MessageTransaction {
+    ) -> Arc<MessageTransaction> {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -1814,8 +1899,8 @@ mod tests {
             .iter()
             .copied()
             .collect();
-        MessageTransaction {
-            transaction: Arc::new(MessageTransactionInfo {
+        Arc::new(MessageTransaction {
+            transaction: MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: convert_to::create_transaction(&versioned_transaction),
@@ -1825,10 +1910,35 @@ mod tests {
                 pre_encoded: OnceLock::new(),
                 token_owners_all: OnceLock::new(),
                 token_owners_changed: OnceLock::new(),
-            }),
+            },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
-        }
+        })
+    }
+
+    pub(super) fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
+        use {
+            bytes::Bytes,
+            prost_types::Timestamp,
+            std::{sync::Arc, time::SystemTime},
+        };
+
+        Arc::new(MessageAccount {
+            account: MessageAccountInfo {
+                pubkey,
+                lamports: 1000,
+                owner,
+                executable: false,
+                rent_epoch: 0,
+                data: Bytes::new(),
+                write_version: 1,
+                txn_signature: None,
+                pre_encoded: std::sync::OnceLock::new(),
+            },
+            slot: 100,
+            is_startup: false,
+            created_at: Timestamp::from(SystemTime::now()),
+        })
     }
 
     #[test]
@@ -1900,6 +2010,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -1936,6 +2047,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -1978,6 +2090,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2044,6 +2157,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2110,6 +2224,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude,
                 account_required: vec![],
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2162,6 +2277,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2218,7 +2334,7 @@ mod tests {
         loaded_writable: Vec<Pubkey>,
         loaded_readonly: Vec<Pubkey>,
         is_vote: bool,
-    ) -> MessageDeshredTransaction {
+    ) -> Arc<MessageDeshredTransaction> {
         let message = SolMessage {
             header: MessageHeader {
                 num_required_signatures: 1,
@@ -2231,8 +2347,8 @@ mod tests {
         let versioned_transaction =
             VersionedTransaction::from(Transaction::new(&[keypair], message, recent_blockhash));
 
-        MessageDeshredTransaction {
-            transaction: Arc::new(MessageDeshredTransactionInfo {
+        Arc::new(MessageDeshredTransaction {
+            transaction: MessageDeshredTransactionInfo {
                 signature: *versioned_transaction
                     .signatures
                     .first()
@@ -2244,10 +2360,10 @@ mod tests {
                 loaded_readonly_addresses: loaded_readonly,
                 completed_data_set_starting_shred_index: 0,
                 completed_data_set_ending_shred_index_exclusive: 0,
-            }),
+            },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
-        }
+        })
     }
 
     #[test]
@@ -2565,6 +2681,7 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                cuckoo_account_include: None,
                 token_accounts: None,
             },
         );
@@ -2592,13 +2709,36 @@ mod tests {
             assert!(message.filters.is_empty());
         }
     }
+
+    #[test]
+    fn no_account_filters_yields_no_updates() {
+        let mut slots = HashMap::new();
+        slots.insert("s".to_owned(), SubscribeRequestFilterSlots::default());
+
+        let filter = Filter::new(
+            &SubscribeRequest {
+                slots,
+                ..Default::default()
+            },
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let message = create_message_account(Pubkey::new_unique(), Pubkey::new_unique());
+        assert!(filter
+            .get_updates(&Message::Account(message), None)
+            .is_empty());
+    }
 }
 
 #[cfg(test)]
 mod cuckoo_tests {
     use {
-        super::{tests::create_filter_names, *},
-        crate::plugin::message::MessageAccountInfo,
+        super::{
+            tests::{create_filter_names, create_message_account},
+            *,
+        },
         yellowstone_grpc_proto::{cuckoo::CuckooFilter, geyser::CuckooFilter as ProtoCuckooFilter},
     };
 
@@ -2608,31 +2748,6 @@ mod cuckoo_tests {
             filter.insert(&pk.to_bytes()).unwrap();
         }
         ProtoCuckooFilter::from(&filter)
-    }
-
-    fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> MessageAccount {
-        use {
-            bytes::Bytes,
-            prost_types::Timestamp,
-            std::{sync::Arc, time::SystemTime},
-        };
-
-        MessageAccount {
-            account: Arc::new(MessageAccountInfo {
-                pubkey,
-                lamports: 1000,
-                owner,
-                executable: false,
-                rent_epoch: 0,
-                data: Bytes::new(),
-                write_version: 1,
-                txn_signature: None,
-                pre_encoded: std::sync::OnceLock::new(),
-            }),
-            slot: 100,
-            is_startup: false,
-            created_at: Timestamp::from(SystemTime::now()),
-        }
     }
 
     #[test]
@@ -2923,7 +3038,7 @@ mod cuckoo_tests {
             account_keys: Vec<Pubkey>,
             pre: Vec<confirmed_block::TokenBalance>,
             post: Vec<confirmed_block::TokenBalance>,
-        ) -> MessageTransaction {
+        ) -> Arc<MessageTransaction> {
             let signer = Keypair::new();
             let signer_pk = signer.pubkey();
             let mut full_keys = Vec::with_capacity(1 + account_keys.len());
@@ -2971,8 +3086,8 @@ mod cuckoo_tests {
                 .iter()
                 .copied()
                 .collect();
-            MessageTransaction {
-                transaction: Arc::new(MessageTransactionInfo {
+            Arc::new(MessageTransaction {
+                transaction: MessageTransactionInfo {
                     signature: sig,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
@@ -2982,10 +3097,10 @@ mod cuckoo_tests {
                     pre_encoded: OnceLock::new(),
                     token_owners_all: OnceLock::new(),
                     token_owners_changed: OnceLock::new(),
-                }),
+                },
                 slot: 100,
                 created_at: Timestamp::from(SystemTime::now()),
-            }
+            })
         }
 
         fn filter_with_transactions(
@@ -3028,6 +3143,7 @@ mod cuckoo_tests {
                     .into_iter()
                     .map(|k| k.to_string())
                     .collect(),
+                cuckoo_account_include: None,
                 token_accounts: mode.map(|m| m as i32),
             }
         }
@@ -3611,6 +3727,7 @@ mod cuckoo_tests {
                     account_include: vec![Pubkey::new_unique().to_string()],
                     account_exclude: vec![],
                     account_required: vec![],
+                    cuckoo_account_include: None,
                     token_accounts: Some(99),
                 },
             );
@@ -3651,10 +3768,9 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
 
-            assert!(tx_arc.token_owners_all.get().is_none());
-            assert!(tx_arc.token_owners_changed.get().is_none());
+            assert!(tx.transaction.token_owners_all.get().is_none());
+            assert!(tx.transaction.token_owners_changed.get().is_none());
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3667,14 +3783,14 @@ mod cuckoo_tests {
                 ),
             );
             let filter = filter_with_transactions(tx_filters);
-            assert!(matches(&filter, &Message::Transaction(tx)));
+            assert!(matches(&filter, &Message::Transaction(Arc::clone(&tx))));
 
             assert!(
-                tx_arc.token_owners_all.get().is_some(),
+                tx.transaction.token_owners_all.get().is_some(),
                 "mode=All must populate token_owners_all"
             );
             assert!(
-                tx_arc.token_owners_changed.get().is_none(),
+                tx.transaction.token_owners_changed.get().is_none(),
                 "mode=All must NOT touch token_owners_changed"
             );
         }
@@ -3692,8 +3808,7 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3724,12 +3839,12 @@ mod cuckoo_tests {
             );
 
             // First run populated the cache. Capture the pointer.
-            let first_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+            let first_addr = tx.transaction.token_owners_all.get().expect("populated") as *const _;
 
             // Run the filter again on the same tx (same Arc). The cache
             // must still be there and point at the SAME allocation.
             let _ = filter.get_updates(&message, None);
-            let second_addr = tx_arc.token_owners_all.get().expect("populated") as *const _;
+            let second_addr = tx.transaction.token_owners_all.get().expect("populated") as *const _;
             assert_eq!(
                 first_addr, second_addr,
                 "cache backing storage must be reused, not reallocated"
@@ -3757,8 +3872,7 @@ mod cuckoo_tests {
                 ],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3783,16 +3897,16 @@ mod cuckoo_tests {
             let _ = filter.get_updates(&message, None);
 
             assert!(
-                tx_arc.token_owners_all.get().is_some(),
+                tx.transaction.token_owners_all.get().is_some(),
                 "mode=All filter must populate token_owners_all"
             );
             assert!(
-                tx_arc.token_owners_changed.get().is_some(),
+                tx.transaction.token_owners_changed.get().is_some(),
                 "mode=BalanceChanged filter must populate token_owners_changed"
             );
             // Sanity: they're at different addresses (different OnceLocks).
-            let all_addr = tx_arc.token_owners_all.get().unwrap() as *const _;
-            let changed_addr = tx_arc.token_owners_changed.get().unwrap() as *const _;
+            let all_addr = tx.transaction.token_owners_all.get().unwrap() as *const _;
+            let changed_addr = tx.transaction.token_owners_changed.get().unwrap() as *const _;
             assert_ne!(all_addr as usize, changed_addr as usize);
         }
 
@@ -3805,8 +3919,7 @@ mod cuckoo_tests {
                 vec![token_balance(0, owner, "100")],
                 vec![token_balance(0, owner, "200")],
             );
-            let tx_arc = Arc::clone(&tx.transaction);
-            let message = Message::Transaction(tx);
+            let message = Message::Transaction(Arc::clone(&tx));
 
             let mut tx_filters = HashMap::new();
             tx_filters.insert(
@@ -3817,10 +3930,10 @@ mod cuckoo_tests {
             let _ = filter.get_updates(&message, None);
 
             assert!(
-                tx_arc.token_owners_all.get().is_none(),
+                tx.transaction.token_owners_all.get().is_none(),
                 "mode=None must NOT populate any owner-set cache"
             );
-            assert!(tx_arc.token_owners_changed.get().is_none());
+            assert!(tx.transaction.token_owners_changed.get().is_none());
         }
     }
 }

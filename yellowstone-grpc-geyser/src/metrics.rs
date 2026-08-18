@@ -5,7 +5,7 @@ use {
             filter::{Filter, FilterStats},
             message::SlotStatus,
         },
-        version::VERSION as VERSION_INFO,
+        version::Version,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
     http_body_util::{combinators::BoxBody, BodyExt, Empty as BodyEmpty, Full as BodyFull},
@@ -59,6 +59,10 @@ lazy_static::lazy_static! {
         "yellowstone_grpc_geyser_deshred_queue_size", "Size of deshred message queue"
     ).unwrap();
 
+    static ref BLOCK_RECONSTRUCTION_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "yellowstone_grpc_geyser_block_reconstruction_queue_size", "Size of block reconstruction message queue"
+    ).unwrap();
+
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
         Opts::new("yellowstone_grpc_geyser_subscriptions_total", "Total number of subscriptions to gRPC service"),
         &["endpoint", "subscription"]
@@ -108,14 +112,6 @@ lazy_static::lazy_static! {
             "Histogram of all account update data (kib) received from Geyser plugin"
         )
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
-    ).unwrap();
-
-    pub static ref GEYSER_BATCH_SIZE: Histogram = Histogram::with_opts(
-        HistogramOpts::new(
-            "yellowstone_grpc_geyser_batch_size",
-            "Size of processed message batches"
-        )
-        .buckets(vec![1.0, 4.0, 8.0, 16.0, 24.0, 31.0])
     ).unwrap();
 
     static ref PRE_ENCODED_CACHE_HIT: IntCounterVec = IntCounterVec::new(
@@ -238,6 +234,7 @@ impl PrometheusService {
         config: Option<ConfigPrometheus>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        version: &Version,
     ) -> std::io::Result<()> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
@@ -253,13 +250,13 @@ impl PrometheusService {
             register!(SLOT_STATUS_PLUGIN);
             register!(INVALID_FULL_BLOCKS);
             register!(MESSAGE_QUEUE_SIZE);
+            register!(BLOCK_RECONSTRUCTION_QUEUE_SIZE);
             register!(SUBSCRIPTIONS_TOTAL);
             register!(MISSED_STATUS_MESSAGE);
             register!(GRPC_MESSAGE_SENT);
             register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
             register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
             register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
-            register!(GEYSER_BATCH_SIZE);
             register!(GRPC_CLIENT_DISCONNECTS);
             register!(PRE_ENCODED_CACHE_HIT);
             register!(PRE_ENCODED_CACHE_MISS);
@@ -280,13 +277,13 @@ impl PrometheusService {
 
             VERSION
                 .with_label_values(&[
-                    VERSION_INFO.buildts,
-                    VERSION_INFO.git,
-                    VERSION_INFO.package,
-                    VERSION_INFO.proto,
-                    VERSION_INFO.rustc,
-                    VERSION_INFO.solana,
-                    VERSION_INFO.version,
+                    version.buildts,
+                    version.git,
+                    version.package,
+                    version.proto,
+                    version.rustc,
+                    version.solana,
+                    version.version,
                 ])
                 .inc();
         });
@@ -505,12 +502,24 @@ pub fn deshred_queue_size_inc(amount: i64) {
     DESHRED_QUEUE_SIZE.add(amount);
 }
 
+pub fn block_reconstruction_queue_size_inc() {
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.inc()
+}
+
 pub fn message_queue_size_dec() {
-    MESSAGE_QUEUE_SIZE.dec()
+    MESSAGE_QUEUE_SIZE.dec();
+}
+
+pub fn message_queue_size_dec_by(amount: i64) {
+    MESSAGE_QUEUE_SIZE.sub(amount);
 }
 
 pub fn deshred_queue_size_dec() {
     DESHRED_QUEUE_SIZE.dec()
+}
+
+pub fn block_reconstruction_queue_size_dec_by(amount: i64) {
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.sub(amount);
 }
 
 pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
@@ -620,6 +629,8 @@ pub fn remove_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscri
 pub fn reset_metrics() {
     // Reset gauge metrics to 0
     MESSAGE_QUEUE_SIZE.set(0);
+    DESHRED_QUEUE_SIZE.set(0);
+    BLOCK_RECONSTRUCTION_QUEUE_SIZE.set(0);
 
     // Reset gauge vectors (clears all label combinations)
     SUBSCRIPTIONS_TOTAL.reset();

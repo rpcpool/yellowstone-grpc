@@ -122,7 +122,7 @@ The `404` behavior is important: the gRPC server treats it as an unauthenticated
 Example request:
 
 ```text
-GET http://127.0.0.1:8080/?host=api.example.com&token=test
+GET http://127.0.0.1:8080/?host=api.example.com
 ```
 
 Example `200 OK` response body:
