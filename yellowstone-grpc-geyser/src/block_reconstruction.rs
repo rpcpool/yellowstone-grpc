@@ -592,6 +592,7 @@ mod tests {
             slot,
             is_startup: false,
             created_at: ts(),
+            bank_id: Some(slot),
         }))
     }
 
@@ -610,6 +611,7 @@ mod tests {
             },
             slot,
             created_at: ts(),
+            bank_id: slot,
         }))
     }
 
@@ -622,16 +624,23 @@ mod tests {
             executed_transaction_count: 0,
             starting_transaction_index: 0,
             created_at: ts(),
+            bank_id: slot,
         }))
     }
 
     fn make_slot_msg(slot: u64, parent: Option<u64>, status: SlotStatus) -> Message {
+        let bank_id = if [SlotStatus::Completed, SlotStatus::Dead, SlotStatus::FirstShredReceived].contains(&status) {
+            None
+        } else {
+            Some(slot)
+        };
         Message::Slot(Arc::new(MessageSlot {
             slot,
             parent,
             status,
             dead_error: None,
             created_at: ts(),
+            bank_id,
         }))
     }
 
@@ -647,6 +656,7 @@ mod tests {
                 block_height: None,
                 executed_transaction_count: 0,
                 entries_count: 0,
+                bank_id: slot,
             },
             ts(),
         )))
@@ -664,6 +674,7 @@ mod tests {
                 block_height: None,
                 executed_transaction_count: 0,
                 entries_count: 0,
+                bank_id: slot
             },
             ts(),
         ))

@@ -2549,6 +2549,7 @@ mod tests {
             },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: 100,
         })
     }
 
@@ -2574,6 +2575,7 @@ mod tests {
             slot: 100,
             is_startup: false,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: Some(100),
         })
     }
 
@@ -3599,6 +3601,7 @@ mod account_filter_regression_tests {
             slot: 42,
             is_startup: false,
             created_at: Timestamp::default(),
+            bank_id: Some(42),
         });
         let updates = filter.get_updates(&Message::Account(message), None);
         assert!(updates.len() <= 1);
@@ -5398,6 +5401,7 @@ mod cuckoo_tests {
                 },
                 slot: 100,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 100,
             })
         }
 

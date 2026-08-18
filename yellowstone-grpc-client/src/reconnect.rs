@@ -691,6 +691,7 @@ mod tests {
                 }),
                 slot,
                 is_startup: false,
+                bank_id: Some(slot),
             })),
             created_at: None,
         }
@@ -852,6 +853,7 @@ mod tests {
                 parent: None,
                 status: 0,
                 dead_error: None,
+                bank_id: Some(42),
             })),
             created_at: None,
         };
@@ -886,6 +888,7 @@ mod tests {
                 parent: None,
                 status,
                 dead_error: None,
+                bank_id: Some(slot)
             })),
             created_at: None,
         }
@@ -905,6 +908,7 @@ mod tests {
                     parent_blockhash: String::new(),
                     executed_transaction_count: 0,
                     entries_count: 0,
+                    bank_id: slot,
                 },
             )),
             created_at: None,
@@ -1183,6 +1187,7 @@ mod tests {
                 }),
                 slot: 100,
                 is_startup: false,
+                bank_id: Some(100),
             })),
             created_at: None,
         };

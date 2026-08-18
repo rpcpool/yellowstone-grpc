@@ -77,6 +77,7 @@ pub fn message_account(account: MessageAccountInfo) -> Arc<MessageAccount> {
         slot: 100,
         is_startup: false,
         created_at: Timestamp::default(),
+        bank_id: Some(100),
     })
 }
 
@@ -85,12 +86,18 @@ pub fn simple_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccou
 }
 
 pub fn message_slot(slot: u64, status: SlotStatus) -> MessageSlot {
+    let bank_id = if [SlotStatus::Completed, SlotStatus::Dead, SlotStatus::FirstShredReceived].contains(&status) {
+        None
+    } else {
+        Some(slot)
+    };
     MessageSlot {
         slot,
         parent: Some(slot.saturating_sub(1)),
         status,
         dead_error: None,
         created_at: Timestamp::default(),
+        bank_id,
     }
 }
 
@@ -103,6 +110,7 @@ pub fn message_entry(slot: u64, index: usize) -> Arc<MessageEntry> {
         executed_transaction_count: 4,
         starting_transaction_index: 0,
         created_at: Timestamp::default(),
+        bank_id: slot,
     })
 }
 
@@ -171,5 +179,6 @@ pub fn message_transaction(
         },
         slot: 100,
         created_at: Timestamp::default(),
+        bank_id: 100,
     })
 }

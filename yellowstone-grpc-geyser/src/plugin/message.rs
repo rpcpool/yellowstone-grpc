@@ -8,7 +8,7 @@ use {
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
-    solana_clock::Slot,
+    solana_clock::{BankId, Slot},
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -150,10 +150,12 @@ pub struct MessageSlot {
     pub status: SlotStatus,
     pub dead_error: Option<String>,
     pub created_at: Timestamp,
+    // FIRST_SHRED_RECEIVED and COMPLETED does not have any bank id.
+    pub bank_id: Option<BankId>
 }
 
 impl MessageSlot {
-    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &GeyserSlotStatus) -> Self {
+    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &GeyserSlotStatus, bank_id: Option<BankId>) -> Self {
         Self {
             slot,
             parent,
@@ -164,6 +166,7 @@ impl MessageSlot {
                 None
             },
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
 }
@@ -208,15 +211,21 @@ pub struct MessageAccount {
     pub account: MessageAccountInfo,
     pub slot: Slot,
     pub is_startup: bool,
+    // startup account update has no bank id.
+    pub bank_id: Option<BankId>,
     pub created_at: Timestamp,
 }
 
 impl MessageAccount {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool) -> Self {
+    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool, bank_id: Option<BankId>) -> Self {
+        if is_startup {
+            assert!(bank_id.is_none(), "startup account update should have no bank id");
+        }
         Self {
             account: MessageAccountInfo::from_geyser(info),
             slot,
             is_startup,
+            bank_id,
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
@@ -317,14 +326,16 @@ pub struct MessageTransaction {
     pub transaction: MessageTransactionInfo,
     pub slot: u64,
     pub created_at: Timestamp,
+    pub bank_id: BankId,
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot, bank_id: BankId) -> Self {
         Self {
             transaction: MessageTransactionInfo::from_geyser(info),
             slot,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
 }
@@ -440,11 +451,12 @@ pub struct MessageEntry {
     pub hash: Hash,
     pub executed_transaction_count: u64,
     pub starting_transaction_index: u64,
+    pub bank_id: BankId,
     pub created_at: Timestamp,
 }
 
 impl MessageEntry {
-    pub fn from_geyser(info: &ReplicaEntryInfoV2) -> Self {
+    pub fn from_geyser(info: &ReplicaEntryInfoV2, bank_id: BankId) -> Self {
         Self {
             slot: info.slot,
             index: info.index,
@@ -456,6 +468,7 @@ impl MessageEntry {
                 .try_into()
                 .expect("failed convert usize to u64"),
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
 }
@@ -481,7 +494,7 @@ impl DerefMut for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>, bank_id: BankId) -> Self {
         Self {
             block_meta: SubscribeUpdateBlockMeta {
                 parent_slot: info.parent_slot,
@@ -496,6 +509,7 @@ impl MessageBlockMeta {
                 block_height: info.block_height.map(convert_to::create_block_height),
                 executed_transaction_count: info.executed_transaction_count,
                 entries_count: info.entry_count,
+                bank_id,
             },
             created_at: Timestamp::from(SystemTime::now()),
         }

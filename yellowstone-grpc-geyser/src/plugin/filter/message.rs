@@ -172,6 +172,7 @@ impl FilteredUpdate {
             hash: message.hash.to_bytes().to_vec(),
             executed_transaction_count: message.executed_transaction_count,
             starting_transaction_index: message.starting_transaction_index,
+            bank_id: message.bank_id,
         }
     }
 
@@ -184,17 +185,20 @@ impl FilteredUpdate {
                 )),
                 is_startup: msg.account.is_startup,
                 slot: msg.account.slot,
+                bank_id: msg.account.bank_id,
             }),
             FilteredUpdateOneof::Slot(msg) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: msg.slot,
                 parent: msg.parent,
                 status: msg.status as i32,
                 dead_error: msg.dead_error.clone(),
+                bank_id: msg.bank_id,
             }),
             FilteredUpdateOneof::Transaction(msg) => {
                 UpdateOneof::Transaction(SubscribeUpdateTransaction {
                     transaction: Some(Self::as_subscribe_update_transaction(&msg.transaction)),
                     slot: msg.slot,
+                    bank_id: msg.transaction.bank_id,
                 })
             }
             FilteredUpdateOneof::TransactionStatus(msg) => {
@@ -1324,6 +1328,7 @@ pub mod tests {
                             account: account.clone(),
                             slot,
                             is_startup,
+                            bank_id: Some(slot),
                             created_at: Timestamp::from(SystemTime::now()),
                         };
                         vec.push((msg, data_slice));
@@ -1344,6 +1349,7 @@ pub mod tests {
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 299888121,
             },
             MessageEntry {
                 slot: 299888121,
@@ -1353,6 +1359,7 @@ pub mod tests {
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 299888121
             },
         ]
         .into_iter()
@@ -1423,6 +1430,7 @@ pub mod tests {
                             },
                             slot: block.parent_slot + 1,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id: block.parent_slot + 1,
                         }
                     })
                     .map(Arc::new)
@@ -1445,6 +1453,7 @@ pub mod tests {
                         block_height: block.block_height.map(convert_to::create_block_height),
                         executed_transaction_count: transactions.len() as u64,
                         entries_count: entries.len() as u64,
+                        bank_id: slot
                     },
                     created_at: Timestamp::from(SystemTime::now()),
                 };
@@ -1463,6 +1472,7 @@ pub mod tests {
                             slot: block.parent_slot + 1,
                             is_startup: false,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id: Some(block.parent_slot + 1),
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1610,6 +1620,11 @@ pub mod tests {
                     SlotStatus::CreatedBank,
                     SlotStatus::Dead,
                 ] {
+                    let bank_id = if [SlotStatus::Completed, SlotStatus::FirstShredReceived, SlotStatus::Dead].contains(&status) {
+                        None
+                    } else {
+                        Some(slot)
+                    };
                     encode_decode_cmp(
                         &["123"],
                         FilteredUpdateOneof::slot(MessageSlot {
@@ -1618,6 +1633,7 @@ pub mod tests {
                             status,
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id
                         }),
                     )
                 }
@@ -1629,6 +1645,7 @@ pub mod tests {
                         status: SlotStatus::Dead,
                         dead_error: Some("123".to_owned()),
                         created_at: Timestamp::from(SystemTime::now()),
+                        bank_id: None,
                     }),
                 )
             }
@@ -1655,6 +1672,7 @@ pub mod tests {
                 },
                 slot: message_arc.slot,
                 created_at: message_arc.created_at,
+                bank_id: message_arc.bank_id,
             });
 
             // Create version without cache (fallback path)
@@ -1672,6 +1690,7 @@ pub mod tests {
                 },
                 slot: message_arc.slot,
                 created_at: message_arc.created_at,
+                bank_id: message_arc.bank_id,
             });
 
             // Pre-encode one of them

@@ -1405,7 +1405,8 @@ impl GrpcService {
                                 solana_commitment_config::CommitmentLevel::Finalized => SlotStatus::Finalized,
                             },
                             dead_error: None,
-                            created_at: Timestamp::from(SystemTime::now())
+                            created_at: Timestamp::from(SystemTime::now()),
+                            bank_id: None // TODO: we need to support bank id
                         }));
 
                         let slot_message_singleton_vec = Arc::new(vec![slot_message]);
@@ -1463,6 +1464,7 @@ impl GrpcService {
                                 },
                                 dead_error: None,
                                 created_at,
+                                bank_id: None // TODO: we need to support bank id
                             }));
                             replayed_messages.push(ReplayResponseMessageType::Single(slot_message));
                         }
@@ -2511,6 +2513,7 @@ mod tests {
             status: SlotStatus::Processed,
             dead_error: None,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: Some(slot),
         }))])
     }
 
@@ -2695,6 +2698,7 @@ mod tests {
             status: SlotStatus::Processed,
             dead_error: None,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: Some(100),
         }));
         broadcast.send(CommitmentLevel::Processed, Arc::new(vec![msg]));
 
@@ -2857,12 +2861,18 @@ mod tests {
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
+            let bank_id = if [SlotStatus::Completed, SlotStatus::Dead, SlotStatus::FirstShredReceived].contains(&status) {
+                None
+            } else {
+                Some(slot)
+            };
             Message::Slot(Arc::new(MessageSlot {
                 slot,
                 parent,
                 status,
                 dead_error: None,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id,
             }))
         }
 

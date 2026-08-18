@@ -360,11 +360,9 @@ impl DedupState {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        futures::{stream, StreamExt},
-        yellowstone_grpc_proto::prelude::{
-            subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot,
-        },
+        super::*, futures::{StreamExt, stream}, yellowstone_grpc_proto::{geyser::SlotStatus::{SlotCompleted, SlotDead, SlotFirstShredReceived}, prelude::{
+            SubscribeUpdatePing, SubscribeUpdateSlot, subscribe_update::UpdateOneof,
+        }},
     };
 
     struct TestStream<S> {
@@ -390,6 +388,11 @@ mod tests {
     }
 
     fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
+        let bank_id = if [SlotFirstShredReceived as i32, SlotCompleted as i32, SlotDead as i32].contains(&status) {
+            None
+        } else {
+            Some(slot)
+        };
         SubscribeUpdate {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -397,6 +400,7 @@ mod tests {
                 parent: None,
                 status,
                 dead_error: None,
+                bank_id,
             })),
             created_at: None,
         }
@@ -416,6 +420,7 @@ mod tests {
                     parent_blockhash: String::new(),
                     executed_transaction_count: 0,
                     entries_count: 0,
+                    bank_id: slot
                 },
             )),
             created_at: None,
@@ -436,6 +441,7 @@ mod tests {
                     parent_blockhash: String::new(),
                     executed_transaction_count: 0,
                     entries_count: 0,
+                    bank_id: slot,
                 },
             )),
             created_at: None,
@@ -459,6 +465,7 @@ mod tests {
                     }),
                     slot,
                     is_startup: false,
+                    bank_id: Some(slot)
                 },
             )),
             created_at: None,
