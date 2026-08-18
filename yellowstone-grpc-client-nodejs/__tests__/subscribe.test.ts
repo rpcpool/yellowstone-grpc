@@ -1,4 +1,4 @@
-import Client, { CommitmentLevel } from "../src";
+import Client, { CommitmentLevel, CompressedAccountFilterSet } from "../src";
 import type { SubscribeRequest, SubscribeUpdate } from "../src";
 
 const ACTIVE_ACCOUNT_PUBKEY = "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989";
@@ -26,6 +26,9 @@ describeLive("Client.subscribe", () => {
       );
       await client.connect();
 
+      const compressedAccounts = new CompressedAccountFilterSet(1);
+      compressedAccounts.insert(ACTIVE_ACCOUNT_PUBKEY);
+
       const request: SubscribeRequest = {
         accounts: {
           accountsClient: {
@@ -48,6 +51,8 @@ describeLive("Client.subscribe", () => {
             accountExclude: [],
             accountRequired: [],
           },
+          compressedTransactionsClient:
+            compressedAccounts.toTransactionFilter(),
         },
         transactionsStatus: {
           transactionsStatusClient: {
@@ -57,6 +62,8 @@ describeLive("Client.subscribe", () => {
             accountExclude: [],
             accountRequired: [],
           },
+          compressedTransactionsStatusClient:
+            compressedAccounts.toTransactionFilter(),
         },
         blocks: {
           blocksClient: {
@@ -89,7 +96,9 @@ describeLive("Client.subscribe", () => {
         account: false,
         slot: false,
         transaction: false,
+        compressedTransaction: false,
         transactionStatus: false,
+        compressedTransactionStatus: false,
         block: false,
         ping: false,
         pong: false,
@@ -128,8 +137,18 @@ describeLive("Client.subscribe", () => {
           const onData = (update: SubscribeUpdate) => {
             seen.account ||= update.account !== undefined;
             seen.slot ||= update.slot !== undefined;
-            seen.transaction ||= update.transaction !== undefined;
-            seen.transactionStatus ||= update.transactionStatus !== undefined;
+            seen.transaction ||=
+              update.transaction !== undefined &&
+              update.filters.includes("transactionsClient");
+            seen.compressedTransaction ||=
+              update.transaction !== undefined &&
+              update.filters.includes("compressedTransactionsClient");
+            seen.transactionStatus ||=
+              update.transactionStatus !== undefined &&
+              update.filters.includes("transactionsStatusClient");
+            seen.compressedTransactionStatus ||=
+              update.transactionStatus !== undefined &&
+              update.filters.includes("compressedTransactionsStatusClient");
             seen.block ||= update.block !== undefined;
             seen.ping ||= update.ping !== undefined;
             seen.pong ||= update.pong !== undefined;
