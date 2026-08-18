@@ -20,6 +20,7 @@ import {
   SubscribeRequest as SubscribeRequestMessage,
   SubscribeRequestFilterAccounts as SubscribeRequestFilterAccountsMessage,
   SubscribeRequestFilterBlocks as SubscribeRequestFilterBlocksMessage,
+  SubscribeRequestFilterTransactions as SubscribeRequestFilterTransactionsMessage,
   SubscribeReplayInfoRequest as SubscribeReplayInfoRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
   SubscribeUpdate as SubscribeUpdateMessage,
@@ -41,6 +42,7 @@ import type {
   SubscribeRequest,
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterBlocks,
+  SubscribeRequestFilterTransactions,
   SubscribeUpdateDeshred,
   SubscribeUpdate,
 } from "./grpc/geyser";
@@ -249,6 +251,12 @@ export class CompressedAccountFilterSet {
     );
   }
 
+  toTransactionFilter(): SubscribeRequestFilterTransactions {
+    return SubscribeRequestFilterTransactionsMessage.decode(
+      this._native.toTransactionFilter() as unknown as Uint8Array,
+    );
+  }
+
   insertIntoSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.accounts ??= {};
     request.accounts[name] = this.toAccountFilter();
@@ -257,6 +265,22 @@ export class CompressedAccountFilterSet {
   insertIntoBlockSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.blocks ??= {};
     request.blocks[name] = this.toBlockFilter();
+  }
+
+  insertIntoTransactionSubscribeRequest(
+    request: SubscribeRequest,
+    name: string,
+  ): void {
+    request.transactions ??= {};
+    request.transactions[name] = this.toTransactionFilter();
+  }
+
+  insertIntoTransactionStatusSubscribeRequest(
+    request: SubscribeRequest,
+    name: string,
+  ): void {
+    request.transactionsStatus ??= {};
+    request.transactionsStatus[name] = this.toTransactionFilter();
   }
 }
 
