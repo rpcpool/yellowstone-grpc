@@ -1,7 +1,7 @@
 import Client, { CommitmentLevel } from "../src";
 import type { SubscribeRequest, SubscribeUpdate } from "../src";
 
-const PING_THING_PUBKEY = "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989";
+const ACTIVE_ACCOUNT_PUBKEY = "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989";
 const SUBSCRIBE_TIMEOUT_MS = Number(
   process.env.SUBSCRIBE_ALL_UPDATES_TIMEOUT_MS ?? 60_000,
 );
@@ -29,8 +29,8 @@ describeLive("Client.subscribe", () => {
       const request: SubscribeRequest = {
         accounts: {
           accountsClient: {
-            account: [],
-            owner: [PING_THING_PUBKEY],
+            account: [ACTIVE_ACCOUNT_PUBKEY],
+            owner: [],
             filters: [],
           },
         },
@@ -44,7 +44,7 @@ describeLive("Client.subscribe", () => {
           transactionsClient: {
             vote: false,
             failed: false,
-            accountInclude: [PING_THING_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
           },
@@ -53,14 +53,14 @@ describeLive("Client.subscribe", () => {
           transactionsStatusClient: {
             vote: false,
             failed: false,
-            accountInclude: [PING_THING_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
           },
         },
         blocks: {
           blocksClient: {
-            accountInclude: [PING_THING_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             includeTransactions: true,
             includeAccounts: true,
             includeEntries: true,
