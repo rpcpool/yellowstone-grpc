@@ -8,9 +8,9 @@ use {
                 FilterAccountsDataSlice,
             },
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta,
-                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageDeshredTransaction,
+                MessageDeshredTransactionInfo, MessageEntry, MessageSlot, MessageTransaction,
+                MessageTransactionInfo,
             },
         },
     },
@@ -18,7 +18,6 @@ use {
         buf::{Buf, BufMut},
         Bytes,
     },
-    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -32,18 +31,15 @@ use {
     solana_signature::Signature,
     std::{
         ops::{Deref, DerefMut},
-        sync::{Arc, OnceLock},
+        sync::Arc,
         time::SystemTime,
     },
-    yellowstone_grpc_proto::{
-        geyser::{
-            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus,
-        },
-        solana::storage::confirmed_block,
+    yellowstone_grpc_proto::geyser::{
+        subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+        SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+        SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        SubscribeUpdateTransactionStatus,
     },
 };
 
@@ -257,81 +253,6 @@ impl FilteredUpdate {
             update_oneof: Some(message),
             created_at: Some(self.created_at),
         }
-    }
-
-    pub fn from_subscribe_update(update: SubscribeUpdate) -> Result<Self, &'static str> {
-        let created_at = update.created_at.ok_or("create_at should be defined")?;
-
-        let message = match update.update_oneof.ok_or("update should be defined")? {
-            UpdateOneof::Account(msg) => {
-                let account = MessageAccount::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Account(FilteredUpdateAccount {
-                    account: Arc::new(account),
-                    data_slice: FilterAccountsDataSlice::default(),
-                })
-            }
-            UpdateOneof::Slot(msg) => {
-                let slot = MessageSlot::from_update_oneof(&msg, created_at)?;
-                FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
-            }
-            UpdateOneof::Transaction(msg) => {
-                let tx = MessageTransaction::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
-                    slot: tx.slot,
-                    transaction: Arc::new(tx),
-                })
-            }
-            UpdateOneof::TransactionStatus(msg) => {
-                FilteredUpdateOneof::TransactionStatus(FilteredUpdateTransactionStatus {
-                    transaction: Arc::new(MessageTransaction {
-                        transaction: MessageTransactionInfo {
-                            signature: Signature::try_from(msg.signature.as_slice())
-                                .map_err(|_| "invalid signature length")?,
-                            is_vote: msg.is_vote,
-                            transaction: confirmed_block::Transaction::default(),
-                            meta: confirmed_block::TransactionStatusMeta {
-                                err: msg.err,
-                                ..confirmed_block::TransactionStatusMeta::default()
-                            },
-                            index: msg.index as usize,
-                            account_keys: FoldHashSet::new(),
-                            pre_encoded: OnceLock::new(),
-                            token_owners_all: OnceLock::new(),
-                            token_owners_changed: OnceLock::new(),
-                        },
-                        created_at,
-                        slot: msg.slot,
-                    }),
-                })
-            }
-            UpdateOneof::Block(msg) => {
-                let block = MessageBlock::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
-                    meta: block.meta,
-                    transactions: block.transactions,
-                    updated_account_count: block.updated_account_count,
-                    accounts: block.accounts,
-                    accounts_data_slice: FilterAccountsDataSlice::default(),
-                    entries: block.entries,
-                }))
-            }
-            UpdateOneof::Ping(_) => FilteredUpdateOneof::Ping,
-            UpdateOneof::Pong(msg) => FilteredUpdateOneof::Pong(msg),
-            UpdateOneof::BlockMeta(msg) => {
-                let block_meta = MessageBlockMeta::from_update_oneof(msg, created_at);
-                FilteredUpdateOneof::BlockMeta(Arc::new(block_meta))
-            }
-            UpdateOneof::Entry(msg) => {
-                let entry = MessageEntry::from_update_oneof(&msg, created_at)?;
-                FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
-            }
-        };
-
-        Ok(Self {
-            filters: update.filters.into_iter().map(FilterName::new).collect(),
-            message,
-            created_at,
-        })
     }
 }
 
@@ -1583,11 +1504,6 @@ pub mod tests {
         assert_eq!(
             SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
             update
-        );
-        assert_eq!(
-            FilteredUpdate::from_subscribe_update(update.clone())
-                .map(|msg| msg.as_subscribe_update()),
-            Ok(update)
         );
     }
 
