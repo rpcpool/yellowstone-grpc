@@ -557,7 +557,15 @@ impl FilterBitSet {
     }
 
     fn insert(&mut self, index: usize) {
-        self.0[index / Self::BITS_PER_WORD] |= 1 << (index % Self::BITS_PER_WORD);
+        if let Some(word) = self.0.get_mut(index / Self::BITS_PER_WORD) {
+            *word |= 1 << (index % Self::BITS_PER_WORD);
+        } else {
+            panic!(
+                "Index {} out of bounds for FilterBitSet with {} bits",
+                index,
+                self.0.len() * Self::BITS_PER_WORD
+            );
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -629,7 +637,7 @@ struct FilterAccountsIndex {
 impl FilterAccountsIndex {
     const MAX_BITSET_BYTES: usize = 512 * 1024 * 1024;
 
-    fn new(aggregates: &[FilterAccountAggregate]) -> Option<Self> {
+    fn try_init(aggregates: &[FilterAccountAggregate]) -> Option<Self> {
         if aggregates.len() <= 1 {
             return None;
         }
@@ -1109,7 +1117,7 @@ impl FilterAccountsStrategy {
         // bitset matching algorithm, capped at 512MB of usage. if the requested
         // filter goes above this, it falls back to one of the non-indexed
         // strategies below.
-        if let Some(index) = FilterAccountsIndex::new(&aggregates) {
+        if let Some(index) = FilterAccountsIndex::try_init(&aggregates) {
             return Self::Indexed(Arc::new(index));
         }
 
@@ -3932,7 +3940,7 @@ mod account_filter_regression_tests {
                     aggregate_for_index(index, account, other_account, owner, other_owner, &cuckoo)
                 })
                 .collect::<Vec<_>>();
-            let index = FilterAccountsIndex::new(&aggregates);
+            let index = FilterAccountsIndex::try_init(&aggregates);
             assert_eq!(index.is_some(), count > 1, "filter count {count}");
 
             for (message_index, message) in messages.iter().enumerate() {
@@ -3995,7 +4003,7 @@ mod account_filter_regression_tests {
         });
         aggregates[3].accounts_cuckoo = Some(Arc::clone(&cuckoo));
 
-        assert!(FilterAccountsIndex::new(&aggregates).is_none());
+        assert!(FilterAccountsIndex::try_init(&aggregates).is_none());
 
         let owner = Pubkey::new_from_array([22; 32]);
         let data = valid_token_data();
@@ -4031,7 +4039,7 @@ mod account_filter_regression_tests {
             "explicit".to_owned(),
             &[Pubkey::new_from_array([24; 32])],
         ));
-        assert!(FilterAccountsIndex::new(&aggregates).is_some());
+        assert!(FilterAccountsIndex::try_init(&aggregates).is_some());
     }
 
     #[test]
@@ -4046,7 +4054,7 @@ mod account_filter_regression_tests {
                 aggregate
             })
             .collect::<Vec<_>>();
-        let index = FilterAccountsIndex::new(&aggregates).expect("index builds");
+        let index = FilterAccountsIndex::try_init(&aggregates).expect("index builds");
         assert!(
             index.account_fallback.is_empty(),
             "no filter is account-unconstrained, so nothing may sit in the account fallback"
@@ -4063,7 +4071,7 @@ mod account_filter_regression_tests {
 
         let mut mixed = aggregates.clone();
         mixed.push(FilterAccountAggregate::new(FilterName::new("wildcard")));
-        let mixed_index = FilterAccountsIndex::new(&mixed).expect("index builds");
+        let mixed_index = FilterAccountsIndex::try_init(&mixed).expect("index builds");
         assert!(!mixed_index.account_fallback.is_empty());
         assert!(!mixed_index.owner_fallback.is_empty());
         assert_eq!(
@@ -4103,7 +4111,7 @@ mod account_filter_regression_tests {
                 <= FilterAccountsIndex::MAX_BITSET_BYTES
         );
         assert!(
-            FilterAccountsIndex::new(&under_budget).is_some(),
+            FilterAccountsIndex::try_init(&under_budget).is_some(),
             "{per_filter_under} pubkeys per filter is under MAX_BITSET_BYTES and must still index"
         );
 
@@ -4112,7 +4120,7 @@ mod account_filter_regression_tests {
             word_bytes * (AGGREGATES * per_filter_over + 2) > FilterAccountsIndex::MAX_BITSET_BYTES
         );
         assert!(
-            FilterAccountsIndex::new(&over_budget).is_none(),
+            FilterAccountsIndex::try_init(&over_budget).is_none(),
             "{per_filter_over} pubkeys per filter exceeds MAX_BITSET_BYTES and must fall back"
         );
 
@@ -4132,7 +4140,7 @@ mod account_filter_regression_tests {
 
         let owner = Pubkey::new_from_array([200; 32]);
         let hit = account_info(pool[0], owner, vec![0; 3], 100, false);
-        let indexed = FilterAccountsIndex::new(&under_budget).unwrap();
+        let indexed = FilterAccountsIndex::try_init(&under_budget).unwrap();
         assert_eq!(indexed.get_filters(&hit), linear_scan(&under_budget, &hit));
         assert_eq!(linear_scan(&over_budget, &hit).len(), AGGREGATES);
 
