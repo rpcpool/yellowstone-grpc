@@ -14,6 +14,7 @@ export declare class CompressedAccountFilterSet {
   toProto(): Buffer
   toAccountFilter(): Buffer
   toBlockFilter(): Buffer
+  toTransactionFilter(): Buffer
 }
 
 /**

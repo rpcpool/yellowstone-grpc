@@ -7,6 +7,7 @@ import Client, {
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
   SubscribeRequestFilterAccountsFilterLamports,
+  TokenAccountExpansionControlFlag,
   txDeshredEncode,
   txEncode,
   txErrDecode,
@@ -42,6 +43,9 @@ type CliArgs = {
   transactionsFailed?: boolean;
   transactionsSignature?: string;
   transactionsAccountInclude: string[];
+  transactionsTokenAccounts?: string;
+  transactionsCompressed: boolean;
+  transactionsCompressedCapacity?: number;
   transactionsAccountExclude: string[];
   transactionsAccountRequired: string[];
   transactionsParsed: boolean;
@@ -51,6 +55,9 @@ type CliArgs = {
   transactionsStatusFailed?: boolean;
   transactionsStatusSignature?: string;
   transactionsStatusAccountInclude: string[];
+  transactionsStatusTokenAccounts?: string;
+  transactionsStatusCompressed: boolean;
+  transactionsStatusCompressedCapacity?: number;
   transactionsStatusAccountExclude: string[];
   transactionsStatusAccountRequired: string[];
   entry: boolean;
@@ -108,16 +115,21 @@ async function main() {
       break;
 
     case "get-block-height":
-      console.log("response: " + inspect(await client.getBlockHeight(commitment)));
+      console.log(
+        "response: " + inspect(await client.getBlockHeight(commitment)),
+      );
       break;
 
     case "get-latest-blockhash":
-      console.log("response: " + inspect(await client.getLatestBlockhash(commitment)));
+      console.log(
+        "response: " + inspect(await client.getLatestBlockhash(commitment)),
+      );
       break;
 
     case "is-blockhash-valid":
       console.log(
-        "response: " + inspect(await client.isBlockhashValid(String(args.blockhash))),
+        "response: " +
+          inspect(await client.isBlockhashValid(String(args.blockhash))),
       );
       break;
 
@@ -184,6 +196,16 @@ function parsePair(value: unknown, separator: string, optionName: string) {
   ] as const;
 }
 
+function parseTokenAccountExpansion(
+  value: string | undefined,
+): TokenAccountExpansionControlFlag | undefined {
+  return value === "all"
+    ? TokenAccountExpansionControlFlag.ALL
+    : value === "balance-changed"
+      ? TokenAccountExpansionControlFlag.BALANCE_CHANGED
+      : undefined;
+}
+
 function buildCompressedAccountSet(
   pubkeys: unknown[] | undefined,
   maxCapacity: number | undefined,
@@ -207,6 +229,7 @@ function buildCompressedAccountSet(
 type BuiltSubscribeRequest = {
   request: SubscribeRequest;
   accountCompressedFilter?: CompressedAccountFilterSet;
+  transactionCompressedFilter?: CompressedAccountFilterSet;
 };
 
 function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
@@ -232,6 +255,16 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
     throw new Error("--blocks-compressed requires --blocks");
   }
 
+  if (args.transactionsCompressed && !args.transactions) {
+    throw new Error("--transactions-compressed requires --transactions");
+  }
+
+  if (args.transactionsStatusCompressed && !args.transactionsStatus) {
+    throw new Error(
+      "--transactions-status-compressed requires --transactions-status",
+    );
+  }
+
   if (args.accountsCompressed) {
     accountCompressedFilter = buildCompressedAccountSet(
       args.accountsAccount,
@@ -247,6 +280,29 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
         "--blocks-compressed",
       )
     : undefined;
+
+  const transactionCompressedFilter = args.transactionsCompressed
+    ? buildCompressedAccountSet(
+        args.transactionsAccountInclude,
+        args.transactionsCompressedCapacity,
+        "--transactions-compressed",
+      )
+    : undefined;
+
+  const transactionStatusCompressedFilter = args.transactionsStatusCompressed
+    ? buildCompressedAccountSet(
+        args.transactionsStatusAccountInclude,
+        args.transactionsStatusCompressedCapacity,
+        "--transactions-status-compressed",
+      )
+    : undefined;
+
+  const transactionTokenAccounts = parseTokenAccountExpansion(
+    args.transactionsTokenAccounts,
+  );
+  const transactionStatusTokenAccounts = parseTokenAccountExpansion(
+    args.transactionsStatusTokenAccounts,
+  );
 
   if (args.accounts) {
     const filters: SubscribeRequestFilterAccountsFilter[] = [];
@@ -307,7 +363,6 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
       filters,
       nonemptyTxnSignature: args.accountsNonemptytxnsignature,
     };
-
   }
 
   if (args.slots) {
@@ -318,23 +373,31 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
 
   if (args.transactions) {
     request.transactions.client = {
+      ...(transactionCompressedFilter?.toTransactionFilter() ?? {}),
       vote: args.transactionsVote,
       failed: args.transactionsFailed,
       signature: args.transactionsSignature,
-      accountInclude: args.transactionsAccountInclude,
+      accountInclude: transactionCompressedFilter
+        ? []
+        : args.transactionsAccountInclude,
       accountExclude: args.transactionsAccountExclude,
       accountRequired: args.transactionsAccountRequired,
+      tokenAccounts: transactionTokenAccounts,
     };
   }
 
   if (args.transactionsStatus) {
     request.transactionsStatus.client = {
+      ...(transactionStatusCompressedFilter?.toTransactionFilter() ?? {}),
       vote: args.transactionsStatusVote,
       failed: args.transactionsStatusFailed,
       signature: args.transactionsStatusSignature,
-      accountInclude: args.transactionsStatusAccountInclude,
+      accountInclude: transactionStatusCompressedFilter
+        ? []
+        : args.transactionsStatusAccountInclude,
       accountExclude: args.transactionsStatusAccountExclude,
       accountRequired: args.transactionsStatusAccountRequired,
+      tokenAccounts: transactionStatusTokenAccounts,
     };
   }
 
@@ -352,7 +415,6 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
       includeAccounts: args.blocksIncludeAccounts,
       includeEntries: args.blocksIncludeEntries,
     };
-
   }
 
   if (args.blocksMeta) {
@@ -373,12 +435,13 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
     request.ping = { id: args.ping };
   }
 
-  return { request, accountCompressedFilter };
+  return { request, accountCompressedFilter, transactionCompressedFilter };
 }
 
 async function subscribeCommand(client: Client, args: CliArgs) {
   // Create subscribe request based on provided arguments.
-  const { request, accountCompressedFilter } = buildSubscribeRequest(args);
+  const { request, accountCompressedFilter, transactionCompressedFilter } =
+    buildSubscribeRequest(args);
 
   // Subscribe for events. When auto-reconnect is enabled, pass the initial
   // request at stream creation so reconnects can resume that subscription.
@@ -402,6 +465,26 @@ async function subscribeCommand(client: Client, args: CliArgs) {
 
   // Handle updates
   stream.on("data", (data) => {
+    if (
+      transactionCompressedFilter &&
+      args.transactionsTokenAccounts === undefined &&
+      data.transaction
+    ) {
+      const transaction = data.transaction.transaction;
+      const accountKeys = [
+        ...(transaction?.transaction?.message?.accountKeys ?? []),
+        ...(transaction?.meta?.loadedWritableAddresses ?? []),
+        ...(transaction?.meta?.loadedReadonlyAddresses ?? []),
+      ];
+      if (
+        !accountKeys.some((pubkey) =>
+          transactionCompressedFilter.contains(pubkey),
+        )
+      ) {
+        return;
+      }
+    }
+
     if (
       data.transaction &&
       (args.transactionsParsed || args.transactionsDecodeErr)
@@ -681,6 +764,22 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
           description: "filter included account in transactions",
           type: "array",
         },
+        "transactions-token-accounts": {
+          choices: ["all", "balance-changed"],
+          description:
+            "also match transaction filters against token-account owners",
+        },
+        "transactions-compressed": {
+          default: false,
+          description:
+            "send --transactions-account-include pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "transactions-compressed-capacity": {
+          description:
+            "max capacity for --transactions-compressed; defaults to number of --transactions-account-include values",
+          type: "number",
+        },
         "transactions-account-exclude": {
           default: [],
           description: "filter excluded account in transactions",
@@ -722,6 +821,22 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
           default: [],
           description: "filter included account in transactions",
           type: "array",
+        },
+        "transactions-status-token-accounts": {
+          choices: ["all", "balance-changed"],
+          description:
+            "also match transaction-status filters against token-account owners",
+        },
+        "transactions-status-compressed": {
+          default: false,
+          description:
+            "send --transactions-status-account-include pubkeys as a compressed account filter",
+          type: "boolean",
+        },
+        "transactions-status-compressed-capacity": {
+          description:
+            "max capacity for --transactions-status-compressed; defaults to number of --transactions-status-account-include values",
+          type: "number",
         },
         "transactions-status-account-exclude": {
           default: [],
