@@ -124,6 +124,18 @@ export interface JsChannelOptions {
   grpcMaxDecodingMessageSize?: number
   grpcMaxEncodingMessageSize?: number
   grpcDefaultCompressionAlgorithm?: JsCompressionAlgorithm
+  /**
+   * Capacity, in updates, of the per-subscription worker -> JS channel.
+   *
+   * Bounded so that a JS consumer slower than the stream backpressures the
+   * server: once the channel is full the worker stops polling the gRPC
+   * stream, tonic stops reading the socket and the h2 receive window
+   * closes. An unbounded channel instead accumulates the surplus in native
+   * memory, invisible to the V8 heap, until the process is killed.
+   *
+   * `0` selects an effectively unbounded capacity (the previous behavior).
+   */
+  grpcSubscribeReadableChannelCapacity?: number
   grpcSetXRequestSnapshot?: boolean
   grpcHttp2AdaptiveWindow?: boolean
   grpcKeepAliveWhileIdle?: boolean

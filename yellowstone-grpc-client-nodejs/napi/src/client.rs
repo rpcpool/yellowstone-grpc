@@ -46,6 +46,30 @@ where
   })
 }
 
+/// Resolves `grpc_subscribe_readable_channel_capacity` following the same
+/// convention as the other channel options: the `JsChannelOptions::default()`
+/// value applies unless the caller set the field explicitly. An explicit `0`
+/// selects a capacity so large it is unbounded in practice, restoring the
+/// previous behavior without a separate flag.
+fn resolve_subscribe_readable_channel_capacity(
+  channel_options: Option<&JsChannelOptions>,
+) -> usize {
+  /// One update is tens of KB, so this is tens of GB of buffering: never
+  /// reachable in practice, which is what makes it a faithful stand-in for
+  /// "unbounded" while keeping the channel type uniform.
+  const EFFECTIVELY_UNBOUNDED: usize = 1 << 20;
+
+  let capacity = channel_options
+    .and_then(|options| options.grpc_subscribe_readable_channel_capacity)
+    .or(JsChannelOptions::default().grpc_subscribe_readable_channel_capacity)
+    .unwrap_or(1024);
+  if capacity == 0 {
+    EFFECTIVELY_UNBOUNDED
+  } else {
+    capacity as usize
+  }
+}
+
 /// Main client struct exposed to JavaScript via NAPI.
 ///
 /// The client maintains a persistent gRPC connection that is created once
@@ -53,6 +77,9 @@ where
 #[napi]
 pub struct GrpcClient {
   pub(crate) client: GeyserGrpcClient,
+  /// Resolved `grpc_subscribe_readable_channel_capacity`; consumed by
+  /// `DuplexStream::subscribe` / `DuplexStreamDeshred::subscribe`.
+  pub(crate) subscribe_readable_channel_capacity: usize,
 }
 
 #[napi]
@@ -75,6 +102,9 @@ impl GrpcClient {
   ) -> napi::Result<Self> {
     init_crypto_provider();
 
+    let subscribe_readable_channel_capacity =
+      resolve_subscribe_readable_channel_capacity(channel_options.as_ref());
+
     // Build the client with the provided configuration
     let builder =
       utils::get_client_builder(endpoint, x_token, channel_options, reconnect_config).await?;
@@ -88,7 +118,10 @@ impl GrpcClient {
       )
     })?;
 
-    Ok(Self { client })
+    Ok(Self {
+      client,
+      subscribe_readable_channel_capacity,
+    })
   }
 
   #[napi]
@@ -325,5 +358,50 @@ impl GrpcClient {
     env: &'env napi::Env,
   ) -> napi::Result<PromiseRaw<'env, crate::DuplexStreamDeshred>> {
     crate::DuplexStreamDeshred::subscribe(env, self)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::resolve_subscribe_readable_channel_capacity;
+  use crate::bindings::JsChannelOptions;
+
+  fn options_with_capacity(capacity: Option<u32>) -> JsChannelOptions {
+    JsChannelOptions {
+      grpc_subscribe_readable_channel_capacity: capacity,
+      ..JsChannelOptions::default()
+    }
+  }
+
+  #[test]
+  fn capacity_defaults_when_options_are_omitted() {
+    assert_eq!(resolve_subscribe_readable_channel_capacity(None), 1024);
+  }
+
+  #[test]
+  fn capacity_defaults_when_field_is_unset() {
+    let options = options_with_capacity(None);
+    assert_eq!(
+      resolve_subscribe_readable_channel_capacity(Some(&options)),
+      1024
+    );
+  }
+
+  #[test]
+  fn capacity_honours_an_explicit_value() {
+    let options = options_with_capacity(Some(64));
+    assert_eq!(
+      resolve_subscribe_readable_channel_capacity(Some(&options)),
+      64
+    );
+  }
+
+  #[test]
+  fn capacity_zero_is_effectively_unbounded() {
+    let options = options_with_capacity(Some(0));
+    assert_eq!(
+      resolve_subscribe_readable_channel_capacity(Some(&options)),
+      1 << 20
+    );
   }
 }
