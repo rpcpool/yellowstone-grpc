@@ -38,6 +38,16 @@ pub struct JsChannelOptions {
   pub grpc_max_decoding_message_size: Option<u32>,
   pub grpc_max_encoding_message_size: Option<u32>,
   pub grpc_default_compression_algorithm: Option<JsCompressionAlgorithm>,
+  /// Capacity, in updates, of the per-subscription worker -> JS channel.
+  ///
+  /// Bounded so that a JS consumer slower than the stream backpressures the
+  /// server: once the channel is full the worker stops polling the gRPC
+  /// stream, tonic stops reading the socket and the h2 receive window
+  /// closes. An unbounded channel instead accumulates the surplus in native
+  /// memory, invisible to the V8 heap, until the process is killed.
+  ///
+  /// `0` selects an effectively unbounded capacity (the previous behavior).
+  pub grpc_subscribe_readable_channel_capacity: Option<u32>,
   //--------------------
   // Flags.
   //--------------------
@@ -86,6 +96,7 @@ impl Default for JsChannelOptions {
   ///   grpc_initial_stream_window_size: Some(4 * 1024 * 1024),     // 4MB
   ///   grpc_max_decoding_message_size: Some(1 * 1024 * 1024 * 1024), // 1GB
   ///   grpc_max_encoding_message_size: Some(32 * 1024 * 1024),     // 32MB
+  ///   grpc_subscribe_readable_channel_capacity: Some(1024),        // updates
   ///   grpc_http2_adaptive_window: Some(true),
   ///   grpc_tcp_nodelay: Some(true),
   ///   grpc_keep_alive_while_idle: None,
@@ -105,6 +116,7 @@ impl Default for JsChannelOptions {
       grpc_initial_stream_window_size: Some(4 * 1024 * 1024),     // 4MB
       grpc_max_decoding_message_size: Some(1024 * 1024 * 1024),   // 1GB
       grpc_max_encoding_message_size: Some(32 * 1024 * 1024),     // 32MB
+      grpc_subscribe_readable_channel_capacity: Some(1024),       // updates
       grpc_http2_adaptive_window: Some(true),
       grpc_tcp_nodelay: Some(true),
       grpc_keep_alive_while_idle: None,

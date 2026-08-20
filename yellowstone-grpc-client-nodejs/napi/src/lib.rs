@@ -25,7 +25,7 @@ use std::sync::{
   Arc, Mutex as StdMutex, Once,
 };
 use tokio::sync::{
-  mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+  mpsc::{channel, unbounded_channel, Receiver, UnboundedSender},
   Mutex,
 };
 use yellowstone_grpc_proto::prelude::*;
@@ -111,7 +111,7 @@ fn strip_autoreconnect_filter(update: &mut SubscribeUpdate) -> bool {
 struct DuplexStream {
   /// Read side consumed by `read()`. Each protobuf payload is delivered exactly once.
   #[allow(dead_code)]
-  readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
+  readable: Arc<Mutex<Receiver<Vec<u8>>>>,
   /// Write side used by `write_raw()`. Requests are forwarded to gRPC task.
   ///
   /// The mutex protects a close-state transition, not sender sharing:
@@ -155,6 +155,7 @@ impl DuplexStream {
       None => None,
     };
     let mut client = grpc_client.client.clone();
+    let readable_channel_capacity = grpc_client.subscribe_readable_channel_capacity;
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // reject the Promise and bubble to TypeScript callers.
@@ -174,8 +175,7 @@ impl DuplexStream {
             })?
         };
 
-        // TODO : Fine tune unbounded channels.
-        let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+        let (readable_tx, readable_rx) = channel::<Vec<u8>>(readable_channel_capacity);
         let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeRequest>();
         let writable = Arc::new(StdMutex::new(Some(writable_tx)));
         let terminal_error = Arc::new(StdMutex::new(None));
@@ -189,6 +189,13 @@ impl DuplexStream {
         // - For non-graceful failures, captures terminal error and exits.
         // - Dropping `readable_tx` on exit closes JS read channel.
         tokio::spawn(async move {
+          // Send capacity is reserved BEFORE the gRPC stream is polled, and
+          // `stream_rx` is polled only while a permit is held. That is what
+          // carries backpressure to the server: holding no permit leaves the
+          // socket unread, so tonic stops draining it and h2 flow control
+          // closes the receive window. Writes are serviced in either state,
+          // so a subscription update is never starved while backpressured.
+          let mut permit = None;
           loop {
             tokio::select! {
               // 1. SubscribeRequest is received from self.write_raw().
@@ -218,9 +225,17 @@ impl DuplexStream {
                 }
               },
 
+              reserved = readable_tx.reserve(), if permit.is_none() => {
+                match reserved {
+                  Ok(reserved) => permit = Some(reserved),
+                  // JS reader side disappeared; no point continuing the worker.
+                  Err(_) => break,
+                }
+              },
+
               // 1. SubscribeUpdate is received from Geyser client's receiver.
               // 2. SubscribeUpdate is propagated to self.read() for NodeJS consumption.
-              maybe_update_result = stream_rx.next() => {
+              maybe_update_result = stream_rx.next(), if permit.is_some() => {
                 match maybe_update_result {
                   Some(Ok(mut update)) => {
                     let stripped = strip_autoreconnect_filter(&mut update);
@@ -228,12 +243,11 @@ impl DuplexStream {
                       continue;
                     }
 
-                    let update_bytes = update.encode_to_vec();
-
-                    // JS reader side disappeared; no point continuing the worker.
-                    if readable_tx.send(update_bytes).is_err() {
-                      break;
-                    }
+                    // Capacity is already reserved, so this neither blocks nor fails.
+                    permit
+                      .take()
+                      .expect("branch is only polled while a permit is held")
+                      .send(update.encode_to_vec());
                   }
                   Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
@@ -359,7 +373,7 @@ impl DuplexStream {
   }
 
   async fn recv_update_or_error(
-    readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
+    readable: Arc<Mutex<Receiver<Vec<u8>>>>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<Vec<u8>>> {
     match readable.lock().await.recv().await {
@@ -387,7 +401,7 @@ impl DuplexStream {
 #[napi]
 struct DuplexStreamDeshred {
   /// Read side consumed by `read()`. Each protobuf payload is delivered exactly once.
-  readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
+  readable: Arc<Mutex<Receiver<Vec<u8>>>>,
   /// Write side used by `write_raw()`. Requests are forwarded to gRPC task.
   writable: Arc<StdMutex<Option<UnboundedSender<SubscribeDeshredRequest>>>>,
   /// Terminal worker error captured from gRPC send/recv failures.
@@ -405,6 +419,7 @@ impl DuplexStreamDeshred {
     grpc_client: &GrpcClient,
   ) -> Result<PromiseRaw<'env, Self>> {
     let mut client = grpc_client.client.clone();
+    let readable_channel_capacity = grpc_client.subscribe_readable_channel_capacity;
 
     // Open the gRPC stream before returning to JS so connection/protocol errors
     // (e.g. UNIMPLEMENTED) reject the Promise and bubble to TypeScript callers.
@@ -421,7 +436,7 @@ impl DuplexStreamDeshred {
           })?
         };
 
-        let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+        let (readable_tx, readable_rx) = channel::<Vec<u8>>(readable_channel_capacity);
         let (writable_tx, mut writable_rx) = unbounded_channel::<SubscribeDeshredRequest>();
         let writable = Arc::new(StdMutex::new(Some(writable_tx)));
         let terminal_error = Arc::new(StdMutex::new(None));
@@ -433,6 +448,8 @@ impl DuplexStreamDeshred {
         // propagate first non-graceful gRPC error through `terminal_error`,
         // then close channel so JS `read()` can map it to a rejected promise.
         tokio::spawn(async move {
+          // Permit-gated for the same reason as `DuplexStream::subscribe`.
+          let mut permit = None;
           loop {
             tokio::select! {
               req_option = writable_rx.recv() => {
@@ -456,12 +473,20 @@ impl DuplexStreamDeshred {
                   break;
                 }
               },
-              maybe_update_result = stream_rx.next() => {
+              reserved = readable_tx.reserve(), if permit.is_none() => {
+                match reserved {
+                  Ok(reserved) => permit = Some(reserved),
+                  Err(_) => break,
+                }
+              },
+
+              maybe_update_result = stream_rx.next(), if permit.is_some() => {
                 match maybe_update_result {
                   Some(Ok(update)) => {
-                    if readable_tx.send(update.encode_to_vec()).is_err() {
-                      break;
-                    }
+                    permit
+                      .take()
+                      .expect("branch is only polled while a permit is held")
+                      .send(update.encode_to_vec());
                   }
                   Some(Err(error)) => {
                     if is_closing_worker.load(Ordering::Acquire) {
@@ -580,7 +605,7 @@ impl DuplexStreamDeshred {
   }
 
   async fn recv_update_or_error(
-    readable: Arc<Mutex<UnboundedReceiver<Vec<u8>>>>,
+    readable: Arc<Mutex<Receiver<Vec<u8>>>>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<Vec<u8>>> {
     match readable.lock().await.recv().await {
@@ -611,7 +636,13 @@ mod tests {
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex as StdMutex,
   };
-  use tokio::sync::mpsc::unbounded_channel;
+  use tokio::sync::mpsc::{channel, unbounded_channel};
+
+  /// Capacity for hand-built readable channels in tests: large enough that
+  /// no fixture blocks on send. The bounded-channel semantics themselves are
+  /// exercised through `resolve_subscribe_readable_channel_capacity` and the
+  /// worker-loop tests.
+  const TEST_CHANNEL_CAPACITY: usize = 32;
   use tokio::sync::Mutex;
   use tokio::time::{timeout, Duration};
   use yellowstone_grpc_proto::geyser::{
@@ -735,7 +766,7 @@ mod tests {
     DuplexStream,
     tokio::sync::mpsc::UnboundedReceiver<SubscribeRequest>,
   ) {
-    let (_readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (_readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     let (writable_tx, writable_rx) = unbounded_channel::<SubscribeRequest>();
 
     (
@@ -753,7 +784,7 @@ mod tests {
     DuplexStreamDeshred,
     tokio::sync::mpsc::UnboundedReceiver<SubscribeDeshredRequest>,
   ) {
-    let (_readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (_readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     let (writable_tx, writable_rx) = unbounded_channel::<SubscribeDeshredRequest>();
 
     (
@@ -1181,7 +1212,7 @@ mod tests {
 
   #[tokio::test]
   async fn subscribe_read_returns_none_when_channel_closed_without_terminal_error() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
@@ -1195,7 +1226,7 @@ mod tests {
 
   #[tokio::test]
   async fn subscribe_read_returns_terminal_error_when_channel_closed_after_worker_failure() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(Some(terminal_error_with_cause(
@@ -1221,7 +1252,7 @@ mod tests {
 
   #[tokio::test]
   async fn subscribe_read_returns_terminal_error_when_terminal_error_lock_is_poisoned() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
@@ -1533,7 +1564,7 @@ mod tests {
 
   #[tokio::test]
   async fn deshred_read_returns_none_when_channel_closed_without_terminal_error() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
@@ -1547,7 +1578,7 @@ mod tests {
 
   #[tokio::test]
   async fn deshred_read_returns_terminal_error_when_channel_closed_after_worker_failure() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(Some(terminal_error_with_cause(
@@ -1573,7 +1604,7 @@ mod tests {
 
   #[tokio::test]
   async fn deshred_read_returns_terminal_error_when_terminal_error_lock_is_poisoned() {
-    let (readable_tx, readable_rx) = unbounded_channel::<Vec<u8>>();
+    let (readable_tx, readable_rx) = channel::<Vec<u8>>(TEST_CHANNEL_CAPACITY);
     drop(readable_tx);
     let readable = Arc::new(Mutex::new(readable_rx));
     let terminal_error = Arc::new(StdMutex::new(None));
