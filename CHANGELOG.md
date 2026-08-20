@@ -10,6 +10,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-19
+
+- yellowstone-grpc-client-nodejs-6.0.0
+
+### Features
+
+- added support for compressed transaction filters.
+- added support for token owner matching.
+
+### Breaking
+
+- nodejs: `6.0.0` bumps it's dependencies in package.json.
+
+
 ## 2026-08-17
 
 - yellowstone-grpc-geyser 15.1.2
