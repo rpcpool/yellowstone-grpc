@@ -16,26 +16,17 @@ use {
     },
 };
 
-/// Process exit codes. `2` is deliberately unused: clap returns it for usage
-/// errors, so callers can tell a bad invocation from a real verdict.
+// 2 is reserved: clap uses it for usage errors.
 mod exit_code {
-    /// Scenarios passed, or the target version matched.
     pub const OK: u8 = 0;
-    /// A scenario failed, or the target reported a different version.
     pub const FAILED: u8 = 1;
-    /// The target version could not be determined, so nothing was verified.
     pub const CANNOT_VERIFY: u8 = 3;
 }
 
-/// Build metadata for this `yellowstone-e2e` binary, embedded by `build.rs`.
 mod build_info {
-    /// Crate version (e.g. `0.1.0`).
     pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-    /// `git describe` of the source tree: tag + commit sha this was built from.
     pub const GIT: &str = env!("GIT_VERSION");
-    /// Build timestamp (RFC 3339).
     pub const BUILD_TS: &str = env!("VERGEN_BUILD_TIMESTAMP");
-    /// rustc version used to build.
     pub const RUSTC: &str = env!("VERGEN_RUSTC_SEMVER");
 }
 
@@ -85,16 +76,10 @@ enum Commands {
         #[arg(value_enum)]
         scenario: Scenario,
     },
-    /// Verify the plugin version the target endpoint reports, and nothing else.
-    ///
-    /// Exits 0 when it matches (or, with no EXPECTED given, when the version
-    /// could be read), 1 on a mismatch, and 3 when the version could not be
-    /// determined at all — so a caller can tell "wrong version" from
-    /// "could not check".
+    /// Verify the plugin version the target reports. Exits 0 on match, 1 on
+    /// mismatch, 3 if the version could not be determined.
     VerifyVersion {
-        /// Version the target is expected to report. Matched against the
-        /// `GetVersion` semver (`version`) or `git` field; a leading `v` is
-        /// ignored and a git prefix is accepted.
+        /// Version the target should report (semver, or a git describe prefix).
         expected: Option<String>,
     },
 }
@@ -308,7 +293,6 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         x_token,
     };
 
-    // Record what is under test: this binary's build, and the target endpoint.
     println!(
         "yellowstone-e2e version={} git={} built={} rustc={}",
         build_info::VERSION,
@@ -318,8 +302,6 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     );
     println!("target endpoint: {}", run_config.endpoint);
 
-    // `verify-version` checks the target version and nothing else, reporting the
-    // verdict through the exit code so a caller can gate on it.
     if let Commands::VerifyVersion { expected } = &cli.command {
         let target = match fetch_target_version(&run_config).await {
             Ok(target) => target,
@@ -347,8 +329,6 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         };
     }
 
-    // For scenario runs the version is recorded, not asserted -- use
-    // `verify-version` to gate on it.
     match fetch_target_version(&run_config).await {
         Ok(target) => println!(
             "target plugin version: version={} git={} proto={} solana={}",

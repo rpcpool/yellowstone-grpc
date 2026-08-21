@@ -103,24 +103,15 @@ async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
 /// Version reported by the target endpoint via the `GetVersion` RPC.
 #[derive(Debug, Clone)]
 pub struct TargetVersion {
-    /// Package semver as reported by the target (`.version.version`).
     pub version: String,
-    /// Git describe as reported by the target (`.version.git`).
     pub git: String,
-    /// Proto version reported by the target (`.version.proto`).
     pub proto: String,
-    /// Solana/agave SDK version reported by the target (`.version.solana`).
     pub solana: String,
-    /// Raw JSON string returned by `GetVersion`.
     pub raw: String,
 }
 
 impl TargetVersion {
-    /// Asserts the target reports `expected`.
-    ///
-    /// `expected` is matched (after stripping a leading `v`) against either the
-    /// semver `version` field (exact) or the `git` field (exact, or as a prefix
-    /// so a short commit / `git describe` prefix matches a longer value).
+    /// Matches `version` exactly, or `git` exactly or by prefix; a leading `v` is ignored.
     pub fn assert_matches(&self, expected: &str) -> Result<()> {
         let needle = expected.trim().trim_start_matches('v');
         let version_field = self.version.trim_start_matches('v');
@@ -138,7 +129,6 @@ impl TargetVersion {
     }
 }
 
-/// Connects to the target and fetches its reported version via the `GetVersion` RPC.
 pub async fn fetch_target_version(config: &RunConfig) -> Result<TargetVersion> {
     let mut client = new_client(config).await?;
     let response = client
