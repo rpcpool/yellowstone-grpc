@@ -164,13 +164,6 @@ pub async fn fetch_target_version(config: &RunConfig) -> Result<TargetVersion> {
     })
 }
 
-/// Fetches the target version and asserts it matches `expected`.
-pub async fn verify_target_version(config: &RunConfig, expected: &str) -> Result<TargetVersion> {
-    let target = fetch_target_version(config).await?;
-    target.assert_matches(expected)?;
-    Ok(target)
-}
-
 /// Subscribes to account updates and verifies only SysvarClock updates are returned.
 #[test_helper(name = "sysvar-account")]
 pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfig) -> Result<()> {

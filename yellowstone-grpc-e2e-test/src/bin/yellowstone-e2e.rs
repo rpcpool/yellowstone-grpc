@@ -16,6 +16,17 @@ use {
     },
 };
 
+/// Process exit codes. `2` is deliberately unused: clap returns it for usage
+/// errors, so callers can tell a bad invocation from a real verdict.
+mod exit_code {
+    /// Scenarios passed, or the target version matched.
+    pub const OK: u8 = 0;
+    /// A scenario failed, or the target reported a different version.
+    pub const FAILED: u8 = 1;
+    /// The target version could not be determined, so nothing was verified.
+    pub const CANNOT_VERIFY: u8 = 3;
+}
+
 /// Build metadata for this `yellowstone-e2e` binary, embedded by `build.rs`.
 mod build_info {
     /// Crate version (e.g. `0.1.0`).
@@ -74,6 +85,18 @@ enum Commands {
         #[arg(value_enum)]
         scenario: Scenario,
     },
+    /// Verify the plugin version the target endpoint reports, and nothing else.
+    ///
+    /// Exits 0 when it matches (or, with no EXPECTED given, when the version
+    /// could be read), 1 on a mismatch, and 3 when the version could not be
+    /// determined at all — so a caller can tell "wrong version" from
+    /// "could not check".
+    VerifyVersion {
+        /// Version the target is expected to report. Matched against the
+        /// `GetVersion` semver (`version`) or `git` field; a leading `v` is
+        /// ignored and a git prefix is accepted.
+        expected: Option<String>,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -94,12 +117,6 @@ struct Cli {
     /// x-token override. Takes precedence over dotenv and environment variables.
     #[arg(long)]
     x_token: Option<String>,
-
-    /// Assert the target reports this plugin version before running scenarios.
-    /// Matched against the `GetVersion` semver (`version`) or `git` field; a
-    /// leading `v` is ignored and a git prefix is accepted. Mismatch exits 1.
-    #[arg(long, value_name = "VERSION")]
-    expect_version: Option<String>,
 
     /// Dotenv file path override. If set, only this file is loaded.
     #[arg(long, value_name = "PATH")]
@@ -196,23 +213,6 @@ fn resolve_dial(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<St
         .or_else(|| env::var("YELLOWSTONE_GRPC_DIAL").ok())
 }
 
-fn resolve_expect_version(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<String> {
-    if let Some(expect) = &cli.expect_version {
-        return Some(expect.clone());
-    }
-
-    dotenv_values
-        .get("TEST_EXPECT_VERSION")
-        .cloned()
-        .or_else(|| {
-            dotenv_values
-                .get("YELLOWSTONE_GRPC_EXPECT_VERSION")
-                .cloned()
-        })
-        .or_else(|| env::var("TEST_EXPECT_VERSION").ok())
-        .or_else(|| env::var("YELLOWSTONE_GRPC_EXPECT_VERSION").ok())
-}
-
 async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
     let mut result = Box::pin(async {
         match scenario {
@@ -277,7 +277,7 @@ async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli) -> Result<ExitCode> {
     init_log();
 
     if let Commands::List = cli.command {
@@ -294,7 +294,7 @@ async fn run(cli: Cli) -> Result<()> {
         for scenario in scenarios {
             println!("{} - {}", scenario.name(), scenario.description());
         }
-        return Ok(());
+        return Ok(ExitCode::from(exit_code::OK));
     }
 
     let dotenv_values = load_dotenv(cli.dotenv.as_ref());
@@ -318,32 +318,47 @@ async fn run(cli: Cli) -> Result<()> {
     );
     println!("target endpoint: {}", run_config.endpoint);
 
-    // Always report the plugin version the target is running (via GetVersion).
-    let expected = resolve_expect_version(&cli, &dotenv_values);
+    // `verify-version` checks the target version and nothing else, reporting the
+    // verdict through the exit code so a caller can gate on it.
+    if let Commands::VerifyVersion { expected } = &cli.command {
+        let target = match fetch_target_version(&run_config).await {
+            Ok(target) => target,
+            Err(err) => {
+                eprintln!("could not determine target plugin version (GetVersion): {err:#}");
+                return Ok(ExitCode::from(exit_code::CANNOT_VERIFY));
+            }
+        };
+        println!(
+            "target plugin version: version={} git={} proto={} solana={}",
+            target.version, target.git, target.proto, target.solana
+        );
+        return match expected {
+            Some(expected) => match target.assert_matches(expected) {
+                Ok(()) => {
+                    println!("✅ target version matches expected '{expected}'");
+                    Ok(ExitCode::from(exit_code::OK))
+                }
+                Err(err) => {
+                    eprintln!("❌ {err:#}");
+                    Ok(ExitCode::from(exit_code::FAILED))
+                }
+            },
+            None => Ok(ExitCode::from(exit_code::OK)),
+        };
+    }
+
+    // For scenario runs the version is recorded, not asserted -- use
+    // `verify-version` to gate on it.
     match fetch_target_version(&run_config).await {
-        Ok(target) => {
-            println!(
-                "target plugin version: version={} git={} proto={} solana={}",
-                target.version, target.git, target.proto, target.solana
-            );
-            if let Some(expected) = &expected {
-                target.assert_matches(expected).with_context(|| {
-                    format!("target version check failed (expected '{expected}')")
-                })?;
-                println!("✅ target version matches expected '{expected}'");
-            }
-        }
-        Err(err) => {
-            // A missing version is only fatal when an explicit expectation was set.
-            if expected.is_some() {
-                return Err(err.context("could not read target plugin version (GetVersion)"));
-            }
-            println!("⚠️ could not read target plugin version (GetVersion): {err:#}");
-        }
+        Ok(target) => println!(
+            "target plugin version: version={} git={} proto={} solana={}",
+            target.version, target.git, target.proto, target.solana
+        ),
+        Err(err) => println!("⚠️ could not read target plugin version (GetVersion): {err:#}"),
     }
 
     match &cli.command {
-        Commands::List => Ok(()),
+        Commands::List | Commands::VerifyVersion { .. } => Ok(ExitCode::from(exit_code::OK)),
         Commands::All => {
             let scenarios = [
                 Scenario::SysvarAccount,
@@ -364,11 +379,14 @@ async fn run(cli: Cli) -> Result<()> {
                     .await
                     .with_context(|| format!("scenario '{}' failed", scenario.name()))?;
             }
-            Ok(())
+            Ok(ExitCode::from(exit_code::OK))
         }
-        Commands::Run { scenario } => run_scenario(scenario, &run_config)
-            .await
-            .with_context(|| format!("scenario '{}' failed", scenario.name())),
+        Commands::Run { scenario } => {
+            run_scenario(scenario, &run_config)
+                .await
+                .with_context(|| format!("scenario '{}' failed", scenario.name()))?;
+            Ok(ExitCode::from(exit_code::OK))
+        }
     }
 }
 
@@ -377,10 +395,10 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match run(cli).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) => {
             eprintln!("{err:#}");
-            ExitCode::from(1)
+            ExitCode::from(exit_code::FAILED)
         }
     }
 }
