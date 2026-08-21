@@ -10,7 +10,7 @@ package geyser;
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
   rpc SubscribeDeshred(stream SubscribeDeshredRequest) returns (stream SubscribeUpdateDeshred) {}
-  rpc SubscribeContactInfo(SubscribeContactInfoRequest) returns (stream SubscribeUpdateContactInfo) {}
+  rpc SubscribeGossip(SubscribeGossipRequest) returns (stream SubscribeUpdateGossip) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -306,18 +306,23 @@ message SubscribeUpdateDeshred {
   google.protobuf.Timestamp created_at = 5;
 }
 
-message SubscribeContactInfoRequest {
+message SubscribeGossipRequest {
   optional SubscribeRequestPing ping = 1;
 }
 
-message SubscribeUpdateContactInfo {
+message SubscribeUpdateGossip {
   oneof update_oneof {
-    SubscribeUpdateContactInfoNode node = 1;
-    SubscribeUpdateContactInfoRemoved removed = 2;
-    SubscribeUpdatePing ping = 3;
-    SubscribeUpdatePong pong = 4;
+    GossipTopology full = 1;
+    SubscribeUpdateContactInfoNode node = 2;
+    SubscribeUpdateContactInfoRemoved removed = 3;
+    SubscribeUpdatePing ping = 4;
+    SubscribeUpdatePong pong = 5;
   }
-  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message GossipTopology {
+  repeated SubscribeUpdateContactInfoNode nodes = 1;
 }
 
 message SubscribeUpdateContactInfoNode {
