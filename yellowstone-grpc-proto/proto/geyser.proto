@@ -312,13 +312,12 @@ message SubscribeGossipRequest {
 
 message SubscribeUpdateGossip {
   oneof update_oneof {
-    GossipTopology full = 1;
-    SubscribeUpdateContactInfoNode node = 2;
-    SubscribeUpdateContactInfoRemoved removed = 3;
-    SubscribeUpdatePing ping = 4;
-    SubscribeUpdatePong pong = 5;
+    SubscribeUpdateContactInfoNode node = 1;
+    SubscribeUpdateContactInfoRemoved removed = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
   }
-  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message GossipTopology {

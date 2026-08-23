@@ -314,6 +314,8 @@ pub struct ConfigGrpc {
     /// Capacity of the finalized broadcast ring, defaults to `channel_capacity`
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub finalized_broadcast_capacity: Option<usize>,
+    #[serde(default = "ConfigGrpc::default_contact_info_channel_capacity")]
+    pub contact_info_channel_capacity: usize,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -632,6 +634,10 @@ impl ConfigGrpc {
 
     const fn default_replay_stored_slots() -> u64 {
         150
+    }
+
+    const fn default_contact_info_channel_capacity() -> usize {
+        100_000
     }
 }
 
