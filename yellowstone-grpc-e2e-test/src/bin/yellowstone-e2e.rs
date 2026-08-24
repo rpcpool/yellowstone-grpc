@@ -1,18 +1,13 @@
 use {
     anyhow::{Context, Result},
-    clap::{Parser, Subcommand, ValueEnum},
-    std::{collections::HashMap, env, io::Write, path::PathBuf, process::ExitCode},
-    tokio::time::{self, Duration, MissedTickBehavior},
-    yellowstone_grpc_intg_test::scenarios::{
-        any_commitment_level_of_subscription_should_return_all_possible_values,
-        fetch_target_version, init_log,
-        it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner,
-        it_should_support_replay, it_should_verifies_geyser_event_ordering_is_correct,
-        scenario_description, subscribe_should_filter_accounts,
-        subscribe_should_only_returns_sysvarclock_account,
-        subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated,
-        subscribe_should_receive_full_blocks, subscribe_should_receive_no_slot_duplicates,
-        test_subscribe_deshred, RunConfig,
+    clap::{Parser, Subcommand},
+    futures::stream::{self, StreamExt, TryStreamExt},
+    indicatif::{MultiProgress, ProgressBar, ProgressStyle},
+    std::{collections::HashMap, env, path::PathBuf, process::ExitCode, time::Duration},
+    yellowstone_grpc_intg_test::{
+        config::Config,
+        grpc::fetch_target_version,
+        scenarios::{init_log, RunConfig, Scenario},
     },
 };
 
@@ -30,51 +25,33 @@ mod build_info {
     pub const RUSTC: &str = env!("VERGEN_RUSTC_SEMVER");
 }
 
-#[derive(Debug, Clone, ValueEnum)]
-enum Scenario {
-    SysvarAccount,
-    SysvarBlock,
-    FullBlocks,
-    Replay,
-    Deshred,
-    AnyCommitment,
-    TokenOwnerBalanceChanged,
-    Ordering,
-    FilterAccounts,
-    SlotDuplicate,
-}
-
-impl Scenario {
-    const fn name(&self) -> &'static str {
-        match self {
-            Self::SysvarAccount => "sysvar-account",
-            Self::SysvarBlock => "sysvar-block",
-            Self::FullBlocks => "full-blocks",
-            Self::Replay => "replay",
-            Self::Deshred => "deshred",
-            Self::AnyCommitment => "any-commitment",
-            Self::TokenOwnerBalanceChanged => "token-owner-balance-changed",
-            Self::Ordering => "event-ordering",
-            Self::FilterAccounts => "filter-accounts",
-            Self::SlotDuplicate => "slot-duplicate",
-        }
-    }
-
-    fn description(&self) -> &'static str {
-        scenario_description(self.name()).unwrap_or("No description available")
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// List all available e2e subscriber scenarios.
-    List,
+    List {
+        /// Only show scenarios that carry this tag (repeatable; any match passes).
+        #[arg(long = "tags", value_name = "TAG")]
+        tags: Vec<String>,
+        /// Only show scenarios from this module (e.g. `default`, `extra`).
+        #[arg(long = "module", value_name = "MODULE", default_value = "default")]
+        module: String,
+    },
     /// Run all e2e subscriber scenarios.
-    All,
+    All {
+        /// Only run scenarios that carry this tag (repeatable; any match passes).
+        #[arg(long = "tags", value_name = "TAG")]
+        tags: Vec<String>,
+        /// Only run scenarios from this module (e.g. `default`, `extra`).
+        #[arg(long = "module", value_name = "MODULE", default_value = "default")]
+        module: String,
+        /// Number of scenarios to run concurrently. Defaults to the number of physical CPU cores.
+        #[arg(long = "num-threads", short = 'j', default_value_t = num_cpus::get_physical())]
+        num_threads: usize,
+    },
     /// Run one specific subscriber scenario.
     Run {
-        #[arg(value_enum)]
-        scenario: Scenario,
+        #[arg(value_name = "SCENARIO")]
+        scenario: String,
     },
     /// Verify the plugin version the target reports. Exits 0 on match, 1 on
     /// mismatch, 3 if the version could not be determined.
@@ -95,7 +72,7 @@ struct Cli {
     #[arg(long)]
     endpoint: Option<String>,
 
-    /// Dial string override (`host:port`). Takes precedence over dotenv and environment variables.
+    /// Dial string override. Takes precedence over dotenv and environment variables.
     #[arg(long)]
     dial: Option<String>,
 
@@ -106,6 +83,10 @@ struct Cli {
     /// Dotenv file path override. If set, only this file is loaded.
     #[arg(long, value_name = "PATH")]
     dotenv: Option<PathBuf>,
+
+    /// TOML config file for scenario-specific parameters.
+    #[arg(long, value_name = "PATH")]
+    config_file: Option<PathBuf>,
 }
 
 fn load_dotenv(dotenv_path_override: Option<&PathBuf>) -> HashMap<String, String> {
@@ -198,86 +179,100 @@ fn resolve_dial(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<St
         .or_else(|| env::var("YELLOWSTONE_GRPC_DIAL").ok())
 }
 
-async fn run_scenario(scenario: &Scenario, config: &RunConfig) -> Result<()> {
-    let mut result = Box::pin(async {
-        match scenario {
-            Scenario::SysvarAccount => {
-                subscribe_should_only_returns_sysvarclock_account(config).await
-            }
-            Scenario::SysvarBlock => {
-                subscribe_should_receive_block_where_sysvarclock1111_account_has_been_updated(
-                    config,
-                )
-                .await
-            }
-            Scenario::FullBlocks => subscribe_should_receive_full_blocks(config).await,
-            Scenario::Replay => it_should_support_replay(config).await,
-            Scenario::Deshred => test_subscribe_deshred(config).await,
-            Scenario::AnyCommitment => {
-                any_commitment_level_of_subscription_should_return_all_possible_values(config).await
-            }
-            Scenario::TokenOwnerBalanceChanged => {
-                it_should_subscribe_to_all_transaction_include_token_ata_to_an_owner(config).await
-            }
-            Scenario::Ordering => it_should_verifies_geyser_event_ordering_is_correct(config).await,
-            Scenario::FilterAccounts => subscribe_should_filter_accounts(config).await,
-            Scenario::SlotDuplicate => subscribe_should_receive_no_slot_duplicates(config).await,
-        }
-    });
-    let mut interval = time::interval(Duration::from_millis(120));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+fn matches_tags(scenario: &Scenario, tags: &[String]) -> bool {
+    tags.is_empty() || tags.iter().any(|t| scenario.tags.contains(&t.as_str()))
+}
 
-    let frames = ["|", "/", "-", "\\"];
-    let mut frame_index = 0usize;
-    let mut stdout = std::io::stdout();
+fn matches_module(scenario: &Scenario, module: &str) -> bool {
+    scenario.module == module
+        || scenario.module.ends_with(&format!("::{module}"))
+        || scenario.module.contains(&format!("::{module}::"))
+}
 
-    loop {
-        tokio::select! {
-            res = &mut result => {
-                write!(stdout, "\r\x1b[2K")?;
-                if res.is_ok() {
-                    writeln!(stdout, "✅ scenario '{}' passed", scenario.name())?;
-                } else {
-                    writeln!(
-                        stdout,
-                        "❌ scenario '{}' failed: {:#}",
-                        scenario.name(),
-                        res.as_ref().expect_err("error should be present on failure")
-                    )?;
-                }
-                stdout.flush()?;
-                return res;
-            }
-            _ = interval.tick() => {
-                write!(
-                    stdout,
-                    "\r{} running scenario '{}'...",
-                    frames[frame_index],
-                    scenario.name()
-                )?;
-                stdout.flush()?;
-                frame_index = (frame_index + 1) % frames.len();
-            }
-        }
-    }
+fn find_scenario(name: &str) -> Result<&'static Scenario> {
+    inventory::iter::<Scenario>
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| {
+            let available: Vec<_> = inventory::iter::<Scenario>
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            anyhow::anyhow!(
+                "unknown scenario '{}'; available: {}",
+                name,
+                available.join(", ")
+            )
+        })
+}
+
+async fn run_scenario(
+    scenario: &'static Scenario,
+    config: &RunConfig,
+    multi: &MultiProgress,
+) -> Result<()> {
+    let pb = multi.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} {msg}")
+            .expect("valid template")
+            .tick_strings(&["|", "/", "-", "\\"]),
+    );
+    pb.set_message(format!("running scenario '{}'...", scenario.name));
+    pb.enable_steady_tick(Duration::from_millis(120));
+
+    let res = (scenario.run)(config).await;
+
+    pb.disable_steady_tick();
+
+    let message = match &res {
+        Ok(()) => format!("✅ scenario '{}' passed", scenario.name),
+        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.name, err),
+    };
+    // Print the final line to the scrollback and drop this bar, so the still-running
+    // scenarios' spinners stay pinned as the trailing lines instead of being interleaved
+    // with finished ones sitting at their original position.
+    multi.println(&message).ok();
+    pb.finish_and_clear();
+
+    res
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
     init_log();
 
-    if let Commands::List = cli.command {
-        let scenarios = [
-            Scenario::SysvarAccount,
-            Scenario::SysvarBlock,
-            Scenario::FullBlocks,
-            Scenario::Replay,
-            Scenario::Deshred,
-            Scenario::AnyCommitment,
-            Scenario::TokenOwnerBalanceChanged,
-        ];
+    if let Commands::List {
+        ref tags,
+        ref module,
+    } = cli.command
+    {
+        let scenarios: Vec<&Scenario> = inventory::iter::<Scenario>
+            .into_iter()
+            .filter(|s| matches_tags(s, tags) && matches_module(s, module))
+            .collect();
+
+        if scenarios.is_empty() {
+            println!("No scenarios match the specified tags.");
+            return Ok(ExitCode::from(exit_code::OK));
+        }
+
+        let name_w = scenarios.iter().map(|s| s.name.len()).max().unwrap_or(4);
+        let tags_w = scenarios
+            .iter()
+            .map(|s| s.tags.join(", ").len())
+            .max()
+            .unwrap_or(4)
+            .max(4);
+
+        println!("{:<name_w$}  {:<tags_w$}  DESCRIPTION", "NAME", "TAGS",);
+        println!("{}", "─".repeat(name_w + 2 + tags_w + 2 + 40));
 
         for scenario in scenarios {
-            println!("{} - {}", scenario.name(), scenario.description());
+            println!(
+                "{:<name_w$}  {:<tags_w$}  {}",
+                scenario.name,
+                scenario.tags.join(", "),
+                scenario.description,
+            );
         }
         return Ok(ExitCode::from(exit_code::OK));
     }
@@ -287,10 +282,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     let endpoint = resolve_endpoint(&cli, &dotenv_values).map_err(|msg| anyhow::anyhow!(msg))?;
     let dial = resolve_dial(&cli, &dotenv_values);
     let x_token = resolve_x_token(&cli, &dotenv_values);
+    let config = match &cli.config_file {
+        Some(path) => Config::from_file(path).context("failed to load config file")?,
+        None => Config::default(),
+    };
     let run_config = RunConfig {
         endpoint,
         dial,
         x_token,
+        config,
     };
 
     println!(
@@ -338,33 +338,41 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     }
 
     match &cli.command {
-        Commands::List | Commands::VerifyVersion { .. } => Ok(ExitCode::from(exit_code::OK)),
-        Commands::All => {
-            let scenarios = [
-                Scenario::SysvarAccount,
-                Scenario::SysvarBlock,
-                Scenario::FullBlocks,
-                Scenario::Replay,
-                Scenario::Deshred,
-                Scenario::AnyCommitment,
-                Scenario::TokenOwnerBalanceChanged,
-                Scenario::Ordering,
-                Scenario::FilterAccounts,
-                Scenario::SlotDuplicate,
-            ];
+        Commands::List { .. } | Commands::VerifyVersion { .. } => Ok(ExitCode::from(exit_code::OK)),
+        Commands::All {
+            ref tags,
+            ref module,
+            num_threads,
+        } => {
+            let scenarios: Vec<&'static Scenario> = inventory::iter::<Scenario>
+                .into_iter()
+                .filter(|s| matches_tags(s, tags) && matches_module(s, module.as_str()))
+                .collect();
 
-            for scenario in scenarios {
-                log::info!("running scenario: {}", scenario.name());
-                run_scenario(&scenario, &run_config)
-                    .await
-                    .with_context(|| format!("scenario '{}' failed", scenario.name()))?;
-            }
+            let num_threads = (*num_threads).max(1);
+            let multi = MultiProgress::new();
+
+            stream::iter(scenarios)
+                .map(Ok::<_, anyhow::Error>)
+                .try_for_each_concurrent(Some(num_threads), |scenario| {
+                    let run_config = &run_config;
+                    let multi = &multi;
+                    async move {
+                        log::info!("running scenario: {}", scenario.name);
+                        run_scenario(scenario, run_config, multi)
+                            .await
+                            .with_context(|| format!("scenario '{}' failed", scenario.name))
+                    }
+                })
+                .await?;
             Ok(ExitCode::from(exit_code::OK))
         }
         Commands::Run { scenario } => {
-            run_scenario(scenario, &run_config)
+            let entry = find_scenario(scenario)?;
+            let multi = MultiProgress::new();
+            run_scenario(entry, &run_config, &multi)
                 .await
-                .with_context(|| format!("scenario '{}' failed", scenario.name()))?;
+                .with_context(|| format!("scenario '{}' failed", scenario))?;
             Ok(ExitCode::from(exit_code::OK))
         }
     }

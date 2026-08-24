@@ -114,6 +114,7 @@ message SubscribeRequestFilterTransactions {
   repeated string account_include = 3;
   repeated string account_exclude = 4;
   repeated string account_required = 6;
+  optional CuckooFilter cuckoo_account_include = 7;
   // ATA / token-account expansion control. When set, account_include /
   // account_exclude / account_required also match against owners of
   // pre/post token balances on each transaction. Absent = no expansion.

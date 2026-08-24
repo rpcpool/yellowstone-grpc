@@ -5,6 +5,7 @@ use {
     solana_message::{
         compiled_instruction::CompiledInstruction,
         v0::{LoadedAddresses, Message as MessageV0, MessageAddressTableLookup},
+        v1::{Message as MessageV1, TransactionConfig},
         Message, MessageHeader, VersionedMessage,
     },
     solana_pubkey::Pubkey,
@@ -104,8 +105,27 @@ pub fn create_message(message: proto::Message) -> CreateResult<VersionedMessage>
             .map_err(|_| "failed to parse num_readonly_unsigned_accounts")?,
     };
 
-    if message.recent_blockhash.len() != HASH_BYTES {
+    let Ok(blockhash) = <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()) else {
         return Err("failed to parse hash");
+    };
+    let recent_blockhash = Hash::new_from_array(blockhash);
+
+    // `config` is set only for V1 messages, whose lifetime specifier is carried in
+    // `recent_blockhash` and which have no address table lookups. `versioned` is
+    // true for both V0 and V1, so it cannot tell them apart on its own.
+    if let Some(config) = message.config {
+        return Ok(VersionedMessage::V1(MessageV1 {
+            header,
+            config: TransactionConfig {
+                priority_fee: config.priority_fee,
+                compute_unit_limit: config.compute_unit_limit,
+                loaded_accounts_data_size_limit: config.loaded_accounts_data_size_limit,
+                heap_size: config.heap_size,
+            },
+            lifetime_specifier: recent_blockhash,
+            account_keys: create_pubkey_vec(message.account_keys)?,
+            instructions: create_message_instructions(message.instructions)?,
+        }));
     }
 
     Ok(if message.versioned {
@@ -122,9 +142,7 @@ pub fn create_message(message: proto::Message) -> CreateResult<VersionedMessage>
         VersionedMessage::V0(MessageV0 {
             header,
             account_keys: create_pubkey_vec(message.account_keys)?,
-            recent_blockhash: Hash::new_from_array(
-                <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
-            ),
+            recent_blockhash,
             instructions: create_message_instructions(message.instructions)?,
             address_table_lookups,
         })
@@ -132,9 +150,7 @@ pub fn create_message(message: proto::Message) -> CreateResult<VersionedMessage>
         VersionedMessage::Legacy(Message {
             header,
             account_keys: create_pubkey_vec(message.account_keys)?,
-            recent_blockhash: Hash::new_from_array(
-                <[u8; HASH_BYTES]>::try_from(message.recent_blockhash.as_slice()).unwrap(),
-            ),
+            recent_blockhash,
             instructions: create_message_instructions(message.instructions)?,
         })
     })
@@ -202,7 +218,7 @@ pub fn create_tx_meta(meta: proto::TransactionStatusMeta) -> CreateResult<Transa
 pub fn create_tx_error(
     err: Option<&proto::TransactionError>,
 ) -> CreateResult<Option<TransactionError>> {
-    err.map(|err| bincode::deserialize::<TransactionError>(&err.err))
+    err.map(|err| wincode::deserialize::<TransactionError>(&err.err))
         .transpose()
         .map_err(|_| "failed to decode TransactionError")
 }
@@ -263,6 +279,7 @@ pub fn create_reward(reward: proto::Reward) -> CreateResult<Reward> {
             proto::RewardType::Rent => Some(RewardType::Rent),
             proto::RewardType::Staking => Some(RewardType::Staking),
             proto::RewardType::Voting => Some(RewardType::Voting),
+            proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
         },
         commission: if reward.commission.is_empty() {
             None

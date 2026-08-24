@@ -1,9 +1,12 @@
 use {
-    crate::plugin::{
-        filter::message::{
-            prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len,
+    crate::{
+        metrics,
+        plugin::{
+            filter::message::{
+                prost_bytes_encode_raw, prost_bytes_encoded_len, prost_field_encoded_len,
+            },
+            message::{MessageAccountInfo, MessageTransactionInfo},
         },
-        message::{Message, MessageAccountInfo, MessageTransactionInfo},
     },
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -16,7 +19,9 @@ impl TransactionEncoder {
         let len = Self::encoded_len(tx);
         let mut buf = Vec::with_capacity(len);
         Self::encode_raw(tx, &mut buf);
-        let _ = tx.pre_encoded.set(buf);
+        if tx.pre_encoded.set(buf).is_err() {
+            metrics::pre_encoded_cache_miss("txn");
+        }
     }
 
     fn encode_raw(tx: &MessageTransactionInfo, buf: &mut impl bytes::BufMut) {
@@ -48,7 +53,6 @@ impl TransactionEncoder {
         let index = tx.index as u64;
 
         SIGNATURE_FIELD_ENCODED_LEN
-            + size_of::<Signature>()
             + if tx.is_vote {
                 prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
             } else {
@@ -92,7 +96,9 @@ impl AccountEncoder {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
 
-        let _ = account.pre_encoded.set(buf);
+        if account.pre_encoded.set(buf).is_err() {
+            metrics::pre_encoded_cache_miss("account");
+        }
     }
 
     pub fn encoded_len(account: &MessageAccountInfo) -> usize {
@@ -134,20 +140,79 @@ impl AccountEncoder {
     }
 }
 
-pub fn encode_messages(messages: &Vec<Message>) {
-    for msg in messages {
-        match msg {
-            Message::Transaction(tx) => {
-                if tx.transaction.pre_encoded.get().is_none() {
-                    TransactionEncoder::pre_encode(&tx.transaction);
-                }
-            }
-            Message::Account(acc) => {
-                if acc.account.pre_encoded.get().is_none() {
-                    AccountEncoder::pre_encode(&acc.account);
-                }
-            }
-            _ => {}
+#[cfg(test)]
+mod tests {
+    use {
+        super::*, crate::plugin::filter::fixtures, solana_signature::Signature,
+        yellowstone_grpc_proto::solana::storage::confirmed_block,
+    };
+
+    #[test]
+    fn transaction_encoded_len_matches_the_bytes_actually_written() {
+        let keys = fixtures::deterministic_pubkeys(40, 6);
+
+        for (label, is_vote, meta) in [
+            (
+                "empty meta",
+                false,
+                confirmed_block::TransactionStatusMeta::default(),
+            ),
+            (
+                "vote with fee",
+                true,
+                confirmed_block::TransactionStatusMeta {
+                    fee: 5000,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let message =
+                fixtures::message_transaction(Signature::default(), keys.clone(), is_vote, meta);
+            let tx = &message.transaction;
+
+            let mut buf = Vec::new();
+            TransactionEncoder::encode_raw(tx, &mut buf);
+
+            assert_eq!(
+                TransactionEncoder::encoded_len(tx),
+                buf.len(),
+                "{label}: encoded_len must equal the encoded byte count"
+            );
+        }
+    }
+
+    #[test]
+    fn account_encoded_len_matches_the_bytes_actually_written() {
+        let keys = fixtures::deterministic_pubkeys(41, 2);
+
+        for (label, data, lamports, signature) in [
+            ("empty", Vec::new(), 0u64, None),
+            (
+                "token account",
+                fixtures::token_account_data(None),
+                1000,
+                None,
+            ),
+            (
+                "with signature",
+                vec![7u8; 40],
+                u64::MAX,
+                Some(Signature::default()),
+            ),
+        ] {
+            let account = fixtures::account_info(keys[0], keys[1], data, lamports, signature);
+
+            AccountEncoder::pre_encode(&account);
+            let encoded = account
+                .pre_encoded
+                .get()
+                .expect("pre_encode fills the cache");
+
+            assert_eq!(
+                AccountEncoder::encoded_len(&account),
+                encoded.len(),
+                "{label}: encoded_len must equal the encoded byte count"
+            );
         }
     }
 }

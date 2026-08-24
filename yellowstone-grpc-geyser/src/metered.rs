@@ -1,13 +1,11 @@
 use {
     crate::{auth::SubscriptionInfo, metrics},
-    http::request::Parts,
+    http::{request::Parts, uri::PathAndQuery},
     std::{
         collections::HashMap,
         sync::{LazyLock, Mutex},
     },
-    yellowstone_grpc_tools::server::tonic::metered::{
-        MeteredBandwidthHooks, MeteredBandwidthManager,
-    },
+    yellowstone_grpc_tools::server::tonic::metered::{MeteredBandwidthHooks, MeteredManager},
 };
 
 pub const X_SUBSCRIPTION_ID_HEADER: &str = "x-subscription-id";
@@ -53,17 +51,17 @@ fn decrement_active_metered_bodies_for_subscriber_and_path(
 #[derive(Debug)]
 pub struct PrometheusMeteredHooks {
     subscriber_id: String,
-    uri_path: String,
+    uri_path: PathAndQuery,
 }
 
 impl Drop for PrometheusMeteredHooks {
     fn drop(&mut self) {
-        if self.subscriber_id.is_empty() && self.uri_path.is_empty() {
+        if self.subscriber_id.is_empty() && self.uri_path.path().is_empty() {
             return;
         }
         decrement_active_metered_bodies_for_subscriber_and_path(
             &self.subscriber_id,
-            &self.uri_path,
+            self.uri_path.path(),
         );
     }
 }
@@ -75,39 +73,42 @@ impl MeteredBandwidthHooks for PrometheusMeteredHooks {
         _now: std::time::Instant,
         _system_now: std::time::SystemTime,
     ) {
-        if self.subscriber_id.is_empty() && self.uri_path.is_empty() {
+        if self.subscriber_id.is_empty() && self.uri_path.path().is_empty() {
             return;
         }
         metrics::add_total_traffic_sent(byte_count);
-        metrics::add_grpc_service_outbound_bytes(&self.subscriber_id, &self.uri_path, byte_count);
+        metrics::add_grpc_service_outbound_bytes(
+            &self.subscriber_id,
+            self.uri_path.path(),
+            byte_count,
+        );
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct PrometheusMeteredManager;
 
-impl MeteredBandwidthManager for PrometheusMeteredManager {
-    type Hooks = PrometheusMeteredHooks;
+impl MeteredManager for PrometheusMeteredManager {
+    type BandwidthMeteredHooks = PrometheusMeteredHooks;
 
-    fn build_hooks(&self, parts: &Parts) -> Self::Hooks {
+    fn build_hooks(&self, parts: &Parts) -> Option<Self::BandwidthMeteredHooks> {
         let subscriber_id = parts
             .extensions
             .get::<SubscriptionInfo>()
             .map(|info| info.subscription_id.clone())
-            .unwrap_or_else(|| {
+            .or_else(|| {
                 parts
                     .headers
                     .get(X_SUBSCRIPTION_ID_HEADER)
                     .and_then(|value| value.to_str().ok())
-                    .unwrap_or(UNKNOWN_SUBSCRIBER_ID)
-                    .to_owned()
-            });
-        let uri_path = parts.uri.to_string();
+                    .map(|s| s.to_string())
+            })?;
+        let uri_path = parts.uri.path_and_query().cloned()?;
 
-        increment_active_metered_bodies_for_subscriber_and_path(&subscriber_id, &uri_path);
-        PrometheusMeteredHooks {
+        increment_active_metered_bodies_for_subscriber_and_path(&subscriber_id, uri_path.path());
+        Some(PrometheusMeteredHooks {
             subscriber_id,
             uri_path,
-        }
+        })
     }
 }

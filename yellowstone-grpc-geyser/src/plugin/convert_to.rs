@@ -36,6 +36,7 @@ pub fn create_message(message: &VersionedMessage) -> proto::Message {
             instructions: create_instructions(&message.instructions),
             versioned: false,
             address_table_lookups: vec![],
+            config: None,
         },
         VersionedMessage::V0(message) => proto::Message {
             header: Some(create_header(&message.header)),
@@ -44,6 +45,21 @@ pub fn create_message(message: &VersionedMessage) -> proto::Message {
             instructions: create_instructions(&message.instructions),
             versioned: true,
             address_table_lookups: create_lookups(&message.address_table_lookups),
+            config: None,
+        },
+        VersionedMessage::V1(message) => proto::Message {
+            header: Some(create_header(&message.header)),
+            account_keys: create_pubkeys(&message.account_keys),
+            recent_blockhash: message.lifetime_specifier.to_bytes().into(),
+            instructions: create_instructions(&message.instructions),
+            versioned: true,
+            address_table_lookups: vec![],
+            config: Some(proto::TransactionConfig {
+                priority_fee: message.config.priority_fee,
+                compute_unit_limit: message.config.compute_unit_limit,
+                loaded_accounts_data_size_limit: message.config.loaded_accounts_data_size_limit,
+                heap_size: message.config.heap_size,
+            }),
         },
     }
 }
@@ -152,7 +168,7 @@ pub fn create_transaction_error(
     match status {
         Ok(()) => None,
         Err(err) => Some(proto::TransactionError {
-            err: bincode::serialize(&err).expect("transaction error to serialize to bytes"),
+            err: wincode::serialize(&err).expect("transaction error to serialize to bytes"),
         }),
     }
 }
@@ -232,6 +248,7 @@ pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::Rewar
         Some(RewardType::Rent) => proto::RewardType::Rent,
         Some(RewardType::Staking) => proto::RewardType::Staking,
         Some(RewardType::Voting) => proto::RewardType::Voting,
+        Some(RewardType::DeactivatedStake) => proto::RewardType::DeactivatedStake,
     }
 }
 

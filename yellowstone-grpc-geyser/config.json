@@ -8,11 +8,23 @@
     "affinity": "0-1,12-13"
   },
   "grpc": {
-    "address": "0.0.0.0:10000",
-    "tls_config": {
-      "cert_path": "",
-      "key_path": ""
-    },
+    "listen": [
+      {
+        "address": "0.0.0.0:10000",
+        "tls": {
+          "cert_dir": "/etc/yellowstone/certs",
+          "watch_file": true
+        },
+        "auth": {
+          "type": "trusted-metadata",
+          "billing": {
+            "type": "http",
+            "billing_endpoint_url": "http://127.0.0.1:8081/billing",
+            "report_interval": "5s"
+          }
+        }
+      }
+    ],
     "compression": {
       "accept": ["gzip", "zstd"],
       "send": ["gzip", "zstd"]

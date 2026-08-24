@@ -3,7 +3,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "target": "ES2020",
-    "lib": ["ES2020"],
+    "lib": ["ES2020", "DOM"],
     "types": ["node"],
     "module": "Node16",
     "moduleResolution": "Node16",

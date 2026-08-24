@@ -171,6 +171,104 @@ impl ResolvesServerCert for HotResolvesServerCertUsingSni {
     }
 }
 
+/// A resolver for a single identity cert/key pair that can be hot-swapped at runtime.
+pub struct HotResolvesServerCertUsingIdentity {
+    inner: Arc<ArcSwap<CertifiedKey>>,
+}
+
+impl HotResolvesServerCertUsingIdentity {
+    pub fn new(initial_certified_key: CertifiedKey) -> Self {
+        Self {
+            inner: Arc::new(ArcSwap::from_pointee(initial_certified_key)),
+        }
+    }
+
+    pub fn swap(&self, new_certified_key: CertifiedKey) {
+        self.inner.store(Arc::new(new_certified_key));
+    }
+}
+
+impl From<CertifiedKey> for HotResolvesServerCertUsingIdentity {
+    fn from(certified_key: CertifiedKey) -> Self {
+        Self::new(certified_key)
+    }
+}
+
+impl fmt::Debug for HotResolvesServerCertUsingIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl ResolvesServerCert for HotResolvesServerCertUsingIdentity {
+    fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.inner.load_full())
+    }
+}
+
+/// Builds a single-cert identity from a cert PEM path and private key PEM path.
+pub fn build_identity_certified_key<C, K>(
+    cert_path: C,
+    key_path: K,
+) -> Result<CertifiedKey, io::Error>
+where
+    C: AsRef<Path>,
+    K: AsRef<Path>,
+{
+    let cert_path = cert_path.as_ref();
+    let key_path = key_path.as_ref();
+
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|err| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to open identity cert PEM file {}: {err}",
+                    cert_path.display()
+                ),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse identity certificate in {}: {err}",
+                    cert_path.display()
+                ),
+            )
+        })?;
+
+    if certs.is_empty() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("no certificates found in {}", cert_path.display()),
+        ));
+    }
+
+    let key = PrivateKeyDer::from_pem_file(key_path).map_err(|err| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "failed to parse identity key in {}: {err}",
+                key_path.display()
+            ),
+        )
+    })?;
+
+    let signing_key = any_supported_type(&key).map_err(|err| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "failed to parse identity signing key in {}: {err}",
+                key_path.display()
+            ),
+        )
+    })?;
+
+    Ok(CertifiedKey::new(certs, signing_key))
+}
+
 ///
 /// Builds an [`SniResolver`] by loading all PEM files in the given directory.
 ///
@@ -347,6 +445,18 @@ impl AsyncWrite for TlsIO {
         self.project().inner.poll_write(cx, buf)
     }
 
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        self.project().inner.poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
         self.project().inner.poll_flush(cx)
     }
@@ -447,7 +557,7 @@ mod tests {
         super::*,
         std::{
             fs::{self, File},
-            io::{ErrorKind, Write},
+            io::{ErrorKind, IoSlice, Write},
             path::PathBuf,
             sync::{
                 atomic::{AtomicU64, Ordering},
@@ -455,7 +565,7 @@ mod tests {
             },
             time::{Duration, SystemTime, UNIX_EPOCH},
         },
-        tokio::io::AsyncWriteExt,
+        tokio::io::{AsyncReadExt, AsyncWriteExt},
         tokio_rustls::{
             rustls::{
                 self,
@@ -717,13 +827,19 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
             let server_name = ServerName::try_from("localhost")
                 .expect("localhost should be a valid TLS server name");
 
-            good_connector
+            let mut stream = good_connector
                 .connect(server_name, stream)
                 .await
                 .expect("TLS handshake should succeed");
+            let mut buf = [0; 11];
+            stream
+                .read_exact(&mut buf)
+                .await
+                .expect("TLS client should read server bytes");
+            assert_eq!(&buf, b"hello world");
         });
 
-        let accepted = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut accepted = tokio::time::timeout(Duration::from_secs(5), async {
             match tls_incoming.next().await {
                 Some(Ok(io)) => io,
                 Some(Err(err)) => panic!("unexpected stream error: {err}"),
@@ -732,6 +848,10 @@ sF+HCDt5QXFY9Up3hhtWqKee6Sfd+kGC2cUKNhTZ2Q5VAc4uzJ7TpBU/DX6W+DU0
         })
         .await
         .expect("TlsIncoming should yield a successful stream in time");
+
+        assert!(accepted.is_write_vectored());
+        let bufs = [IoSlice::new(b"hello"), IoSlice::new(b" world")];
+        assert_eq!(accepted.write_vectored(&bufs).await.unwrap(), 11);
 
         bad_client
             .await

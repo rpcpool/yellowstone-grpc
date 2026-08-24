@@ -77,6 +77,20 @@ You can configure TLS in two ways:
 }
 ```
 
+Both forms accept an optional `watch_file` flag (default `false`). When `true`, the server watches the relevant path(s) on disk and hot-swaps the served certificate in place, without dropping existing connections or requiring a restart:
+
+- Identity pair: watches `cert_path` and `key_path` individually and rebuilds the identity when either changes.
+- Certificate directory: watches `cert_dir` recursively and rebuilds the SNI resolver when any file under it changes.
+
+```json
+{
+   "tls": {
+      "cert_dir": "/etc/yellowstone/certs",
+      "watch_file": true
+   }
+}
+```
+
 Notes:
 
 - TLS is ignored for Unix domain sockets.
@@ -108,7 +122,7 @@ The `404` behavior is important: the gRPC server treats it as an unauthenticated
 Example request:
 
 ```text
-GET http://127.0.0.1:8080/?host=api.example.com&token=test
+GET http://127.0.0.1:8080/?host=api.example.com
 ```
 
 Example `200 OK` response body:
@@ -215,6 +229,44 @@ Example `/etc/yellowstone/subscriptions.json`:
 }
 ```
 
+#### Billing monitoring (`listen[].auth.billing`)
+
+Billing monitoring is configured under `listen[].auth.billing`.
+
+Currently supported mode:
+
+- `type: "http"`
+
+```json
+{
+   "auth": {
+      "type": "http",
+      "subscription_resolver_url": "http://127.0.0.1:8080/",
+      "billing": {
+         "type": "http",
+         "billing_endpoint_url": "http://127.0.0.1:8081/billing",
+         "report_interval": "5s"
+      }
+   }
+}
+```
+
+Notes:
+
+- Billing monitoring is optional.
+- `report_interval` defaults to `5s` if omitted.
+- Billing events are sent as NDJSON (`application/x-ndjson` style payload): one JSON event per line.
+- Event `code` is one of:
+  - `bandwidth`: metered bytes per request path and subscription
+  - `requests`: method call counts per request path and subscription
+
+Example NDJSON payload:
+
+```ndjson
+{"code":"bandwidth","subscription_id":"sub-1","method":"/geyser.Geyser/Subscribe","quantity":8192}
+{"code":"requests","subscription_id":"sub-1","method":"/geyser.Geyser/Subscribe","quantity":1}
+```
+
 #### Full `listen` example
 
 ```json
@@ -236,7 +288,8 @@ Example `/etc/yellowstone/subscriptions.json`:
                "identity": {
                   "cert_path": "/etc/yellowstone/tls/server.crt",
                   "key_path": "/etc/yellowstone/tls/server.key"
-               }
+               },
+               "watch_file": true
             },
             "auth": {
                "type": "trusted-metadata"

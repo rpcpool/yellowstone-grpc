@@ -10,6 +10,177 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-19
+
+- yellowstone-grpc-client-nodejs-6.0.0
+
+### Features
+
+- added support for compressed transaction filters.
+- added support for token owner matching.
+
+### Breaking
+
+- nodejs: `6.0.0` bumps it's dependencies in package.json.
+
+
+## 2026-08-17
+
+- yellowstone-grpc-geyser 15.1.2
+
+### Fixes
+
+- plugin: performance optimization of account update filtering
+
+## 2026-08-13
+
+- yellowstone-grpc-geyser 15.1.1
+
+### Fixes
+
+- plugin: reconstruct V1 messages in `convert_from::create_message` instead of downgrading them to V0. `convert_to` already emits `Message.config` for V1, but `convert_from` only checked the `versioned` boolean, which is true for both V0 and V1
+
+## 2026-08-10
+
+- yellowstone-grpc-proto 12.6.0
+- yellowstone-grpc-geyser 15.1.0
+
+### Features
+
+- proto/plugin: support `cuckoo_account_include` on transaction subscriptions so clients can filter large address sets without sending every pubkey
+
+### Misc
+
+- plugin perf: match transaction `account_include`/`account_exclude` against the shorter of the transaction keys or the filter list, and skip the account path when a subscriber has no account filters
+
+## 2026-08-06
+
+- yellowstone-grpc-geyser 14.2.4
+
+### Misc
+
+- plugin perf: use tonic's vectored writes for less overhead and copying when using TLS
+
+## 2026-08-04
+
+- yellowstone-grpc-geyser 14.2.3
+
+### Fixed
+
+- Fixed queue size metric, previously ignored block_meta message
+
+### Misc
+
+- plugin perf: separated commitment level messages to subscribers into separate channels to reduce wakeups
+
+## 2026-07-31
+
+- yellowstone-grpc-client 13.3.0
+- yellowstone-grpc-client-simple-12.3.1
+- yellowstone-grpc-client-nodejs-5.1.0
+
+### Features
+
+- Added `ReconnectionPolicy` so a subscription can choose whether or not to auto-reconnect from the tip without paying for replay or dedup.
+
+### Fixes
+
+- Fixed the internal `__autoreconnect` filter being stripped from the stored subscription when a user changed filters mid-stream, which silently prevented data recovery on every subsequent reconnect.
+
+### Breaking
+- Changed `AutoReconnect::new` to take the raw stream instead of `DedupStream<S>`; `DedupStream` now wraps `AutoReconnect` rather than being wrapped by it.
+- Changed `reconnect_config` to `Option<ReconnectConfig>` and removed `ReconnectConfig::no_reconnect()`; `None` now expresses "no reconnect".
+- Moved `slot_retention` from `ReconnectConfig` into `ReconnectionPolicy::Replay`.
+
+## 2026-07-24
+
+- yellowstone-grpc-geyser 14.2.2
+
+### Fixed
+
+- Fixed `yellowstone_grpc_geyser_concurrent_subscribe_per_subscriber_id` when `subscription_limit_enforce` is set to false.
+- The `BlockMeta` message is now handle and only sent to geyser loop before being delegated to the block-reconstruction loop, this ensure we see all account updates before block-meta since on block `freeze` new account update are emitted really late, so a race could happen and cause lost account updates.
+
+### Misc
+
+- plugin perf: moved Arc<> to outer objects in Message enum type, reducing overall size of each send() and recv()
+
+## 2026-07-22
+
+- yellowstone-grpc-geyser 14.2.1
+
+### Fixes
+
+- Fixed `from_slot` replay never delivering `Message::Block`: subscribers with a `blocks` filter had their replay request accepted but received zero replayed messages (the filter matches none of the raw Account/Transaction/Entry/BlockMeta messages), silently resuming from the live head with a state gap. Replay now emits the precomputed block message between block content and `BlockMeta`, mirroring the live broadcast path. Regression from [#750](https://github.com/rpcpool/yellowstone-grpc/pull/750); the fix was originally part of [#810](https://github.com/rpcpool/yellowstone-grpc/pull/810) but was not imported by [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809). Closes [#830](https://github.com/rpcpool/yellowstone-grpc/issues/830). Thanks to @zoukba0014
+
+## 2026-07-08
+
+- yellowstone-grpc-geyser 14.2.0
+
+### Features
+
+- Added `yellowstone_grpc_geyser_filter_stats`, a filter-complexity histogram metric labeled by `subscriber_id`, filter `type`, and `condition`.
+- Added per-group `len` observations for filter-complexity metrics (`accounts`, `transactions`, `transaction_status`, and `blocks`).
+- Added `watch_file` option in configuration for `GrpcTlsConfig` to automatically hot-swap server certificate(s) [#816](https://github.com/rpcpool/yellowstone-grpc/pull/816/changes#diff-3844993256ceeb4ce89d37c67a6be13a8193b0cd2bdbd9bc7a380cb1908cc8fe)
+- Added billing metering option in the auth configuration [#817](https://github.com/rpcpool/yellowstone-grpc/pull/817)
+
+### Fixes
+
+- Enabled address lookup table resolution for deshred transactions. The plugin left agave's `deshred_transaction_alt_resolution_enabled` at its default of `false`, so V0 transaction lookups were never resolved and `loaded_addresses` stayed empty. As a result subscribers received no ALT addresses and account filters could not match ALT-loaded keys.
+- Fixed a subscription-tracking edge case where counter updates could leak if execution failed before `ClientSession` creation.
+- Reworked subscription tracking to use an owned RAII permit with `Drop`, making acquire/release semantics explicit and safer.
+
+### Breaking
+
+- Renamed Prometheus metric prefixes from `yellowstone_grpc_*` to `yellowstone_grpc_geyser_*`.
+- Removed `/debug_clients` endpoint from the auxiliary sidecar server.
+- Changed client-loop logs to include subscriber context for improved monitoring and troubleshooting.
+- Changed `yellowstone_grpc_geyser_subscriber_queue_size` from `IntGaugeVec` to `HistogramVec` to better represent multiple concurrent subscriptions per subscriber.
+- Removed 'yellowstone_grpc_geyser_batch_size' metric due to geyser_loop overhead and unnecessary tracking
+
+### Misc
+- Introduced a stream which feeds data into the geyser and block reconstruction loops
+- Optimizes the geyser_loop processed message feed by moving block reconstruction, block meta and slot messages to a 1hop channel send instead of running through geyser_loop
+- Optimizes geyser_loop by lazily encoding messages on a first visit basis instead of encoding them in geyser_loop
+- Optimizes block reconstruction message ingress and egress
+- Optimizes replay 
+- Wrap MessageSlot in an Arc to reduce overall size of 'Message' to 40 bytes down from 80, reducing amount of memory required during copy and allocate
+
+## 2026-07-03
+
+- yellowstone-grpc-geyser 14.1.0
+
+### Fixes
+
+- missing Confirmed/Finalized message when `replay_capacity` was set to 0 [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+- missing `parent` value field in `SubscribeSlotUpdate` [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+- fixed some edge cases in block reconstruction where bank-reset or forks detection did not properly refresh min slot.
+- added new e2e tests in `yellowstone-grpc-e2e-tools` around message ordering guarantees.
+- fixed missing `BlockMeta` in `confirmed/finalized` subscription
+
+### Features
+
+- in-plugin authentication resolution [#795](https://github.com/rpcpool/yellowstone-grpc/pull/795)
+
+### Related PRs
+
+- [#809](https://github.com/rpcpool/yellowstone-grpc/pull/809)
+    - imports changes from [#810](https://github.com/rpcpool/yellowstone-grpc/pull/810)
+
+## 2026-07-02
+
+- yellowstone-grpc-geyser 14.0.0
+- yellowstone-grpc-client 13.2.0
+
+### Features
+
+- Implementation of `SubscribeDeshred` transaction [#801](https://github.com/rpcpool/yellowstone-grpc/pull/801/changes/5bfc22fe9e158db4053e5e456b2bb7d25ef657b4)
+- Implements feature-gated `GeyserGrpcBuilder::connect_with_connector` (enabled via `test-tools` feature flag) [#800](https://github.com/rpcpool/yellowstone-grpc/pull/800)
+
+### Breakings
+
+- The `yellowstone-grpc-geyser` plugin compiles to target agava `v4.1.0` using `1.95` rust toolchain.
+
 ## 2026-06-26
 
 - yellowstone-grpc-geyser 13.3.1
@@ -122,6 +293,15 @@ Referenced PR(s) :[747](https://github.com/rpcpool/yellowstone-grpc/pull/747)
 
 - client: auto-reconnect stream for yellowstone-grpc-client ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
 - geyser: set replay_stored_slots default to 150, added startup warning for low values ([#717](https://github.com/rpcpool/yellowstone-grpc/pull/717))
+
+## [Triton Extension Patches]
+
+### `deshred-transaction`
+
+- geyser, client, proto: add deshred transaction subscription support with loaded addresses (ALT) via separate `SubscribeDeshred` RPC endpoint (`SubscribeUpdateDeshred` response type, `FilteredUpdateDeshred` server-side encoding, client methods, example CLI command with loaded address output, filtering on static and dynamically loaded account keys via `account_include`, `account_exclude`, `account_required`)
+- geyser: add deshred filter tests (vote, account_include with static/loaded keys, account_exclude, account_required, pong generation)
+- deps: update solana/agave git dependencies to v3.1.8 (`v3.1-triton-public`)
+- deps: add `[patch.crates-io]` for triton fork compatibility
 
 ## 2026-04-10
 

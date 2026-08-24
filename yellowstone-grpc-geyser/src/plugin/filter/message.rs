@@ -2,10 +2,15 @@ use {
     crate::{
         metrics,
         plugin::{
-            filter::{name::FilterName, FilterAccountsDataSlice},
+            filter::{
+                encoder::{AccountEncoder, TransactionEncoder},
+                name::FilterName,
+                FilterAccountsDataSlice,
+            },
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageDeshredTransaction,
+                MessageDeshredTransactionInfo, MessageEntry, MessageSlot, MessageTransaction,
+                MessageTransactionInfo,
             },
         },
     },
@@ -13,7 +18,6 @@ use {
         buf::{Buf, BufMut},
         Bytes,
     },
-    foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost::{
         encoding::{
             encode_key, encode_varint, encoded_len_varint, key_len, message, DecodeContext,
@@ -27,18 +31,15 @@ use {
     solana_signature::Signature,
     std::{
         ops::{Deref, DerefMut},
-        sync::{Arc, OnceLock},
+        sync::Arc,
         time::SystemTime,
     },
-    yellowstone_grpc_proto::{
-        geyser::{
-            subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
-            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-            SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            SubscribeUpdateTransactionStatus,
-        },
-        solana::storage::confirmed_block,
+    yellowstone_grpc_proto::geyser::{
+        subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
+        SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+        SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
+        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        SubscribeUpdateTransactionStatus,
     },
 };
 
@@ -133,31 +134,33 @@ impl FilteredUpdate {
     }
 
     fn as_subscribe_update_account(
-        message: &MessageAccountInfo,
+        message: &MessageAccount,
         data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
-        let data_slice = data_slice.get_slice(message.data.iter().as_slice());
+        let acc = &message.account;
+        let data_slice = data_slice.get_slice(acc.data.iter().as_slice());
         SubscribeUpdateAccountInfo {
-            pubkey: message.pubkey.as_ref().into(),
-            lamports: message.lamports,
-            owner: message.owner.as_ref().into(),
-            executable: message.executable,
-            rent_epoch: message.rent_epoch,
+            pubkey: acc.pubkey.as_ref().into(),
+            lamports: acc.lamports,
+            owner: acc.owner.as_ref().into(),
+            executable: acc.executable,
+            rent_epoch: acc.rent_epoch,
             data: Bytes::from(data_slice),
-            write_version: message.write_version,
-            txn_signature: message.txn_signature.map(|s| s.as_ref().into()),
+            write_version: acc.write_version,
+            txn_signature: acc.txn_signature.map(|s| s.as_ref().into()),
         }
     }
 
     fn as_subscribe_update_transaction(
-        message: &MessageTransactionInfo,
+        message: &MessageTransaction,
     ) -> SubscribeUpdateTransactionInfo {
+        let tx = &message.transaction;
         SubscribeUpdateTransactionInfo {
-            signature: message.signature.as_ref().into(),
-            is_vote: message.is_vote,
-            transaction: Some(message.transaction.clone()),
-            meta: Some(message.meta.clone()),
-            index: message.index as u64,
+            signature: tx.signature.as_ref().into(),
+            is_vote: tx.is_vote,
+            transaction: Some(tx.transaction.clone()),
+            meta: Some(tx.meta.clone()),
+            index: tx.index as u64,
         }
     }
 
@@ -176,11 +179,11 @@ impl FilteredUpdate {
         let message = match &self.message {
             FilteredUpdateOneof::Account(msg) => UpdateOneof::Account(SubscribeUpdateAccount {
                 account: Some(Self::as_subscribe_update_account(
-                    msg.account.as_ref(),
+                    &msg.account,
                     &msg.data_slice,
                 )),
-                slot: msg.slot,
-                is_startup: msg.is_startup,
+                is_startup: msg.account.is_startup,
+                slot: msg.account.slot,
             }),
             FilteredUpdateOneof::Slot(msg) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: msg.slot,
@@ -190,19 +193,18 @@ impl FilteredUpdate {
             }),
             FilteredUpdateOneof::Transaction(msg) => {
                 UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                    transaction: Some(Self::as_subscribe_update_transaction(
-                        msg.transaction.as_ref(),
-                    )),
+                    transaction: Some(Self::as_subscribe_update_transaction(&msg.transaction)),
                     slot: msg.slot,
                 })
             }
             FilteredUpdateOneof::TransactionStatus(msg) => {
+                let tx = &msg.transaction;
                 UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
-                    slot: msg.slot,
-                    signature: msg.transaction.signature.as_ref().into(),
-                    is_vote: msg.transaction.is_vote,
-                    index: msg.transaction.index as u64,
-                    err: msg.transaction.meta.err.clone(),
+                    slot: tx.slot,
+                    signature: tx.transaction.signature.as_ref().into(),
+                    is_vote: tx.transaction.is_vote,
+                    index: tx.transaction.index as u64,
+                    err: tx.transaction.meta.err.clone(),
                 })
             }
             FilteredUpdateOneof::Block(msg) => UpdateOneof::Block(SubscribeUpdateBlock {
@@ -252,80 +254,6 @@ impl FilteredUpdate {
             created_at: Some(self.created_at),
         }
     }
-
-    pub fn from_subscribe_update(update: SubscribeUpdate) -> Result<Self, &'static str> {
-        let created_at = update.created_at.ok_or("create_at should be defined")?;
-
-        let message = match update.update_oneof.ok_or("update should be defined")? {
-            UpdateOneof::Account(msg) => {
-                let account = MessageAccount::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Account(FilteredUpdateAccount {
-                    account: account.account,
-                    slot: account.slot,
-                    is_startup: account.is_startup,
-                    data_slice: FilterAccountsDataSlice::default(),
-                })
-            }
-            UpdateOneof::Slot(msg) => {
-                let slot = MessageSlot::from_update_oneof(&msg, created_at)?;
-                FilteredUpdateOneof::Slot(FilteredUpdateSlot(slot))
-            }
-            UpdateOneof::Transaction(msg) => {
-                let tx = MessageTransaction::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Transaction(FilteredUpdateTransaction {
-                    transaction: tx.transaction,
-                    slot: tx.slot,
-                })
-            }
-            UpdateOneof::TransactionStatus(msg) => {
-                FilteredUpdateOneof::TransactionStatus(FilteredUpdateTransactionStatus {
-                    transaction: Arc::new(MessageTransactionInfo {
-                        signature: Signature::try_from(msg.signature.as_slice())
-                            .map_err(|_| "invalid signature length")?,
-                        is_vote: msg.is_vote,
-                        transaction: confirmed_block::Transaction::default(),
-                        meta: confirmed_block::TransactionStatusMeta {
-                            err: msg.err,
-                            ..confirmed_block::TransactionStatusMeta::default()
-                        },
-                        index: msg.index as usize,
-                        account_keys: FoldHashSet::new(),
-                        pre_encoded: OnceLock::new(),
-                        token_owners_all: OnceLock::new(),
-                        token_owners_changed: OnceLock::new(),
-                    }),
-                    slot: msg.slot,
-                })
-            }
-            UpdateOneof::Block(msg) => {
-                let block = MessageBlock::from_update_oneof(msg, created_at)?;
-                FilteredUpdateOneof::Block(Box::new(FilteredUpdateBlock {
-                    meta: block.meta,
-                    transactions: block.transactions,
-                    updated_account_count: block.updated_account_count,
-                    accounts: block.accounts,
-                    accounts_data_slice: FilterAccountsDataSlice::default(),
-                    entries: block.entries,
-                }))
-            }
-            UpdateOneof::Ping(_) => FilteredUpdateOneof::Ping,
-            UpdateOneof::Pong(msg) => FilteredUpdateOneof::Pong(msg),
-            UpdateOneof::BlockMeta(msg) => {
-                let block_meta = MessageBlockMeta::from_update_oneof(msg, created_at);
-                FilteredUpdateOneof::BlockMeta(Arc::new(block_meta))
-            }
-            UpdateOneof::Entry(msg) => {
-                let entry = MessageEntry::from_update_oneof(&msg, created_at)?;
-                FilteredUpdateOneof::Entry(FilteredUpdateEntry(Arc::new(entry)))
-            }
-        };
-
-        Ok(Self {
-            filters: update.filters.into_iter().map(FilterName::new).collect(),
-            message,
-            created_at,
-        })
-    }
 }
 
 pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
@@ -344,11 +272,12 @@ pub enum FilteredUpdateOneof {
 }
 
 impl FilteredUpdateOneof {
-    pub fn account(message: &MessageAccount, data_slice: FilterAccountsDataSlice) -> Self {
+    pub const fn account(
+        message: Arc<MessageAccount>,
+        data_slice: FilterAccountsDataSlice,
+    ) -> Self {
         Self::Account(FilteredUpdateAccount {
-            slot: message.slot,
-            account: Arc::clone(&message.account),
-            is_startup: message.is_startup,
+            account: message,
             data_slice,
         })
     }
@@ -357,17 +286,17 @@ impl FilteredUpdateOneof {
         Self::Slot(FilteredUpdateSlot(message))
     }
 
-    pub fn transaction(message: &MessageTransaction) -> Self {
+    pub fn transaction(message: Arc<MessageTransaction>) -> Self {
+        let slot = message.slot;
         Self::Transaction(FilteredUpdateTransaction {
-            transaction: Arc::clone(&message.transaction),
-            slot: message.slot,
+            transaction: message,
+            slot,
         })
     }
 
-    pub fn transaction_status(message: &MessageTransaction) -> Self {
+    pub const fn transaction_status(message: Arc<MessageTransaction>) -> Self {
         Self::TransactionStatus(FilteredUpdateTransactionStatus {
-            transaction: Arc::clone(&message.transaction),
-            slot: message.slot,
+            transaction: message,
         })
     }
 
@@ -441,33 +370,31 @@ impl prost::Message for FilteredUpdateOneof {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateAccount {
-    pub account: Arc<MessageAccountInfo>,
-    pub slot: u64,
-    pub is_startup: bool,
+    pub account: Arc<MessageAccount>,
     pub data_slice: FilterAccountsDataSlice,
 }
 
 impl prost::Message for FilteredUpdateAccount {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::account_encode_raw(1u32, &self.account, &self.data_slice, buf);
-        if self.slot != 0u64 {
-            ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
+        Self::account_encode_raw(1u32, &self.account.account, &self.data_slice, buf);
+        if self.account.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.account.slot, buf);
         }
-        if self.is_startup {
-            ::prost::encoding::bool::encode(3u32, &self.is_startup, buf);
+        if self.account.is_startup {
+            ::prost::encoding::bool::encode(3u32, &self.account.is_startup, buf);
         }
     }
 
     fn encoded_len(&self) -> usize {
         prost_field_encoded_len(
             1u32,
-            Self::account_encoded_len(&self.account, &self.data_slice),
-        ) + if self.slot != 0u64 {
-            ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            Self::account_encoded_len(&self.account.account, &self.data_slice),
+        ) + if self.account.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(2u32, &self.account.slot)
         } else {
             0
-        } + if self.is_startup {
-            ::prost::encoding::bool::encoded_len(3u32, &self.is_startup)
+        } + if self.account.is_startup {
+            ::prost::encoding::bool::encoded_len(3u32, &self.account.is_startup)
         } else {
             0
         }
@@ -488,6 +415,12 @@ impl prost::Message for FilteredUpdateAccount {
     }
 }
 
+fn account_return_encoded(pre_encoded: &[u8], tag: u32, buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(pre_encoded.len() as u64, buf);
+    buf.put_slice(pre_encoded);
+}
+
 impl FilteredUpdateAccount {
     fn account_encode_raw(
         tag: u32,
@@ -499,12 +432,17 @@ impl FilteredUpdateAccount {
         if data_slice.as_ref().is_empty() {
             if let Some(pre_encoded) = account.get_pre_encoded() {
                 metrics::pre_encoded_cache_hit("account");
-                encode_key(tag, WireType::LengthDelimited, buf);
-                encode_varint(pre_encoded.len() as u64, buf);
-                buf.put_slice(pre_encoded);
+                account_return_encoded(pre_encoded, tag, buf);
                 return;
+            } else {
+                // lazyily pre-encode the account for future use
+                AccountEncoder::pre_encode(account);
+
+                if let Some(pre_encoded) = account.get_pre_encoded() {
+                    account_return_encoded(pre_encoded, tag, buf);
+                    return;
+                }
             }
-            metrics::pre_encoded_cache_miss("account");
         }
 
         // fallback: slice-aware encoding
@@ -654,20 +592,20 @@ impl prost::Message for FilteredUpdateSlot {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateTransaction {
-    pub transaction: Arc<MessageTransactionInfo>,
+    pub transaction: Arc<MessageTransaction>,
     pub slot: u64,
 }
 
 impl prost::Message for FilteredUpdateTransaction {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::tx_encode_raw(1u32, &self.transaction, buf);
+        Self::tx_encode_raw(1u32, &self.transaction.transaction, buf);
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
     }
 
     fn encoded_len(&self) -> usize {
-        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction))
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction.transaction))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
             } else {
@@ -690,15 +628,27 @@ impl prost::Message for FilteredUpdateTransaction {
     }
 }
 
+fn transaction_return_encoded(pre_encoded: &[u8], tag: u32, buf: &mut impl BufMut) {
+    encode_key(tag, WireType::LengthDelimited, buf);
+    encode_varint(pre_encoded.len() as u64, buf);
+    buf.put_slice(pre_encoded);
+}
+
 impl FilteredUpdateTransaction {
     fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
         // try to use pre-encoded bytes (fast path)
         if let Some(pre_encoded) = tx.get_pre_encoded() {
             metrics::pre_encoded_cache_hit("txn");
-            encode_key(tag, WireType::LengthDelimited, buf);
-            encode_varint(pre_encoded.len() as u64, buf);
-            buf.put_slice(pre_encoded);
+            transaction_return_encoded(pre_encoded, tag, buf);
             return;
+        } else {
+            // lazyly pre-encode the transaction for future use
+            TransactionEncoder::pre_encode(tx);
+
+            if let Some(pre_encoded) = tx.get_pre_encoded() {
+                transaction_return_encoded(pre_encoded, tag, buf);
+                return;
+            }
         }
 
         metrics::pre_encoded_cache_miss("txn");
@@ -746,16 +696,15 @@ impl FilteredUpdateTransaction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateTransactionStatus {
-    pub transaction: Arc<MessageTransactionInfo>,
-    pub slot: u64,
+    pub transaction: Arc<MessageTransaction>,
 }
 
 impl prost::Message for FilteredUpdateTransactionStatus {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        if self.slot != 0u64 {
-            ::prost::encoding::uint64::encode(1u32, &self.slot, buf);
+        if self.transaction.slot != 0u64 {
+            ::prost::encoding::uint64::encode(1u32, &self.transaction.slot, buf);
         }
-        let tx = &self.transaction;
+        let tx = &self.transaction.transaction;
         prost_bytes_encode_raw(2u32, tx.signature.as_ref(), buf);
         if tx.is_vote {
             ::prost::encoding::bool::encode(3u32, &tx.is_vote, buf);
@@ -770,11 +719,11 @@ impl prost::Message for FilteredUpdateTransactionStatus {
     }
 
     fn encoded_len(&self) -> usize {
-        let tx = &self.transaction;
+        let tx = &self.transaction.transaction;
         let index = tx.index as u64;
 
-        (if self.slot != 0u64 {
-            ::prost::encoding::uint64::encoded_len(1u32, &self.slot)
+        (if self.transaction.slot != 0u64 {
+            ::prost::encoding::uint64::encoded_len(1u32, &self.transaction.slot)
         } else {
             0
         }) + prost_bytes_encoded_len(2u32, tx.signature.as_ref())
@@ -810,11 +759,245 @@ impl prost::Message for FilteredUpdateTransactionStatus {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateDeshredTransaction {
+    pub transaction: Arc<MessageDeshredTransaction>,
+}
+
+impl prost::Message for FilteredUpdateDeshredTransaction {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        Self::tx_encode_raw(1u32, &self.transaction.transaction, buf);
+        if self.transaction.slot != 0u64 {
+            ::prost::encoding::uint64::encode(2u32, &self.transaction.slot, buf);
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction.transaction))
+            + if self.transaction.slot != 0u64 {
+                ::prost::encoding::uint64::encoded_len(2u32, &self.transaction.slot)
+            } else {
+                0
+            }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateDeshredTransaction {
+    fn tx_encode_raw(tag: u32, tx: &MessageDeshredTransactionInfo, buf: &mut impl BufMut) {
+        encode_key(tag, WireType::LengthDelimited, buf);
+        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+
+        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
+        if tx.is_vote {
+            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
+        }
+        message::encode(3u32, &tx.transaction, buf);
+        for pk in &tx.loaded_writable_addresses {
+            prost_bytes_encode_raw(4u32, pk.as_ref(), buf);
+        }
+        for pk in &tx.loaded_readonly_addresses {
+            prost_bytes_encode_raw(5u32, pk.as_ref(), buf);
+        }
+        if tx.completed_data_set_starting_shred_index != 0u32 {
+            ::prost::encoding::uint32::encode(
+                6u32,
+                &tx.completed_data_set_starting_shred_index,
+                buf,
+            );
+        }
+        if tx.completed_data_set_ending_shred_index_exclusive != 0u32 {
+            ::prost::encoding::uint32::encode(
+                7u32,
+                &tx.completed_data_set_ending_shred_index_exclusive,
+                buf,
+            );
+        }
+    }
+
+    fn tx_encoded_len(tx: &MessageDeshredTransactionInfo) -> usize {
+        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
+            + if tx.is_vote {
+                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
+            } else {
+                0
+            }
+            + message::encoded_len(3u32, &tx.transaction)
+            + prost_repeated_encoded_len_map!(4u32, tx.loaded_writable_addresses, |pk| pk
+                .as_ref()
+                .len())
+            + prost_repeated_encoded_len_map!(5u32, tx.loaded_readonly_addresses, |pk| pk
+                .as_ref()
+                .len())
+            + if tx.completed_data_set_starting_shred_index != 0u32 {
+                ::prost::encoding::uint32::encoded_len(
+                    6u32,
+                    &tx.completed_data_set_starting_shred_index,
+                )
+            } else {
+                0
+            }
+            + if tx.completed_data_set_ending_shred_index_exclusive != 0u32 {
+                ::prost::encoding::uint32::encoded_len(
+                    7u32,
+                    &tx.completed_data_set_ending_shred_index_exclusive,
+                )
+            } else {
+                0
+            }
+    }
+}
+
+pub type FilteredUpdatesDeshred = SmallVec<[FilteredUpdateDeshred; 2]>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateDeshred {
+    pub filters: FilteredUpdateFilters,
+    pub message: FilteredUpdateDeshredOneof,
+    pub created_at: Timestamp,
+}
+
+impl prost::Message for FilteredUpdateDeshred {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        for name in self.filters.iter().map(|filter| filter.as_ref()) {
+            encode_key(1u32, WireType::LengthDelimited, buf);
+            encode_varint(name.len() as u64, buf);
+            buf.put_slice(name.as_bytes());
+        }
+        self.message.encode_raw(buf);
+        message::encode(5u32, &self.created_at, buf);
+    }
+
+    fn encoded_len(&self) -> usize {
+        prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
+            + self.message.encoded_len()
+            + message::encoded_len(5u32, &self.created_at)
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+impl FilteredUpdateDeshred {
+    pub const fn new(
+        filters: FilteredUpdateFilters,
+        message: FilteredUpdateDeshredOneof,
+        created_at: Timestamp,
+    ) -> Self {
+        Self {
+            filters,
+            message,
+            created_at,
+        }
+    }
+
+    pub fn new_empty(message: FilteredUpdateDeshredOneof) -> Self {
+        Self::new(
+            FilteredUpdateFilters::new(),
+            message,
+            Timestamp::from(SystemTime::now()),
+        )
+    }
+
+    pub fn ping() -> Self {
+        Self::new_empty(FilteredUpdateDeshredOneof::Ping)
+    }
+
+    pub fn pong(id: i32) -> Self {
+        Self::new_empty(FilteredUpdateDeshredOneof::pong(id))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilteredUpdateDeshredOneof {
+    DeshredTransaction(FilteredUpdateDeshredTransaction), // tag 2
+    Ping,                                                 // tag 3
+    Pong(SubscribeUpdatePong),                            // tag 4
+    Slot(FilteredUpdateSlot),                             // tag 6
+}
+
+impl FilteredUpdateDeshredOneof {
+    pub fn deshred_transaction(message: &Arc<MessageDeshredTransaction>) -> Self {
+        Self::DeshredTransaction(FilteredUpdateDeshredTransaction {
+            transaction: Arc::clone(message),
+        })
+    }
+
+    pub const fn slot(message: MessageSlot) -> Self {
+        Self::Slot(FilteredUpdateSlot(message))
+    }
+
+    pub const fn pong(id: i32) -> Self {
+        Self::Pong(SubscribeUpdatePong { id })
+    }
+}
+
+impl prost::Message for FilteredUpdateDeshredOneof {
+    fn encode_raw(&self, buf: &mut impl BufMut) {
+        match self {
+            Self::DeshredTransaction(msg) => message::encode(2u32, msg, buf),
+            Self::Ping => {
+                encode_key(3u32, WireType::LengthDelimited, buf);
+                encode_varint(0, buf);
+            }
+            Self::Pong(msg) => message::encode(4u32, msg, buf),
+            Self::Slot(msg) => message::encode(6u32, msg, buf),
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        match self {
+            Self::DeshredTransaction(msg) => message::encoded_len(2u32, msg),
+            Self::Ping => key_len(3u32) + encoded_len_varint(0),
+            Self::Pong(msg) => message::encoded_len(4u32, msg),
+            Self::Slot(msg) => message::encoded_len(6u32, msg),
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        unimplemented!()
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FilteredUpdateBlock {
     pub meta: Arc<MessageBlockMeta>,
-    pub transactions: Vec<Arc<MessageTransactionInfo>>,
+    pub transactions: Vec<Arc<MessageTransaction>>,
     pub updated_account_count: u64,
-    pub accounts: Vec<Arc<MessageAccountInfo>>,
+    pub accounts: Vec<Arc<MessageAccount>>,
     pub accounts_data_slice: FilterAccountsDataSlice,
     pub entries: Vec<Arc<MessageEntry>>,
 }
@@ -837,7 +1020,7 @@ impl prost::Message for FilteredUpdateBlock {
             message::encode(5u32, msg, buf);
         }
         for tx in &self.transactions {
-            FilteredUpdateTransaction::tx_encode_raw(6u32, tx.as_ref(), buf);
+            FilteredUpdateTransaction::tx_encode_raw(6u32, &tx.transaction, buf);
         }
         if self.meta.parent_slot != 0u64 {
             ::prost::encoding::uint64::encode(7u32, &self.meta.parent_slot, buf);
@@ -854,7 +1037,7 @@ impl prost::Message for FilteredUpdateBlock {
         for account in &self.accounts {
             FilteredUpdateAccount::account_encode_raw(
                 11u32,
-                account.as_ref(),
+                &account.account,
                 &self.accounts_data_slice,
                 buf,
             );
@@ -897,7 +1080,7 @@ impl prost::Message for FilteredUpdateBlock {
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
             + prost_repeated_encoded_len_map!(6u32, self.transactions, |tx| {
-                FilteredUpdateTransaction::tx_encoded_len(tx.as_ref())
+                FilteredUpdateTransaction::tx_encoded_len(&tx.transaction)
             })
             + if self.meta.parent_slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(7u32, &self.meta.parent_slot)
@@ -921,7 +1104,7 @@ impl prost::Message for FilteredUpdateBlock {
             }
             + prost_repeated_encoded_len_map!(11u32, self.accounts, |account| {
                 FilteredUpdateAccount::account_encoded_len(
-                    account.as_ref(),
+                    &account.account,
                     &self.accounts_data_slice,
                 )
             })
@@ -1038,10 +1221,8 @@ pub mod tests {
             encoder::{AccountEncoder, TransactionEncoder},
             message::{FilteredUpdateAccount, FilteredUpdateTransaction},
         },
-        message::{MessageSlot, MessageTransaction, SlotStatus},
+        message::{MessageSlot, SlotStatus},
     };
-    #[cfg(test)]
-    use prost::Message as _;
     #[cfg(test)]
     use yellowstone_grpc_proto::geyser::SubscribeUpdate;
     use {
@@ -1051,12 +1232,12 @@ pub mod tests {
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageTransactionInfo,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
         bytes::Bytes,
         foldhash::{HashSet as FoldHashSet, HashSetExt},
-        prost_011::Message as _,
+        prost::Message,
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
@@ -1096,7 +1277,7 @@ pub mod tests {
         .collect()
     }
 
-    pub fn create_accounts_raw() -> Vec<Arc<MessageAccountInfo>> {
+    pub fn create_accounts_raw() -> Vec<MessageAccountInfo> {
         let pubkey = Pubkey::from_str("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu").unwrap();
         let owner = Pubkey::from_str("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn").unwrap();
         let txn_signature = Signature::from_str("4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5").unwrap();
@@ -1113,7 +1294,7 @@ pub mod tests {
                     ] {
                         for write_version in [0, 1] {
                             for txn_signature in [None, Some(txn_signature)] {
-                                accounts.push(Arc::new(MessageAccountInfo {
+                                accounts.push(MessageAccountInfo {
                                     pubkey,
                                     lamports,
                                     owner,
@@ -1123,7 +1304,7 @@ pub mod tests {
                                     write_version,
                                     txn_signature,
                                     pre_encoded: OnceLock::new(),
-                                }));
+                                });
                             }
                         }
                     }
@@ -1140,7 +1321,7 @@ pub mod tests {
                 for is_startup in [true, false] {
                     for data_slice in create_account_data_slice() {
                         let msg = MessageAccount {
-                            account: Arc::clone(&account),
+                            account: account.clone(),
                             slot,
                             is_startup,
                             created_at: Timestamp::from(SystemTime::now()),
@@ -1202,10 +1383,15 @@ pub mod tests {
             .collect()
     }
 
-    pub fn load_predefined_transactions() -> Vec<Arc<MessageTransactionInfo>> {
+    pub fn load_predefined_transactions() -> Vec<Arc<MessageTransaction>> {
         load_predefined_blocks()
             .into_iter()
-            .flat_map(|block| block.transactions.into_iter().map(|tx| (tx.signature, tx)))
+            .flat_map(|block| {
+                block
+                    .transactions
+                    .into_iter()
+                    .map(|tx| (tx.transaction.signature, tx))
+            })
             .collect::<HashMap<_, _>>()
             .into_values()
             .collect()
@@ -1223,16 +1409,20 @@ pub mod tests {
                         let TransactionWithStatusMeta::Complete(tx) = tx else {
                             panic!("tx with missed meta");
                         };
-                        MessageTransactionInfo {
-                            signature: tx.transaction.signatures[0],
-                            is_vote: true,
-                            transaction: convert_to::create_transaction(&tx.transaction),
-                            meta: convert_to::create_transaction_meta(&tx.meta),
-                            index,
-                            account_keys: FoldHashSet::new(),
-                            pre_encoded: OnceLock::new(),
-                            token_owners_all: OnceLock::new(),
-                            token_owners_changed: OnceLock::new(),
+                        MessageTransaction {
+                            transaction: MessageTransactionInfo {
+                                signature: tx.transaction.signatures[0],
+                                is_vote: true,
+                                transaction: convert_to::create_transaction(&tx.transaction),
+                                meta: convert_to::create_transaction_meta(&tx.meta),
+                                index,
+                                account_keys: FoldHashSet::new(),
+                                pre_encoded: OnceLock::new(),
+                                token_owners_all: OnceLock::new(),
+                                token_owners_changed: OnceLock::new(),
+                            },
+                            slot: block.parent_slot + 1,
+                            created_at: Timestamp::from(SystemTime::now()),
                         }
                     })
                     .map(Arc::new)
@@ -1265,7 +1455,17 @@ pub mod tests {
                 let block_meta1 = Arc::new(block_meta1);
                 let block_meta2 = Arc::new(block_meta2);
 
-                let accounts = create_accounts_raw();
+                let accounts = create_accounts_raw()
+                    .into_iter()
+                    .map(|acc_info| {
+                        Arc::new(MessageAccount {
+                            account: acc_info,
+                            slot: block.parent_slot + 1,
+                            is_startup: false,
+                            created_at: Timestamp::from(SystemTime::now()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 create_account_data_slice()
                     .into_iter()
                     .flat_map(move |data_slice| {
@@ -1304,11 +1504,6 @@ pub mod tests {
         assert_eq!(
             SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
             update
-        );
-        assert_eq!(
-            FilteredUpdate::from_subscribe_update(update.clone())
-                .map(|msg| msg.as_subscribe_update()),
-            Ok(update)
         );
     }
 
@@ -1397,7 +1592,8 @@ pub mod tests {
     #[test]
     fn test_message_account() {
         for (msg, data_slice) in create_accounts() {
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::account(&msg, data_slice));
+            let msg_arc = Arc::new(msg);
+            encode_decode_cmp(&["123"], FilteredUpdateOneof::account(msg_arc, data_slice));
         }
     }
 
@@ -1442,48 +1638,57 @@ pub mod tests {
     #[test]
     fn test_pre_encoded_matches_manual_encoding() {
         // Get real transactions from fixtures (these have pre_encoded: None)
-        for tx_arc in load_predefined_transactions() {
+        for message_arc in load_predefined_transactions() {
+            let tx = &message_arc.transaction;
             // Clone the transaction info
-            let tx_with_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: OnceLock::new(),
-                token_owners_all: OnceLock::new(),
-                token_owners_changed: OnceLock::new(),
-            };
+            let tx_with_cache = Arc::new(MessageTransaction {
+                transaction: MessageTransactionInfo {
+                    signature: tx.signature,
+                    is_vote: tx.is_vote,
+                    transaction: tx.transaction.clone(),
+                    meta: tx.meta.clone(),
+                    index: tx.index,
+                    account_keys: tx.account_keys.clone(),
+                    pre_encoded: OnceLock::new(),
+                    token_owners_all: OnceLock::new(),
+                    token_owners_changed: OnceLock::new(),
+                },
+                slot: message_arc.slot,
+                created_at: message_arc.created_at,
+            });
 
             // Create version without cache (fallback path)
-            let tx_without_cache = MessageTransactionInfo {
-                signature: tx_arc.signature,
-                is_vote: tx_arc.is_vote,
-                transaction: tx_arc.transaction.clone(),
-                meta: tx_arc.meta.clone(),
-                index: tx_arc.index,
-                account_keys: tx_arc.account_keys.clone(),
-                pre_encoded: OnceLock::new(),
-                token_owners_all: OnceLock::new(),
-                token_owners_changed: OnceLock::new(),
-            };
+            let tx_without_cache = Arc::new(MessageTransaction {
+                transaction: MessageTransactionInfo {
+                    signature: tx.signature,
+                    is_vote: tx.is_vote,
+                    transaction: tx.transaction.clone(),
+                    meta: tx.meta.clone(),
+                    index: tx.index,
+                    account_keys: tx.account_keys.clone(),
+                    pre_encoded: OnceLock::new(),
+                    token_owners_all: OnceLock::new(),
+                    token_owners_changed: OnceLock::new(),
+                },
+                slot: message_arc.slot,
+                created_at: message_arc.created_at,
+            });
 
             // Pre-encode one of them
-            TransactionEncoder::pre_encode(&tx_with_cache);
+            TransactionEncoder::pre_encode(&tx_with_cache.transaction);
 
             assert!(
-                tx_with_cache.pre_encoded.get().is_some(),
+                tx_with_cache.transaction.pre_encoded.get().is_some(),
                 "pre_encode should populate the field"
             );
 
             // Wrap both in FilteredUpdateTransaction and encode via the public Message trait
             let wrapped_cached = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_with_cache),
+                transaction: tx_with_cache,
                 slot: 42,
             };
             let wrapped_manual = FilteredUpdateTransaction {
-                transaction: Arc::new(tx_without_cache),
+                transaction: tx_without_cache,
                 slot: 42,
             };
 
@@ -1495,7 +1700,7 @@ pub mod tests {
             assert_eq!(
                 buf_cached, buf_manual,
                 "Pre-encoded bytes differ from manual encoding for tx {:?}",
-                tx_arc.signature
+                tx.signature
             );
         }
 
@@ -1508,13 +1713,14 @@ pub mod tests {
     #[test]
     fn test_message_transaction() {
         for transaction in load_predefined_transactions() {
-            let msg = MessageTransaction {
-                transaction,
-                slot: 42,
-                created_at: Timestamp::from(SystemTime::now()),
-            };
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction(&msg));
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::transaction_status(&msg));
+            encode_decode_cmp(
+                &["123"],
+                FilteredUpdateOneof::transaction(Arc::clone(&transaction)),
+            );
+            encode_decode_cmp(
+                &["123"],
+                FilteredUpdateOneof::transaction_status(transaction),
+            );
         }
     }
 

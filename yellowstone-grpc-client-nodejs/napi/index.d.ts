@@ -14,6 +14,7 @@ export declare class CompressedAccountFilterSet {
   toProto(): Buffer
   toAccountFilter(): Buffer
   toBlockFilter(): Buffer
+  toTransactionFilter(): Buffer
 }
 
 /**
@@ -148,6 +149,13 @@ export interface JsReconnectConfig {
   enabled?: boolean
   backoff?: JsReconnectBackoff
   slotRetention?: number
+  /** Omitted defaults to RecoverMissedData. */
+  policy?: JsReconnectPolicy
+}
+
+export declare const enum JsReconnectPolicy {
+  RecoverMissedData = 'RecoverMissedData',
+  SkipMissedData = 'SkipMissedData'
 }
 
 export declare const enum WasmUiTransactionEncoding {

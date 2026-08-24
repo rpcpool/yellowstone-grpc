@@ -115,7 +115,7 @@ impl HttpSubscriptionRepository {
                 );
             }
         }
-        const SEPARATOR: &'static str = "\0";
+        const SEPARATOR: &str = "\0";
         let caching_key = caching_key_parts.join(SEPARATOR);
 
         let request_builder = self.client.get(url).headers(header_map);

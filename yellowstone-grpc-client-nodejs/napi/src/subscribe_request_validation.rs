@@ -149,6 +149,20 @@ pub fn validate_subscribe_request(
     }
   }
 
+  for (group_name, filters) in [
+    ("transactions", &request.transactions),
+    ("transactionsStatus", &request.transactions_status),
+  ] {
+    for (filter_name, filter) in filters {
+      if let Some(cuckoo_filter) = &filter.cuckoo_account_include {
+        validate_cuckoo_filter(
+          cuckoo_filter,
+          &format!("{group_name}[\"{filter_name}\"].cuckooAccountInclude"),
+        )?;
+      }
+    }
+  }
+
   for (block_key, block_filter) in &request.blocks {
     if let Some(cuckoo_filter) = &block_filter.cuckoo_account_include {
       validate_cuckoo_filter(
@@ -418,6 +432,7 @@ mod tests {
         account_include: vec!["acc_i".to_string()],
         account_exclude: vec!["acc_x".to_string()],
         account_required: vec!["acc_r".to_string()],
+        cuckoo_account_include: None,
         token_accounts: None,
       },
     );
@@ -432,6 +447,7 @@ mod tests {
         account_include: vec!["status_i".to_string()],
         account_exclude: vec!["status_x".to_string()],
         account_required: vec!["status_r".to_string()],
+        cuckoo_account_include: None,
         token_accounts: None,
       },
     );
@@ -615,7 +631,7 @@ mod tests {
   }
 
   #[test]
-  fn accepts_valid_account_and_block_cuckoo_filters() {
+  fn accepts_valid_cuckoo_filters_in_all_supported_request_maps() {
     let mut request = fully_populated_request();
     request
       .accounts
@@ -625,6 +641,16 @@ mod tests {
     request
       .blocks
       .get_mut("blocks_client")
+      .unwrap()
+      .cuckoo_account_include = Some(valid_cuckoo_filter());
+    request
+      .transactions
+      .get_mut("transactions_client")
+      .unwrap()
+      .cuckoo_account_include = Some(valid_cuckoo_filter());
+    request
+      .transactions_status
+      .get_mut("tx_status_client")
       .unwrap()
       .cuckoo_account_include = Some(valid_cuckoo_filter());
 
@@ -670,6 +696,30 @@ mod tests {
       error,
       SubscribeRequestValidationError::InvalidCuckooDataLength {
         path: "blocks[\"blocks_client\"].cuckooAccountInclude".to_string(),
+        expected: 8,
+        actual: 7,
+      }
+    );
+  }
+
+  #[test]
+  fn rejects_invalid_transaction_status_cuckoo_filter_with_precise_path() {
+    let mut request = fully_populated_request();
+    let mut cuckoo_filter = valid_cuckoo_filter();
+    cuckoo_filter.data.pop();
+    request
+      .transactions_status
+      .get_mut("tx_status_client")
+      .unwrap()
+      .cuckoo_account_include = Some(cuckoo_filter);
+
+    let error = validate_subscribe_request(&request)
+      .expect_err("invalid transaction status cuckoo filter must fail");
+
+    assert_eq!(
+      error,
+      SubscribeRequestValidationError::InvalidCuckooDataLength {
+        path: "transactionsStatus[\"tx_status_client\"].cuckooAccountInclude".to_string(),
         expected: 8,
         actual: 7,
       }

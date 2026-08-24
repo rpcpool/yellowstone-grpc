@@ -1,20 +1,23 @@
 use {
     crate::{
         config::Config,
-        grpc::GrpcService,
+        file_watcher::FileWatcher,
+        grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                Message, MessageAccount, MessageBlockMeta, MessageEntry, MessageSlot,
-                MessageTransaction,
+                CommitmentLevel, Message, MessageAccount, MessageBlockMeta,
+                MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
             },
         },
+        stream::tokio::BatchStreamUnboundedReceiver,
+        version::VERSION,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
-        SlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     solana_pubkey::Pubkey,
     std::{
@@ -27,7 +30,7 @@ use {
     },
     tokio::{
         runtime::{Builder, Runtime},
-        sync::mpsc,
+        sync::{broadcast, mpsc},
     },
     tokio_rustls::rustls,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
@@ -39,15 +42,47 @@ pub struct PluginInner {
     snapshot_channel: Mutex<Option<crossbeam_channel::Sender<Box<Message>>>>,
     snapshot_channel_closed: AtomicBool,
     filter_limits: FilterLimits,
-    grpc_channel: mpsc::UnboundedSender<Message>,
+    grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
+    deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
+    block_reconstruction_channel: mpsc::UnboundedSender<BlockReconstructionMessage>, // block_reconstruction_loop
+    broadcast_channel: SubscriberChannels,                                           // client_loop
+    blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
+    file_watcher: Arc<FileWatcher>,
 }
 
 impl PluginInner {
+    // Sends messages to the geyser_loop
     fn send_message(&self, message: Message) {
         if self.grpc_channel.send(message).is_ok() {
             metrics::message_queue_size_inc();
+        }
+    }
+
+    // Sends messages to the deshred subscribers if their filter allows it.
+    fn send_deshred_message(&self, message: Message) {
+        if let Ok(count) = self.deshred_channel.send(message) {
+            metrics::deshred_queue_size_inc(count as i64);
+        }
+    }
+
+    // Sends messages to the block reconstruction loop
+    fn send_block_reconstruction_message(&self, message: BlockReconstructionMessage) {
+        if self.block_reconstruction_channel.send(message).is_ok() {
+            metrics::block_reconstruction_queue_size_inc();
+        }
+    }
+
+    // Sends messages to all subscribed clients if their filter matches the message.
+    fn send_broadcast_message(&self, commitment: CommitmentLevel, messages: Arc<Vec<Message>>) {
+        self.broadcast_channel.send(commitment, messages);
+    }
+
+    // Sends messages to block meta storage
+    fn send_blocks_meta_message(&self, message: Message) {
+        if let Some(blocks_meta_tx) = &self.blocks_meta_tx {
+            let _ = blocks_meta_tx.send(message);
         }
     }
 }
@@ -114,37 +149,43 @@ impl GeyserPlugin for Plugin {
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
+        let file_watcher = crate::file_watcher::FileWatcher::new().map_err(|error| {
+            GeyserPluginError::Custom(format!("failed to create file watcher: {error:?}").into())
+        })?;
+        let file_watcher = Arc::new(file_watcher);
+        let geyser_svc_file_watcher = Arc::clone(&file_watcher);
+        let (grpc_channel_tx, grpc_channel_receiver) = mpsc::unbounded_channel();
         let result = runtime.block_on(async move {
             static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
             CRYPTO_PROVIDER_INIT.call_once(|| {
                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             });
-
-            let (debug_client_tx, debug_client_rx) = mpsc::unbounded_channel();
             // Create prometheus service First so if it fails the plugin doesn't spawn geyser tasks unnecessarily.
             PrometheusService::spawn(
                 config.prometheus,
-                config.debug_clients_http.then_some(debug_client_rx),
                 prometheus_cancellation_token,
                 prometheus_task_tracker,
+                &VERSION,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
 
-            let (snapshot_channel, grpc_channel) = GrpcService::create(
+            let grpc_channel_rx = BatchStreamUnboundedReceiver::new(grpc_channel_receiver);
+            let grpc_service_result = GrpcService::create(
                 config.grpc,
-                config.debug_clients_http.then_some(debug_client_tx),
                 is_reload,
                 grpc_cancellation_token,
                 grpc_task_tracker,
+                geyser_svc_file_watcher,
+                grpc_channel_rx,
             )
             .await
             .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
-            Ok::<_, GeyserPluginError>((snapshot_channel, grpc_channel))
+            Ok::<_, GeyserPluginError>(grpc_service_result)
         });
 
-        let (snapshot_channel, grpc_channel) = match result {
+        let grpc_service_result = match result {
             Ok(val) => val,
             Err(e) => {
                 log::error!("failed to start plugin services: {e}");
@@ -156,12 +197,17 @@ impl GeyserPlugin for Plugin {
 
         self.inner = Some(PluginInner {
             runtime,
-            snapshot_channel: Mutex::new(snapshot_channel),
+            snapshot_channel: Mutex::new(grpc_service_result.snapshot_tx),
             snapshot_channel_closed: AtomicBool::new(false),
             filter_limits,
-            grpc_channel,
+            grpc_channel: grpc_channel_tx,
+            deshred_channel: grpc_service_result.deshred_broadcast_tx,
+            block_reconstruction_channel: grpc_service_result.block_reconstruction_tx,
+            broadcast_channel: grpc_service_result.broadcast,
+            blocks_meta_tx: grpc_service_result.blocks_meta_tx,
             plugin_cancellation_token,
             plugin_task_tracker,
+            file_watcher,
         });
 
         Ok(())
@@ -173,6 +219,7 @@ impl GeyserPlugin for Plugin {
             log::info!("shutting down plugin: {number_of_tasks} tasks to cancel.");
             inner.plugin_cancellation_token.cancel();
             inner.plugin_task_tracker.close();
+            drop(inner.file_watcher);
             drop(inner.grpc_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();
@@ -213,8 +260,9 @@ impl GeyserPlugin for Plugin {
 
             if is_startup {
                 if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                    let message =
-                        Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                    let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                        account, slot, is_startup,
+                    )));
                     match channel.send(Box::new(message)) {
                         Ok(()) => metrics::message_queue_size_inc(),
                         Err(_) => {
@@ -227,8 +275,9 @@ impl GeyserPlugin for Plugin {
                     }
                 }
             } else {
-                let message =
-                    Message::Account(MessageAccount::from_geyser(account, slot, is_startup));
+                let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                    account, slot, is_startup,
+                )));
                 inner.send_message(message);
             }
 
@@ -250,8 +299,47 @@ impl GeyserPlugin for Plugin {
         status: &SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot(MessageSlot::from_geyser(slot, parent, status));
-            inner.send_message(message);
+            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status)));
+            if matches!(
+                status,
+                SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted
+            ) {
+                // Processed/Confirmed/Finalized slot status updates are handled by the block reconstruction loop and are never directly exposed by the processed message loop (geyser_loop.)
+                // If they were to be sent through geyser_loop, the block_reconstruction_loop would also send them, resulting in duplicate slot life-cycle messages.
+                // By sending them directly to block_reconstruction_loop, we avoid this issue while ensuring block reconstruction happens as normal.
+                inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
+                    message.clone(),
+                ));
+            } else {
+                // The only remaining states are FirstShredReceived/Completed/CreatedBank/Dead.
+                // These states are used by both block reconstruction and the geyser_loop (processed message loop).
+                // When sending to geyser_loop, the loop will batch all messages (whether it's slot updates, account updates, or transaction updates) and send them to the block_reconstruction_loop in a single batch.
+                // CreatedBank in particular is critical to the life-cycle of a block reconstruction, but it is not forwarded to the subscribed client from block_reconstruction_loop, so it must be sent to geyser_loop to ensure subscribers receive it.
+                inner.send_message(message.clone());
+
+                // Note: The following if statement remains here in case of any future additions to a slot's life-cycle state.
+                // It could be removed as it is right now, since we've already filtered out all other states above, but it is left here for clarity and future-proofing.
+                if matches!(
+                    status,
+                    SlotStatus::FirstShredReceived
+                        | SlotStatus::Completed
+                        | SlotStatus::CreatedBank
+                        | SlotStatus::Dead(_)
+                ) {
+                    // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
+                    // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
+                    let messages = Arc::new(vec![message.clone()]);
+                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
+                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
+                }
+            }
+
+            // Deshred subscribers need to receive all slot status updates.
+            inner.send_deshred_message(message.clone());
+
+            // Blocks meta subscribers need to receive all slot status updates.
+            inner.send_blocks_meta_message(message);
+
             metrics::update_slot_status(status, slot);
             Ok(())
         })
@@ -273,7 +361,8 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 
-            let message = Message::Transaction(MessageTransaction::from_geyser(transaction, slot));
+            let message =
+                Message::Transaction(Arc::new(MessageTransaction::from_geyser(transaction, slot)));
             inner.send_message(message);
 
             Ok(())
@@ -313,7 +402,29 @@ impl GeyserPlugin for Plugin {
             };
 
             let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo)));
-            inner.send_message(message);
+
+            // It's super important that block-meta message goes to the geyser loop message channel,
+            // and not straight to block-reconstruction.
+            // The reason why is during block freeze, in agave, some account update are emitted really late, but before block-meta.
+            // In order to guarantee those account update are seen by the block-reconstruction state machine and all downstream customer,
+            // we must send the block-meta message to the geyser loop, so that it be emitted to the block-reconstruction loop after all account update messages have been processed.
+            inner.send_message(message.clone());
+            inner.send_blocks_meta_message(message);
+
+            Ok(())
+        })
+    }
+
+    fn notify_deshred_transaction(
+        &self,
+        transaction: ReplicaDeshredTransactionInfoVersions,
+        slot: u64,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message = Message::DeshredTransaction(Arc::new(
+                MessageDeshredTransaction::from_geyser_versioned(transaction, slot),
+            ));
+            inner.send_deshred_message(message);
 
             Ok(())
         })
@@ -332,6 +443,14 @@ impl GeyserPlugin for Plugin {
     }
 
     fn entry_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn deshred_transaction_notifications_enabled(&self) -> bool {
+        true
+    }
+
+    fn deshred_transaction_alt_resolution_enabled(&self) -> bool {
         true
     }
 }

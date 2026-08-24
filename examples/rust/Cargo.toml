@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client-simple"
-version = "12.3.0"
+version = "12.3.1"
 authors = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -15,7 +15,6 @@ name = "client"
 [dependencies]
 anyhow = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
-bincode = { workspace = true }
 bs58 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

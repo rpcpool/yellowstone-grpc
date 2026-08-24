@@ -1,15 +1,25 @@
 use {
-    clap::Parser,
+    clap::{Parser, ValueEnum},
     futures::stream::StreamExt,
     log::info,
     std::collections::HashMap,
-    yellowstone_grpc_client::{GeyserGrpcClient, ReconnectConfig},
+    yellowstone_grpc_client::{
+        Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectionPolicy, DEFAULT_SLOT_RETENTION,
+    },
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
         SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
         SubscribeRequestFilterTransactions,
     },
 };
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Policy {
+    /// Re-request data produced while disconnected. No gap in the stream.
+    Recover,
+    /// Continue from the newest data. Anything missed is lost.
+    Skip,
+}
 
 #[derive(Debug, Clone, Parser)]
 #[clap(author, version, about = "Yellowstone gRPC client with auto-reconnect")]
@@ -28,6 +38,10 @@ struct Args {
 
     #[clap(long)]
     transactions: bool,
+
+    /// What happens to data produced while the connection was down.
+    #[clap(long, value_enum, default_value_t = Policy::Recover)]
+    policy: Policy,
 }
 
 #[tokio::main]
@@ -35,9 +49,19 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = Args::parse();
 
+    let reconnect_config = ReconnectConfig {
+        backoff: Backoff::default(),
+        policy: match args.policy {
+            Policy::Recover => ReconnectionPolicy::RecoverMissedData {
+                slot_retention: DEFAULT_SLOT_RETENTION,
+            },
+            Policy::Skip => ReconnectionPolicy::SkipMissedData,
+        },
+    };
+
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
-        .set_reconnect_config(ReconnectConfig::default())
+        .set_reconnect_config(reconnect_config)
         .connect()
         .await?;
 
@@ -73,10 +97,11 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    info!("connecting with auto-reconnect enabled");
+    info!("connecting with policy={:?}", args.policy);
     let mut stream = client.subscribe_once(request).await?;
     let mut count = 0u64;
 
+    // Reconnects happen underneath this loop. Nothing here needs to know.
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(update) => {
