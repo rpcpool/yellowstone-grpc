@@ -310,7 +310,7 @@ impl GrpcClient {
     env: &'env napi::Env,
     initial_request_bytes: Option<Buffer>,
   ) -> napi::Result<PromiseRaw<'env, crate::DuplexStream>> {
-    crate::DuplexStream::subscribe(env, self, initial_request_bytes)
+    crate::subscribe_duplex_stream(env, self, initial_request_bytes)
   }
 
   /// Creates a deshred subscription stream bound to this client connection.
@@ -324,6 +324,6 @@ impl GrpcClient {
     &self,
     env: &'env napi::Env,
   ) -> napi::Result<PromiseRaw<'env, crate::DuplexStreamDeshred>> {
-    crate::DuplexStreamDeshred::subscribe(env, self)
+    crate::subscribe_duplex_stream_deshred(env, self)
   }
 }
