@@ -6,9 +6,24 @@ use {
     std::{collections::HashMap, env, path::PathBuf, process::ExitCode, time::Duration},
     yellowstone_grpc_intg_test::{
         config::Config,
+        grpc::fetch_target_version,
         scenarios::{init_log, RunConfig, Scenario},
     },
 };
+
+// 2 is reserved: clap uses it for usage errors.
+mod exit_code {
+    pub const OK: u8 = 0;
+    pub const FAILED: u8 = 1;
+    pub const CANNOT_VERIFY: u8 = 3;
+}
+
+mod build_info {
+    pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+    pub const GIT: &str = env!("GIT_VERSION");
+    pub const BUILD_TS: &str = env!("VERGEN_BUILD_TIMESTAMP");
+    pub const RUSTC: &str = env!("VERGEN_RUSTC_SEMVER");
+}
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -37,6 +52,12 @@ enum Commands {
     Run {
         #[arg(value_name = "SCENARIO")]
         scenario: String,
+    },
+    /// Verify the plugin version the target reports. Exits 0 on match, 1 on
+    /// mismatch, 3 if the version could not be determined.
+    VerifyVersion {
+        /// Version the target should report (semver, or a git describe prefix).
+        expected: Option<String>,
     },
 }
 
@@ -216,7 +237,7 @@ async fn run_scenario(
     res
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli) -> Result<ExitCode> {
     init_log();
 
     if let Commands::List {
@@ -231,7 +252,7 @@ async fn run(cli: Cli) -> Result<()> {
 
         if scenarios.is_empty() {
             println!("No scenarios match the specified tags.");
-            return Ok(());
+            return Ok(ExitCode::from(exit_code::OK));
         }
 
         let name_w = scenarios.iter().map(|s| s.name.len()).max().unwrap_or(4);
@@ -253,7 +274,7 @@ async fn run(cli: Cli) -> Result<()> {
                 scenario.description,
             );
         }
-        return Ok(());
+        return Ok(ExitCode::from(exit_code::OK));
     }
 
     let dotenv_values = load_dotenv(cli.dotenv.as_ref());
@@ -272,8 +293,52 @@ async fn run(cli: Cli) -> Result<()> {
         config,
     };
 
+    println!(
+        "yellowstone-e2e version={} git={} built={} rustc={}",
+        build_info::VERSION,
+        build_info::GIT,
+        build_info::BUILD_TS,
+        build_info::RUSTC,
+    );
+    println!("target endpoint: {}", run_config.endpoint);
+
+    if let Commands::VerifyVersion { expected } = &cli.command {
+        let target = match fetch_target_version(&run_config).await {
+            Ok(target) => target,
+            Err(err) => {
+                eprintln!("could not determine target plugin version (GetVersion): {err:#}");
+                return Ok(ExitCode::from(exit_code::CANNOT_VERIFY));
+            }
+        };
+        println!(
+            "target plugin version: version={} git={} proto={} solana={}",
+            target.version, target.git, target.proto, target.solana
+        );
+        return match expected {
+            Some(expected) => match target.assert_matches(expected) {
+                Ok(()) => {
+                    println!("✅ target version matches expected '{expected}'");
+                    Ok(ExitCode::from(exit_code::OK))
+                }
+                Err(err) => {
+                    eprintln!("❌ {err:#}");
+                    Ok(ExitCode::from(exit_code::FAILED))
+                }
+            },
+            None => Ok(ExitCode::from(exit_code::OK)),
+        };
+    }
+
+    match fetch_target_version(&run_config).await {
+        Ok(target) => println!(
+            "target plugin version: version={} git={} proto={} solana={}",
+            target.version, target.git, target.proto, target.solana
+        ),
+        Err(err) => println!("⚠️ could not read target plugin version (GetVersion): {err:#}"),
+    }
+
     match &cli.command {
-        Commands::List { .. } => Ok(()),
+        Commands::List { .. } | Commands::VerifyVersion { .. } => Ok(ExitCode::from(exit_code::OK)),
         Commands::All {
             ref tags,
             ref module,
@@ -299,14 +364,16 @@ async fn run(cli: Cli) -> Result<()> {
                             .with_context(|| format!("scenario '{}' failed", scenario.name))
                     }
                 })
-                .await
+                .await?;
+            Ok(ExitCode::from(exit_code::OK))
         }
         Commands::Run { scenario } => {
             let entry = find_scenario(scenario)?;
             let multi = MultiProgress::new();
             run_scenario(entry, &run_config, &multi)
                 .await
-                .with_context(|| format!("scenario '{}' failed", scenario))
+                .with_context(|| format!("scenario '{}' failed", scenario))?;
+            Ok(ExitCode::from(exit_code::OK))
         }
     }
 }
@@ -316,10 +383,10 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match run(cli).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) => {
             eprintln!("{err:#}");
-            ExitCode::from(1)
+            ExitCode::from(exit_code::FAILED)
         }
     }
 }

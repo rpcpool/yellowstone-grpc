@@ -1,6 +1,6 @@
 use {
     crate::scenarios::RunConfig,
-    anyhow::{Context, Result},
+    anyhow::{ensure, Context, Result},
     std::str::FromStr,
     tokio::net::TcpStream,
     yellowstone_block_machine::event::{
@@ -49,6 +49,60 @@ pub async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
             .await
             .context("client should build from endpoint and token")
     }
+}
+
+/// Version reported by the target endpoint via the `GetVersion` RPC.
+#[derive(Debug, Clone)]
+pub struct TargetVersion {
+    pub version: String,
+    pub git: String,
+    pub proto: String,
+    pub solana: String,
+    pub raw: String,
+}
+
+impl TargetVersion {
+    /// Matches `version` exactly, or `git` exactly or by prefix; a leading `v` is ignored.
+    pub fn assert_matches(&self, expected: &str) -> Result<()> {
+        let needle = expected.trim().trim_start_matches('v');
+        let version_field = self.version.trim_start_matches('v');
+        let git_field = self.git.trim_start_matches('v');
+        let matches = !needle.is_empty()
+            && (version_field == needle || git_field == needle || git_field.starts_with(needle));
+        ensure!(
+            matches,
+            "target version mismatch: expected '{}', target reports version='{}' git='{}'",
+            expected,
+            self.version,
+            self.git,
+        );
+        Ok(())
+    }
+}
+
+pub async fn fetch_target_version(config: &RunConfig) -> Result<TargetVersion> {
+    let mut client = new_client(config).await?;
+    let response = client
+        .get_version()
+        .await
+        .context("GetVersion RPC should succeed")?;
+    let raw = response.version;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).context("GetVersion response should be valid JSON")?;
+    let field = |name: &str| {
+        parsed
+            .pointer(&format!("/version/{name}"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    Ok(TargetVersion {
+        version: field("version"),
+        git: field("git"),
+        proto: field("proto"),
+        solana: field("solana"),
+        raw,
+    })
 }
 
 const fn slot_status_kind(value: SlotStatus) -> SlotStatusKind {

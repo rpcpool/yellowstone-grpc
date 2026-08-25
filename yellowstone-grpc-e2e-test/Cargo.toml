@@ -19,6 +19,7 @@ inventory = { workspace = true }
 log = { workspace = true }
 num_cpus = { workspace = true }
 env_logger = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
 tower = { workspace = true }
@@ -36,6 +37,11 @@ solana-hash = { workspace = true }
 solana-signature = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-commitment-config = { workspace = true }
+
+[build-dependencies]
+anyhow = "1"
+git-version = { workspace = true }
+vergen = { workspace = true, features = ["build", "rustc"] }
 
 [lints]
 workspace = true
