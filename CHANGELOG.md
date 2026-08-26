@@ -10,6 +10,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-proto 12.7.0
+- yellowstone-grpc-geyser 15.2.0
+- yellowstone-grpc-client 13.5.0
+
+### Features
+
+- proto/plugin/client: added the `SubscribeGossip` method, which streams the validator's gossip contact info table. 
+
+### Misc
+
+- plugin: `SubscribeGossip` requires the plugin to be loaded when the validator starts. Agave does not replay the table to a plugin loaded later, so a hot-loaded plugin never builds a complete table.
+
 ## 2026-08-25
 
 - yellowstone-grpc-client-nodejs 7.0.0
