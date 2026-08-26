@@ -8,7 +8,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = "Apache-2.0"
 keywords = { workspace = true }
-publish = true
+publish = { workspace = true }
 
 [dependencies]
 solana-account = { workspace = true }
