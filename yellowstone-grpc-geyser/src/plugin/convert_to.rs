@@ -15,7 +15,7 @@ use {
         InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
         TransactionTokenBalance,
     },
-    std::{sync::Arc, time::SystemTime},
+    std::time::SystemTime,
     yellowstone_grpc_proto::prelude as proto,
 };
 
@@ -329,8 +329,6 @@ pub fn create_gossip_update(
     }
 }
 
-/// Keepalive sent to gossip subscribers so a half-open connection is detected on a stream
-/// that may otherwise be silent for minutes.
 pub fn create_gossip_ping() -> proto::SubscribeUpdateGossip {
     use proto::subscribe_update_gossip::UpdateOneof;
 
@@ -341,17 +339,15 @@ pub fn create_gossip_ping() -> proto::SubscribeUpdateGossip {
     }
 }
 
-/// Builds the full-table snapshot sent to a client when it subscribes.
-/// `seq` is the table revision the nodes were copied at.
 pub fn create_gossip_snapshot(
     seq: u64,
-    nodes: &[Arc<MessageContactInfo>],
+    nodes: &[MessageContactInfo],
 ) -> proto::SubscribeUpdateGossip {
     use proto::subscribe_update_gossip::UpdateOneof;
 
     proto::SubscribeUpdateGossip {
         update_oneof: Some(UpdateOneof::Snapshot(proto::GossipTopology {
-            nodes: nodes.iter().map(|n| create_contact_info_node(n)).collect(),
+            nodes: nodes.iter().map(create_contact_info_node).collect(),
         })),
         created_at: Some(Timestamp::from(SystemTime::now())),
         seq,

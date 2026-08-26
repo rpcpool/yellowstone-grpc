@@ -32,8 +32,9 @@ use {
         GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
         GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
         IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeDeshredRequest, SubscribeReplayInfoRequest, SubscribeReplayInfoResponse,
-        SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
+        SubscribeDeshredRequest, SubscribeGossipRequest, SubscribeReplayInfoRequest,
+        SubscribeReplayInfoResponse, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
+        SubscribeUpdateGossip,
     },
 };
 pub use {
@@ -544,6 +545,14 @@ impl GeyserGrpcClient {
         self.subscribe_deshred_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
+    }
+
+    pub async fn subscribe_gossip(
+        &mut self,
+    ) -> GeyserGrpcClientResult<Streaming<SubscribeUpdateGossip>> {
+        let request = tonic::Request::new(SubscribeGossipRequest {});
+        let response = self.geyser.subscribe_gossip(request).await?;
+        Ok(response.into_inner())
     }
 
     // RPC calls

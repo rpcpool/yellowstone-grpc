@@ -1,34 +1,16 @@
 use {
-    crate::{
-        grpc::SubscriptionOwnedPermit,
-        metrics::{self, observe_subscriber_queue_size},
-        plugin::{
-            convert_to,
-            message::{ContactInfoMessage, MessageContactInfo},
-        },
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
-    },
-    log::{error, info},
+    crate::plugin::message::{ContactInfoMessage, MessageContactInfo},
+    futures::stream::{Stream, StreamExt},
+    log::info,
     solana_pubkey::Pubkey,
     std::{
         collections::HashMap,
         sync::{Arc, Mutex},
-        time::Duration,
     },
-    tokio::sync::{broadcast, mpsc, watch},
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
-    tonic::{Result as TonicResult, Status},
-    yellowstone_grpc_proto::prelude::SubscribeUpdateGossip,
+    tokio::sync::{broadcast, watch},
+    tokio_util::sync::CancellationToken,
 };
 
-///
-/// One notification from the geyser hook, before the writer assigns it a revision.
-///
-/// `is_startup` marks the single-shot replay of the gossip table that agave delivers when the
-/// validator starts. There is no explicit end-of-replay signal, so the table is treated as
-/// complete on the first notification that is not part of it. Agave does not replay on plugin
-/// reload, so a reloaded plugin never becomes complete; that requires a validator restart.
-///
 pub struct ContactInfoNotification {
     pub message: ContactInfoMessage,
     pub is_startup: bool,
@@ -39,6 +21,13 @@ pub(crate) struct ContactInfoEvent {
     /// Map version at which this change was applied.
     pub seq: u64,
     pub message: ContactInfoMessage,
+}
+
+/// The gossip table at one revision.
+pub(crate) struct TopologySnapshot {
+    /// Revision the copy was taken at. Updates with `seq <= rev` are already in `topology`.
+    pub rev: u64,
+    pub topology: Vec<MessageContactInfo>,
 }
 
 pub(crate) struct ContactInfoTable {
@@ -77,47 +66,43 @@ impl ContactInfoState {
         }
     }
 
-    /// Establishes a consistent starting point for a new subscriber: a copy of the table at
-    /// revision `seq`, plus a receiver guaranteed to observe every event after it.
+    /// A copy of the table plus a receiver that sees every event after it.
     ///
-    /// The guarantee comes from `contact_info_loop` holding the map lock across the whole of
-    /// bump-version, mutate-map and broadcast. Because that is one atomic unit, no event can be
-    /// published while this function holds the lock, so `seq` and the copy can never disagree
-    /// and nothing after `seq` can be missed. Splitting the broadcast out from under the lock
-    /// there breaks this function, however correct this function looks in isolation.
+    /// Safe only because `contact_info_loop` bumps the version, mutates and broadcasts under one
+    /// lock: nothing can be published while this holds it. Moving that broadcast out from under
+    /// the lock breaks this function, however correct this function looks alone.
     ///
-    /// Events at or below `seq` may still be delivered (broadcast after the receiver was created
-    /// but already reflected in the copy); the caller drops them.
-    ///
-    fn subscribe_and_snapshot(
+    /// Events at or below `rev` may still arrive; the caller drops them.
+    pub(crate) fn subscribe_and_snapshot(
         &self,
-    ) -> (
-        broadcast::Receiver<ContactInfoEvent>,
-        u64,
-        Vec<Arc<MessageContactInfo>>,
-    ) {
+    ) -> (broadcast::Receiver<ContactInfoEvent>, TopologySnapshot) {
         let messages_rx = self.tx.subscribe();
         let table = self.map.lock().expect("contact info map mutex poisoned");
         (
             messages_rx,
-            table.version,
-            table.nodes.values().map(Arc::clone).collect(),
+            TopologySnapshot {
+                rev: table.version,
+                topology: table.nodes.values().map(|node| (**node).clone()).collect(),
+            },
         )
     }
 }
 
-pub(crate) async fn contact_info_loop(
-    mut rx: mpsc::UnboundedReceiver<ContactInfoNotification>,
+/// The single writer. Owns every mutation of the table.
+pub(crate) async fn contact_info_loop<St>(
+    mut notifications: St,
     state: Arc<ContactInfoState>,
     cancellation_token: CancellationToken,
-) {
+) where
+    St: Stream<Item = ContactInfoNotification> + Unpin,
+{
     loop {
         let ContactInfoNotification {
             message,
             is_startup,
         } = tokio::select! {
             _ = cancellation_token.cancelled() => break,
-            m = rx.recv() => match m { Some(m) => m, None => break },
+            m = notifications.next() => match m { Some(m) => m, None => break },
         };
 
         if !is_startup && !*state.complete_tx.borrow() {
@@ -126,9 +111,8 @@ pub(crate) async fn contact_info_loop(
             let _ = state.complete_tx.send(true);
         }
 
-        // Version bump, map mutation and broadcast are one critical section: subscribers rely
-        // on never observing a revision the map has not yet applied. See
-        // `subscribe_and_snapshot`.
+        // One critical section: subscribers must never observe a revision the map has not
+        // applied. See `subscribe_and_snapshot`.
         let mut table = state.map.lock().unwrap();
         table.version += 1;
         let seq = table.version;
@@ -144,196 +128,234 @@ pub(crate) async fn contact_info_loop(
     }
 }
 
-struct ContactInfoClientSession {
-    id: usize,
-    subscriber_id: String,
-    disconnect_reason: &'static str,
-    cancellation_token: CancellationToken,
-    _permit: Option<SubscriptionOwnedPermit>,
-}
+/// gRPC subscriber side of the gossip contact info feed.
+pub(crate) mod grpc {
+    use {
+        super::ContactInfoState,
+        crate::{grpc::SubscriptionOwnedPermit, metrics, plugin::convert_to},
+        futures::sink::{Sink, SinkExt},
+        log::{error, info},
+        std::{future::poll_fn, sync::Arc, task::Poll, time::Duration},
+        tokio::sync::{broadcast, mpsc},
+        tokio_stream::wrappers::ReceiverStream,
+        tokio_util::{sync::CancellationToken, sync::PollSender, task::TaskTracker},
+        tonic::{Result as TonicResult, Status},
+        yellowstone_grpc_proto::prelude::SubscribeUpdateGossip,
+    };
 
-impl ContactInfoClientSession {
-    fn new(
-        id: usize,
-        subscriber_id: Option<String>,
-        cancellation_token: CancellationToken,
-        permit: Option<SubscriptionOwnedPermit>,
-    ) -> Self {
-        Self {
-            id,
-            subscriber_id: subscriber_id.unwrap_or_default(),
-            disconnect_reason: "unknown",
-            cancellation_token,
-            _permit: permit,
+    type GossipItem = TonicResult<SubscribeUpdateGossip>;
+
+    enum Sent {
+        Ok,
+        Full,
+        Closed,
+    }
+
+    /// Sends without waiting. `Sink` has no `try_send`, so poll readiness once and give up if
+    /// the sink is not ready rather than awaiting it.
+    async fn try_send<S>(sink: &mut S, item: GossipItem) -> Sent
+    where
+        S: Sink<GossipItem> + Unpin,
+    {
+        match futures::poll!(poll_fn(|cx| sink.poll_ready_unpin(cx))) {
+            Poll::Ready(Ok(())) => match sink.start_send_unpin(item) {
+                Ok(()) => Sent::Ok,
+                Err(_) => Sent::Closed,
+            },
+            Poll::Ready(Err(_)) => Sent::Closed,
+            Poll::Pending => Sent::Full,
         }
     }
-}
 
-impl Drop for ContactInfoClientSession {
-    fn drop(&mut self) {
-        observe_subscriber_queue_size(&self.subscriber_id, 0, "contact_info");
-        metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
-        self.cancellation_token.cancel();
+    struct ContactInfoClientSession {
+        id: usize,
+        subscriber_id: String,
+        disconnect_reason: &'static str,
+        cancellation_token: CancellationToken,
+        _permit: Option<SubscriptionOwnedPermit>,
     }
-}
 
-/// Interval between server keepalives.
-const PING_INTERVAL: Duration = Duration::from_secs(10);
+    impl ContactInfoClientSession {
+        fn new(
+            id: usize,
+            subscriber_id: Option<String>,
+            cancellation_token: CancellationToken,
+            permit: Option<SubscriptionOwnedPermit>,
+        ) -> Self {
+            Self {
+                id,
+                subscriber_id: subscriber_id.unwrap_or_default(),
+                disconnect_reason: "unknown",
+                cancellation_token,
+                _permit: permit,
+            }
+        }
+    }
 
-/// Creates the downstream stream for a `subscribe_gossip` call and spawns the tasks that
-/// drive it.
-pub(crate) fn spawn_subscriber(
-    id: usize,
-    subscriber_id: Option<String>,
-    permit: Option<SubscriptionOwnedPermit>,
-    channel_capacity: usize,
-    state: Arc<ContactInfoState>,
-    cancellation_token: CancellationToken,
-    task_tracker: TaskTracker,
-) -> LoadAwareReceiver<TonicResult<SubscribeUpdateGossip>> {
-    let (stream_tx, stream_rx) = load_aware_channel(channel_capacity);
+    impl Drop for ContactInfoClientSession {
+        fn drop(&mut self) {
+            metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
+            self.cancellation_token.cancel();
+        }
+    }
 
-    // ping task
-    let ping_stream_tx = stream_tx.clone();
-    let ping_cancellation_token = cancellation_token.clone();
-    let ping_client_cancel = cancellation_token.clone();
-    task_tracker.spawn(async move {
-        let mut interval = tokio::time::interval(PING_INTERVAL);
-        loop {
-            tokio::select! {
-                _ = ping_cancellation_token.cancelled() => {
-                    info!("contact info client #{id}: ping cancelled");
-                    break;
-                }
-                _ = interval.tick() => {
-                    if ping_stream_tx.send(Ok(convert_to::create_gossip_ping())).await.is_err() {
-                        ping_client_cancel.cancel();
-                        info!("detected dead contact info client #{id}");
+    const PING_INTERVAL: Duration = Duration::from_secs(20);
+
+    /// A client that cannot drain a snapshot before the broadcast ring wraps never catches up,
+    /// so retrying forever would livelock instead of surfacing the problem.
+    const MAX_RESNAPSHOT_ATTEMPTS: usize = 3;
+
+    pub(crate) fn spawn_subscriber(
+        id: usize,
+        subscriber_id: Option<String>,
+        permit: Option<SubscriptionOwnedPermit>,
+        channel_capacity: usize,
+        state: Arc<ContactInfoState>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) -> ReceiverStream<GossipItem> {
+        let (stream_tx, stream_rx) = mpsc::channel(channel_capacity);
+
+        let ping_stream_tx = stream_tx.clone();
+        let ping_cancellation_token = cancellation_token.clone();
+        let ping_client_cancel = cancellation_token.clone();
+        task_tracker.spawn(async move {
+            let mut interval = tokio::time::interval(PING_INTERVAL);
+            loop {
+                tokio::select! {
+                    _ = ping_cancellation_token.cancelled() => {
+                        info!("contact info client #{id}: ping cancelled");
                         break;
+                    }
+                    _ = interval.tick() => {
+                        if ping_stream_tx.send(Ok(convert_to::create_gossip_ping())).await.is_err() {
+                            ping_client_cancel.cancel();
+                            info!("detected dead contact info client #{id}");
+                            break;
+                        }
                     }
                 }
             }
-        }
-        info!("contact info client #{id}: ping task exiting");
-    });
+            info!("contact info client #{id}: ping task exiting");
+        });
 
-    let session =
-        ContactInfoClientSession::new(id, subscriber_id, cancellation_token.clone(), permit);
+        let session =
+            ContactInfoClientSession::new(id, subscriber_id, cancellation_token.clone(), permit);
 
-    task_tracker.spawn(contact_info_client_loop(
-        session,
-        stream_tx,
-        state,
-        cancellation_token,
-        task_tracker.clone(),
-    ));
+        task_tracker.spawn(contact_info_client_loop(
+            session,
+            PollSender::new(stream_tx),
+            state,
+            cancellation_token,
+            task_tracker.clone(),
+        ));
 
-    stream_rx
-}
-
-/// Number of consecutive re-snapshots tolerated before the client is dropped. A client that
-/// cannot drain a full snapshot before the broadcast ring wraps will never catch up, so
-/// retrying forever would livelock instead of surfacing the problem.
-const MAX_RESNAPSHOT_ATTEMPTS: usize = 3;
-
-async fn contact_info_client_loop(
-    mut session: ContactInfoClientSession,
-    stream_tx: LoadAwareSender<TonicResult<SubscribeUpdateGossip>>,
-    state: Arc<ContactInfoState>,
-    cancellation_token: CancellationToken,
-    task_tracker: TaskTracker,
-) {
-    // Never hand a client a partial table: agave replays the gossip state at validator start
-    // with no end-of-replay marker, so wait until a live notification proves it is done.
-    tokio::select! {
-        _ = cancellation_token.cancelled() => {
-            let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
-            session.disconnect_reason = "server_shutdown";
-            return;
-        }
-        _ = state.wait_until_complete() => {}
+        ReceiverStream::new(stream_rx)
     }
 
-    let mut resnapshot_attempts = 0;
-
-    'handoff: loop {
-        // Subscribe before copying the map; see `subscribe_and_snapshot`.
-        let (mut messages_rx, snapshot_seq, nodes) = state.subscribe_and_snapshot();
-
-        let snapshot = convert_to::create_gossip_snapshot(snapshot_seq, &nodes);
-        drop(nodes);
-        if stream_tx.send(Ok(snapshot)).await.is_err() {
-            session.disconnect_reason = "client_closed";
-            break 'handoff;
+    async fn contact_info_client_loop<S>(
+        mut session: ContactInfoClientSession,
+        mut sink: S,
+        state: Arc<ContactInfoState>,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) where
+        S: Sink<GossipItem> + Unpin + Send + 'static,
+    {
+        // Never hand a client a partial table: agave replays the gossip state at validator start
+        // with no end-of-replay marker, so wait until a live notification proves it is done.
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                let _ = try_send(&mut sink, Err(Status::unavailable("server is shutting down try again later"))).await;
+                session.disconnect_reason = "server_shutdown";
+                return;
+            }
+            _ = state.wait_until_complete() => {}
         }
-        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
 
-        loop {
-            observe_subscriber_queue_size(
-                &session.subscriber_id,
-                stream_tx.queue_size(),
-                "contact_info",
+        let mut resnapshot_attempts = 0;
+
+        'handoff: loop {
+            let (mut messages_rx, snapshot) = state.subscribe_and_snapshot();
+            let snapshot_seq = snapshot.rev;
+
+            info!(
+                "contact info client #{}/{}: sending snapshot of {} nodes at seq {}",
+                session.subscriber_id,
+                session.id,
+                snapshot.topology.len(),
+                snapshot_seq
             );
 
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
-                    session.disconnect_reason = "server_shutdown";
-                    break 'handoff;
-                }
-                message = messages_rx.recv() => {
-                    let event = match message {
-                        Ok(event) => event,
-                        Err(broadcast::error::RecvError::Closed) => {
-                            session.disconnect_reason = "broadcast_closed";
-                            break 'handoff;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            // Events were dropped from the ring, so the client's view has a
-                            // hole. Skipping ahead would leave it permanently wrong; the table
-                            // is authoritative, so resynchronise from a fresh snapshot.
-                            resnapshot_attempts += 1;
-                            if resnapshot_attempts > MAX_RESNAPSHOT_ATTEMPTS {
-                                error!(
-                                    "contact info client #{}/{}: lagged {skipped} events, giving up after {MAX_RESNAPSHOT_ATTEMPTS} re-snapshots",
+            let update = convert_to::create_gossip_snapshot(snapshot_seq, &snapshot.topology);
+            drop(snapshot);
+            if sink.send(Ok(update)).await.is_err() {
+                session.disconnect_reason = "client_closed";
+                break 'handoff;
+            }
+            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        let _ = try_send(&mut sink, Err(Status::unavailable("server is shutting down try again later"))).await;
+                        session.disconnect_reason = "server_shutdown";
+                        break 'handoff;
+                    }
+                    message = messages_rx.recv() => {
+                        let event = match message {
+                            Ok(event) => event,
+                            Err(broadcast::error::RecvError::Closed) => {
+                                session.disconnect_reason = "broadcast_closed";
+                                break 'handoff;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                // The client's view now has a hole and skipping ahead leaves it
+                                // permanently wrong. The table is authoritative: resynchronise.
+                                resnapshot_attempts += 1;
+                                if resnapshot_attempts > MAX_RESNAPSHOT_ATTEMPTS {
+                                    error!(
+                                        "contact info client #{}/{}: lagged {skipped} events, giving up after {MAX_RESNAPSHOT_ATTEMPTS} re-snapshots",
+                                        session.subscriber_id, session.id
+                                    );
+                                    session.disconnect_reason = "client_broadcast_lag";
+                                    task_tracker.spawn(async move {
+                                        let _ = sink.send(Err(Status::internal("lagged to receive contact info messages"))).await;
+                                    });
+                                    break 'handoff;
+                                }
+                                info!(
+                                    "contact info client #{}/{}: lagged {skipped} events, re-snapshotting (attempt {resnapshot_attempts})",
                                     session.subscriber_id, session.id
                                 );
-                                session.disconnect_reason = "client_broadcast_lag";
+                                continue 'handoff;
+                            }
+                        };
+
+                        // Already reflected in the snapshot this client was primed with.
+                        if event.seq <= snapshot_seq {
+                            continue;
+                        }
+
+                        let update = convert_to::create_gossip_update(event.seq, &event.message);
+                        match try_send(&mut sink, Ok(update)).await {
+                            Sent::Ok => {
+                                resnapshot_attempts = 0;
+                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                            }
+                            Sent::Full => {
+                                error!("contact info client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
+                                session.disconnect_reason = "client_channel_full";
                                 task_tracker.spawn(async move {
-                                    let _ = stream_tx.send(Err(Status::internal("lagged to receive contact info messages"))).await;
+                                    let _ = sink.send(Err(Status::internal("lagged to send an update"))).await;
                                 });
                                 break 'handoff;
                             }
-                            info!(
-                                "contact info client #{}/{}: lagged {skipped} events, re-snapshotting (attempt {resnapshot_attempts})",
-                                session.subscriber_id, session.id
-                            );
-                            continue 'handoff;
-                        }
-                    };
-
-                    // Already reflected in the snapshot this client was primed with.
-                    if event.seq <= snapshot_seq {
-                        continue;
-                    }
-
-                    match stream_tx.try_send(Ok(convert_to::create_gossip_update(event.seq, &event.message))) {
-                        Ok(()) => {
-                            resnapshot_attempts = 0;
-                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                        }
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            error!("contact info client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
-                            session.disconnect_reason = "client_channel_full";
-                            task_tracker.spawn(async move {
-                                let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                            });
-                            break 'handoff;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            error!("contact info client #{}/{}: stream closed", session.subscriber_id, session.id);
-                            session.disconnect_reason = "client_closed";
-                            break 'handoff;
+                            Sent::Closed => {
+                                error!("contact info client #{}/{}: stream closed", session.subscriber_id, session.id);
+                                session.disconnect_reason = "client_closed";
+                                break 'handoff;
+                            }
                         }
                     }
                 }
@@ -345,8 +367,12 @@ async fn contact_info_client_loop(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::plugin::message::MessageContactInfoRemoved, prost_types::Timestamp,
-        std::collections::HashMap as Map,
+        super::*,
+        crate::plugin::message::MessageContactInfoRemoved,
+        prost_types::Timestamp,
+        std::{collections::HashMap as Map, time::Duration},
+        tokio::sync::mpsc,
+        tokio_stream::wrappers::UnboundedReceiverStream,
     };
 
     /// `shred_version` doubles as a marker so a reconstructed table can be compared field-wise
@@ -430,7 +456,11 @@ mod tests {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel = CancellationToken::new();
-        let loop_handle = tokio::spawn(contact_info_loop(rx, Arc::clone(&state), cancel.clone()));
+        let loop_handle = tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+            cancel.clone(),
+        ));
 
         let a = Pubkey::new_unique();
         let b = Pubkey::new_unique();
@@ -453,7 +483,11 @@ mod tests {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel = CancellationToken::new();
-        tokio::spawn(contact_info_loop(rx, Arc::clone(&state), cancel.clone()));
+        tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+            cancel.clone(),
+        ));
 
         // Startup replay: entries land in the table but it is not yet complete.
         for i in 0..3 {
@@ -485,18 +519,22 @@ mod tests {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel = CancellationToken::new();
-        let loop_handle = tokio::spawn(contact_info_loop(rx, Arc::clone(&state), cancel.clone()));
+        let loop_handle = tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+            cancel.clone(),
+        ));
 
         let a = Pubkey::new_unique();
         tx.send(live(node(a, 7))).unwrap();
         drop(tx);
         loop_handle.await.unwrap();
 
-        let (_rx, seq, nodes) = state.subscribe_and_snapshot();
-        assert_eq!(seq, 1);
-        assert_eq!(nodes.len(), 1);
+        let (_rx, snapshot) = state.subscribe_and_snapshot();
+        assert_eq!(snapshot.rev, 1);
+        assert_eq!(snapshot.topology.len(), 1);
         assert_eq!(
-            nodes[0].shred_version, 7,
+            snapshot.topology[0].shred_version, 7,
             "the snapshot already reflects every event up to and including `seq`, \
              which is why the client drops events with seq <= snapshot_seq"
         );
@@ -525,7 +563,11 @@ mod tests {
         let state = ContactInfoState::new(1 << 16);
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel = CancellationToken::new();
-        let loop_handle = tokio::spawn(contact_info_loop(rx, Arc::clone(&state), cancel.clone()));
+        let loop_handle = tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+            cancel.clone(),
+        ));
 
         let keys: Vec<Pubkey> = (0..KEYS).map(|_| Pubkey::new_unique()).collect();
 
@@ -556,8 +598,10 @@ mod tests {
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     loop {
-                        let (mut messages_rx, snapshot_seq, nodes) = state.subscribe_and_snapshot();
-                        let mut view: Map<Pubkey, u16> = nodes
+                        let (mut messages_rx, snapshot) = state.subscribe_and_snapshot();
+                        let snapshot_seq = snapshot.rev;
+                        let mut view: Map<Pubkey, u16> = snapshot
+                            .topology
                             .iter()
                             .map(|info| (info.pubkey, info.shred_version))
                             .collect();

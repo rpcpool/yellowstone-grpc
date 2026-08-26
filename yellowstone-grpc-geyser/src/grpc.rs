@@ -60,7 +60,7 @@ use {
         time::{sleep, Duration},
     },
     tokio_rustls::{rustls, TlsAcceptor},
-    tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream},
+    tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream, UnixListenerStream},
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
@@ -1045,7 +1045,7 @@ impl GrpcService {
         let (contact_info_tx, contact_info_rx) = mpsc::unbounded_channel();
 
         task_tracker.spawn(contact_info::contact_info_loop(
-            contact_info_rx,
+            UnboundedReceiverStream::new(contact_info_rx),
             Arc::clone(&contact_info_state),
             service_cancellation_token.child_token(),
         ));
@@ -2051,7 +2051,7 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
     type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
-    type SubscribeGossipStream = LoadAwareReceiver<TonicResult<SubscribeUpdateGossip>>;
+    type SubscribeGossipStream = ReceiverStream<TonicResult<SubscribeUpdateGossip>>;
 
     async fn subscribe(
         &self,
@@ -2421,7 +2421,7 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let stream_rx = contact_info::spawn_subscriber(
+        let stream_rx = contact_info::grpc::spawn_subscriber(
             id,
             subscriber_id,
             subscription_permit,
