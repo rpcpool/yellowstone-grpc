@@ -6427,7 +6427,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.3.0"
+version = "13.4.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6624,6 +6624,7 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "tokio-stream",
+ "tonic",
  "uuid",
  "wincode",
  "yellowstone-grpc-client",

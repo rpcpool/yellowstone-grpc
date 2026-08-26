@@ -597,7 +597,7 @@ export class ClientDuplexStream extends Duplex {
     try {
       const encodedRequest = SubscribeRequestMessage.encode(chunk).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
-        writeRaw?: (requestBytes: Uint8Array) => void;
+        writeRaw?: (requestBytes: Uint8Array) => Promise<void>;
       };
 
       if (typeof nativeStream.writeRaw !== "function") {
@@ -606,8 +606,13 @@ export class ClientDuplexStream extends Duplex {
         );
       }
 
-      nativeStream.writeRaw(encodedRequest);
-      callback();
+      // Awaiting the native call is what gives this real backpressure: Node
+      // won't call `_write()` again until `callback()` fires, and `writeRaw`
+      // now doesn't resolve until the gRPC sink actually accepts the request.
+      nativeStream.writeRaw(encodedRequest).then(
+        () => callback(),
+        (err) => callback(err as Error),
+      );
     } catch (err) {
       callback(err as Error);
     }
@@ -729,7 +734,7 @@ export class ClientDeshredDuplexStream extends Duplex {
         normalizedChunk,
       ).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
-        writeRaw?: (requestBytes: Uint8Array) => void;
+        writeRaw?: (requestBytes: Uint8Array) => Promise<void>;
       };
 
       if (typeof nativeStream.writeRaw !== "function") {
@@ -738,8 +743,10 @@ export class ClientDeshredDuplexStream extends Duplex {
         );
       }
 
-      nativeStream.writeRaw(encodedRequest);
-      callback();
+      nativeStream.writeRaw(encodedRequest).then(
+        () => callback(),
+        (err) => callback(err as Error),
+      );
     } catch (err) {
       callback(err as Error);
     }

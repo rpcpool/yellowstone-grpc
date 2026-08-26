@@ -42,5 +42,9 @@ home = { workspace = true }
 napi-build = { workspace = true }
 napi-sys = { workspace = true }
 
+[dev-dependencies]
+yellowstone-grpc-client = { workspace = true, features = ["test-tools"] }
+tonic = { workspace = true }
+
 [package.metadata.napi]
 name = "yellowstone-grpc-napi"
