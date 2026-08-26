@@ -14,6 +14,7 @@ export declare class CompressedAccountFilterSet {
   toProto(): Buffer
   toAccountFilter(): Buffer
   toBlockFilter(): Buffer
+  toTransactionFilter(): Buffer
 }
 
 /**
@@ -30,12 +31,12 @@ export declare class DuplexStream {
   /**
    * Read JS Accesspoint.
    *
-   * Retrieve one encoded `SubscribeUpdate` payload from the worker.
+   * Retrieve one encoded `SubscribeUpdate` payload from the gRPC stream.
    */
   read(): Promise<Buffer | undefined | null>
   /** Close the stream and reject future writes. */
   close(): void
-  writeRaw(requestBytes: Buffer): void
+  writeRaw(requestBytes: Buffer): Promise<undefined>
 }
 
 /**
@@ -47,7 +48,7 @@ export declare class DuplexStreamDeshred {
   /** Retrieve one encoded `SubscribeUpdateDeshred` payload. */
   read(): Promise<Buffer | undefined | null>
   close(): void
-  writeRaw(requestBytes: Buffer): void
+  writeRaw(requestBytes: Buffer): Promise<undefined>
 }
 
 /**

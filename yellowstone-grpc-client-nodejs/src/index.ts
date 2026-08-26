@@ -20,6 +20,7 @@ import {
   SubscribeRequest as SubscribeRequestMessage,
   SubscribeRequestFilterAccounts as SubscribeRequestFilterAccountsMessage,
   SubscribeRequestFilterBlocks as SubscribeRequestFilterBlocksMessage,
+  SubscribeRequestFilterTransactions as SubscribeRequestFilterTransactionsMessage,
   SubscribeReplayInfoRequest as SubscribeReplayInfoRequestMessage,
   SubscribeReplayInfoResponse as SubscribeReplayInfoResponseMessage,
   SubscribeUpdate as SubscribeUpdateMessage,
@@ -41,6 +42,7 @@ import type {
   SubscribeRequest,
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterBlocks,
+  SubscribeRequestFilterTransactions,
   SubscribeUpdateDeshred,
   SubscribeUpdate,
 } from "./grpc/geyser";
@@ -50,15 +52,21 @@ export {
   CommitmentLevel,
   CuckooFilter,
   CuckooHashAlgorithm,
+  SlotStatus,
+  TokenAccountExpansionControlFlag,
   SubscribeDeshredRequest,
   SubscribeDeshredRequest_DeshredTransactionsEntry,
+  SubscribeDeshredRequest_SlotsEntry,
   SubscribeRequest,
   SubscribeRequest_AccountsEntry,
   SubscribeRequest_BlocksEntry,
   SubscribeRequest_BlocksMetaEntry,
+  SubscribeRequest_EntryEntry,
   SubscribeRequestFilterDeshredTransactions,
+  SubscribeRequestPing,
   SubscribeRequest_SlotsEntry,
   SubscribeRequest_TransactionsEntry,
+  SubscribeRequest_TransactionsStatusEntry,
   SubscribeRequestAccountsDataSlice,
   SubscribeRequestFilterAccounts,
   SubscribeRequestFilterAccountsFilter,
@@ -77,10 +85,27 @@ export {
   SubscribeUpdateDeshred,
   SubscribeUpdateDeshredTransaction,
   SubscribeUpdateDeshredTransactionInfo,
+  SubscribeUpdateEntry,
   SubscribeUpdatePing,
+  SubscribeUpdatePong,
   SubscribeUpdateSlot,
   SubscribeUpdateTransaction,
   SubscribeUpdateTransactionInfo,
+  SubscribeUpdateTransactionStatus,
+  SubscribeReplayInfoRequest,
+  SubscribeReplayInfoResponse,
+  PingRequest,
+  PongResponse,
+  GetLatestBlockhashRequest,
+  GetLatestBlockhashResponse,
+  GetBlockHeightRequest,
+  GetBlockHeightResponse,
+  GetSlotRequest,
+  GetSlotResponse,
+  GetVersionRequest,
+  GetVersionResponse,
+  IsBlockhashValidRequest,
+  IsBlockhashValidResponse,
 } from "./grpc/geyser";
 
 import type {
@@ -249,6 +274,12 @@ export class CompressedAccountFilterSet {
     );
   }
 
+  toTransactionFilter(): SubscribeRequestFilterTransactions {
+    return SubscribeRequestFilterTransactionsMessage.decode(
+      this._native.toTransactionFilter() as unknown as Uint8Array,
+    );
+  }
+
   insertIntoSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.accounts ??= {};
     request.accounts[name] = this.toAccountFilter();
@@ -257,6 +288,22 @@ export class CompressedAccountFilterSet {
   insertIntoBlockSubscribeRequest(request: SubscribeRequest, name: string): void {
     request.blocks ??= {};
     request.blocks[name] = this.toBlockFilter();
+  }
+
+  insertIntoTransactionSubscribeRequest(
+    request: SubscribeRequest,
+    name: string,
+  ): void {
+    request.transactions ??= {};
+    request.transactions[name] = this.toTransactionFilter();
+  }
+
+  insertIntoTransactionStatusSubscribeRequest(
+    request: SubscribeRequest,
+    name: string,
+  ): void {
+    request.transactionsStatus ??= {};
+    request.transactionsStatus[name] = this.toTransactionFilter();
   }
 }
 
@@ -550,7 +597,7 @@ export class ClientDuplexStream extends Duplex {
     try {
       const encodedRequest = SubscribeRequestMessage.encode(chunk).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
-        writeRaw?: (requestBytes: Uint8Array) => void;
+        writeRaw?: (requestBytes: Uint8Array) => Promise<void>;
       };
 
       if (typeof nativeStream.writeRaw !== "function") {
@@ -559,8 +606,13 @@ export class ClientDuplexStream extends Duplex {
         );
       }
 
-      nativeStream.writeRaw(encodedRequest);
-      callback();
+      // Awaiting the native call is what gives this real backpressure: Node
+      // won't call `_write()` again until `callback()` fires, and `writeRaw`
+      // now doesn't resolve until the gRPC sink actually accepts the request.
+      nativeStream.writeRaw(encodedRequest).then(
+        () => callback(),
+        (err) => callback(err as Error),
+      );
     } catch (err) {
       callback(err as Error);
     }
@@ -682,7 +734,7 @@ export class ClientDeshredDuplexStream extends Duplex {
         normalizedChunk,
       ).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
-        writeRaw?: (requestBytes: Uint8Array) => void;
+        writeRaw?: (requestBytes: Uint8Array) => Promise<void>;
       };
 
       if (typeof nativeStream.writeRaw !== "function") {
@@ -691,8 +743,10 @@ export class ClientDeshredDuplexStream extends Duplex {
         );
       }
 
-      nativeStream.writeRaw(encodedRequest);
-      callback();
+      nativeStream.writeRaw(encodedRequest).then(
+        () => callback(),
+        (err) => callback(err as Error),
+      );
     } catch (err) {
       callback(err as Error);
     }

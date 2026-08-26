@@ -7306,7 +7306,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.3.0"
+version = "13.4.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -7446,6 +7446,7 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "futures",
+ "git-version",
  "humantime-serde",
  "hyper",
  "hyper-util",
@@ -7454,6 +7455,7 @@ dependencies = [
  "log",
  "num_cpus",
  "serde",
+ "serde_json",
  "solana-commitment-config",
  "solana-hash",
  "solana-pubkey 4.3.0",
@@ -7462,6 +7464,7 @@ dependencies = [
  "tokio-stream",
  "toml 0.8.23",
  "tower",
+ "vergen",
  "yellowstone-block-machine",
  "yellowstone-grpc-client",
  "yellowstone-grpc-e2e-macros",
@@ -7500,6 +7503,7 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "tokio-stream",
+ "tonic",
  "uuid",
  "wincode",
  "yellowstone-grpc-client",

@@ -58,6 +58,7 @@ membership for false-positive filtering.
 import Client, {
   CompressedAccountFilterSet,
   SubscribeRequest,
+  TokenAccountExpansionControlFlag,
 } from "@triton-one/yellowstone-grpc";
 
 const accounts = new CompressedAccountFilterSet(2_000_000);
@@ -94,6 +95,82 @@ stream.write(request);
 
 Use `insertIntoBlockSubscribeRequest(request, name)` when filtering account
 includes inside block subscriptions.
+
+Use `insertIntoTransactionSubscribeRequest(request, name)` for full transaction
+updates and `insertIntoTransactionStatusSubscribeRequest(request, name)` for
+transaction status updates:
+
+```ts
+accounts.insertIntoTransactionSubscribeRequest(request, "trackedTransactions");
+accounts.insertIntoTransactionStatusSubscribeRequest(
+  request,
+  "trackedTransactionStatuses",
+);
+```
+
+The compressed include filter and `accountInclude` use OR logic. Other fields,
+such as `vote`, `failed`, `accountExclude`, and `accountRequired`, are applied as
+separate conditions. Add them after creating the compressed filter:
+
+```ts
+request.transactions.trackedTransactions = {
+  ...accounts.toTransactionFilter(),
+  vote: false,
+  failed: false,
+  accountExclude: blockedPubkeys,
+};
+```
+
+Transaction filters can also match token account owners.
+
+- `ALL` matches an owner listed before or after the transaction.
+- `BALANCE_CHANGED` matches an owner when its token balance changes. It also
+  matches when a token account is created or closed.
+
+This works with transaction and transaction status subscriptions. It applies to
+`accountInclude`, `accountExclude`, and `accountRequired`.
+
+```ts
+request.transactions.trackedTransactions = {
+  ...accounts.toTransactionFilter(),
+  tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
+};
+
+request.transactionsStatus.trackedTransactionStatuses = {
+  ...accounts.toTransactionFilter(),
+  tokenAccounts: TokenAccountExpansionControlFlag.ALL,
+};
+```
+
+If you do not set `tokenAccounts`, filters only match transaction account keys.
+
+A compressed filter can match an account that you did not add. Before using a
+full transaction update, check its account keys against your local set. If you
+set `tokenAccounts`, also check the token account owners:
+
+```ts
+stream.on("data", (update) => {
+  const info = update.transaction?.transaction;
+  if (!info) return;
+
+  const accountKeys = [
+    ...(info.transaction?.message?.accountKeys ?? []),
+    ...(info.meta?.loadedWritableAddresses ?? []),
+    ...(info.meta?.loadedReadonlyAddresses ?? []),
+  ];
+
+  if (!accountKeys.some((pubkey) => accounts.contains(pubkey))) {
+    return; // compressed-filter false positive
+  }
+
+  // exact local match
+});
+```
+
+Transaction status updates do not include account keys. A false positive from a
+`transactionsStatus` filter cannot be removed from that update alone. Use a full
+transaction subscription or another transaction data source when exact local
+matching is required.
 
 ## Troubleshooting
 

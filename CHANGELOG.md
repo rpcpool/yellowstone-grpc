@@ -10,6 +10,37 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-25
+
+- yellowstone-grpc-client-nodejs 7.0.0
+- yellowstone-grpc-client 13.4.0
+
+### Fixes
+
+- Fixes backpressure issue [#854](https://github.com/rpcpool/yellowstone-grpc/issues/854)
+
+### Features
+
+- new `Mock` variant for `GeyserStream` in `yellowstone-grpc-client` when `test-tools` feature-flag is enabled.
+
+### Breaking
+
+- The `napi`'s `DuplexStream` and `DuplexStreamDeshred` `writes_raw` method now returns a `Promise` instead of being synchronous call.
+
+## 2026-08-19
+
+- yellowstone-grpc-client-nodejs-6.0.0
+
+### Features
+
+- added support for compressed transaction filters.
+- added support for token owner matching.
+
+### Breaking
+
+- nodejs: `6.0.0` bumps it's dependencies in package.json.
+
+
 ## 2026-08-17
 
 - yellowstone-grpc-geyser 15.1.2

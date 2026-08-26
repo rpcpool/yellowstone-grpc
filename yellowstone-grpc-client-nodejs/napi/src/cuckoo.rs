@@ -160,6 +160,12 @@ impl CompressedAccountFilterSet {
     let filter = self.lock_filter()?;
     Ok(Buffer::from(filter.to_block_filter().encode_to_vec()))
   }
+
+  #[napi]
+  pub fn to_transaction_filter(&self) -> Result<Buffer> {
+    let filter = self.lock_filter()?;
+    Ok(Buffer::from(filter.to_transaction_filter().encode_to_vec()))
+  }
 }
 
 impl CompressedAccountFilterSet {
@@ -286,5 +292,25 @@ mod tests {
       proto.hash_algorithm,
       yellowstone_grpc_proto::geyser::CuckooHashAlgorithm::SipHash as i32
     );
+  }
+
+  #[test]
+  fn transaction_filter_output_carries_only_the_cuckoo_matcher() {
+    use yellowstone_grpc_proto::geyser::SubscribeRequestFilterTransactions;
+
+    let filter = CompressedAccountFilterSet::new(10).unwrap();
+    filter.insert_bytes(Buffer::from(key(1))).unwrap();
+
+    let encoded = filter.to_transaction_filter().unwrap();
+    let decoded = SubscribeRequestFilterTransactions::decode(encoded.as_ref()).unwrap();
+
+    assert!(decoded.cuckoo_account_include.is_some());
+    assert!(decoded.account_include.is_empty());
+    assert!(decoded.account_exclude.is_empty());
+    assert!(decoded.account_required.is_empty());
+    assert_eq!(decoded.vote, None);
+    assert_eq!(decoded.failed, None);
+    assert_eq!(decoded.signature, None);
+    assert_eq!(decoded.token_accounts, None);
   }
 }
