@@ -1368,3 +1368,145 @@ pub async fn slot_status_should_have_parent(config: &RunConfig) -> Result<()> {
 
     Ok(())
 }
+
+/// Verifies that all sysvars are present in the updates.
+/// This test subscribe by replaying from the last 200 slots.
+/// at the processed commitment level.
+#[test_helper(name = "all-sysvar-present", tags = ["replay"])]
+pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    let resp = client.get_slot(None).await.context("get_slot")?;
+    let tip = resp.slot;
+    let sysvar_account_musthave = vec![
+        // emitted before CreatedBank
+        "SysvarC1ock11111111111111111111111111111111".to_string(),
+        "SysvarS1otHashes111111111111111111111111111".to_string(),
+        // written when the block freeze
+        "SysvarS1otHistory11111111111111111111111111".to_string(),
+        "SysvarRecentB1ockHashes11111111111111111111".to_string(),
+    ];
+    let musthave_pubkeys = sysvar_account_musthave
+        .iter()
+        .map(|s| Pubkey::from_str(s).context("valid must-have sysvar pubkey string"))
+        .collect::<Result<HashSet<_>>>()?;
+    let account_filter = SubscribeRequestFilterAccounts {
+        account: sysvar_account_musthave,
+        ..Default::default()
+    };
+    let from_slot = tip.saturating_sub(900);
+    let subscription = SubscribeRequest {
+        slots: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterSlots {
+                interslot_updates: Some(false),
+                ..Default::default()
+            },
+        )]),
+        accounts: HashMap::from([("test".to_string(), account_filter)]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        from_slot: Some(from_slot),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    log::info!(
+        "current tip slot is {}, subscribing from slot {}",
+        tip,
+        from_slot
+    );
+    let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    let mut block_meta_received = HashSet::new();
+    let mut slot_status_received = HashMap::new();
+    // Every must-have sysvar pubkey actually observed for a given slot.
+    let mut sysvar_seen_per_slot: HashMap<u64, HashSet<Pubkey>> = HashMap::new();
+    while let Some(update) = stream.next().await {
+        if remaining_slot_to_visit.is_empty() {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Slot(slot) => {
+                slot_status_received.insert(slot.slot, slot.status());
+                ensure!(
+                    slot.parent.is_some(),
+                    "slot update should have parent slot for replayed slots"
+                );
+
+                // A slot emits several lifecycle statuses (FirstShredReceived,
+                // CreatedBank, Completed, ...) before Processed -- checking on
+                // any of those would be premature, since sysvar/account
+                // updates for the slot may not have arrived yet. Processed is
+                // the first status that means "this slot's data is in".
+                if slot.status() == SlotStatus::SlotProcessed
+                    && remaining_slot_to_visit.contains(&slot.slot)
+                {
+                    let seen = sysvar_seen_per_slot
+                        .get(&slot.slot)
+                        .cloned()
+                        .unwrap_or_default();
+                    let missing: Vec<Pubkey> = musthave_pubkeys
+                        .iter()
+                        .filter(|pk| !seen.contains(*pk))
+                        .copied()
+                        .collect();
+                    ensure!(
+                        missing.is_empty(),
+                        "every must-have sysvar should be present for every slot, but slot {} was missing: {missing:?}",
+                        slot.slot
+                    );
+
+                    remaining_slot_to_visit.retain(|s| *s != slot.slot);
+                    log::info!("finished processing slot {}", slot.slot);
+                }
+            }
+            UpdateOneof::Account(subscribe_update_account) => {
+                let account = subscribe_update_account
+                    .account
+                    .context("account update should have account field")?;
+                let actual_pubkey = Pubkey::try_from(account.pubkey.as_slice())
+                    .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
+
+                ensure!(
+                    !block_meta_received.contains(&subscribe_update_account.slot),
+                    "block meta should always be last to arrive for a slot, after all account updates have been received"
+                );
+                ensure!(
+                    !slot_status_received.contains_key(&subscribe_update_account.slot),
+                    "slot status should always be last to arrive for a slot, after all account updates have been received"
+                );
+
+                sysvar_seen_per_slot
+                    .entry(subscribe_update_account.slot)
+                    .or_default()
+                    .insert(actual_pubkey);
+            }
+            UpdateOneof::BlockMeta(ev) => {
+                block_meta_received.insert(ev.slot);
+                ensure!(
+                    !slot_status_received.contains_key(&ev.slot),
+                    "slot status should always be last to arrive for a slot, after all block meta updates have been received"
+                );
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+            other => bail!("unexpected update type: {other:?}"),
+        }
+    }
+    ensure!(
+        slot_status_received.len() == (tip - from_slot) as usize,
+        "should receive slot status updates for all slots in the replay"
+    );
+    ensure!(
+        remaining_slot_to_visit.is_empty(),
+        "should have received updates for all expected slots in the replay"
+    );
+
+    Ok(())
+}
