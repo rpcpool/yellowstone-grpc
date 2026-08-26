@@ -306,20 +306,22 @@ message SubscribeUpdateDeshred {
   google.protobuf.Timestamp created_at = 5;
 }
 
-message SubscribeGossipRequest {
-  optional SubscribeRequestPing ping = 1;
-}
+message SubscribeGossipRequest {}
 
 message SubscribeUpdateGossip {
   oneof update_oneof {
     SubscribeUpdateContactInfoNode node = 1;
     SubscribeUpdateContactInfoRemoved removed = 2;
+    // Server keepalive; the stream can be silent for minutes on a stable cluster.
     SubscribeUpdatePing ping = 3;
-    SubscribeUpdatePong pong = 4;
+    GossipTopology snapshot = 6;
   }
   google.protobuf.Timestamp created_at = 5;
+  // Table revision: for `snapshot` the revision copied, for `node`/`removed` the revision applied. Increases by one per change. Unset (0) for `ping`.
+  uint64 seq = 7;
 }
 
+// Full copy of the server-side gossip contact info table, sent when a client subscribes. Later `node`/`removed` updates carry `seq > snapshot.seq`.
 message GossipTopology {
   repeated SubscribeUpdateContactInfoNode nodes = 1;
 }

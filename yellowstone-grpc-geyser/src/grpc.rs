@@ -7,6 +7,7 @@ use {
         billing::{BillingMeteredManager, HttpBillingEventSink},
         block_reconstruction::BlockMachineStorage,
         config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        contact_info::{self, ContactInfoState},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
         metrics::{
@@ -14,17 +15,13 @@ use {
             subscription_limit_exceeded_inc,
         },
         plugin::{
-            convert_to,
             filter::{
                 limits::FilterLimits,
                 message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
                 name::FilterNames,
                 DeshredFilter, Filter,
             },
-            message::{
-                CommitmentLevel, ContactInfoMessage, Message, MessageBlockMeta, MessageSlot,
-                SlotStatus,
-            },
+            message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
@@ -449,7 +446,7 @@ impl SubscriptionTracker {
 ///
 /// A permit that is owned by a subscriber. When the permit is dropped,
 /// it decrements the subscription count for the subscriber in the SubscriptionTracker.
-struct SubscriptionOwnedPermit {
+pub(crate) struct SubscriptionOwnedPermit {
     inner: Option<SubscriptionTracker>,
     key: String,
 }
@@ -614,43 +611,6 @@ impl Drop for DeshredClientSession {
     }
 }
 
-struct ContactInfoClientSession {
-    id: usize,
-    subscriber_id: String,
-    disconnect_reason: &'static str,
-    cancellation_token: CancellationToken,
-    _permit: Option<SubscriptionOwnedPermit>,
-}
-
-impl ContactInfoClientSession {
-    fn new(
-        id: usize,
-        subscriber_id: Option<String>,
-        cancellation_token: CancellationToken,
-        permit: Option<SubscriptionOwnedPermit>,
-    ) -> Self {
-        Self {
-            id,
-            subscriber_id: subscriber_id.unwrap_or_default(),
-            disconnect_reason: "unknown",
-            cancellation_token,
-            _permit: permit,
-        }
-    }
-}
-
-impl Drop for ContactInfoClientSession {
-    fn drop(&mut self) {
-        observe_subscriber_queue_size(&self.subscriber_id, 0, "contact_info");
-        metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
-        info!(
-            "contact info client #{} ({}): removed ({})",
-            self.id, self.subscriber_id, self.disconnect_reason
-        );
-        self.cancellation_token.cancel();
-    }
-}
-
 struct AutoClosableUnixListenerStream {
     path_to_remove: PathBuf,
     listener: UnixListenerStream,
@@ -719,7 +679,7 @@ pub struct GrpcService {
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast: SubscriberChannels,
     deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
-    contact_info_broadcast_tx: broadcast::Sender<ContactInfoMessage>,
+    contact_info_state: Arc<ContactInfoState>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     cancellation_token: CancellationToken,
@@ -868,7 +828,7 @@ pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
-    pub contact_info_broadcast_tx: broadcast::Sender<ContactInfoMessage>,
+    pub contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
 }
@@ -1080,8 +1040,15 @@ impl GrpcService {
             };
 
         // contact info subscribers
-        let (contact_info_broadcast_tx, _) =
-            broadcast::channel(config.contact_info_channel_capacity);
+        let contact_info_state = ContactInfoState::new(config.contact_info_channel_capacity);
+
+        let (contact_info_tx, contact_info_rx) = mpsc::unbounded_channel();
+
+        task_tracker.spawn(contact_info::contact_info_loop(
+            contact_info_rx,
+            Arc::clone(&contact_info_state),
+            service_cancellation_token.child_token(),
+        ));
 
         // Capture traffic reporting threshold before config is moved
         let traffic_reporting_threshold = config
@@ -1110,7 +1077,7 @@ impl GrpcService {
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast: broadcast.clone(),
             deshred_broadcast_tx: deshred_broadcast_tx.clone(),
-            contact_info_broadcast_tx: contact_info_broadcast_tx.clone(),
+            contact_info_state: Arc::clone(&contact_info_state),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             cancellation_token: service_cancellation_token.clone(),
@@ -1235,7 +1202,7 @@ impl GrpcService {
         Ok(GrpcServiceResult {
             snapshot_tx,
             deshred_broadcast_tx,
-            contact_info_broadcast_tx,
+            contact_info_tx,
             block_reconstruction_tx,
             broadcast,
             blocks_meta_tx,
@@ -2075,67 +2042,6 @@ impl GrpcService {
         // session Drop handles: queue_size(0), disconnect metric, debug removal, cancel, log
     }
 
-    async fn contact_info_client_loop(
-        mut session: ContactInfoClientSession,
-        stream_tx: LoadAwareSender<TonicResult<SubscribeUpdateGossip>>,
-        mut messages_rx: broadcast::Receiver<ContactInfoMessage>,
-        cancellation_token: CancellationToken,
-        task_tracker: TaskTracker,
-    ) {
-        'outer: loop {
-            observe_subscriber_queue_size(
-                &session.subscriber_id,
-                stream_tx.queue_size(),
-                "contact_info",
-            );
-
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    info!("contact info client #{}/{}: cancelled", session.subscriber_id, session.id);
-                    let _ = stream_tx.try_send(Err(Status::unavailable("server is shutting down try again later")));
-                    session.disconnect_reason = "server_shutdown";
-                    break 'outer;
-                }
-                message = messages_rx.recv() => {
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(broadcast::error::RecvError::Closed) => {
-                            session.disconnect_reason = "broadcast_closed";
-                            break 'outer;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            info!("contact info client #{}/{}: lagged to receive contact info messages", session.subscriber_id, session.id);
-                            session.disconnect_reason = "client_broadcast_lag";
-                            task_tracker.spawn(async move {
-                                let _ = stream_tx.send(Err(Status::internal("lagged to receive contact info messages"))).await;
-                            });
-                            break 'outer;
-                        }
-                    };
-
-                    match stream_tx.try_send(Ok(convert_to::create_gossip_update(&message))) {
-                        Ok(()) => {
-                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                        }
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            error!("contact info client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
-                            session.disconnect_reason = "client_channel_full";
-                            task_tracker.spawn(async move {
-                                let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                            });
-                            break 'outer;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            error!("contact info client #{}/{}: stream closed", session.subscriber_id, session.id);
-                            session.disconnect_reason = "client_closed";
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn next_subscribe_seq_id(&self) -> usize {
         self.subscribe_id.fetch_add(1, Ordering::Relaxed)
     }
@@ -2483,7 +2389,6 @@ impl Geyser for GrpcService {
     ) -> TonicResult<Response<Self::SubscribeGossipStream>> {
         incr_grpc_method_call_count("subscribe_gossip");
 
-
         let subscriber_id = request
             .extensions()
             .get::<SubscriptionInfo>()
@@ -2516,21 +2421,15 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
-
-        let session = ContactInfoClientSession::new(
+        let stream_rx = contact_info::spawn_subscriber(
             id,
             subscriber_id,
-            client_cancellation_token.clone(),
             subscription_permit,
-        );
-        self.task_tracker.spawn(Self::contact_info_client_loop(
-            session,
-            stream_tx,
-            self.contact_info_broadcast_tx.subscribe(),
+            self.config_channel_capacity,
+            Arc::clone(&self.contact_info_state),
             client_cancellation_token,
             self.task_tracker.clone(),
-        ));
+        );
 
         Ok(Response::new(stream_rx))
     }
