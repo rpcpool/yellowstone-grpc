@@ -231,8 +231,8 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
     ///
     /// [`MAX_KICKS`]: crate::cuckoo
     pub fn insert(&mut self, item: &T) -> Result<(), TableFullError> {
-        let fp = self.fingerprint(item);
         let h = self.hash(item);
+        let fp = Self::fingerprint_from_hash(h);
         let i1 = self.index(h);
         let i2 = i1 ^ self.index(self.hash(&fp));
 
@@ -272,8 +272,8 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
     /// [`HashSet`]: std::collections::HashSet
     /// [`CompressedAccountFilterSet`]: crate::cuckoo::CompressedAccountFilterSet
     pub fn contains(&self, item: &T) -> bool {
-        let fp = self.fingerprint(item);
         let h = self.hash(item);
+        let fp = Self::fingerprint_from_hash(h);
         let i1 = self.index(h);
         let i2 = i1 ^ self.index(self.hash(&fp));
 
@@ -294,8 +294,8 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
     ///
     /// [`CompressedAccountFilterSet`]: crate::cuckoo::CompressedAccountFilterSet
     pub fn remove(&mut self, item: &T) -> bool {
-        let fp = self.fingerprint(item);
         let h = self.hash(item);
+        let fp = Self::fingerprint_from_hash(h);
         let i1 = self.index(h);
         let i2 = i1 ^ self.index(self.hash(&fp));
 
@@ -304,9 +304,8 @@ impl<T: Hash, S: BuildHasher> CuckooFilter<T, S> {
 
     /// Extracts a fingerprint from an item's hash.
     /// Returns upper 16 bits, ensuring non-zero (0 = empty slot).
-    fn fingerprint(&self, item: &T) -> Fingerprint {
-        let h = self.hash(item);
-        let fp = (h >> 32) as u16;
+    const fn fingerprint_from_hash(hash: u64) -> Fingerprint {
+        let fp = (hash >> 32) as u16;
         if fp == 0 {
             1
         } else {
@@ -389,7 +388,26 @@ impl<T> From<&CuckooFilter<T, YellowstoneHasherBuilder>> for ProtoCuckooFilter {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, rand::RngExt};
+    use {
+        super::*,
+        rand::RngExt,
+        std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
+
+    struct CountedHash {
+        value: u64,
+        hash_calls: Arc<AtomicUsize>,
+    }
+
+    impl Hash for CountedHash {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.hash_calls.fetch_add(1, Ordering::Relaxed);
+            self.value.hash(state);
+        }
+    }
 
     #[test]
     fn empty_filter_contains_nothing() {
@@ -406,6 +424,31 @@ mod tests {
         assert!(filter.insert(&"hello").is_ok());
         assert!(filter.contains(&"hello"));
         assert!(!filter.contains(&"world"));
+    }
+
+    #[test]
+    fn operations_hash_item_once() {
+        let hash_calls = Arc::new(AtomicUsize::new(0));
+        let item = CountedHash {
+            value: 42,
+            hash_calls: Arc::clone(&hash_calls),
+        };
+        let mut filter = CuckooFilter::<CountedHash>::with_capacity(100).unwrap();
+
+        filter.insert(&item).unwrap();
+        assert_eq!(hash_calls.swap(0, Ordering::Relaxed), 1);
+
+        assert!(filter.contains(&item));
+        assert_eq!(hash_calls.swap(0, Ordering::Relaxed), 1);
+
+        assert!(filter.remove(&item));
+        assert_eq!(hash_calls.swap(0, Ordering::Relaxed), 1);
+
+        assert!(!filter.contains(&item));
+        assert_eq!(hash_calls.swap(0, Ordering::Relaxed), 1);
+
+        assert!(!filter.remove(&item));
+        assert_eq!(hash_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -1001,5 +1044,83 @@ mod tests {
         filter.insert(&"hello").unwrap();
         assert!(filter.contains(&"hello"));
         assert!(!filter.contains(&"world"));
+    }
+
+    #[test]
+    fn hash_reuse_preserves_golden_wire_fixture() {
+        const SEED: u64 = 0x0123_4567_89ab_cdef;
+        const CAPACITY: usize = 32;
+        const KEY_COUNT: u8 = 47;
+        const ALTERNATE_PLACEMENT_KEY: u8 = 31;
+        const RELOCATION_KEY: u8 = 46;
+        const GOLDEN_DATA: [u8; 128] = [
+            98, 225, 76, 119, 190, 148, 14, 101, 11, 41, 217, 3, 119, 174, 0, 0, 66, 89, 195, 68,
+            95, 234, 230, 233, 20, 49, 10, 177, 0, 0, 0, 0, 219, 56, 38, 161, 53, 30, 11, 123, 215,
+            189, 20, 44, 123, 34, 176, 131, 12, 189, 134, 227, 205, 228, 142, 117, 68, 108, 97,
+            147, 203, 29, 222, 218, 104, 255, 204, 10, 145, 239, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 41,
+            254, 16, 199, 37, 77, 0, 0, 170, 17, 23, 225, 34, 7, 180, 119, 125, 61, 0, 0, 0, 0, 0,
+            0, 199, 228, 152, 62, 183, 114, 0, 0, 209, 244, 248, 9, 104, 65, 230, 66, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ];
+
+        let builder = YellowstoneHasherBuilder::new(SEED);
+        let mut filter = CuckooFilter::<[u8; 32]>::with_capacity_and_hasher(
+            CAPACITY,
+            YellowstoneHasherBuilder::new(SEED),
+        )
+        .unwrap();
+
+        for byte in 0..KEY_COUNT {
+            let key = [byte; 32];
+            let hash = builder.hash_one(key);
+            let fp = fingerprint_for_test(hash);
+            let mask = filter.buckets.len() - 1;
+            let i1 = filter.index(hash);
+            let i2 = i1 ^ (builder.hash_one(fp) as usize & mask);
+            let primary_full = filter.buckets[i1].iter().all(|slot| *slot != 0);
+            let alternate_full = filter.buckets[i2].iter().all(|slot| *slot != 0);
+
+            if byte == ALTERNATE_PLACEMENT_KEY {
+                assert_ne!(i1, i2);
+                assert!(primary_full);
+                assert!(!alternate_full);
+            }
+            if byte == RELOCATION_KEY {
+                assert_ne!(i1, i2);
+                assert!(primary_full);
+                assert!(alternate_full);
+            }
+
+            filter.insert(&key).unwrap();
+
+            if byte == ALTERNATE_PLACEMENT_KEY {
+                assert!(filter.buckets[i2].contains(&fp));
+            }
+        }
+
+        let proto = ProtoCuckooFilter::from(&filter);
+        let golden_proto = ProtoCuckooFilter {
+            data: GOLDEN_DATA.to_vec(),
+            bucket_count: 16,
+            entries_per_bucket: 4,
+            fingerprint_bits: 16,
+            hash_seed: SEED,
+            hash_algorithm: CuckooHashAlgorithm::SipHash as i32,
+        };
+        assert_eq!(proto, golden_proto);
+
+        // This literal models a filter serialized by the pre-optimization
+        // implementation, so reconstruction also covers old producer -> new
+        // consumer compatibility.
+        let mut restored = CuckooFilter::<[u8; 32]>::from(&golden_proto);
+        for byte in 0..KEY_COUNT {
+            assert!(restored.contains(&[byte; 32]), "missing key {byte}");
+        }
+        assert!(!restored.contains(&[u8::MAX; 32]));
+        assert!(restored.remove(&[RELOCATION_KEY; 32]));
+        assert!(!restored.contains(&[RELOCATION_KEY; 32]));
+        for byte in 0..RELOCATION_KEY {
+            assert!(restored.contains(&[byte; 32]), "remove damaged key {byte}");
+        }
     }
 }

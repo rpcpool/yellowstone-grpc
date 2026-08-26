@@ -132,7 +132,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.9.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.3.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.1.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "15.1.2" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "12.6.0", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }

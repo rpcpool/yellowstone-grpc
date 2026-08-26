@@ -201,8 +201,19 @@ pub struct SubscribeDeshredRequestSinkError(#[from] mpsc::SendError);
 ///
 /// The sink is used to send [`SubscribeDeshredRequest`] updates to the server.
 ///
+#[derive(Clone)]
 pub struct SubscribeDeshredRequestSink {
     inner: mpsc::UnboundedSender<SubscribeDeshredRequest>,
+}
+
+#[cfg(feature = "test-tools")]
+impl SubscribeDeshredRequestSink {
+    /// Build a `SubscribeDeshredRequestSink` backed by an in-memory channel
+    /// instead of a live gRPC connection, for tests that need a real
+    /// `SubscribeDeshredRequestSink` value.
+    pub const fn mock(sender: mpsc::UnboundedSender<SubscribeDeshredRequest>) -> Self {
+        Self { inner: sender }
+    }
 }
 
 impl Sink<SubscribeDeshredRequest> for SubscribeDeshredRequestSink {
@@ -251,6 +262,21 @@ enum InnerStream {
     NoReconnect(Streaming<SubscribeUpdate>),
     Replay(DedupStream<AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>>),
     NoReplay(AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>),
+    #[cfg(feature = "test-tools")]
+    MockSource(tokio::sync::mpsc::Receiver<Result<SubscribeUpdate, Status>>),
+}
+
+#[cfg(feature = "test-tools")]
+impl GeyserStream {
+    /// Build a `GeyserStream` backed by an in-memory channel instead of a live
+    /// gRPC connection, for tests that need a real `GeyserStream` value.
+    pub const fn mock(
+        receiver: tokio::sync::mpsc::Receiver<Result<SubscribeUpdate, Status>>,
+    ) -> Self {
+        Self {
+            inner: InnerStream::MockSource(receiver),
+        }
+    }
 }
 
 ///
@@ -259,7 +285,14 @@ enum InnerStream {
 /// The stream yields [`SubscribeUpdateDeshred`] from the server.
 ///
 pub struct SubscribeDeshredStream {
-    inner: Streaming<SubscribeUpdateDeshred>,
+    inner: DeshredInnerStream,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum DeshredInnerStream {
+    Live(Streaming<SubscribeUpdateDeshred>),
+    #[cfg(feature = "test-tools")]
+    MockSource(tokio::sync::mpsc::Receiver<Result<SubscribeUpdateDeshred, Status>>),
 }
 
 impl Stream for SubscribeDeshredStream {
@@ -269,7 +302,25 @@ impl Stream for SubscribeDeshredStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+        match &mut self.inner {
+            DeshredInnerStream::Live(stream) => std::pin::Pin::new(stream).poll_next(cx),
+            #[cfg(feature = "test-tools")]
+            DeshredInnerStream::MockSource(rx) => rx.poll_recv(cx),
+        }
+    }
+}
+
+#[cfg(feature = "test-tools")]
+impl SubscribeDeshredStream {
+    /// Build a `SubscribeDeshredStream` backed by an in-memory channel instead
+    /// of a live gRPC connection, for tests that need a real
+    /// `SubscribeDeshredStream` value.
+    pub const fn mock(
+        receiver: tokio::sync::mpsc::Receiver<Result<SubscribeUpdateDeshred, Status>>,
+    ) -> Self {
+        Self {
+            inner: DeshredInnerStream::MockSource(receiver),
+        }
     }
 }
 
@@ -284,6 +335,8 @@ impl Stream for GeyserStream {
             InnerStream::NoReconnect(stream) => std::pin::Pin::new(stream).poll_next(cx),
             InnerStream::Replay(stream) => std::pin::Pin::new(stream).poll_next(cx),
             InnerStream::NoReplay(stream) => std::pin::Pin::new(stream).poll_next(cx),
+            #[cfg(feature = "test-tools")]
+            InnerStream::MockSource(rx) => rx.poll_recv(cx),
         }
     }
 }
@@ -297,6 +350,19 @@ impl Stream for GeyserStream {
 pub struct SubscribeRequestSink {
     inner: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     shared: Arc<ArcSwap<SubscribeRequest>>,
+}
+
+#[cfg(feature = "test-tools")]
+impl SubscribeRequestSink {
+    /// Build a `SubscribeRequestSink` backed by an in-memory channel instead
+    /// of a live gRPC connection, for tests that need a real
+    /// `SubscribeRequestSink` value.
+    pub fn mock(sender: mpsc::Sender<SubscribeRequest>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(sender)),
+            shared: Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default()))),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -533,7 +599,7 @@ impl GeyserGrpcClient {
                 inner: subscribe_tx,
             },
             SubscribeDeshredStream {
-                inner: response.into_inner(),
+                inner: DeshredInnerStream::Live(response.into_inner()),
             },
         ))
     }

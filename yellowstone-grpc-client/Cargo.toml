@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "13.3.0"
+version = "13.4.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -14,7 +14,7 @@ publish = true
 account-data-as-bytes = [
     "yellowstone-grpc-proto/account-data-as-bytes"
 ]
-test-tools = []
+test-tools = ["tokio/sync"]
 
 [dependencies]
 arc-swap = { workspace = true }

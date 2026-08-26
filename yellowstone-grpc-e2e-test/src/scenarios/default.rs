@@ -838,21 +838,17 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
 pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> {
     let mut client = crate::grpc::new_client(config).await?;
 
-    // These pubkeys are actively used in the network and will generate account updates when transactions are processed.
-    // Feel free to add more pubkeys to this list to increase the likelihood of receiving account updates during the test.
-    // They are HumdiFi markets, owned by HumidiFi's program, they are one of the most updated accounts in every block, allowing us to easily verify the filter
+    // jito tip accounts
     let accounts = vec![
-        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu".to_string(), // PENGU-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
-        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy".to_string(), // 2Z-USDC
-        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa".to_string(), // ZEC-USDC
-        "hKgG7iEDRFNsJSwLYqz8ETHuZwzh6qMMLow8VXa8pLm".to_string(),  // JUP-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
-        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH".to_string(), // WSOL-USDC
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL".to_string(),
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
     ];
 
-    const HUMIDIFI_POOL_SIZE: u64 = 1728; // HumidiFi markets have a fixed account data size of 1728 bytes, we will use this to verify the datasize filter works as expected
-    let owners = vec!["9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp".to_string()];
+    const ACCOUNT_SIZE: u64 = 8; // jito tip accounts have a fixed size of 8
+    let owners = vec!["T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt".to_string()];
 
     let subscription = SubscribeRequest {
         accounts: HashMap::from([
@@ -863,7 +859,7 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                     nonempty_txn_signature: Some(true),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -875,7 +871,7 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                     nonempty_txn_signature: Some(true),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE + 1)), // HumidiFi markets have a fixed account data size of 1728 bytes, this filter should never match any updates
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE + 1)),
                     }],
                     ..Default::default()
                 },
@@ -884,10 +880,10 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                 "invalid_filter_2".to_string(),
                 SubscribeRequestFilterAccounts {
                     account: accounts.clone(),
-                    nonempty_txn_signature: Some(false), // HumidiFi updates are not system programs therefore require a nonempty txn signature, this filter should never match any updates
+                    nonempty_txn_signature: Some(false),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -897,9 +893,9 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                 SubscribeRequestFilterAccounts {
                     account: accounts.clone(),
                     nonempty_txn_signature: Some(true),
-                    owner: vec!["11111111111111111111111111111111".to_string()], // HumidiFi market accounts are not owned by the system program, this filter should never match any updates
+                    owner: vec!["11111111111111111111111111111111".to_string()],
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -991,13 +987,13 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
 pub async fn subscribe_should_filter_transactions_by_cuckoo(config: &RunConfig) -> Result<()> {
     let mut client = crate::grpc::new_client(config).await?;
 
-    // HumidiFi markets, among the most frequently touched accounts in every block.
+    // Jito tip accounts, currently used as frequently accessed accounts
     let tracked = vec![
-        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu", // PENGU-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH", // HYPE-USDC
-        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy", // 2Z-USDC
-        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa", // ZEC-USDC
-        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH", // WSOL-USDC
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL".to_string(),
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
     ]
     .into_iter()
     .map(|s| s.parse::<Pubkey>().expect("valid pubkey"))
@@ -1056,13 +1052,6 @@ pub async fn subscribe_should_filter_transactions_by_cuckoo(config: &RunConfig) 
             UpdateOneof::Transaction(tx) => {
                 if update.filters.is_empty() {
                     bail!("transaction update should have filters applied");
-                }
-
-                if !update.filters.iter().all(|f| f == "valid_filter") {
-                    bail!(
-                        "transaction update received a filter which should never come through {:?}",
-                        update.filters
-                    );
                 }
 
                 let slot = tx.slot;

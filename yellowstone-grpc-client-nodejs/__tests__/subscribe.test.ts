@@ -1,7 +1,11 @@
-import Client, { CommitmentLevel } from "../src";
+import Client, {
+  CommitmentLevel,
+  CompressedAccountFilterSet,
+  TokenAccountExpansionControlFlag,
+} from "../src";
 import type { SubscribeRequest, SubscribeUpdate } from "../src";
 
-const TOKEN_PROGRAM_PUBKEY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ACTIVE_ACCOUNT_PUBKEY = "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989";
 const SUBSCRIBE_TIMEOUT_MS = Number(
   process.env.SUBSCRIBE_ALL_UPDATES_TIMEOUT_MS ?? 60_000,
 );
@@ -26,11 +30,14 @@ describeLive("Client.subscribe", () => {
       );
       await client.connect();
 
+      const compressedAccounts = new CompressedAccountFilterSet(1);
+      compressedAccounts.insert(ACTIVE_ACCOUNT_PUBKEY);
+
       const request: SubscribeRequest = {
         accounts: {
           accountsClient: {
-            account: [],
-            owner: [TOKEN_PROGRAM_PUBKEY],
+            account: [ACTIVE_ACCOUNT_PUBKEY],
+            owner: [],
             filters: [],
           },
         },
@@ -44,23 +51,33 @@ describeLive("Client.subscribe", () => {
           transactionsClient: {
             vote: false,
             failed: false,
-            accountInclude: [TOKEN_PROGRAM_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            tokenAccounts: TokenAccountExpansionControlFlag.ALL,
+          },
+          compressedTransactionsClient: {
+            ...compressedAccounts.toTransactionFilter(),
+            tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
           },
         },
         transactionsStatus: {
           transactionsStatusClient: {
             vote: false,
             failed: false,
-            accountInclude: [TOKEN_PROGRAM_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            tokenAccounts: TokenAccountExpansionControlFlag.ALL,
+          },
+          compressedTransactionsStatusClient: {
+            ...compressedAccounts.toTransactionFilter(),
+            tokenAccounts: TokenAccountExpansionControlFlag.BALANCE_CHANGED,
           },
         },
         blocks: {
           blocksClient: {
-            accountInclude: [TOKEN_PROGRAM_PUBKEY],
+            accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             includeTransactions: true,
             includeAccounts: true,
             includeEntries: true,
@@ -89,7 +106,9 @@ describeLive("Client.subscribe", () => {
         account: false,
         slot: false,
         transaction: false,
+        compressedTransaction: false,
         transactionStatus: false,
+        compressedTransactionStatus: false,
         block: false,
         ping: false,
         pong: false,
@@ -128,8 +147,18 @@ describeLive("Client.subscribe", () => {
           const onData = (update: SubscribeUpdate) => {
             seen.account ||= update.account !== undefined;
             seen.slot ||= update.slot !== undefined;
-            seen.transaction ||= update.transaction !== undefined;
-            seen.transactionStatus ||= update.transactionStatus !== undefined;
+            seen.transaction ||=
+              update.transaction !== undefined &&
+              update.filters.includes("transactionsClient");
+            seen.compressedTransaction ||=
+              update.transaction !== undefined &&
+              update.filters.includes("compressedTransactionsClient");
+            seen.transactionStatus ||=
+              update.transactionStatus !== undefined &&
+              update.filters.includes("transactionsStatusClient");
+            seen.compressedTransactionStatus ||=
+              update.transactionStatus !== undefined &&
+              update.filters.includes("compressedTransactionsStatusClient");
             seen.block ||= update.block !== undefined;
             seen.ping ||= update.ping !== undefined;
             seen.pong ||= update.pong !== undefined;

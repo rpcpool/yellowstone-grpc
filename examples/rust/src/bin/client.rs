@@ -17,12 +17,12 @@ use {
         path::PathBuf,
         str::FromStr,
         sync::Arc,
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tokio::{fs, sync::Mutex},
     tonic::transport::{channel::ClientTlsConfig, Certificate},
     yellowstone_grpc_client::{GeyserGrpcBuilder, GeyserGrpcClient},
-    yellowstone_grpc_geyser::plugin::{convert_from, filter::message::FilteredUpdate},
+    yellowstone_grpc_geyser::plugin::convert_from,
     yellowstone_grpc_proto::{
         geyser::SlotStatus,
         prelude::{
@@ -405,10 +405,6 @@ struct ActionSubscribe {
     /// Show total stat instead of messages
     #[clap(long, default_value_t = false)]
     stats: bool,
-
-    /// Verify manually implemented encoding against prost
-    #[clap(long, default_value_t = false)]
-    verify_encoding: bool,
 }
 
 /// Subscribe on deshred transactions (pre-execution)
@@ -447,7 +443,7 @@ impl Action {
     async fn get_subscribe_request(
         &self,
         commitment: Option<CommitmentLevel>,
-    ) -> anyhow::Result<Option<(SubscribeRequest, usize, bool, bool)>> {
+    ) -> anyhow::Result<Option<(SubscribeRequest, usize, bool)>> {
         Ok(match self {
             Self::Subscribe(args) => {
                 let mut accounts: AccountFilterMap = HashMap::new();
@@ -630,7 +626,6 @@ impl Action {
                     },
                     args.resub.unwrap_or(0),
                     args.stats,
-                    args.verify_encoding,
                 ))
             }
             _ => None,
@@ -691,12 +686,12 @@ async fn run_action(
             .map(|response| info!("response: {response:?}")),
         Action::HealthWatch => geyser_health_watch(client).await,
         Action::Subscribe(_) => {
-            let (request, resub, stats, verify_encoding) = action
+            let (request, resub, stats) = action
                 .get_subscribe_request(commitment)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("expect subscribe action"))?;
 
-            geyser_subscribe(client, request, resub, stats, verify_encoding).await
+            geyser_subscribe(client, request, resub, stats).await
         }
         Action::SubscribeDeshred(_) => {
             let (request, stats) = action
@@ -817,7 +812,6 @@ async fn geyser_subscribe(
     request: SubscribeRequest,
     resub: usize,
     stats: bool,
-    verify_encoding: bool,
 ) -> anyhow::Result<()> {
     let pb_multi = MultiProgress::new();
     let mut pb_accounts_c = 0;
@@ -838,8 +832,6 @@ async fn geyser_subscribe(
     let pb_pp = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("ping/pong"))?;
     let mut pb_total_c = 0;
     let pb_total = crate_progress_bar(&pb_multi, ProgressBarTpl::Total)?;
-    let mut pb_verify_c = verify_encoding.then_some((0, 0));
-    let pb_verify = crate_progress_bar(&pb_multi, ProgressBarTpl::Verify)?;
 
     let (mut subscribe_tx, mut stream) = client.subscribe_with_request(Some(request)).await?;
 
@@ -871,50 +863,6 @@ async fn geyser_subscribe(
                     pb_total_c += 1;
                     pb_total.set_message(format_thousands(pb_total_c));
                     pb_total.inc(encoded_len);
-
-                    if let Some((prost_c, ref_c)) = &mut pb_verify_c {
-                        let encoded_len_prost0 = msg.encoded_len();
-                        let encoded_prost0 = msg.encode_to_vec();
-
-                        let update = FilteredUpdate::from_subscribe_update(msg)
-                            .map_err(|error| anyhow::anyhow!(error))
-                            .context("failed to convert update message to filtered update")?;
-
-                        let ts = Instant::now();
-                        let msg2 = update.as_subscribe_update();
-                        let encoded_len_prost = msg2.encoded_len();
-                        let encoded_prost = msg2.encode_to_vec();
-                        *prost_c += ts.elapsed().as_nanos();
-
-                        let ts = Instant::now();
-                        let encoded_len_ref = update.encoded_len();
-                        let encoded_ref = update.encode_to_vec();
-                        *ref_c += ts.elapsed().as_nanos();
-
-                        pb_verify.set_message(format!(
-                            "{:.2?}%",
-                            100f64 * (*ref_c as f64) / (*prost_c as f64)
-                        ));
-
-                        if encoded_len_prost0 != encoded_len_prost
-                            || encoded_len_prost != encoded_len_ref
-                            || encoded_prost0 != encoded_prost
-                            || encoded_prost != encoded_ref
-                        {
-                            let dir = "grpc-client-verify";
-                            let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-                            let path = format!("{dir}/{name}");
-                            pb_multi
-                                .println(format!("found unmached message, save to `{path}`"))?;
-                            fs::create_dir_all(dir)
-                                .await
-                                .context("failed to create dir for unmached")?;
-                            fs::write(path, encoded_prost)
-                                .await
-                                .context("failed to save unmached")?;
-                        }
-                    }
-
                     continue;
                 }
 
@@ -1196,7 +1144,6 @@ async fn geyser_subscribe_deshred(
 enum ProgressBarTpl {
     Msg(&'static str),
     Total,
-    Verify,
 }
 
 fn crate_progress_bar(
@@ -1210,9 +1157,6 @@ fn crate_progress_bar(
         }
         ProgressBarTpl::Total => {
             "{spinner} total: {msg} / ~{bytes} (~{bytes_per_sec}) in {elapsed_precise}".to_owned()
-        }
-        ProgressBarTpl::Verify => {
-            "{spinner} verify: {msg} (elapsed time, compare to prost)".to_owned()
         }
     };
     pb.set_style(ProgressStyle::with_template(&tpl)?);
