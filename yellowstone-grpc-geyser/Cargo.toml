@@ -59,7 +59,6 @@ tower-layer = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls-native-roots"] }
 tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
-wincode = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
 
@@ -68,8 +67,6 @@ agave-geyser-plugin-interface = { workspace = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
-solana-account = { workspace = true }
-solana-account-decoder = { workspace = true }
 solana-clock = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }
@@ -77,8 +74,6 @@ solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction = { workspace = true, features = ["wincode"] }
-solana-transaction-context = { workspace = true }
-solana-transaction-error = { workspace = true, features = ["wincode"] }
 solana-transaction-status = { workspace = true }
 
 # Solana Misc
@@ -87,6 +82,7 @@ solana-storage-proto = { workspace = true, optional = true }
 spl-token-2022-interface = { workspace = true }
 
 # Yellowstone
+yellowstone-grpc-convert = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-block-machine = { workspace = true, default-features = false }
 yellowstone-grpc-tools = { workspace = true }

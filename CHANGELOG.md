@@ -10,6 +10,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- Extracted `convert_from`/`convert_to` from `yellowstone-grpc-geyser` into a new `yellowstone-grpc-convert` crate so gRPC clients can reuse the proto conversions; `yellowstone-grpc-geyser` re-exports them at the old paths ([#867](https://github.com/rpcpool/yellowstone-grpc/issues/867))
+
+### Fixes
+
+- convert: `create_tx_meta` now respects `inner_instructions_none` and `log_messages_none` instead of always producing empty collections
+- napi: `encode_tx`/`encode_deshred_tx` use `yellowstone-grpc-convert` directly instead of round-tripping through agave's `solana-storage-proto`, so V1 transactions are no longer reported as V0 with `transactionConfig` dropped ([#866](https://github.com/rpcpool/yellowstone-grpc/issues/866))
+
 ## 2026-08-25
 
 - yellowstone-grpc-client-nodejs 7.0.0

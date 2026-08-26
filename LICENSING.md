@@ -12,6 +12,7 @@ The following directories and their subdirectories are licensed under Apache-2.0
 examples
 yellowstone-grpc-client
 yellowstone-grpc-client-nodejs
+yellowstone-grpc-convert
 yellowstone-grpc-proto
 ```
 

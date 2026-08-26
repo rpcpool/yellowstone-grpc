@@ -6472,6 +6472,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "yellowstone-grpc-convert"
+version = "0.1.0"
+dependencies = [
+ "solana-account 4.3.2",
+ "solana-account-decoder",
+ "solana-clock",
+ "solana-hash",
+ "solana-message",
+ "solana-pubkey 4.2.1",
+ "solana-signature",
+ "solana-transaction",
+ "solana-transaction-context",
+ "solana-transaction-error",
+ "solana-transaction-status",
+ "wincode",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
 name = "yellowstone-grpc-e2e-macros"
 version = "0.1.0"
 dependencies = [
@@ -6521,8 +6540,6 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
- "solana-account 4.3.2",
- "solana-account-decoder",
  "solana-clock",
  "solana-commitment-config",
  "solana-hash",
@@ -6534,8 +6551,6 @@ dependencies = [
  "solana-signer",
  "solana-storage-proto",
  "solana-transaction",
- "solana-transaction-context",
- "solana-transaction-error",
  "solana-transaction-status",
  "spl-token-2022-interface 2.1.0",
  "thiserror 2.0.20",
@@ -6552,8 +6567,8 @@ dependencies = [
  "tower-layer",
  "url",
  "vergen",
- "wincode",
  "yellowstone-block-machine",
+ "yellowstone-grpc-convert",
  "yellowstone-grpc-proto",
  "yellowstone-grpc-tools",
 ]
@@ -6618,7 +6633,6 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-pubkey 4.2.1",
- "solana-storage-proto",
  "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status",
@@ -6628,6 +6642,7 @@ dependencies = [
  "uuid",
  "wincode",
  "yellowstone-grpc-client",
+ "yellowstone-grpc-convert",
  "yellowstone-grpc-proto",
 ]
 

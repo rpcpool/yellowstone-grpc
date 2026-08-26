@@ -13,7 +13,7 @@ napi-derive = { workspace = true }
 napi-derive-backend = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-solana-transaction-status = { workspace = true }
+solana-transaction-status = { workspace = true, features = ["agave-unstable-api"] }
 base64 = { workspace = true }
 wincode = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -26,13 +26,13 @@ futures-channel = { workspace = true }
 parking_lot = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-convert = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 prost = { workspace = true }
 bs58 = { workspace = true, features = ["alloc"] }
 fastrand = { workspace = true }
 lazy_static = { workspace = true }
 prost-types = { workspace = true }
-solana-storage-proto = { workspace = true, features = ["agave-unstable-api"] }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true, features = ["wincode"] }
 solana-pubkey = { workspace = true }
