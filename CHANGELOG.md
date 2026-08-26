@@ -13,10 +13,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## 2026-08-25
 
 - yellowstone-grpc-client-nodejs 7.0.0
+- yellowstone-grpc-client 13.4.0
 
 ### Fixes
 
 - Fixes backpressure issue [#854](https://github.com/rpcpool/yellowstone-grpc/issues/854)
+
+### Features
+
+- new `Mock` variant for `GeyserStream` in `yellowstone-grpc-client` when `test-tools` feature-flag is enabled.
 
 ### Breaking
 
