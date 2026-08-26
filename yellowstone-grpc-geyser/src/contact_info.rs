@@ -138,7 +138,10 @@ pub(crate) mod grpc {
         std::{future::poll_fn, sync::Arc, task::Poll, time::Duration},
         tokio::sync::{broadcast, mpsc},
         tokio_stream::wrappers::ReceiverStream,
-        tokio_util::{sync::CancellationToken, sync::PollSender, task::TaskTracker},
+        tokio_util::{
+            sync::{CancellationToken, PollSender},
+            task::TaskTracker,
+        },
         tonic::{Result as TonicResult, Status},
         yellowstone_grpc_proto::prelude::SubscribeUpdateGossip,
     };
