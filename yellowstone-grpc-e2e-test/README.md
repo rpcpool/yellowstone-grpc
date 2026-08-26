@@ -193,7 +193,7 @@ Use `--json-file PATH` to write the same JSON document to a file. This option al
 
 Structured mode runs all selected scenarios. It does not stop after the first failure. Each failed scenario has status `CRITICAL`. The run status is the worst check status. An empty check set has status `UNKNOWN`.
 
-The document contains only fields that the test pack owns: start time, duration, status, endpoint, versions, notes, and checks. The dispatch layer adds its own identity and provenance fields.
+The document contains the start time, duration, status, endpoint, versions, notes, and checks.
 
 ## Endpoint/token/dial resolution precedence
 
