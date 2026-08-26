@@ -954,19 +954,19 @@ async fn geyser_subscribe(
                             json!({
                                 "slot": msg.slot,
                                 "blockhash": msg.blockhash,
-                                "rewards": if let Some(rewards) = msg.rewards {
-                                    Some(convert_from::create_rewards_obj(rewards).map_err(|error| anyhow::anyhow!(error))?)
-                                } else {
-                                    None
-                                },
-                                "blockTime": msg.block_time.map(|obj| obj.timestamp),
-                                "blockHeight": msg.block_height.map(|obj| obj.block_height),
-                                "parentSlot": msg.parent_slot,
-                                "parentBlockhash": msg.parent_blockhash,
+                                // "rewards": if let Some(rewards) = msg.rewards {
+                                //     Some(convert_from::create_rewards_obj(rewards).map_err(|error| anyhow::anyhow!(error))?)
+                                // } else {
+                                //     None
+                                // },
+                                // "blockTime": msg.block_time.map(|obj| obj.timestamp),
+                                // "blockHeight": msg.block_height.map(|obj| obj.block_height),
+                                // "parentSlot": msg.parent_slot,
+                                // "parentBlockhash": msg.parent_blockhash,
                                 "executedTransactionCount": msg.executed_transaction_count,
-                                "transactions": msg.transactions.into_iter().map(create_pretty_transaction).collect::<Result<Value, _>>()?,
+                                "transactions": msg.transactions.len(), // msg.transactions.into_iter().map(create_pretty_transaction).collect::<Result<Value, _>>()?,
                                 "updatedAccountCount": msg.updated_account_count,
-                                "accounts": msg.accounts.into_iter().map(create_pretty_account).collect::<Result<Value, _>>()?,
+                                "accounts": msg.accounts.len(), //msg.accounts.into_iter().map(create_pretty_account).collect::<Result<Value, _>>()?,
                                 "entriesCount": msg.entries_count,
                                 "entries": msg.entries.into_iter().map(create_pretty_entry).collect::<Result<Value, _>>()?,
                             }),

@@ -282,9 +282,23 @@ impl BlockMachineStorage {
         self.min_slot = self.replayed_slot.keys().next().copied();
     }
 
-    fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool) {
+    /// `reason` is purely for the log line below -- it identifies which of
+    /// `prune_slot`'s four call sites (GC capacity eviction, bank reset, fork
+    /// detected, dead slot detected) triggered this removal, so a slot that
+    /// vanishes from `replayed_slot` before every commitment level has been
+    /// delivered for it can be traced back to the actual cause instead of
+    /// just disappearing silently.
+    fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool, reason: &'static str) {
         self.processing_slots.remove(&slot);
-        self.replayed_slot.remove(&slot);
+        if self.replayed_slot.remove(&slot).is_some() {
+            let progression = self.slot_commitment_progression_map.get(&slot);
+            let max_commitment_seen = progression.map(|p| p.max_commitment);
+            if max_commitment_seen != Some(CommitmentLevel::Finalized) {
+                log::warn!(
+                    "Pruning slot {slot} ({reason}) before it reached Finalized -- highest commitment delivered so far: {max_commitment_seen:?}. Any commitment level above that will never be delivered for this slot.",
+                );
+            }
+        }
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
             if progression.max_commitment == CommitmentLevel::Finalized {
                 self.num_buffered_finalized_slot =
@@ -297,7 +311,7 @@ impl BlockMachineStorage {
     }
 
     fn slot_reset(&mut self, slot: u64) {
-        self.prune_slot(slot, true);
+        self.prune_slot(slot, true, "bank_reset");
         self.ready_queue
             .retain(|(_, block)| block.block_meta.slot != slot);
     }
@@ -388,8 +402,39 @@ impl BlockMachineStorage {
 
     fn handle_block_data(&mut self, block_data: Message) {
         let slot = block_data.get_slot();
+        // TEMP TRACE: pin down exactly where SysvarClock's account write
+        // disappears -- it's confirmed absent from Confirmed/Finalized
+        // delivery, but never observed hitting either drop site below, so
+        // first confirm it even reaches this function at all.
+        if let Message::Account(account) = &block_data {
+            if account.account.pubkey.to_string() == "SysvarC1ock11111111111111111111111111111111" {
+                log::warn!(
+                    "TRACE: SysvarClock account message reached handle_block_data for slot {slot} (is_slot_tracked={})",
+                    self.state.is_slot_tracked(slot)
+                );
+            }
+        }
         if !self.state.is_slot_tracked(slot) {
             metrics::incr_geyser_untrack_slot_event_dropped();
+            // `incr_geyser_untrack_slot_event_dropped` has no accompanying log
+            // line, making this drop invisible outside of scraping the metric
+            // directly -- add one so it's visible via plain log search too,
+            // and identify which account/message got dropped so a specific
+            // pubkey's disappearance (not just "something" was dropped) can
+            // be confirmed against this exact site.
+            let detail = match &block_data {
+                Message::Account(account) => {
+                    format!("account pubkey={}", account.account.pubkey)
+                }
+                Message::Transaction(txn) => {
+                    format!("transaction signature={}", txn.transaction.signature)
+                }
+                Message::Entry(_) => "entry".to_string(),
+                other => format!("{other:?}"),
+            };
+            log::warn!(
+                "Dropping block data for untracked slot {slot} ({detail}): slot has no FirstShredReceived/CreatedBank registration yet in the block-machine index.",
+            );
             return;
         }
         // Technically, once a block is sealed and put in the replay queue, we should not NEVER
@@ -413,7 +458,7 @@ impl BlockMachineStorage {
         {
             if let Some((&oldest_slot, _)) = self.replayed_slot.iter().next() {
                 // refresh_min_slot is set to false, since we don't want to refresh the min_slot on every prune, but only after the loop is done.
-                self.prune_slot(oldest_slot, false);
+                self.prune_slot(oldest_slot, false, "gc_capacity_eviction");
             }
         }
 
@@ -484,6 +529,22 @@ impl BlockMachineStorage {
                 if let Some(frozen_block) = self.replayed_slot.get(&slot) {
                     self.ready_queue
                         .push_back((slot_commitment_status_update, Arc::clone(frozen_block)));
+                } else {
+                    // The block-machine guarantees `FrozenBlock` is queued before any
+                    // `SlotStatus` for the same slot (see `handle_slot_commitment_status_update`
+                    // in `yellowstone-block-machine`), so this isn't an ordering race -- it means
+                    // `slot` was pruned from `replayed_slot` (GC eviction, fork/dead-slot
+                    // detection, or a bank reset) before this commitment level was delivered.
+                    // Silent otherwise: this update is simply dropped.
+                    let missed_status = match commitment_level {
+                        CommitmentLevel::Processed => SlotStatus::Processed,
+                        CommitmentLevel::Confirmed => SlotStatus::Confirmed,
+                        CommitmentLevel::Finalized => SlotStatus::Finalized,
+                    };
+                    metrics::missed_status_message_inc(missed_status);
+                    log::warn!(
+                        "Dropping {commitment_level:?} commitment update for slot {slot}: no frozen block found in `replayed_slot` (likely pruned before this commitment level arrived)",
+                    );
                 }
 
                 if matches!(commitment_level, CommitmentLevel::Finalized) {
@@ -492,10 +553,10 @@ impl BlockMachineStorage {
                 }
             }
             BlockStateMachineOutput::ForksDetected(fork_detected) => {
-                self.prune_slot(fork_detected.slot, true);
+                self.prune_slot(fork_detected.slot, true, "fork_detected");
             }
             BlockStateMachineOutput::DeadSlotDetected(dead_block_detected) => {
-                self.prune_slot(dead_block_detected.slot, true);
+                self.prune_slot(dead_block_detected.slot, true, "dead_slot_detected");
             }
             BlockStateMachineOutput::BankCreated(_) => {}
             BlockStateMachineOutput::BankReset(slot) => {

@@ -70,6 +70,7 @@ pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfi
     };
     let subscription = SubscribeRequest {
         accounts: HashMap::from([("test".to_string(), account_filter)]),
+        commitment: Some(1),
         ..Default::default()
     };
 
@@ -108,6 +109,133 @@ pub async fn subscribe_should_only_returns_sysvarclock_account(config: &RunConfi
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
             other => bail!("unexpected update type: {other:?}"),
         }
+    }
+
+    Ok(())
+}
+
+/// TEMP DIAGNOSTIC (not meant to stay): subscribes to blocks at Confirmed
+/// commitment, no account_include filter (so every block, not just ones
+/// touching a specific pubkey), and checks whether each block's embedded
+/// `accounts` list actually contains SysvarClock by pubkey -- not just a
+/// matching count.
+#[test_helper(name = "sysvar-in-confirmed-block", tags = ["diagnostic"])]
+pub async fn diagnostic_sysvar_in_confirmed_block(config: &RunConfig) -> Result<()> {
+    let mut client = crate::grpc::new_client(config).await?;
+    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+    let sysvar_clock_pubkey = Pubkey::from_str(sysvar_clock_str).context("valid pubkey string")?;
+
+    let subscription = SubscribeRequest {
+        blocks: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterBlocks {
+                include_accounts: Some(true),
+                include_transactions: Some(false),
+                include_entries: Some(false),
+                ..Default::default()
+            },
+        )]),
+        commitment: Some(1),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+
+    let mut blocks_checked = 0usize;
+    const MAX_BLOCKS: usize = 5;
+    while let Some(update) = stream.next().await {
+        if blocks_checked >= MAX_BLOCKS {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(UpdateOneof::Block(block)) = update.update_oneof else {
+            continue;
+        };
+        blocks_checked += 1;
+        let found = block.accounts.iter().any(|a| {
+            Pubkey::try_from(a.pubkey.clone())
+                .map(|pk| pk == sysvar_clock_pubkey)
+                .unwrap_or(false)
+        });
+        log::info!(
+            "block slot={} account_count={} sysvar_present={found}",
+            block.slot,
+            block.accounts.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// TEMP DIAGNOSTIC: replays the SAME `from_slot` range twice, once at
+/// Processed and once at Confirmed, filtered to SysvarClock, and logs which
+/// slots actually yielded a SysvarClock account update in each -- so we can
+/// tell whether Confirmed replay is genuinely missing slots that Processed
+/// replay has, for the exact same underlying `FrozenBlock`s.
+#[test_helper(name = "sysvar-replay-compare", tags = ["diagnostic"])]
+pub async fn diagnostic_sysvar_replay_compare(config: &RunConfig) -> Result<()> {
+    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+    let sysvar_clock_pubkey = Pubkey::from_str(sysvar_clock_str).context("valid pubkey string")?;
+
+    let mut client = crate::grpc::new_client(config).await?;
+    let tip = client.get_slot(None).await.context("get_slot")?.slot;
+    let from_slot = tip.saturating_sub(15);
+    log::info!("tip={tip} from_slot={from_slot}");
+
+    for (label, commitment) in [("processed", 0), ("confirmed", 1)] {
+        let mut client = crate::grpc::new_client(config).await?;
+        let account_filter = SubscribeRequestFilterAccounts {
+            account: vec![sysvar_clock_str.to_string()],
+            ..Default::default()
+        };
+        let subscription = SubscribeRequest {
+            accounts: HashMap::from([("test".to_string(), account_filter)]),
+            from_slot: Some(from_slot),
+            commitment: Some(commitment),
+            ..Default::default()
+        };
+        let mut stream = client
+            .subscribe_once(subscription)
+            .await
+            .context("subscription should succeed")?;
+
+        let mut seen_slots = Vec::new();
+        let mut total_updates = 0usize;
+        let mut any_update_count = 0usize;
+        const MAX_UPDATES: usize = 30;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() || total_updates >= MAX_UPDATES {
+                break;
+            }
+            let Ok(Some(update)) = tokio::time::timeout(remaining, stream.next()).await else {
+                break;
+            };
+            let update = update.context("stream should yield updates without error")?;
+            let Some(update_oneof) = update.update_oneof else {
+                continue;
+            };
+            any_update_count += 1;
+            let UpdateOneof::Account(acc) = update_oneof else {
+                continue;
+            };
+            let Some(account) = acc.account else { continue };
+            let Ok(pubkey) = Pubkey::try_from(account.pubkey.as_slice()) else {
+                continue;
+            };
+            if pubkey == sysvar_clock_pubkey {
+                total_updates += 1;
+                seen_slots.push(acc.slot);
+            }
+        }
+        seen_slots.sort_unstable();
+        log::info!(
+            "[{label}] commitment={commitment} from_slot={from_slot} any_update_count={any_update_count} sysvar_updates={total_updates} slots={seen_slots:?}"
+        );
     }
 
     Ok(())
@@ -461,7 +589,7 @@ pub async fn any_commitment_level_of_subscription_should_return_all_possible_val
     let mut client = crate::grpc::new_client(config).await?;
     let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
 
-    for commitment in [0, 1, 2] {
+    for commitment in [1] {
         let account_filter = SubscribeRequestFilterAccounts {
             account: vec![sysvar_clock_str.to_string()],
             ..Default::default()

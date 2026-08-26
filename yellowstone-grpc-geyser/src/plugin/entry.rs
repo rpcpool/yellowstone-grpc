@@ -304,50 +304,50 @@ impl GeyserPlugin for Plugin {
     /// `bank_id` identifies the concrete bank instance associated with this
     /// status update. This method is called for statuses tied to a particular
     /// `Bank`: `Confirmed`, `Processed`, `Rooted`, and `CreatedBank`.
-    #[allow(unused_variables)]
-    fn update_bank_status(
-        &self,
-        slot: Slot,
-        parent: Option<u64>,
-        status: &SlotStatus,
-        bank_id: BankId,
-    ) -> PluginResult<()> {
-        self.with_inner(|inner| {
-            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, None)));
+    // #[allow(unused_variables)]
+    // fn update_bank_status(
+    //     &self,
+    //     slot: Slot,
+    //     parent: Option<u64>,
+    //     status: &SlotStatus,
+    //     bank_id: BankId,
+    // ) -> PluginResult<()> {
+    //     self.with_inner(|inner| {
+    //         let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, Some(bank_id))));
 
-            match status {
-                SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted => {
-                    // Processed/Confirmed/Finalized slot status updates are handled by the block reconstruction loop and are never directly exposed by the processed message loop (geyser_loop.)
-                    // If they were to be sent through geyser_loop, the block_reconstruction_loop would also send them, resulting in duplicate slot life-cycle messages.
-                    // By sending them directly to block_reconstruction_loop, we avoid this issue while ensuring block reconstruction happens as normal.
-                    inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
-                        message.clone(),
-                    ));
-                }
-                variant@(SlotStatus::FirstShredReceived | SlotStatus::Dead(_) | SlotStatus::Completed) => { unreachable!("variant {:?} is expected to be emitted from `update_slot_status`", variant) },
-                SlotStatus::CreatedBank => {
-                    // CreatedBank in particular is critical to the life-cycle of a block reconstruction, 
-                    // but it is not forwarded to the subscribed client from block_reconstruction_loop, 
-                    // so it must be sent to geyser_loop to ensure subscribers receive it.
-                    inner.send_message(message.clone());
-                    // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
-                    // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
-                    let messages = Arc::new(vec![message.clone()]);
-                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
-                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
-                }
-            }
+    //         match status {
+    //             SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted => {
+    //                 // Processed/Confirmed/Finalized slot status updates are handled by the block reconstruction loop and are never directly exposed by the processed message loop (geyser_loop.)
+    //                 // If they were to be sent through geyser_loop, the block_reconstruction_loop would also send them, resulting in duplicate slot life-cycle messages.
+    //                 // By sending them directly to block_reconstruction_loop, we avoid this issue while ensuring block reconstruction happens as normal.
+    //                 inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
+    //                     message.clone(),
+    //                 ));
+    //             }
+    //             variant@(SlotStatus::FirstShredReceived | SlotStatus::Dead(_) | SlotStatus::Completed) => { unreachable!("variant {:?} is expected to be emitted from `update_slot_status`", variant) },
+    //             SlotStatus::CreatedBank => {
+    //                 // CreatedBank in particular is critical to the life-cycle of a block reconstruction, 
+    //                 // but it is not forwarded to the subscribed client from block_reconstruction_loop, 
+    //                 // so it must be sent to geyser_loop to ensure subscribers receive it.
+    //                 inner.send_message(message.clone());
+    //                 // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
+    //                 // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
+    //                 let messages = Arc::new(vec![message.clone()]);
+    //                 inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
+    //                 inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
+    //             }
+    //         }
 
-            // Deshred subscribers need to receive all slot status updates.
-            inner.send_deshred_message(message.clone());
+    //         // Deshred subscribers need to receive all slot status updates.
+    //         inner.send_deshred_message(message.clone());
 
-            // Blocks meta subscribers need to receive all slot status updates.
-            inner.send_blocks_meta_message(message);
+    //         // Blocks meta subscribers need to receive all slot status updates.
+    //         inner.send_blocks_meta_message(message);
 
-            metrics::update_slot_status(status, slot);
-            Ok(())
-        })
-    }
+    //         metrics::update_slot_status(status, slot);
+    //         Ok(())
+    //     })
+    // }
 
     fn update_slot_status(
         &self,
@@ -357,19 +357,38 @@ impl GeyserPlugin for Plugin {
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
             let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, None)));
-            inner.send_message(message.clone());
+            if matches!(
+                status,
+                SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted
+            ) {
+                // Processed/Confirmed/Finalized slot status updates are handled by the block reconstruction loop and are never directly exposed by the processed message loop (geyser_loop.)
+                // If they were to be sent through geyser_loop, the block_reconstruction_loop would also send them, resulting in duplicate slot life-cycle messages.
+                // By sending them directly to block_reconstruction_loop, we avoid this issue while ensuring block reconstruction happens as normal.
+                inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
+                    message.clone(),
+                ));
+            } else {
+                // The only remaining states are FirstShredReceived/Completed/CreatedBank/Dead.
+                // These states are used by both block reconstruction and the geyser_loop (processed message loop).
+                // When sending to geyser_loop, the loop will batch all messages (whether it's slot updates, account updates, or transaction updates) and send them to the block_reconstruction_loop in a single batch.
+                // CreatedBank in particular is critical to the life-cycle of a block reconstruction, but it is not forwarded to the subscribed client from block_reconstruction_loop, so it must be sent to geyser_loop to ensure subscribers receive it.
+                inner.send_message(message.clone());
 
-            match status {
-                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
+                // Note: The following if statement remains here in case of any future additions to a slot's life-cycle state.
+                // It could be removed as it is right now, since we've already filtered out all other states above, but it is left here for clarity and future-proofing.
+                if matches!(
+                    status,
+                    SlotStatus::FirstShredReceived
+                        | SlotStatus::Completed
+                        | SlotStatus::CreatedBank
+                        | SlotStatus::Dead(_)
+                ) {
                     // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
                     // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
                     let messages = Arc::new(vec![message.clone()]);
                     inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
                     inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
                 }
-                variant@(SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted | SlotStatus::CreatedBank) => {
-                    unreachable!("variant {:?} expected to be emitted from `update_bank_status`", variant);
-                },
             }
 
             // Deshred subscribers need to receive all slot status updates.
@@ -382,6 +401,40 @@ impl GeyserPlugin for Plugin {
             Ok(())
         })
     }
+
+    // fn update_slot_status(
+    //     &self,
+    //     slot: u64,
+    //     parent: Option<u64>,
+    //     status: &SlotStatus,
+    // ) -> PluginResult<()> {
+    //     self.with_inner(|inner| {
+    //         let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, None)));
+    //         inner.send_message(message.clone());
+
+    //         match status {
+    //             SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
+    //                 // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
+    //                 // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
+    //                 let messages = Arc::new(vec![message.clone()]);
+    //                 inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
+    //                 inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
+    //             }
+    //             variant@(SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted | SlotStatus::CreatedBank) => {
+    //                 unreachable!("variant {:?} expected to be emitted from `update_bank_status`", variant);
+    //             },
+    //         }
+
+    //         // Deshred subscribers need to receive all slot status updates.
+    //         inner.send_deshred_message(message.clone());
+
+    //         // Blocks meta subscribers need to receive all slot status updates.
+    //         inner.send_blocks_meta_message(message);
+
+    //         metrics::update_slot_status(status, slot);
+    //         Ok(())
+    //     })
+    // }
 
     fn notify_transaction_for_bank(
         &self,
