@@ -313,7 +313,7 @@ impl GeyserPlugin for Plugin {
         bank_id: BankId,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, None)));
+            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, Some(bank_id))));
 
             match status {
                 SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted => {
