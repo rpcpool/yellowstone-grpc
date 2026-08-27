@@ -86,7 +86,13 @@ pub fn simple_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccou
 }
 
 pub fn message_slot(slot: u64, status: SlotStatus) -> MessageSlot {
-    let bank_id = if [SlotStatus::Completed, SlotStatus::Dead, SlotStatus::FirstShredReceived].contains(&status) {
+    let bank_id = if [
+        SlotStatus::Completed,
+        SlotStatus::Dead,
+        SlotStatus::FirstShredReceived,
+    ]
+    .contains(&status)
+    {
         None
     } else {
         Some(slot)

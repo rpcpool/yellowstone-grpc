@@ -1,25 +1,41 @@
 use {
     crate::{
-        config::Config, file_watcher::FileWatcher, grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels}, metrics::{self, PrometheusService, incr_geyser_event_dropped}, plugin::{
+        config::Config,
+        file_watcher::FileWatcher,
+        grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
+        metrics::{self, incr_geyser_event_dropped, PrometheusService},
+        plugin::{
             filter::limits::FilterLimits,
             message::{
                 CommitmentLevel, Message, MessageAccount, MessageBlockMeta,
                 MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
             },
-        }, stream::tokio::BatchStreamUnboundedReceiver, version::VERSION,
-    }, agave_geyser_plugin_interface::geyser_plugin_interface::{
+        },
+        stream::tokio::BatchStreamUnboundedReceiver,
+        version::VERSION,
+    },
+    agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions,
         ReplicaBlockFooterInfoVersions, ReplicaBlockInfoVersions,
         ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
-    }, solana_clock::{BankId, Slot}, solana_pubkey::Pubkey, std::{
-        concat, env, sync::{
-            Arc, Mutex, Once, atomic::{AtomicBool, Ordering},
-        }, time::Duration,
-    }, tokio::{
+    },
+    solana_clock::{BankId, Slot},
+    solana_pubkey::Pubkey,
+    std::{
+        concat, env,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex, Once,
+        },
+        time::Duration,
+    },
+    tokio::{
         runtime::{Builder, Runtime},
         sync::{broadcast, mpsc},
-    }, tokio_rustls::rustls, tokio_util::{sync::CancellationToken, task::TaskTracker},
+    },
+    tokio_rustls::rustls,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 #[derive(Debug)]
@@ -244,8 +260,9 @@ impl GeyserPlugin for Plugin {
             }
 
             if let Some(channel) = inner.snapshot_channel.lock().unwrap().as_ref() {
-                let message =
-                    Message::Account(Arc::new(MessageAccount::from_geyser(account, slot, true, None)));
+                let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                    account, slot, true, None,
+                )));
                 match channel.send(Box::new(message)) {
                     Ok(()) => metrics::message_queue_size_inc(),
                     Err(_) => {
@@ -285,8 +302,12 @@ impl GeyserPlugin for Plugin {
                 }
             }
 
-            let message =
-                Message::Account(Arc::new(MessageAccount::from_geyser(account, slot, false, Some(bank_id))));
+            let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                account,
+                slot,
+                false,
+                Some(bank_id),
+            )));
             inner.send_message(message);
             Ok(())
         })
@@ -313,7 +334,12 @@ impl GeyserPlugin for Plugin {
         bank_id: BankId,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, Some(bank_id))));
+            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(
+                slot,
+                parent,
+                status,
+                Some(bank_id),
+            )));
 
             match status {
                 SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted => {
@@ -324,10 +350,17 @@ impl GeyserPlugin for Plugin {
                         message.clone(),
                     ));
                 }
-                variant@(SlotStatus::FirstShredReceived | SlotStatus::Dead(_) | SlotStatus::Completed) => { unreachable!("variant {:?} is expected to be emitted from `update_slot_status`", variant) },
+                variant @ (SlotStatus::FirstShredReceived
+                | SlotStatus::Dead(_)
+                | SlotStatus::Completed) => {
+                    unreachable!(
+                        "variant {:?} is expected to be emitted from `update_slot_status`",
+                        variant
+                    )
+                }
                 SlotStatus::CreatedBank => {
-                    // CreatedBank in particular is critical to the life-cycle of a block reconstruction, 
-                    // but it is not forwarded to the subscribed client from block_reconstruction_loop, 
+                    // CreatedBank in particular is critical to the life-cycle of a block reconstruction,
+                    // but it is not forwarded to the subscribed client from block_reconstruction_loop,
                     // so it must be sent to geyser_loop to ensure subscribers receive it.
                     inner.send_message(message.clone());
                     // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
@@ -356,7 +389,9 @@ impl GeyserPlugin for Plugin {
         status: &SlotStatus,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(slot, parent, status, None)));
+            let message = Message::Slot(Arc::new(MessageSlot::from_geyser(
+                slot, parent, status, None,
+            )));
             inner.send_message(message.clone());
 
             match status {
@@ -367,9 +402,15 @@ impl GeyserPlugin for Plugin {
                     inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
                     inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
                 }
-                variant@(SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted | SlotStatus::CreatedBank) => {
-                    unreachable!("variant {:?} expected to be emitted from `update_bank_status`", variant);
-                },
+                variant @ (SlotStatus::Processed
+                | SlotStatus::Confirmed
+                | SlotStatus::Rooted
+                | SlotStatus::CreatedBank) => {
+                    unreachable!(
+                        "variant {:?} expected to be emitted from `update_bank_status`",
+                        variant
+                    );
+                }
             }
 
             // Deshred subscribers need to receive all slot status updates.
@@ -400,8 +441,11 @@ impl GeyserPlugin for Plugin {
                 ReplicaTransactionInfoVersions::V0_0_3(info) => info,
             };
 
-            let message =
-                Message::Transaction(Arc::new(MessageTransaction::from_geyser(transaction, slot, bank_id)));
+            let message = Message::Transaction(Arc::new(MessageTransaction::from_geyser(
+                transaction,
+                slot,
+                bank_id,
+            )));
             inner.send_message(message);
 
             Ok(())
@@ -448,7 +492,8 @@ impl GeyserPlugin for Plugin {
                 ReplicaBlockInfoVersions::V0_0_4(info) => info,
             };
 
-            let message = Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo, bank_id)));
+            let message =
+                Message::BlockMeta(Arc::new(MessageBlockMeta::from_geyser(blockinfo, bank_id)));
 
             // It's super important that block-meta message goes to the geyser loop message channel,
             // and not straight to block-reconstruction.

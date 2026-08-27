@@ -888,7 +888,7 @@ mod tests {
                 parent: None,
                 status,
                 dead_error: None,
-                bank_id: Some(slot)
+                bank_id: Some(slot),
             })),
             created_at: None,
         }

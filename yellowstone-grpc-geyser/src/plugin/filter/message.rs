@@ -1385,7 +1385,7 @@ pub mod tests {
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
                 created_at: Timestamp::from(SystemTime::now()),
-                bank_id: 299888121
+                bank_id: 299888121,
             },
         ]
         .into_iter()
@@ -1479,7 +1479,7 @@ pub mod tests {
                         block_height: block.block_height.map(convert_to::create_block_height),
                         executed_transaction_count: transactions.len() as u64,
                         entries_count: entries.len() as u64,
-                        bank_id: slot
+                        bank_id: slot,
                     },
                     created_at: Timestamp::from(SystemTime::now()),
                 };
@@ -1646,7 +1646,13 @@ pub mod tests {
                     SlotStatus::CreatedBank,
                     SlotStatus::Dead,
                 ] {
-                    let bank_id = if [SlotStatus::Completed, SlotStatus::FirstShredReceived, SlotStatus::Dead].contains(&status) {
+                    let bank_id = if [
+                        SlotStatus::Completed,
+                        SlotStatus::FirstShredReceived,
+                        SlotStatus::Dead,
+                    ]
+                    .contains(&status)
+                    {
                         None
                     } else {
                         Some(slot)
@@ -1659,7 +1665,7 @@ pub mod tests {
                             status,
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now()),
-                            bank_id
+                            bank_id,
                         }),
                     )
                 }

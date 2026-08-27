@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "16.0.0-rc1+solana.4.3.0.beta.0"
+version = "16.0.0-rc2+solana.4.3.0.beta.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -88,7 +88,6 @@ spl-token-2022-interface = { workspace = true }
 
 # Yellowstone
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
-yellowstone-block-machine = { workspace = true, default-features = false }
 yellowstone-grpc-tools = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]

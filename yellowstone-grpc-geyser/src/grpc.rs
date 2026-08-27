@@ -5,7 +5,7 @@ use {
             TrustedMetadataAuthenticator,
         },
         billing::{BillingMeteredManager, HttpBillingEventSink},
-        block_reconstruction::BlockMachineStorage,
+        block_reconstruction_v2::BlockMachineStorage,
         config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
@@ -1229,20 +1229,21 @@ impl GrpcService {
     ///
     /// Within a slot, if multiple updates arrive for the same account pubkey, only the update with
     /// the highest `write_version` is retained in the frozen block. This is handled internally by
-    /// `BlockMachineStorage` / `ProcessingSlot` and must not be bypassed.
+    /// `BlockMachineStorage` / `BankBuffer` and must not be bypassed.
     ///
     /// # Missing commitment level gap-filling
     ///
     /// If a higher commitment level arrives without a prior lower one (e.g. Finalized before
-    /// Confirmed), `BlocksStateMachine` synthesizes the missing levels in order
+    /// Confirmed), `BlockMachineStorage` synthesizes the missing levels in order
     /// (Processed → Confirmed → Finalized). Each synthesized level causes a separate
     /// `pop_ready_block` entry and a separate fan-out.
     ///
     /// # Ancestor slot propagation
     ///
-    /// When a descendant slot is finalized, `BlocksStateMachine` retroactively finalizes all
-    /// ancestor slots that were not yet finalized. This mirrors the parent-chain walk that
-    /// `geyser_loop` performs manually. It must not be short-circuited.
+    /// When a descendant slot reaches a commitment level, `BlockMachineStorage` retroactively
+    /// raises every ancestor slot (walked via its own tracked parent-slot chain) to at least
+    /// that same commitment level, emitting a synthesized update for any ancestor that hadn't
+    /// already reached it directly. It must not be short-circuited.
     ///
     /// # Batching and metrics
     ///
@@ -1406,7 +1407,7 @@ impl GrpcService {
                             },
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now()),
-                            bank_id: None // TODO: we need to support bank id
+                            bank_id: Some(slot_update.bank_id),
                         }));
 
                         let slot_message_singleton_vec = Arc::new(vec![slot_message]);
@@ -1464,7 +1465,7 @@ impl GrpcService {
                                 },
                                 dead_error: None,
                                 created_at,
-                                bank_id: None // TODO: we need to support bank id
+                                bank_id: Some(slot_update.bank_id),
                             }));
                             replayed_messages.push(ReplayResponseMessageType::Single(slot_message));
                         }
@@ -2861,7 +2862,13 @@ mod tests {
         }
 
         fn make_slot(slot: u64, status: SlotStatus, parent: Option<u64>) -> Message {
-            let bank_id = if [SlotStatus::Completed, SlotStatus::Dead, SlotStatus::FirstShredReceived].contains(&status) {
+            let bank_id = if [
+                SlotStatus::Completed,
+                SlotStatus::Dead,
+                SlotStatus::FirstShredReceived,
+            ]
+            .contains(&status)
+            {
                 None
             } else {
                 Some(slot)
