@@ -828,7 +828,7 @@ pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
-    pub contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
+    pub(crate) contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
 }
@@ -1047,7 +1047,6 @@ impl GrpcService {
         task_tracker.spawn(contact_info::contact_info_loop(
             UnboundedReceiverStream::new(contact_info_rx),
             Arc::clone(&contact_info_state),
-            service_cancellation_token.child_token(),
         ));
 
         // Capture traffic reporting threshold before config is moved

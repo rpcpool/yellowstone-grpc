@@ -3,7 +3,7 @@ pub(crate) mod billing;
 mod block_reconstruction;
 mod cache_ext;
 pub mod config;
-pub mod contact_info;
+pub(crate) mod contact_info;
 pub mod file_watcher;
 pub mod grpc;
 pub mod metered;

@@ -233,6 +233,8 @@ impl GeyserPlugin for Plugin {
             inner.plugin_task_tracker.close();
             drop(inner.file_watcher);
             drop(inner.grpc_channel);
+            // Closes the channel so `contact_info_loop` drains what is queued and exits.
+            drop(inner.contact_info_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();
             log::info!(

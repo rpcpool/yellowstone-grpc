@@ -279,6 +279,33 @@ impl GeyserStream {
     }
 }
 
+/// Streams returned by the [`GeyserGrpcClient::subscribe_gossip`].
+///
+/// The stream yields [`SubscribeUpdateGossip`] from the server.
+///
+/// Wrapping the transport keeps it out of the public signature, so it can change without a
+/// breaking release.
+pub struct GeyserGossipStream {
+    inner: Streaming<SubscribeUpdateGossip>,
+}
+
+impl GeyserGossipStream {
+    pub const fn new(inner: Streaming<SubscribeUpdateGossip>) -> Self {
+        Self { inner }
+    }
+}
+
+impl Stream for GeyserGossipStream {
+    type Item = Result<SubscribeUpdateGossip, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
 ///
 /// Streams returned by the [`GeyserGrpcClient::subscribe_deshred`].
 ///
@@ -613,12 +640,10 @@ impl GeyserGrpcClient {
             .map(|(_sink, stream)| stream)
     }
 
-    pub async fn subscribe_gossip(
-        &mut self,
-    ) -> GeyserGrpcClientResult<Streaming<SubscribeUpdateGossip>> {
+    pub async fn subscribe_gossip(&mut self) -> GeyserGrpcClientResult<GeyserGossipStream> {
         let request = tonic::Request::new(SubscribeGossipRequest {});
         let response = self.geyser.subscribe_gossip(request).await?;
-        Ok(response.into_inner())
+        Ok(GeyserGossipStream::new(response.into_inner()))
     }
 
     // RPC calls

@@ -8,10 +8,10 @@ use {
         sync::{Arc, Mutex},
     },
     tokio::sync::{broadcast, watch},
-    tokio_util::sync::CancellationToken,
+    tokio_stream::wrappers::BroadcastStream,
 };
 
-pub struct ContactInfoNotification {
+pub(crate) struct ContactInfoNotification {
     pub message: ContactInfoMessage,
     pub is_startup: bool,
 }
@@ -75,8 +75,8 @@ impl ContactInfoState {
     /// Events at or below `rev` may still arrive; the caller drops them.
     pub(crate) fn subscribe_and_snapshot(
         &self,
-    ) -> (broadcast::Receiver<ContactInfoEvent>, TopologySnapshot) {
-        let messages_rx = self.tx.subscribe();
+    ) -> (BroadcastStream<ContactInfoEvent>, TopologySnapshot) {
+        let messages_rx = BroadcastStream::new(self.tx.subscribe());
         let table = self.map.lock().expect("contact info map mutex poisoned");
         (
             messages_rx,
@@ -89,22 +89,18 @@ impl ContactInfoState {
 }
 
 /// The single writer. Owns every mutation of the table.
-pub(crate) async fn contact_info_loop<St>(
-    mut notifications: St,
-    state: Arc<ContactInfoState>,
-    cancellation_token: CancellationToken,
-) where
+///
+/// Ends when `notifications` runs dry, which happens when the plugin drops its sender. That is
+/// the only exit, so the loop cannot stop with work still queued.
+pub(crate) async fn contact_info_loop<St>(mut notifications: St, state: Arc<ContactInfoState>)
+where
     St: Stream<Item = ContactInfoNotification> + Unpin,
 {
-    loop {
-        let ContactInfoNotification {
-            message,
-            is_startup,
-        } = tokio::select! {
-            _ = cancellation_token.cancelled() => break,
-            m = notifications.next() => match m { Some(m) => m, None => break },
-        };
-
+    while let Some(ContactInfoNotification {
+        message,
+        is_startup,
+    }) = notifications.next().await
+    {
         if !is_startup && !*state.complete_tx.borrow() {
             let nodes = state.map.lock().expect("poisoned").nodes.len();
             info!("contact info startup replay complete: {nodes} nodes");
@@ -133,11 +129,14 @@ pub(crate) mod grpc {
     use {
         super::ContactInfoState,
         crate::{grpc::SubscriptionOwnedPermit, metrics, plugin::convert_to},
-        futures::sink::{Sink, SinkExt},
+        futures::{
+            sink::{Sink, SinkExt},
+            stream::StreamExt as _,
+        },
         log::{error, info},
-        std::{future::poll_fn, sync::Arc, task::Poll, time::Duration},
-        tokio::sync::{broadcast, mpsc},
-        tokio_stream::wrappers::ReceiverStream,
+        std::{sync::Arc, time::Duration},
+        tokio::sync::mpsc,
+        tokio_stream::wrappers::{errors::BroadcastStreamRecvError, ReceiverStream},
         tokio_util::{
             sync::{CancellationToken, PollSender},
             task::TaskTracker,
@@ -147,28 +146,6 @@ pub(crate) mod grpc {
     };
 
     type GossipItem = TonicResult<SubscribeUpdateGossip>;
-
-    enum Sent {
-        Ok,
-        Full,
-        Closed,
-    }
-
-    /// Sends without waiting. `Sink` has no `try_send`, so poll readiness once and give up if
-    /// the sink is not ready rather than awaiting it.
-    async fn try_send<S>(sink: &mut S, item: GossipItem) -> Sent
-    where
-        S: Sink<GossipItem> + Unpin,
-    {
-        match futures::poll!(poll_fn(|cx| sink.poll_ready_unpin(cx))) {
-            Poll::Ready(Ok(())) => match sink.start_send_unpin(item) {
-                Ok(()) => Sent::Ok,
-                Err(_) => Sent::Closed,
-            },
-            Poll::Ready(Err(_)) => Sent::Closed,
-            Poll::Pending => Sent::Full,
-        }
-    }
 
     struct ContactInfoClientSession {
         id: usize,
@@ -250,7 +227,6 @@ pub(crate) mod grpc {
             PollSender::new(stream_tx),
             state,
             cancellation_token,
-            task_tracker.clone(),
         ));
 
         ReceiverStream::new(stream_rx)
@@ -261,15 +237,14 @@ pub(crate) mod grpc {
         mut sink: S,
         state: Arc<ContactInfoState>,
         cancellation_token: CancellationToken,
-        task_tracker: TaskTracker,
     ) where
-        S: Sink<GossipItem> + Unpin + Send + 'static,
+        S: Sink<GossipItem> + Unpin,
     {
         // Never hand a client a partial table: agave replays the gossip state at validator start
         // with no end-of-replay marker, so wait until a live notification proves it is done.
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                let _ = try_send(&mut sink, Err(Status::unavailable("server is shutting down try again later"))).await;
+                let _ = sink.send(Err(Status::unavailable("server is shutting down try again later"))).await;
                 session.disconnect_reason = "server_shutdown";
                 return;
             }
@@ -301,18 +276,18 @@ pub(crate) mod grpc {
             loop {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
-                        let _ = try_send(&mut sink, Err(Status::unavailable("server is shutting down try again later"))).await;
+                        let _ = sink.send(Err(Status::unavailable("server is shutting down try again later"))).await;
                         session.disconnect_reason = "server_shutdown";
                         break 'handoff;
                     }
-                    message = messages_rx.recv() => {
+                    message = messages_rx.next() => {
                         let event = match message {
-                            Ok(event) => event,
-                            Err(broadcast::error::RecvError::Closed) => {
+                            Some(Ok(event)) => event,
+                            None => {
                                 session.disconnect_reason = "broadcast_closed";
                                 break 'handoff;
                             }
-                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            Some(Err(BroadcastStreamRecvError::Lagged(skipped))) => {
                                 // The client's view now has a hole and skipping ahead leaves it
                                 // permanently wrong. The table is authoritative: resynchronise.
                                 resnapshot_attempts += 1;
@@ -322,9 +297,7 @@ pub(crate) mod grpc {
                                         session.subscriber_id, session.id
                                     );
                                     session.disconnect_reason = "client_broadcast_lag";
-                                    task_tracker.spawn(async move {
-                                        let _ = sink.send(Err(Status::internal("lagged to receive contact info messages"))).await;
-                                    });
+                                    let _ = sink.send(Err(Status::internal("lagged to receive contact info messages"))).await;
                                     break 'handoff;
                                 }
                                 info!(
@@ -341,25 +314,13 @@ pub(crate) mod grpc {
                         }
 
                         let update = convert_to::create_gossip_update(event.seq, &event.message);
-                        match try_send(&mut sink, Ok(update)).await {
-                            Sent::Ok => {
-                                resnapshot_attempts = 0;
-                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                            }
-                            Sent::Full => {
-                                error!("contact info client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
-                                session.disconnect_reason = "client_channel_full";
-                                task_tracker.spawn(async move {
-                                    let _ = sink.send(Err(Status::internal("lagged to send an update"))).await;
-                                });
-                                break 'handoff;
-                            }
-                            Sent::Closed => {
-                                error!("contact info client #{}/{}: stream closed", session.subscriber_id, session.id);
-                                session.disconnect_reason = "client_closed";
-                                break 'handoff;
-                            }
+                        if sink.send(Ok(update)).await.is_err() {
+                            error!("contact info client #{}/{}: stream closed", session.subscriber_id, session.id);
+                            session.disconnect_reason = "client_closed";
+                            break 'handoff;
                         }
+                        resnapshot_attempts = 0;
+                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                     }
                 }
             }
@@ -375,7 +336,7 @@ mod tests {
         prost_types::Timestamp,
         std::{collections::HashMap as Map, time::Duration},
         tokio::sync::mpsc,
-        tokio_stream::wrappers::UnboundedReceiverStream,
+        tokio_stream::wrappers::{errors::BroadcastStreamRecvError, UnboundedReceiverStream},
     };
 
     /// `shred_version` doubles as a marker so a reconstructed table can be compared field-wise
@@ -458,11 +419,9 @@ mod tests {
     async fn applies_updates_and_removals_in_order() {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
         let loop_handle = tokio::spawn(contact_info_loop(
             UnboundedReceiverStream::new(rx),
             Arc::clone(&state),
-            cancel.clone(),
         ));
 
         let a = Pubkey::new_unique();
@@ -485,11 +444,9 @@ mod tests {
     async fn table_is_incomplete_until_startup_replay_ends() {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
         tokio::spawn(contact_info_loop(
             UnboundedReceiverStream::new(rx),
             Arc::clone(&state),
-            cancel.clone(),
         ));
 
         // Startup replay: entries land in the table but it is not yet complete.
@@ -513,19 +470,15 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), state.wait_until_complete())
             .await
             .expect("completes once a live notification arrives");
-
-        cancel.cancel();
     }
 
     #[tokio::test]
     async fn snapshot_at_or_below_seq_is_already_applied() {
         let state = ContactInfoState::new(64);
         let (tx, rx) = mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
         let loop_handle = tokio::spawn(contact_info_loop(
             UnboundedReceiverStream::new(rx),
             Arc::clone(&state),
-            cancel.clone(),
         ));
 
         let a = Pubkey::new_unique();
@@ -543,7 +496,69 @@ mod tests {
         );
     }
 
+    /// A subscriber that falls behind can always be rebuilt from the table.
     ///
+    /// This is the premise the `Lagged` arm rests on: events dropped from the broadcast ring are
+    /// unrecoverable from the stream, but their effect is in the table, so a fresh snapshot
+    /// restores the client's view. If that were not true, re-snapshotting would be pointless and
+    /// a lagging client would have to be disconnected.
+    #[tokio::test]
+    async fn a_lagged_subscriber_is_restored_by_a_fresh_snapshot() {
+        // Two slots, so overrunning the ring takes three events.
+        let state = ContactInfoState::new(2);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let loop_handle = tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+        ));
+
+        let a = Pubkey::new_unique();
+        tx.send(live(node(a, 1))).unwrap();
+        tokio::task::yield_now().await;
+
+        // Subscribe, then stop reading.
+        let (mut messages_rx, snapshot) = state.subscribe_and_snapshot();
+        assert_eq!(snapshot.rev, 1);
+
+        // Overrun the ring while the subscriber is not draining it.
+        let b = Pubkey::new_unique();
+        for marker in 2..6 {
+            tx.send(live(node(a, marker))).unwrap();
+        }
+        tx.send(live(node(b, 99))).unwrap();
+        drop(tx);
+        loop_handle.await.unwrap();
+
+        // The stream reports loss rather than silently skipping.
+        let skipped = match messages_rx.next().await {
+            Some(Err(BroadcastStreamRecvError::Lagged(n))) => n,
+            Some(Ok(_)) => panic!("expected Lagged, got an event"),
+            None => panic!("expected Lagged, got end of stream"),
+        };
+        assert!(
+            skipped > 0,
+            "lag should report how many events were dropped"
+        );
+
+        // The table still holds everything the subscriber missed.
+        let (_rx, recovered) = state.subscribe_and_snapshot();
+        let markers: Map<Pubkey, u16> = recovered
+            .topology
+            .iter()
+            .map(|info| (info.pubkey, info.shred_version))
+            .collect();
+        assert_eq!(
+            markers.get(&a),
+            Some(&5),
+            "latest write for a is in the table"
+        );
+        assert_eq!(
+            markers.get(&b),
+            Some(&99),
+            "b was only ever announced in a dropped event"
+        );
+    }
+
     /// A client that connects mid-stream must end up with the same table the server has.
     ///
     /// Setup: one writer applies 3000 inserts and removals. Six subscribers repeatedly connect
@@ -554,9 +569,8 @@ mod tests {
     /// or the `seq <= snapshot_seq` filter drops the wrong events.
     ///
     /// Does NOT cover the locking in `contact_info_loop`. Breaking that critical section opens
-    /// a window only nanoseconds wide and this test does not land in it -- it still passes with
+    /// a window only nanoseconds wide and this test does not land in, still passes with
     /// the ordering reversed. That correctness comes from review, not from here.
-    ///
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn subscriber_reconstruction_matches_table_under_concurrent_writes() {
         const EVENTS: u64 = 3_000;
@@ -565,11 +579,9 @@ mod tests {
 
         let state = ContactInfoState::new(1 << 16);
         let (tx, rx) = mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
         let loop_handle = tokio::spawn(contact_info_loop(
             UnboundedReceiverStream::new(rx),
             Arc::clone(&state),
-            cancel.clone(),
         ));
 
         let keys: Vec<Pubkey> = (0..KEYS).map(|_| Pubkey::new_unique()).collect();
@@ -616,8 +628,8 @@ mod tests {
 
                         let mut drained = 0u64;
                         loop {
-                            match messages_rx.recv().await {
-                                Ok(event) => {
+                            match messages_rx.next().await {
+                                Some(Ok(event)) => {
                                     if event.seq > snapshot_seq {
                                         apply(&mut view, &event.message);
                                     }
@@ -635,8 +647,8 @@ mod tests {
                                 }
                                 // The sender lives in `state`, which this task holds, so this
                                 // only fires if the writer is torn down early.
-                                Err(broadcast::error::RecvError::Closed) => return view,
-                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                None => return view,
+                                Some(Err(BroadcastStreamRecvError::Lagged(n))) => {
                                     panic!("broadcast lagged by {n}; capacity is undersized")
                                 }
                             }
