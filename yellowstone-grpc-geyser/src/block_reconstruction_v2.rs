@@ -6,7 +6,7 @@ use {
             MessageTransaction, SlotStatus,
         },
     },
-    foldhash::{HashMap as FoldHashMap, HashMapExt, HashSet as FoldHashSet, HashSetExt},
+    foldhash::{HashMap as FoldHashMap, HashMapExt},
     solana_clock::{BankId, Slot},
     solana_commitment_config::CommitmentLevel,
     solana_pubkey::Pubkey,
@@ -16,12 +16,24 @@ use {
     },
 };
 
-// Sysvars that are rewritten (and thus notified) essentially every slot as part of bank
-// construction. Presence is checked at seal time purely for observability -- see the long
-// comment on `BankBuffer::seal` for why this must never gate sealing.
-const BASIC_SYSVAR_ACCOUNTS: [Pubkey; 2] = [
+// Sysvars a bank must be observed to have written before it's allowed to seal. Clock and
+// SlotHashes are rewritten inline as part of bank construction -- before `CreatedBank`
+// itself fires -- for every single bank instance (confirmed against Agave's own source);
+// SlotHistory and RecentBlockhashes are written later, as the block freezes. Requiring all
+// four here is only safe because buffering is keyed by bank_id: an earlier, slot-keyed
+// version of this pipeline required the same thing and stalled sealing forever, permanently,
+// for every slot in production, because a spurious "bank reset" (a `FirstShredReceived`
+// placeholder mistaken for a real prior bank -- a slot-keyed-only failure mode) discarded
+// the sysvar writes that land right before `CreatedBank`, and a slot's bank only ever gets
+// one shot at emitting them. Keyed by bank_id, nothing can clobber a bank's own buffer, so
+// there's no equivalent failure mode -- and if a bank genuinely never sees one of these for
+// some other reason, the blast radius is just that one bank never sealing (eventually swept
+// by `sweep_stale_slots`), not every slot in the pipeline.
+const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
     Pubkey::from_str_const("SysvarC1ock11111111111111111111111111111111"),
     Pubkey::from_str_const("SysvarS1otHashes111111111111111111111111111"),
+    Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111"),
+    Pubkey::from_str_const("SysvarRecentB1ockHashes11111111111111111111"),
 ];
 
 const fn commitment_rank(level: CommitmentLevel) -> u8 {
@@ -33,6 +45,19 @@ const fn commitment_rank(level: CommitmentLevel) -> u8 {
 }
 
 const MINIMUM_FINALIZED_SLOT_TO_BUFFER: usize = 10;
+
+// How many slots' worth of lag before genuinely in-flight (unresolved) state for a slot is
+// considered abandoned and swept -- e.g. a bank that seals but whose slot never receives any
+// commitment update naming a winner (validator restart, a fork that's silently abandoned
+// without ever reaching Dead, etc.), or a slot that stays ambiguous between multiple
+// candidate banks forever. Must comfortably exceed normal Confirmed/Finalized lag (typically
+// well under 100 slots even under load) so in-flight processing is never swept prematurely --
+// this is strictly a backstop against genuinely orphaned state, not a normal code path.
+const STALE_SLOT_THRESHOLD: Slot = 300;
+// How often (in slots of forward progress) to run the stale-slot sweep. A full scan on every
+// `add()` call would be wasteful; running it only this often keeps the amortized cost
+// negligible relative to normal message volume.
+const STALE_GC_INTERVAL: Slot = 50;
 
 enum TrySealError {
     NotSealable,
@@ -53,6 +78,8 @@ struct BankBuffer {
     // data can legitimately arrive before it -- so this is tracked explicitly and required at
     // seal time instead.
     created_bank_seen: bool,
+    // Bit `i` set means `MUST_HAVE_SYSVAR_ACCOUNTS[i]` has been observed for this bank.
+    musthave_sysvar_accounts_bitmask: u8,
     original_messages: Vec<Message>,
     account_write_version_map: FoldHashMap<Pubkey, u64>,
     blockmeta: Option<Arc<MessageBlockMeta>>,
@@ -69,6 +96,7 @@ impl BankBuffer {
             slot,
             parent_slot: None,
             created_bank_seen: false,
+            musthave_sysvar_accounts_bitmask: 0,
             original_messages: Vec::with_capacity(4096),
             account_write_version_map: FoldHashMap::with_capacity(4096),
             blockmeta: None,
@@ -91,6 +119,12 @@ impl BankBuffer {
                         }
                     })
                     .or_insert(write_version);
+                if let Some(position) = MUST_HAVE_SYSVAR_ACCOUNTS
+                    .iter()
+                    .position(|pubkey| pubkey == &message_account.account.pubkey)
+                {
+                    self.musthave_sysvar_accounts_bitmask |= 1 << position;
+                }
                 self.accounts.push(Arc::clone(message_account));
             }
             Message::Transaction(message_transaction) => {
@@ -111,6 +145,9 @@ impl BankBuffer {
         if !self.created_bank_seen {
             return Err(TrySealError::NotSealable);
         }
+        if self.musthave_sysvar_accounts_bitmask != (1 << MUST_HAVE_SYSVAR_ACCOUNTS.len()) - 1 {
+            return Err(TrySealError::NotSealable);
+        }
         let Some(blockmeta) = self.blockmeta.as_ref() else {
             return Err(TrySealError::NotSealable);
         };
@@ -129,26 +166,6 @@ impl BankBuffer {
     }
 
     fn seal(self) -> FrozenBank {
-        // Informational only -- do NOT turn this into a sealing precondition. An earlier
-        // version of this pipeline required every one of these sysvars to be observed
-        // before a slot could seal, keyed by slot rather than bank_id; a spurious "bank
-        // reset" (a `FirstShredReceived` placeholder being mistaken for a real prior bank)
-        // discarded the handful of sysvar writes that land right before `CreatedBank` on
-        // every single slot, and since a slot's own bank only ever gets one shot at
-        // emitting them, sealing stalled forever, permanently, for every slot. Keying by
-        // bank_id instead removes that specific failure mode, but there is still no
-        // guarantee these are observed before the rest of the bank's content is -- so this
-        // stays a log line, never a blocker.
-        for pubkey in BASIC_SYSVAR_ACCOUNTS {
-            if !self.account_write_version_map.contains_key(&pubkey) {
-                log::warn!(
-                    "bank {} (slot {}) sealed without observing sysvar account {pubkey}",
-                    self.bank_id,
-                    self.slot
-                );
-            }
-        }
-
         let block_meta = self.blockmeta.expect("should be sealable");
         let account_info_vec = self
             .accounts
@@ -242,10 +259,16 @@ pub struct ReplayedSlot<'frozen_bank> {
     pub slot_status_messages: Vec<SlotCommitmentStatusUpdate>,
 }
 
+/// Yields one `ReplayedSlot` per replay-servable candidate bank, in ascending slot order.
+/// A resolved slot (Confirmed/Finalized, or the common single-candidate case) yields
+/// exactly one; a slot still genuinely ambiguous between two or more Processed banks with
+/// no confirmed winner yet yields one per candidate, all at the same slot number -- there
+/// is no other way to expose "no winner is clear yet" through this API.
 pub struct ReplayIter<'storage> {
     storage: &'storage BlockMachineStorage,
-    iter: Range<'storage, Slot, Arc<FrozenBank>>,
+    iter: Range<'storage, Slot, Vec<Arc<FrozenBank>>>,
     min_commitment: CommitmentLevel,
+    current: std::slice::Iter<'storage, Arc<FrozenBank>>,
 }
 
 impl<'storage> Iterator for ReplayIter<'storage> {
@@ -253,17 +276,25 @@ impl<'storage> Iterator for ReplayIter<'storage> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let (slot, block) = self.iter.next()?;
-            let Some(progression) = self.storage.slot_commitment_progression_map.get(slot) else {
-                continue;
-            };
-            if commitment_rank(progression.max_commitment) < commitment_rank(self.min_commitment) {
+            if let Some(frozen) = self.current.next() {
+                return Some(ReplayedSlot {
+                    frozen_block: frozen.as_ref(),
+                    slot_status_messages: self.storage.replay_status_for(frozen),
+                });
+            }
+            let (&slot, candidates) = self.iter.next()?;
+            // A slot with no recorded progression at all is purely sealed-and-waiting --
+            // treat it as Processed-level-available (it can't be anything higher without a
+            // progression entry), matching `try_infer_sole_candidate_winner`'s inference.
+            let max_commitment = self
+                .storage
+                .slot_commitment_progression_map
+                .get(&slot)
+                .map_or(CommitmentLevel::Processed, |p| p.max_commitment);
+            if commitment_rank(max_commitment) < commitment_rank(self.min_commitment) {
                 continue;
             }
-            return Some(ReplayedSlot {
-                frozen_block: block.as_ref(),
-                slot_status_messages: progression.commitment.clone(),
-            });
+            self.current = candidates.iter();
         }
     }
 }
@@ -283,46 +314,57 @@ impl<'storage> Iterator for ReplayIter<'storage> {
 pub struct BlockMachineStorage {
     // Bank instances still accumulating content, keyed by bank_id.
     banks: FoldHashMap<BankId, BankBuffer>,
-    // Sealed bank instances not yet known to be their slot's winner (or not yet promoted).
-    frozen_banks: FoldHashMap<BankId, Arc<FrozenBank>>,
     // Every bank_id ever seen for a slot, so the losers can be found once a winner is known.
     slot_to_banks: FoldHashMap<Slot, Vec<BankId>>,
     // bank_ids explicitly discarded as losers (via `discard_losing_banks`) or abandoned
-    // (via `handle_dead_slot`). A straggler event arriving afterward for one of these is
-    // ignored outright rather than reviving a fresh buffer for it -- distinct from a
-    // bank_id that simply hasn't been resolved as a winner *yet*, which must still be
-    // allowed to accumulate normally (see `processed_resolution_can_be_superseded_by_a_later_bank`).
-    discarded_bank_ids: FoldHashSet<BankId>,
-    // The bank_id currently believed to be a slot's canonical bank, learned from
-    // Processed/Confirmed/Finalized status updates naming a bank_id for that slot. At
-    // Processed this is provisional and can be superseded by a later, different bank_id
-    // (see `supersede_resolved_bank`) -- e.g. a dump-and-repair replay correcting an
-    // earlier bank whose hash was wrong. Once a slot reaches Confirmed or Finalized this
-    // is treated as final and can no longer change.
+    // (via `handle_dead_slot`), paired with the slot they belonged to so `sweep_stale_slots`
+    // can age them out. A straggler event arriving afterward for one of these is ignored
+    // outright rather than reviving a fresh buffer for it -- distinct from a bank_id that
+    // simply hasn't been resolved as a winner *yet*, which must still be allowed to
+    // accumulate normally (see `processed_banks_are_peers_until_one_is_confirmed`).
+    discarded_bank_ids: FoldHashMap<BankId, Slot>,
+    // The bank_id currently believed to be a slot's canonical bank. Multiple banks for the
+    // same slot can be simultaneously Processed with no precedence between them -- a
+    // Processed sighting never sets or changes this (see `handle_commitment_update`) --
+    // only Confirmed/Finalized status updates do, since Solana guarantees at most one bank
+    // per slot ever reaches those. It can still change once, from a bank that was only ever
+    // Processed to a different one that reaches Confirmed first (see
+    // `supersede_resolved_bank`) -- e.g. a dump-and-repair replay correcting an earlier
+    // bank whose hash was wrong -- but once a slot reaches Confirmed or Finalized this is
+    // treated as final and can no longer change. The one exception is
+    // `try_infer_sole_candidate_winner`'s single-candidate inference, which may set this
+    // ahead of any direct status update when there's only ever been one bank_id for the
+    // slot at all.
     resolved_bank_per_slot: FoldHashMap<Slot, BankId>,
-    // Ancestry: slot -> parent slot, learned from CreatedBank/BlockMeta.
-    parent_of: FoldHashMap<Slot, Slot>,
     // The highest commitment level a slot must be treated as having reached, whether from a
     // direct status update or inherited from a confirmed/finalized descendant.
     slot_min_commitment: FoldHashMap<Slot, CommitmentLevel>,
     slot_commitment_progression_map: FoldHashMap<Slot, SlotProgression>,
-    // Final, resolved content -- one entry per slot, once its winning bank has sealed.
-    replayed_slot: BTreeMap<Slot, Arc<FrozenBank>>,
+    // Content available for replay, per slot. Holds every sealed candidate bank for a slot
+    // that hasn't resolved a winner yet -- so a replay request can be served even while a
+    // slot is genuinely ambiguous between two or more banks, all at Processed, with none
+    // having precedence -- and collapses to exactly the one resolved bank the moment the
+    // slot reaches Confirmed or Finalized (see `discard_losing_banks`). Never empty for a
+    // tracked slot: an entry only exists once at least one candidate has sealed.
+    replayed_slot: BTreeMap<Slot, Vec<Arc<FrozenBank>>>,
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)>,
     replayed_capacity: usize,
     num_buffered_finalized_slot: usize,
     min_slot: Option<Slot>,
+    // Highest slot number observed across any message so far, and the value it had at the
+    // last stale-slot sweep -- together these throttle `sweep_stale_slots` to run only every
+    // `STALE_GC_INTERVAL` slots of forward progress instead of on every single message.
+    max_slot_seen: Slot,
+    last_stale_gc_at: Slot,
 }
 
 impl BlockMachineStorage {
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
             banks: FoldHashMap::with_capacity(replayed_capacity),
-            frozen_banks: FoldHashMap::new(),
             slot_to_banks: FoldHashMap::with_capacity(replayed_capacity),
-            discarded_bank_ids: FoldHashSet::new(),
+            discarded_bank_ids: FoldHashMap::new(),
             resolved_bank_per_slot: FoldHashMap::with_capacity(replayed_capacity),
-            parent_of: FoldHashMap::with_capacity(replayed_capacity),
             slot_min_commitment: FoldHashMap::with_capacity(replayed_capacity),
             slot_commitment_progression_map: FoldHashMap::with_capacity(replayed_capacity),
             replayed_slot: BTreeMap::new(),
@@ -330,10 +372,13 @@ impl BlockMachineStorage {
             replayed_capacity,
             num_buffered_finalized_slot: 0,
             min_slot: None,
+            max_slot_seen: 0,
+            last_stale_gc_at: 0,
         }
     }
 
     pub fn add(&mut self, message: Message) {
+        self.observe_slot(message.get_slot());
         match message {
             Message::Slot(message_slot) => self.handle_slot_status(&message_slot),
             Message::Account(_) | Message::Transaction(_) | Message::Entry(_) => {
@@ -345,6 +390,53 @@ impl BlockMachineStorage {
                 // Message::DeshredTransaction goes through a separate pipeline entirely.
             }
         }
+    }
+
+    /// Tracks forward progress and periodically sweeps genuinely orphaned per-slot state
+    /// that fell too far behind to ever plausibly resolve -- see `STALE_SLOT_THRESHOLD`.
+    fn observe_slot(&mut self, slot: Slot) {
+        if slot <= self.max_slot_seen {
+            return;
+        }
+        self.max_slot_seen = slot;
+        if self.max_slot_seen - self.last_stale_gc_at >= STALE_GC_INTERVAL {
+            self.sweep_stale_slots();
+            self.last_stale_gc_at = self.max_slot_seen;
+        }
+    }
+
+    /// Backstop garbage collection for per-slot/per-bank state that `gc()` (capacity-based,
+    /// triggered only for slots that successfully reached `replayed_slot`) never reaches:
+    /// a bank that seals but whose slot never gets a commitment update naming any winner, a
+    /// slot left ambiguous between multiple never-resolved candidate banks, or a discarded
+    /// bank_id sitting in `discarded_bank_ids` forever. Slots already in `replayed_slot` are
+    /// deliberately left alone here -- they're bounded by `gc()` instead, and remain valid
+    /// replay content regardless of age.
+    fn sweep_stale_slots(&mut self) {
+        let cutoff = self.max_slot_seen.saturating_sub(STALE_SLOT_THRESHOLD);
+
+        let stale_slots: Vec<Slot> = self
+            .slot_to_banks
+            .keys()
+            .copied()
+            .filter(|&slot| slot < cutoff && !self.replayed_slot.contains_key(&slot))
+            .collect();
+        for slot in stale_slots {
+            if let Some(bank_ids) = self.slot_to_banks.remove(&slot) {
+                for bank_id in bank_ids {
+                    self.banks.remove(&bank_id);
+                }
+            }
+            self.resolved_bank_per_slot.remove(&slot);
+            self.slot_min_commitment.remove(&slot);
+            self.slot_commitment_progression_map.remove(&slot);
+            log::warn!(
+                "garbage-collecting slot {slot}: never resolved within {STALE_SLOT_THRESHOLD} slots of the latest seen ({}) -- likely an abandoned bank that never received a commitment update",
+                self.max_slot_seen
+            );
+        }
+
+        self.discarded_bank_ids.retain(|_, &mut slot| slot >= cutoff);
     }
 
     fn handle_slot_status(&mut self, message_slot: &MessageSlot) {
@@ -369,10 +461,6 @@ impl BlockMachineStorage {
         }
     }
 
-    fn record_parent(&mut self, slot: Slot, parent_slot: Slot) {
-        self.parent_of.entry(slot).or_insert(parent_slot);
-    }
-
     fn handle_created_bank(&mut self, message_slot: &MessageSlot) {
         let Some(bank_id) = message_slot.bank_id else {
             log::warn!(
@@ -381,14 +469,11 @@ impl BlockMachineStorage {
             );
             return;
         };
-        if self.discarded_bank_ids.contains(&bank_id) {
+        if self.discarded_bank_ids.contains_key(&bank_id) {
             return;
         }
         let slot = message_slot.slot;
         self.register_bank_for_slot(slot, bank_id);
-        if let Some(parent) = message_slot.parent {
-            self.record_parent(slot, parent);
-        }
         let bank = self
             .banks
             .entry(bank_id)
@@ -404,8 +489,7 @@ impl BlockMachineStorage {
         if let Some(bank_ids) = self.slot_to_banks.remove(&slot) {
             for bank_id in bank_ids {
                 self.banks.remove(&bank_id);
-                self.frozen_banks.remove(&bank_id);
-                self.discarded_bank_ids.insert(bank_id);
+                self.discarded_bank_ids.insert(bank_id, slot);
             }
         }
         self.resolved_bank_per_slot.remove(&slot);
@@ -431,7 +515,7 @@ impl BlockMachineStorage {
             );
             return;
         };
-        if self.discarded_bank_ids.contains(&bank_id) {
+        if self.discarded_bank_ids.contains_key(&bank_id) {
             log::warn!(
                 "commitment update for slot {} targets bank_id {bank_id}, which was already discarded as a loser -- dropping",
                 message_slot.slot
@@ -448,53 +532,63 @@ impl BlockMachineStorage {
 
         self.register_bank_for_slot(slot, bank_id);
         if let Some(parent) = message_slot.parent {
-            self.record_parent(slot, parent);
-        }
-
-        if let Some(&existing) = self.resolved_bank_per_slot.get(&slot) {
-            if existing != bank_id {
-                // A different bank_id is now reporting commitment progress for a slot
-                // that already resolved to another one. Processed is optimistic and can
-                // legitimately be superseded (e.g. a dump-and-repair replay correcting an
-                // earlier bank whose hash turned out to be wrong) -- but once a slot has
-                // reached Confirmed or Finalized, Solana guarantees that resolution is
-                // final, so a later, different bank_id at that point is unexpected and
-                // must not be allowed to clobber it.
-                let existing_level = self
-                    .slot_commitment_progression_map
-                    .get(&slot)
-                    .map(|p| p.max_commitment);
-                if matches!(
-                    existing_level,
-                    Some(CommitmentLevel::Confirmed) | Some(CommitmentLevel::Finalized)
-                ) {
-                    log::warn!(
-                        "commitment update for slot {slot} targets bank_id {bank_id}, but bank_id {existing} was already {existing_level:?} for this slot -- dropping",
-                    );
-                    return;
+            // Bank-scoped, not slot-scoped: two banks for the same slot can legitimately
+            // disagree on their parent (skipped slots are normal, and an equivocating
+            // leader isn't required to pick the same parent for both of its conflicting
+            // versions), so this must only ever update *this* bank_id's own record, never
+            // a slot-keyed cache shared across bank_ids.
+            if let Some(bank) = self.banks.get_mut(&bank_id) {
+                if bank.parent_slot.is_none() {
+                    bank.parent_slot = Some(parent);
                 }
-                log::warn!(
-                    "slot {slot}'s resolved bank changed from {existing} to {bank_id} (previous commitment: {existing_level:?}) -- superseding, likely a dump-and-repair replay correcting an optimistic Processed bank",
-                );
-                self.supersede_resolved_bank(slot, bank_id);
             }
-        } else {
-            self.resolved_bank_per_slot.insert(slot, bank_id);
         }
 
-        self.discard_losing_banks(slot, bank_id);
+        // Processed is optimistic, and multiple banks for the same slot can legitimately
+        // be simultaneously Processed with no precedence between any of them -- so a
+        // Processed sighting must never resolve, supersede, or discard anything. Only
+        // Confirmed/Finalized is authoritative: Solana guarantees at most one bank per
+        // slot ever reaches it, and once it does, that resolution is final.
+        if commitment != CommitmentLevel::Processed {
+            if let Some(&existing) = self.resolved_bank_per_slot.get(&slot) {
+                if existing != bank_id {
+                    let existing_level = self
+                        .slot_commitment_progression_map
+                        .get(&slot)
+                        .map(|p| p.max_commitment);
+                    if matches!(
+                        existing_level,
+                        Some(CommitmentLevel::Confirmed) | Some(CommitmentLevel::Finalized)
+                    ) {
+                        log::warn!(
+                            "commitment update for slot {slot} targets bank_id {bank_id}, but bank_id {existing} was already {existing_level:?} for this slot -- dropping",
+                        );
+                        return;
+                    }
+                    log::warn!(
+                        "slot {slot}'s resolved bank changed from {existing} to {bank_id} (previous commitment: {existing_level:?}) -- superseding, likely a dump-and-repair replay correcting an optimistic Processed bank",
+                    );
+                    self.supersede_resolved_bank(slot, bank_id);
+                }
+            } else {
+                self.resolved_bank_per_slot.insert(slot, bank_id);
+            }
+            self.discard_losing_banks(slot, bank_id);
+        }
+
         self.bump_slot_commitment(slot, commitment);
     }
 
-    /// Replaces `slot`'s resolved bank_id, discarding whatever content was optimistically
-    /// delivered/promoted under the old (now-superseded) one so that any subsequent replay
-    /// request serves the corrected bank's content instead of stale data. `slot_min_commitment`
-    /// is deliberately left untouched: it's the slot's target commitment level, independent of
-    /// which bank_id ultimately satisfies it, so it stays valid across the swap and will be
-    /// applied to the new bank as soon as it (re)seals.
+    /// Replaces `slot`'s resolved bank_id, dropping the live-delivery history that was
+    /// built around the old (now-superseded) one so any subsequent commitment delivery is
+    /// synthesized fresh for the new winner instead of being deduped against stale entries.
+    /// `slot_min_commitment` is deliberately left untouched: it's the slot's target
+    /// commitment level, independent of which bank_id ultimately satisfies it, so it stays
+    /// valid across the swap. `replayed_slot` isn't touched here either -- the caller
+    /// always follows this with `discard_losing_banks`, which collapses it down to just the
+    /// new winner while preserving that winner's own already-sealed content if present.
     fn supersede_resolved_bank(&mut self, slot: Slot, new_winner: BankId) {
         self.resolved_bank_per_slot.insert(slot, new_winner);
-        self.replayed_slot.remove(&slot);
         self.slot_commitment_progression_map.remove(&slot);
     }
 
@@ -506,19 +600,25 @@ impl BlockMachineStorage {
         ids.retain(|&id| id == winner);
         for loser in losers {
             self.banks.remove(&loser);
-            self.frozen_banks.remove(&loser);
-            self.discarded_bank_ids.insert(loser);
+            self.discarded_bank_ids.insert(loser, slot);
+        }
+        // Collapse the replay-servable set down to just the winner -- once a slot resolves,
+        // any other candidate that had been sitting there while it was still ambiguous is
+        // no longer valid replay content (see the module doc comment).
+        if let Some(candidates) = self.replayed_slot.get_mut(&slot) {
+            candidates.retain(|c| c.bank_id == winner);
         }
     }
 
     /// Raises the effective commitment floor for `slot` to `level` (a no-op for the floor
-    /// itself if it's already there or higher -- but promotion is still (re-)attempted
-    /// regardless, since a `supersede_resolved_bank` can clear delivered content without
-    /// changing the floor), emits the corresponding update(s) immediately if content is
-    /// available, and retroactively propagates the same floor up the parent chain the first
-    /// time it's raised, so an ancestor that never gets its own direct commitment status
-    /// update from geyser (this does happen -- geyser does not guarantee one arrives for
-    /// every slot) still ends up at least at its descendants' commitment level.
+    /// itself if it's already there or higher -- but the resolved winner's delivery is
+    /// still (re-)attempted regardless, since a `supersede_resolved_bank` can clear
+    /// delivered history without changing the floor), emits the corresponding update(s)
+    /// immediately if the resolved winner's content is available, and retroactively
+    /// propagates the same floor up the parent chain the first time it's raised, so an
+    /// ancestor that never gets its own direct commitment status update from geyser (this
+    /// does happen -- geyser does not guarantee one arrives for every slot) still ends up
+    /// at least at its descendants' commitment level.
     fn bump_slot_commitment(&mut self, slot: Slot, level: CommitmentLevel) {
         let already_at_level = self
             .slot_min_commitment
@@ -528,8 +628,8 @@ impl BlockMachineStorage {
             self.slot_min_commitment.insert(slot, level);
         }
 
-        self.try_promote_now(slot);
-        if let Some(frozen) = self.replayed_slot.get(&slot).cloned() {
+        self.try_infer_sole_candidate_winner(slot);
+        if let Some(frozen) = self.resolved_frozen_bank(slot) {
             self.emit_commitment_levels_up_to(slot, level, &frozen);
         }
 
@@ -538,44 +638,72 @@ impl BlockMachineStorage {
             // an earlier call; nothing further to walk up for.
             return;
         }
-        if let Some(&parent) = self.parent_of.get(&slot) {
+        if let Some(parent) = self.resolved_parent_of(slot) {
             self.bump_slot_commitment(parent, level);
         }
     }
 
-    /// Attempts to promote `slot`'s resolved bank to `replayed_slot` if it has sealed but
-    /// hasn't been promoted yet. If `slot` was never itself the target of a direct
-    /// Processed/Confirmed/Finalized status update from geyser -- which can legitimately
-    /// happen; a level is not guaranteed to be reported for every individual slot -- but is
-    /// being resolved now purely because a descendant's commitment level is propagating up
-    /// through it, infer its winning bank_id when there's exactly one known candidate for
-    /// it. With more than one candidate and no direct confirmation, which one is canonical
-    /// genuinely can't be determined here, so it's left unresolved and logged.
-    fn try_promote_now(&mut self, slot: Slot) {
-        if self.replayed_slot.contains_key(&slot) {
+    /// The parent slot of whichever bank_id is *currently* resolved as `slot`'s canonical
+    /// bank -- looked up fresh from that bank's own record every time, never cached
+    /// per-slot. Two banks for the same slot can legitimately disagree on their parent
+    /// (skipped slots are normal, and an equivocating leader isn't required to pick the
+    /// same parent for both of its conflicting versions), so the only parent that's ever
+    /// safe to use is the one belonging to the specific bank instance actually being
+    /// treated as canonical right now -- which can itself change via `supersede_resolved_bank`.
+    fn resolved_parent_of(&self, slot: Slot) -> Option<Slot> {
+        let bank_id = *self.resolved_bank_per_slot.get(&slot)?;
+        if let Some(bank) = self.banks.get(&bank_id) {
+            return bank.parent_slot;
+        }
+        self.replay_candidate(slot, bank_id)
+            .map(|frozen| frozen.block_meta.parent_slot)
+    }
+
+    /// The resolved winner's frozen content for `slot`, if it has both a known resolution
+    /// and sealed (replay-servable) content for that specific bank_id.
+    fn resolved_frozen_bank(&self, slot: Slot) -> Option<Arc<FrozenBank>> {
+        let bank_id = *self.resolved_bank_per_slot.get(&slot)?;
+        self.replay_candidate(slot, bank_id).cloned()
+    }
+
+    /// The replay candidate for `slot` belonging to `bank_id`, if it has sealed.
+    fn replay_candidate(&self, slot: Slot, bank_id: BankId) -> Option<&Arc<FrozenBank>> {
+        self.replayed_slot
+            .get(&slot)?
+            .iter()
+            .find(|frozen| frozen.bank_id == bank_id)
+    }
+
+    /// Adds `frozen` as a candidate available for replay at its slot. Idempotent: a second
+    /// call for a bank_id already present is a no-op, so callers never need to check first.
+    fn add_replay_candidate(&mut self, slot: Slot, frozen: Arc<FrozenBank>) {
+        let candidates = self.replayed_slot.entry(slot).or_default();
+        if !candidates.iter().any(|c| c.bank_id == frozen.bank_id) {
+            candidates.push(frozen);
+        }
+    }
+
+    /// Infers `slot`'s resolved winning bank_id when it hasn't been named by a direct
+    /// Confirmed/Finalized status update yet but there's exactly one known candidate for
+    /// it -- geyser doesn't guarantee a direct commitment status update arrives for every
+    /// slot (see `resolved_bank_per_slot`). With more than one still-unresolved candidate,
+    /// which one is canonical genuinely can't be determined here, so it's left unresolved
+    /// and logged (both remain available for Processed-level replay regardless).
+    fn try_infer_sole_candidate_winner(&mut self, slot: Slot) {
+        if self.resolved_bank_per_slot.contains_key(&slot) {
             return;
         }
-        if !self.resolved_bank_per_slot.contains_key(&slot) {
-            match self.slot_to_banks.get(&slot).map(Vec::as_slice) {
-                Some([single]) => {
-                    let inferred = *single;
-                    self.resolved_bank_per_slot.insert(slot, inferred);
-                }
-                Some(ids) if ids.len() > 1 => {
-                    log::warn!(
-                        "slot {slot} needs to resolve (e.g. a descendant's commitment level is propagating up to it) but has {} competing bank_ids and none was ever directly confirmed -- cannot determine which is canonical",
-                        ids.len()
-                    );
-                    return;
-                }
-                _ => return,
+        match self.slot_to_banks.get(&slot).map(Vec::as_slice) {
+            Some([single]) => {
+                self.resolved_bank_per_slot.insert(slot, *single);
             }
-        }
-        let Some(&winner) = self.resolved_bank_per_slot.get(&slot) else {
-            return;
-        };
-        if let Some(frozen) = self.frozen_banks.get(&winner).cloned() {
-            self.promote_to_replayed(slot, frozen);
+            Some(ids) if ids.len() > 1 => {
+                log::warn!(
+                    "slot {slot} needs to resolve (e.g. a descendant's commitment level is propagating up to it) but has {} competing bank_ids and none was ever directly confirmed -- cannot determine which is canonical",
+                    ids.len()
+                );
+            }
+            _ => {}
         }
     }
 
@@ -591,30 +719,23 @@ impl BlockMachineStorage {
         }
     }
 
+    /// A sealed bank becomes replay-servable immediately, regardless of whether its slot
+    /// has resolved a winner yet -- multiple banks can be simultaneously replay-servable
+    /// while a slot is still ambiguous between them (see the module doc comment on
+    /// `replayed_slot`). `discard_losing_banks` collapses this down to just the winner once
+    /// the slot resolves. If this bank is (or becomes, via single-candidate inference) the
+    /// resolved winner and the slot already has a known commitment floor -- e.g. inherited
+    /// from a descendant before this bank even sealed -- its delivery is emitted now too.
     fn on_bank_sealed(&mut self, slot: Slot, bank_id: BankId, frozen: Arc<FrozenBank>) {
-        self.frozen_banks.insert(bank_id, Arc::clone(&frozen));
-        // `try_promote_now` promotes immediately if this bank_id was already resolved as
-        // the winner by a commitment update, or -- since geyser doesn't guarantee a direct
-        // commitment status arrives for every slot -- if it's the only bank_id ever seen
-        // for this slot so far. If a second, different bank_id shows up later, this is
-        // still safely superseded by `handle_commitment_update`/`supersede_resolved_bank`,
-        // since no commitment was ever actually recorded for it yet.
-        self.try_promote_now(slot);
-    }
-
-    /// Makes a sealed bank's content the slot's resolved, replayable content. Content is
-    /// always promoted here -- before any commitment level for it is ever queued -- so
-    /// subscribers always see block content, then block meta, then commitment updates, in
-    /// that order.
-    fn promote_to_replayed(&mut self, slot: Slot, frozen: Arc<FrozenBank>) {
-        if self.replayed_slot.contains_key(&slot) {
-            return;
-        }
-        self.frozen_banks.remove(&frozen.bank_id);
         self.min_slot = Some(self.min_slot.map_or(slot, |m| m.min(slot)));
-        self.replayed_slot.insert(slot, Arc::clone(&frozen));
-        if let Some(&level) = self.slot_min_commitment.get(&slot) {
-            self.emit_commitment_levels_up_to(slot, level, &frozen);
+        self.add_replay_candidate(slot, frozen);
+        self.try_infer_sole_candidate_winner(slot);
+        if self.resolved_bank_per_slot.get(&slot) == Some(&bank_id) {
+            if let Some(&level) = self.slot_min_commitment.get(&slot) {
+                if let Some(frozen) = self.resolved_frozen_bank(slot) {
+                    self.emit_commitment_levels_up_to(slot, level, &frozen);
+                }
+            }
         }
     }
 
@@ -625,7 +746,10 @@ impl BlockMachineStorage {
         frozen: &Arc<FrozenBank>,
     ) {
         let bank_id = frozen.bank_id;
-        let parent_slot = self.parent_of.get(&slot).copied();
+        // Read directly off this specific bank's own blockmeta -- authoritative and
+        // always in sync with whichever bank is actually being delivered, unlike a
+        // slot-keyed cache (two banks for the same slot can disagree on their parent).
+        let parent_slot = Some(frozen.block_meta.parent_slot);
         let mut to_emit: Vec<SlotCommitmentStatusUpdate> = Vec::new();
         let mut newly_finalized = false;
         {
@@ -691,19 +815,14 @@ impl BlockMachineStorage {
             // reconstruction, so it's ignored here rather than buffered.
             return;
         };
-        if self.discarded_bank_ids.contains(&bank_id) {
+        if self.discarded_bank_ids.contains_key(&bank_id) {
             return;
         }
-        // Only the bank_id that's already fully sealed *and* promoted is a genuine
-        // "shouldn't happen" straggler here. Any other bank_id -- including one that
-        // hasn't been resolved as a winner yet -- must still be allowed to accumulate
-        // normally, since it may go on to supersede the currently-promoted bank (see
-        // `supersede_resolved_bank`).
-        if self.resolved_bank_per_slot.get(&slot) == Some(&bank_id)
-            && self.replayed_slot.contains_key(&slot)
-        {
+        // A bank that has already sealed is immutable -- more data for it afterward is
+        // always anomalous, whether or not its slot has resolved a winner yet.
+        if self.replay_candidate(slot, bank_id).is_some() {
             log::error!(
-                "UNEXPECTED: received block data for bank {bank_id} (slot {slot}) that is already sealed and replayed. Dropping.",
+                "UNEXPECTED: received block data for bank {bank_id} (slot {slot}) that is already sealed. Dropping.",
             );
             return;
         }
@@ -719,16 +838,13 @@ impl BlockMachineStorage {
     fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {
         let bank_id = block_meta.bank_id;
         let slot = block_meta.slot;
-        if self.discarded_bank_ids.contains(&bank_id) {
+        if self.discarded_bank_ids.contains_key(&bank_id) {
             return;
         }
-        if self.resolved_bank_per_slot.get(&slot) == Some(&bank_id)
-            && self.replayed_slot.contains_key(&slot)
-        {
+        if self.replay_candidate(slot, bank_id).is_some() {
             return;
         }
         self.register_bank_for_slot(slot, bank_id);
-        self.record_parent(slot, block_meta.parent_slot);
         let bank = self
             .banks
             .entry(bank_id)
@@ -763,7 +879,6 @@ impl BlockMachineStorage {
         self.slot_min_commitment.remove(&slot);
         self.resolved_bank_per_slot.remove(&slot);
         self.slot_to_banks.remove(&slot);
-        self.parent_of.remove(&slot);
     }
 
     fn refresh_min_slot(&mut self) {
@@ -780,11 +895,35 @@ impl BlockMachineStorage {
             storage: self,
             iter,
             min_commitment,
+            current: [].iter(),
         }
     }
 
     pub const fn min_replayable_slot(&self) -> Option<Slot> {
         self.min_slot
+    }
+
+    /// The status update history to attach to a replayed candidate bank. For the single
+    /// resolved winner of a slot with a recorded progression, this is the real
+    /// Processed/Confirmed/Finalized history. For one of several still-ambiguous
+    /// candidates (or a resolved winner whose progression was never recorded, e.g. sealed
+    /// purely via single-candidate inference with no direct status update at all), only a
+    /// synthesized Processed entry for that specific bank is returned, since that's the
+    /// only thing ever actually confirmed about it.
+    fn replay_status_for(&self, frozen: &FrozenBank) -> Vec<SlotCommitmentStatusUpdate> {
+        if self.resolved_bank_per_slot.get(&frozen.slot) == Some(&frozen.bank_id) {
+            if let Some(progression) = self.slot_commitment_progression_map.get(&frozen.slot) {
+                if !progression.commitment.is_empty() {
+                    return progression.commitment.clone();
+                }
+            }
+        }
+        vec![SlotCommitmentStatusUpdate {
+            slot: frozen.slot,
+            parent_slot: Some(frozen.block_meta.parent_slot),
+            commitment: CommitmentLevel::Processed,
+            bank_id: frozen.bank_id,
+        }]
     }
 }
 
@@ -828,6 +967,14 @@ mod tests {
             created_at: ts(),
             bank_id: Some(bank_id),
         }))
+    }
+
+    /// Feeds all four `MUST_HAVE_SYSVAR_ACCOUNTS` writes for `bank_id` -- required for any
+    /// bank to be sealable now that `try_seal` hard-requires them.
+    fn add_musthave_sysvars(storage: &mut BlockMachineStorage, slot: u64, bank_id: BankId) {
+        for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+            storage.add(make_account_msg(slot, bank_id, pubkey, 1));
+        }
     }
 
     fn make_startup_account_msg(slot: u64, pubkey: Pubkey) -> Message {
@@ -948,6 +1095,7 @@ mod tests {
         parent: Option<u64>,
     ) {
         storage.add(make_created_bank_msg(slot, parent, bank_id));
+        add_musthave_sysvars(storage, slot, bank_id);
         storage.add(make_entry_msg(slot, 0, bank_id));
         storage.add(make_block_meta_msg(slot, parent.unwrap_or(0), bank_id));
         storage.add(make_commitment_msg(
@@ -963,19 +1111,22 @@ mod tests {
         let mut storage = BlockMachineStorage::new(10);
         let bank_id = 101;
 
+        let ordinary_pubkey = Pubkey::new_unique();
+
         // Account/entry data arrives before CreatedBank -- must still be buffered, not
         // dropped, and must not require CreatedBank to have been seen first.
-        storage.add(make_account_msg(1, bank_id, Pubkey::new_unique(), 1));
+        storage.add(make_account_msg(1, bank_id, ordinary_pubkey, 1));
         storage.add(make_entry_msg(1, 0, bank_id));
         // A startup-snapshot account carries no bank_id and must be ignored entirely.
         storage.add(make_startup_account_msg(1, Pubkey::new_unique()));
 
         assert!(
             storage.pop_ready_block().is_none(),
-            "not sealable yet: no CreatedBank, no blockmeta"
+            "not sealable yet: no CreatedBank, no blockmeta, no sysvars"
         );
 
         storage.add(make_created_bank_msg(1, None, bank_id));
+        add_musthave_sysvars(&mut storage, 1, bank_id);
         storage.add(make_block_meta_msg(1, 0, bank_id));
         storage.add(make_commitment_msg(1, None, SlotStatus::Processed, bank_id));
 
@@ -991,10 +1142,18 @@ mod tests {
                 _ => None,
             })
             .collect();
+        assert!(
+            accounts.contains(&ordinary_pubkey),
+            "the bank-scoped account seen before CreatedBank must survive"
+        );
+        assert!(
+            !accounts.contains(&Pubkey::default()),
+            "no accidental default/startup account should survive"
+        );
         assert_eq!(
             accounts.len(),
-            1,
-            "only the bank-scoped account should survive, not the startup one"
+            1 + MUST_HAVE_SYSVAR_ACCOUNTS.len(),
+            "the bank-scoped account plus the sysvars, and nothing else (not the startup one)"
         );
     }
 
@@ -1009,6 +1168,111 @@ mod tests {
             storage.pop_ready_block().is_none(),
             "must not seal without ever observing CreatedBank for this bank_id"
         );
+    }
+
+    #[test]
+    fn does_not_seal_until_every_musthave_sysvar_is_observed() {
+        let mut storage = BlockMachineStorage::new(10);
+        let bank_id = 1;
+
+        storage.add(make_created_bank_msg(1, None, bank_id));
+        // All but the last must-have sysvar -- deliberately incomplete.
+        for &pubkey in &MUST_HAVE_SYSVAR_ACCOUNTS[..MUST_HAVE_SYSVAR_ACCOUNTS.len() - 1] {
+            storage.add(make_account_msg(1, bank_id, pubkey, 1));
+        }
+        storage.add(make_entry_msg(1, 0, bank_id));
+        storage.add(make_block_meta_msg(1, 0, bank_id));
+        storage.add(make_commitment_msg(1, None, SlotStatus::Processed, bank_id));
+        assert!(
+            storage.pop_ready_block().is_none(),
+            "must not seal while any must-have sysvar account is still missing"
+        );
+
+        let last = MUST_HAVE_SYSVAR_ACCOUNTS[MUST_HAVE_SYSVAR_ACCOUNTS.len() - 1];
+        storage.add(make_account_msg(1, bank_id, last, 1));
+        assert!(
+            storage.pop_ready_block().is_some(),
+            "should seal once the last must-have sysvar account arrives"
+        );
+    }
+
+    #[test]
+    fn replay_yields_every_candidate_until_one_is_confirmed_then_only_the_winner() {
+        let mut storage = BlockMachineStorage::new(10);
+        let slot = 40;
+        let bank_a = 4000;
+        let bank_b = 4001;
+        let pubkey_a = Pubkey::new_unique();
+        let pubkey_b = Pubkey::new_unique();
+
+        // Two competing banks for the same slot both seal -- neither ever gets a direct
+        // commitment update, so no winner is clear yet.
+        storage.add(make_created_bank_msg(slot, None, bank_a));
+        storage.add(make_account_msg(slot, bank_a, pubkey_a, 1));
+        add_musthave_sysvars(&mut storage, slot, bank_a);
+        storage.add(make_entry_msg(slot, 0, bank_a));
+        storage.add(make_block_meta_msg(slot, 0, bank_a));
+
+        storage.add(make_created_bank_msg(slot, None, bank_b));
+        storage.add(make_account_msg(slot, bank_b, pubkey_b, 1));
+        add_musthave_sysvars(&mut storage, slot, bank_b);
+        storage.add(make_entry_msg(slot, 0, bank_b));
+        storage.add(make_block_meta_msg(slot, 0, bank_b));
+
+        // A Processed-level replay request must yield both, since no winner is clear.
+        let replayed: Vec<_> = storage
+            .replay_from_slot(slot, CommitmentLevel::Processed)
+            .collect();
+        assert_eq!(
+            replayed.len(),
+            2,
+            "both unresolved candidates must be replay-servable at Processed"
+        );
+        let replayed_bank_ids: Vec<_> = replayed
+            .iter()
+            .map(|r| {
+                r.slot_status_messages
+                    .first()
+                    .expect("each candidate carries at least a Processed status")
+                    .bank_id
+            })
+            .collect();
+        assert!(replayed_bank_ids.contains(&bank_a));
+        assert!(replayed_bank_ids.contains(&bank_b));
+
+        // A Confirmed-level replay request must yield nothing yet -- neither bank has
+        // actually reached Confirmed.
+        assert_eq!(
+            storage
+                .replay_from_slot(slot, CommitmentLevel::Confirmed)
+                .count(),
+            0,
+            "an unresolved slot must not satisfy a Confirmed-level replay request"
+        );
+
+        // bank_b is confirmed -- it becomes the sole winner, and bank_a must be discarded
+        // from replay entirely.
+        storage.add(make_commitment_msg(slot, None, SlotStatus::Confirmed, bank_b));
+
+        let replayed: Vec<_> = storage
+            .replay_from_slot(slot, CommitmentLevel::Processed)
+            .collect();
+        assert_eq!(
+            replayed.len(),
+            1,
+            "only the confirmed winner should remain replay-servable"
+        );
+        let pubkeys: Vec<_> = replayed[0]
+            .frozen_block
+            .messages()
+            .iter()
+            .filter_map(|m| match m {
+                Message::Account(a) => Some(a.account.pubkey),
+                _ => None,
+            })
+            .collect();
+        assert!(pubkeys.contains(&pubkey_b));
+        assert!(!pubkeys.contains(&pubkey_a));
     }
 
     #[test]
@@ -1028,43 +1292,49 @@ mod tests {
         // same slot (e.g. a dump-and-repair replay).
         storage.add(make_created_bank_msg(slot, None, winner_bank));
         storage.add(make_account_msg(slot, winner_bank, winner_pubkey, 1));
+        add_musthave_sysvars(&mut storage, slot, winner_bank);
         storage.add(make_entry_msg(slot, 0, winner_bank));
         storage.add(make_block_meta_msg(slot, 0, winner_bank));
 
         // Only the second bank ever gets a commitment update -- it's the one on the
-        // canonical fork.
+        // canonical fork. Confirmed, not Processed: with two competing bank_ids still
+        // registered for this slot, only Confirmed/Finalized resolves which one wins (see
+        // `processed_banks_are_peers_until_one_is_confirmed`) -- Processed alone wouldn't
+        // discard the loser or promote the winner here.
         storage.add(make_commitment_msg(
             slot,
             None,
-            SlotStatus::Processed,
+            SlotStatus::Confirmed,
             winner_bank,
         ));
 
-        let (update, frozen) = storage
-            .pop_ready_block()
-            .expect("winner's block should be ready");
-        assert_eq!(update.bank_id, winner_bank);
-        let pubkeys: Vec<_> = frozen
-            .messages()
-            .iter()
-            .filter_map(|m| match m {
-                Message::Account(a) => Some(a.account.pubkey),
-                _ => None,
-            })
-            .collect();
-        assert!(pubkeys.contains(&winner_pubkey));
-        assert!(
-            !pubkeys.contains(&loser_pubkey),
-            "the losing bank's data must not leak into the winner's block"
-        );
-        assert!(
-            storage.pop_ready_block().is_none(),
-            "no separate delivery for the discarded loser"
-        );
+        // winner_bank never got its own Processed status directly, only Confirmed, so this
+        // also gap-fills the missing Processed level -- both deliveries are the winner's.
+        let mut deliveries = Vec::new();
+        while let Some((update, frozen)) = storage.pop_ready_block() {
+            deliveries.push((update, frozen));
+        }
+        assert!(!deliveries.is_empty(), "winner's block should be ready");
+        for (update, frozen) in &deliveries {
+            assert_eq!(update.bank_id, winner_bank);
+            let pubkeys: Vec<_> = frozen
+                .messages()
+                .iter()
+                .filter_map(|m| match m {
+                    Message::Account(a) => Some(a.account.pubkey),
+                    _ => None,
+                })
+                .collect();
+            assert!(pubkeys.contains(&winner_pubkey));
+            assert!(
+                !pubkeys.contains(&loser_pubkey),
+                "the losing bank's data must not leak into the winner's block"
+            );
+        }
     }
 
     #[test]
-    fn processed_resolution_can_be_superseded_by_a_later_bank() {
+    fn processed_banks_are_peers_until_one_is_confirmed() {
         let mut storage = BlockMachineStorage::new(10);
         let slot = 9;
         let first_bank = 900;
@@ -1072,9 +1342,10 @@ mod tests {
         let first_pubkey = Pubkey::new_unique();
         let corrected_pubkey = Pubkey::new_unique();
 
-        // An optimistic Processed bank gets delivered...
+        // The first bank reaches Processed and gets delivered.
         storage.add(make_created_bank_msg(slot, None, first_bank));
         storage.add(make_account_msg(slot, first_bank, first_pubkey, 1));
+        add_musthave_sysvars(&mut storage, slot, first_bank);
         storage.add(make_entry_msg(slot, 0, first_bank));
         storage.add(make_block_meta_msg(slot, 0, first_bank));
         storage.add(make_commitment_msg(
@@ -1088,10 +1359,12 @@ mod tests {
             .expect("first bank's Processed delivery");
         assert_eq!(update.bank_id, first_bank);
 
-        // ...then a dump-and-repair replay produces a genuinely different bank for the same
-        // slot, which also reaches Processed.
+        // A second, genuinely different bank for the same slot also reaches Processed --
+        // this must NOT supersede or discard the first. Multiple Processed banks are peers
+        // with no precedence between them; only Confirmed/Finalized is authoritative.
         storage.add(make_created_bank_msg(slot, None, corrected_bank));
         storage.add(make_account_msg(slot, corrected_bank, corrected_pubkey, 1));
+        add_musthave_sysvars(&mut storage, slot, corrected_bank);
         storage.add(make_entry_msg(slot, 0, corrected_bank));
         storage.add(make_block_meta_msg(slot, 0, corrected_bank));
         storage.add(make_commitment_msg(
@@ -1100,21 +1373,45 @@ mod tests {
             SlotStatus::Processed,
             corrected_bank,
         ));
+        assert!(
+            storage.pop_ready_block().is_none(),
+            "a second Processed bank must not produce a delivery or discard the first"
+        );
 
-        let (update, frozen) = storage
-            .pop_ready_block()
-            .expect("corrected bank's Processed delivery should supersede the first one");
-        assert_eq!(update.bank_id, corrected_bank);
-        let pubkeys: Vec<_> = frozen
-            .messages()
-            .iter()
-            .filter_map(|m| match m {
-                Message::Account(a) => Some(a.account.pubkey),
-                _ => None,
-            })
-            .collect();
-        assert!(pubkeys.contains(&corrected_pubkey));
-        assert!(!pubkeys.contains(&first_pubkey));
+        // Only once the second bank reaches Confirmed does it become the slot's permanent,
+        // canonical bank -- correctly superseding the (still merely Processed) first one.
+        storage.add(make_commitment_msg(
+            slot,
+            None,
+            SlotStatus::Confirmed,
+            corrected_bank,
+        ));
+        // corrected_bank never got its own Processed status directly, so this also
+        // gap-fills the missing Processed level -- both deliveries are corrected_bank's.
+        let mut deliveries = Vec::new();
+        while let Some((update, frozen)) = storage.pop_ready_block() {
+            deliveries.push((update, frozen));
+        }
+        assert!(
+            deliveries
+                .iter()
+                .any(|(u, _)| u.commitment == CommitmentLevel::Confirmed),
+            "corrected bank's Confirmed delivery must be present: {:?}",
+            deliveries.iter().map(|(u, _)| u.commitment).collect::<Vec<_>>()
+        );
+        for (update, frozen) in &deliveries {
+            assert_eq!(update.bank_id, corrected_bank);
+            let pubkeys: Vec<_> = frozen
+                .messages()
+                .iter()
+                .filter_map(|m| match m {
+                    Message::Account(a) => Some(a.account.pubkey),
+                    _ => None,
+                })
+                .collect();
+            assert!(pubkeys.contains(&corrected_pubkey));
+            assert!(!pubkeys.contains(&first_pubkey));
+        }
 
         // Replay must now serve the corrected bank's content, not the superseded one.
         let replayed: Vec<_> = storage
@@ -1131,6 +1428,65 @@ mod tests {
             .collect();
         assert!(replayed_pubkeys.contains(&corrected_pubkey));
         assert!(!replayed_pubkeys.contains(&first_pubkey));
+    }
+
+    #[test]
+    fn two_banks_for_the_same_slot_can_disagree_on_their_parent() {
+        // Two banks for the same slot number are not required to agree on which slot is
+        // their parent -- skipped slots are normal (the leader for N may build on N-2, not
+        // N-1, if N-1's leader was offline), and an equivocating leader isn't required to
+        // pick the same parent for both of its conflicting versions either. Whichever
+        // bank_id is currently resolved as canonical must be the one whose parent is used,
+        // not a slot-keyed cache shared across bank_ids.
+        let mut storage = BlockMachineStorage::new(10);
+        let slot = 30;
+        let bank_with_close_parent = 3000;
+        let bank_with_distant_parent = 3001;
+
+        storage.add(make_created_bank_msg(slot, Some(29), bank_with_close_parent));
+        add_musthave_sysvars(&mut storage, slot, bank_with_close_parent);
+        storage.add(make_entry_msg(slot, 0, bank_with_close_parent));
+        storage.add(make_block_meta_msg(slot, 29, bank_with_close_parent));
+        storage.add(make_commitment_msg(
+            slot,
+            Some(29),
+            SlotStatus::Processed,
+            bank_with_close_parent,
+        ));
+        let (update, _) = storage
+            .pop_ready_block()
+            .expect("first bank's Processed delivery");
+        assert_eq!(update.parent_slot, Some(29));
+
+        // A dump-and-repair replay produces a genuinely different bank for the same slot,
+        // built on a different, more distant parent (e.g. 29 and 28 turned out to be
+        // skipped in this corrected version of history).
+        storage.add(make_created_bank_msg(
+            slot,
+            Some(27),
+            bank_with_distant_parent,
+        ));
+        add_musthave_sysvars(&mut storage, slot, bank_with_distant_parent);
+        storage.add(make_entry_msg(slot, 0, bank_with_distant_parent));
+        storage.add(make_block_meta_msg(slot, 27, bank_with_distant_parent));
+        // Confirmed, not Processed: only Confirmed/Finalized ever supersedes a resolved
+        // bank -- see `processed_banks_are_peers_until_one_is_confirmed`.
+        storage.add(make_commitment_msg(
+            slot,
+            Some(27),
+            SlotStatus::Confirmed,
+            bank_with_distant_parent,
+        ));
+
+        let (update, _) = storage
+            .pop_ready_block()
+            .expect("corrected bank's Confirmed delivery should supersede the first one");
+        assert_eq!(update.bank_id, bank_with_distant_parent);
+        assert_eq!(
+            update.parent_slot,
+            Some(27),
+            "must report the corrected bank's own parent, not the superseded bank's stale one"
+        );
     }
 
     #[test]
@@ -1227,6 +1583,7 @@ mod tests {
         // The ancestor's bank seals but never gets a direct commitment status of its own --
         // geyser does not guarantee one arrives for every slot.
         storage.add(make_created_bank_msg(10, None, ancestor_bank));
+        add_musthave_sysvars(&mut storage, 10, ancestor_bank);
         storage.add(make_entry_msg(10, 0, ancestor_bank));
         storage.add(make_block_meta_msg(10, 0, ancestor_bank));
         assert!(
@@ -1237,6 +1594,7 @@ mod tests {
         // The descendant jumps straight to Finalized, skipping Processed/Confirmed for
         // itself too, to also exercise same-slot gap-filling in the same pass.
         storage.add(make_created_bank_msg(11, Some(10), descendant_bank));
+        add_musthave_sysvars(&mut storage, 11, descendant_bank);
         storage.add(make_entry_msg(11, 0, descendant_bank));
         storage.add(make_block_meta_msg(11, 10, descendant_bank));
         storage.add(make_commitment_msg(
@@ -1264,6 +1622,64 @@ mod tests {
                 "descendant slot 11 must reach {level:?} via same-slot gap-filling: {seen:?}"
             );
         }
+    }
+
+    #[test]
+    fn stale_slot_sweep_bounds_memory_for_orphaned_state() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Two competing banks for slot 1 that never resolve -- neither ever gets a
+        // commitment update, so `try_infer_sole_candidate_winner`'s single-candidate
+        // inference can't kick in either (there are two candidates). Without the sweep,
+        // this would sit in
+        // `banks`/`slot_to_banks` forever.
+        storage.add(make_created_bank_msg(1, None, 10));
+        storage.add(make_account_msg(1, 10, Pubkey::new_unique(), 1));
+        storage.add(make_created_bank_msg(1, None, 11));
+        storage.add(make_account_msg(1, 11, Pubkey::new_unique(), 1));
+        assert!(storage.banks.contains_key(&10));
+        assert!(storage.banks.contains_key(&11));
+        assert!(storage.slot_to_banks.contains_key(&1));
+
+        // A discarded loser at slot 2, resolved normally via Confirmed -- without the
+        // sweep, `discarded_bank_ids` would keep this entry forever too.
+        storage.add(make_created_bank_msg(2, None, 20));
+        storage.add(make_created_bank_msg(2, None, 21));
+        add_musthave_sysvars(&mut storage, 2, 21);
+        storage.add(make_entry_msg(2, 0, 21));
+        storage.add(make_block_meta_msg(2, 0, 21));
+        storage.add(make_commitment_msg(2, None, SlotStatus::Confirmed, 21));
+        assert!(storage.discarded_bank_ids.contains_key(&20));
+
+        // Advance far enough past both slots for the sweep to consider them abandoned and
+        // run (a single message at a much later slot suffices: `observe_slot` runs on
+        // every `add()` call).
+        storage.add(make_lifecycle_msg(1000, SlotStatus::FirstShredReceived));
+
+        assert!(
+            !storage.banks.contains_key(&10),
+            "orphaned bank 10 should have been swept"
+        );
+        assert!(
+            !storage.banks.contains_key(&11),
+            "orphaned bank 11 should have been swept"
+        );
+        assert!(
+            !storage.slot_to_banks.contains_key(&1),
+            "slot 1's bookkeeping should have been swept"
+        );
+        assert!(
+            !storage.discarded_bank_ids.contains_key(&20),
+            "the long-discarded loser should have aged out of discarded_bank_ids"
+        );
+
+        // A slot that's already been successfully resolved and delivered must NOT be
+        // touched by the sweep, no matter how old it is -- it's bounded separately by the
+        // capacity-based `gc()`, and stays valid replay content regardless of age.
+        assert!(
+            storage.replayed_slot.contains_key(&2),
+            "a successfully resolved slot must survive the staleness sweep"
+        );
     }
 
     #[test]
