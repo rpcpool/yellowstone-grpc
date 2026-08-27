@@ -1,7 +1,7 @@
 use {
     anyhow::{Context, Result},
     clap::{Parser, Subcommand},
-    futures::stream::{self, StreamExt, TryStreamExt},
+    futures::stream::{self, StreamExt},
     indicatif::{MultiProgress, ProgressBar, ProgressStyle},
     std::{collections::HashMap, env, path::PathBuf, process::ExitCode, time::Duration},
     yellowstone_grpc_intg_test::{
@@ -352,20 +352,38 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let num_threads = (*num_threads).max(1);
             let multi = MultiProgress::new();
 
-            stream::iter(scenarios)
-                .map(Ok::<_, anyhow::Error>)
-                .try_for_each_concurrent(Some(num_threads), |scenario| {
+            // Run every scenario to completion regardless of earlier failures, so one
+            // failing scenario doesn't hide the results of the others.
+            let results: Vec<(&'static str, Result<()>)> = stream::iter(scenarios)
+                .map(|scenario| {
                     let run_config = &run_config;
                     let multi = &multi;
                     async move {
                         log::info!("running scenario: {}", scenario.name);
-                        run_scenario(scenario, run_config, multi)
-                            .await
-                            .with_context(|| format!("scenario '{}' failed", scenario.name))
+                        (scenario.name, run_scenario(scenario, run_config, multi).await)
                     }
                 })
-                .await?;
-            Ok(ExitCode::from(exit_code::OK))
+                .buffer_unordered(num_threads)
+                .collect()
+                .await;
+
+            let failed: Vec<&str> = results
+                .iter()
+                .filter(|(_, res)| res.is_err())
+                .map(|(name, _)| *name)
+                .collect();
+
+            if failed.is_empty() {
+                Ok(ExitCode::from(exit_code::OK))
+            } else {
+                eprintln!(
+                    "❌ {}/{} scenario(s) failed: {}",
+                    failed.len(),
+                    results.len(),
+                    failed.join(", ")
+                );
+                Ok(ExitCode::from(exit_code::FAILED))
+            }
         }
         Commands::Run { scenario } => {
             let entry = find_scenario(scenario)?;

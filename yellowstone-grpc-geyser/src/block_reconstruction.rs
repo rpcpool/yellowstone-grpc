@@ -22,6 +22,24 @@ use {
     },
 };
 
+const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
+    // written before bank created
+    Pubkey::from_str_const(
+        "SysvarC1ock11111111111111111111111111111111"
+    ),
+    Pubkey::from_str_const(
+        "SysvarS1otHashes111111111111111111111111111"
+    ),
+    // Written when the block freeze
+    Pubkey::from_str_const(
+        "SysvarS1otHistory11111111111111111111111111"
+    ),
+    Pubkey::from_str_const(
+        "SysvarRecentB1ockHashes11111111111111111111"
+    ),
+];
+
+
 pub struct ProcessingSlot {
     original_messages: Vec<Message>,
     account_write_version_map: FoldHashMap<Pubkey, u64>,
@@ -30,6 +48,7 @@ pub struct ProcessingSlot {
     accounts: Vec<Arc<MessageAccount>>,
     entries: Vec<Arc<MessageEntry>>,
     is_sealed: bool,
+    musthave_sysvar_accounts_bitmask: u8,
 }
 
 impl Default for ProcessingSlot {
@@ -42,6 +61,7 @@ impl Default for ProcessingSlot {
             accounts: Vec::with_capacity(4096),
             entries: Vec::with_capacity(64),
             is_sealed: false,
+            musthave_sysvar_accounts_bitmask: 0,
         }
     }
 }
@@ -64,6 +84,10 @@ impl ProcessingSlot {
                         }
                     })
                     .or_insert(write_version);
+                if let Some(position) = MUST_HAVE_SYSVAR_ACCOUNTS.iter().position(|sysvar| sysvar == &message_account.account.pubkey) {
+                    self.musthave_sysvar_accounts_bitmask |= 1 << position;
+                }
+
                 self.accounts.push(Arc::clone(message_account));
                 // Handle account event
             }
@@ -94,6 +118,10 @@ impl ProcessingSlot {
 
         let expected_txn_count = blockmeta.executed_transaction_count as usize;
         if self.transactions.len() < expected_txn_count {
+            return Err(TrySealError::NotSealable);
+        }
+
+        if self.musthave_sysvar_accounts_bitmask != (1 << MUST_HAVE_SYSVAR_ACCOUNTS.len()) - 1 {
             return Err(TrySealError::NotSealable);
         }
 
@@ -193,6 +221,13 @@ pub struct SlotProgression {
 
 pub struct BlockMachineStorage {
     processing_slots: FoldHashMap<u64, ProcessingSlot>,
+    // Block data (Account/Transaction/Entry) that arrived before the block-machine
+    // started tracking its slot's lifecycle. Agave does not guarantee that
+    // FirstShredReceived/CreatedBank precede every account write for a slot --
+    // notably sysvar writes performed as part of bank construction (see
+    // `MUST_HAVE_SYSVAR_ACCOUNTS`) can be observed first. Flushed into
+    // `processing_slots` once the slot becomes tracked.
+    pending_block_data: FoldHashMap<u64, Vec<Message>>,
     replayed_slot: BTreeMap<u64, Arc<FrozenBlock>>,
     slot_commitment_progression_map: FoldHashMap<u64, SlotProgression>,
     replayed_capacity: usize,
@@ -268,6 +303,7 @@ impl BlockMachineStorage {
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
             processing_slots: FoldHashMap::with_capacity(replayed_capacity),
+            pending_block_data: FoldHashMap::new(),
             replayed_slot: BTreeMap::new(),
             replayed_capacity,
             slot_commitment_progression_map: FoldHashMap::with_capacity(replayed_capacity),
@@ -290,6 +326,7 @@ impl BlockMachineStorage {
     /// just disappearing silently.
     fn prune_slot(&mut self, slot: u64, refresh_min_slot: bool, reason: &'static str) {
         self.processing_slots.remove(&slot);
+        self.pending_block_data.remove(&slot);
         if self.replayed_slot.remove(&slot).is_some() {
             let progression = self.slot_commitment_progression_map.get(&slot);
             let max_commitment_seen = progression.map(|p| p.max_commitment);
@@ -402,39 +439,14 @@ impl BlockMachineStorage {
 
     fn handle_block_data(&mut self, block_data: Message) {
         let slot = block_data.get_slot();
-        // TEMP TRACE: pin down exactly where SysvarClock's account write
-        // disappears -- it's confirmed absent from Confirmed/Finalized
-        // delivery, but never observed hitting either drop site below, so
-        // first confirm it even reaches this function at all.
-        if let Message::Account(account) = &block_data {
-            if account.account.pubkey.to_string() == "SysvarC1ock11111111111111111111111111111111" {
-                log::warn!(
-                    "TRACE: SysvarClock account message reached handle_block_data for slot {slot} (is_slot_tracked={})",
-                    self.state.is_slot_tracked(slot)
-                );
-            }
-        }
         if !self.state.is_slot_tracked(slot) {
-            metrics::incr_geyser_untrack_slot_event_dropped();
-            // `incr_geyser_untrack_slot_event_dropped` has no accompanying log
-            // line, making this drop invisible outside of scraping the metric
-            // directly -- add one so it's visible via plain log search too,
-            // and identify which account/message got dropped so a specific
-            // pubkey's disappearance (not just "something" was dropped) can
-            // be confirmed against this exact site.
-            let detail = match &block_data {
-                Message::Account(account) => {
-                    format!("account pubkey={}", account.account.pubkey)
-                }
-                Message::Transaction(txn) => {
-                    format!("transaction signature={}", txn.transaction.signature)
-                }
-                Message::Entry(_) => "entry".to_string(),
-                other => format!("{other:?}"),
-            };
-            log::warn!(
-                "Dropping block data for untracked slot {slot} ({detail}): slot has no FirstShredReceived/CreatedBank registration yet in the block-machine index.",
-            );
+            // Agave does not guarantee FirstShredReceived/CreatedBank precede every
+            // account write for their slot -- sysvar writes performed as part of bank
+            // construction (see `MUST_HAVE_SYSVAR_ACCOUNTS`) can be observed first.
+            // Buffer instead of dropping; `flush_pending_block_data` replays this once
+            // the slot starts being tracked.
+            metrics::incr_geyser_pending_block_data_buffered();
+            self.pending_block_data.entry(slot).or_default().push(block_data);
             return;
         }
         // Technically, once a block is sealed and put in the replay queue, we should not NEVER
@@ -450,6 +462,20 @@ impl BlockMachineStorage {
         let slot_buf = self.processing_slots.entry(slot).or_default();
         slot_buf.add_event(block_data);
         self.try_seal(slot);
+    }
+
+    /// Replays any block data that was buffered by `handle_block_data` while `slot`
+    /// wasn't tracked yet, now that it is.
+    fn flush_pending_block_data(&mut self, slot: u64) {
+        if !self.state.is_slot_tracked(slot) {
+            return;
+        }
+        let Some(pending) = self.pending_block_data.remove(&slot) else {
+            return;
+        };
+        for block_data in pending {
+            self.handle_block_data(block_data);
+        }
     }
 
     fn gc(&mut self) {
@@ -568,10 +594,13 @@ impl BlockMachineStorage {
     pub fn add(&mut self, message: Message) {
         match message {
             Message::Slot(message_slot) => {
+                let slot = message_slot.slot;
                 if self.on_message_slot(&message_slot).is_err() {
                     // Symmetric with handle_block_data which increments the same metric
                     // when is_slot_tracked returns false.
                     metrics::incr_geyser_untrack_slot_event_dropped();
+                } else {
+                    self.flush_pending_block_data(slot);
                 }
             }
             Message::Account(message_account) => {
@@ -917,6 +946,46 @@ mod tests {
         assert_eq!(status.commitment, CommitmentLevel::Processed);
         assert!(storage.pop_ready_block().is_none(), "no more ready blocks");
         assert_eq!(storage.min_replayable_slot(), Some(1));
+    }
+
+    #[test]
+    fn block_machine_storage_buffers_block_data_that_arrives_before_slot_is_tracked() {
+        let mut storage = BlockMachineStorage::new(10);
+
+        // Sysvar writes performed during bank construction can be observed by the
+        // plugin before FirstShredReceived/CreatedBank for their slot -- there is no
+        // slot lifecycle registration yet when these arrive.
+        for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+            storage.add(make_account_msg(1, pubkey, 1));
+        }
+        assert!(
+            storage.pop_ready_block().is_none(),
+            "nothing should be ready before the slot is even tracked"
+        );
+
+        storage.add(make_slot_msg(1, None, SlotStatus::FirstShredReceived));
+        storage.add(make_slot_msg(1, None, SlotStatus::Completed));
+        storage.add(make_entry_msg(1, 0));
+        storage.add(make_block_meta_msg(1, 0));
+        storage.add(make_slot_msg(1, None, SlotStatus::Processed));
+
+        let (_, frozen) = storage
+            .pop_ready_block()
+            .expect("block should seal once the buffered sysvar writes are flushed in");
+        let accounts: Vec<_> = frozen
+            .messages()
+            .iter()
+            .filter_map(|m| match m {
+                Message::Account(a) => Some(a.account.pubkey),
+                _ => None,
+            })
+            .collect();
+        for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+            assert!(
+                accounts.contains(&pubkey),
+                "sysvar {pubkey} buffered before tracking started should still make it into the frozen block"
+            );
+        }
     }
 
     #[test]

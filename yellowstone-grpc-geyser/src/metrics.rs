@@ -171,6 +171,10 @@ lazy_static::lazy_static! {
         "yellowstone_grpc_geyser_untrack_slot_event_dropped_total", "Number of geyser event drop due to untrack slot"
     ).unwrap();
 
+    static ref GEYSER_PENDING_BLOCK_DATA_BUFFERED: IntCounter = IntCounter::new(
+        "yellowstone_grpc_geyser_pending_block_data_buffered_total", "Number of block data events buffered because they arrived before their slot started being tracked"
+    ).unwrap();
+
 
     static ref IP_CONNCUR_RATE_LIMIT_EXCEEDED: IntCounterVec = IntCounterVec::new(
         Opts::new(
@@ -268,6 +272,7 @@ impl PrometheusService {
             register!(GEYSER_EVENT_DROPPED);
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
             register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
+            register!(GEYSER_PENDING_BLOCK_DATA_BUFFERED);
             register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
             register!(UNAUTHORIZED_COUNT);
             register!(AUTHORIZED_COUNT);
@@ -469,6 +474,10 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
+pub fn incr_geyser_pending_block_data_buffered() {
+    GEYSER_PENDING_BLOCK_DATA_BUFFERED.inc();
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
@@ -657,6 +666,7 @@ pub fn reset_metrics() {
     GEYSER_EVENT_DROPPED.reset();
     GEYSER_BLOCK_MISMATCH_TRANSACTION.reset();
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
+    GEYSER_PENDING_BLOCK_DATA_BUFFERED.reset();
 
     IP_CONNCUR_RATE_LIMIT_EXCEEDED.reset();
     UNAUTHORIZED_COUNT.reset();
