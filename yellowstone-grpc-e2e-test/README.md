@@ -178,6 +178,23 @@ cargo run -p yellowstone-grpc-intg-test --bin yellowstone-e2e -- \
 	all --module ratelimit
 ```
 
+### Emit a verification result
+
+Use `--json` to emit the structured verification result. The runner prints one `VERIFICATION_RESULT {…}` line after all selected scenarios finish.
+
+```bash
+TEST_ENDPOINT=https://127.0.0.1:10000 \
+cargo run -p yellowstone-grpc-intg-test --bin yellowstone-e2e -- \
+	all --module default \
+	--json
+```
+
+Use `--json-file PATH` to write the same JSON document to a file. This option also enables structured output.
+
+Structured mode runs all selected scenarios. It does not stop after the first failure. Each failed scenario has status `CRITICAL`. The run status is the worst check status. An empty check set has status `UNKNOWN`.
+
+The document contains the start time, duration, status, endpoint, versions, notes, and checks.
+
 ## Endpoint/token/dial resolution precedence
 
 ### Endpoint

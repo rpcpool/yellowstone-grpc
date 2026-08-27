@@ -1,9 +1,17 @@
 use {
     anyhow::{Context, Result},
+    chrono::{SecondsFormat, Utc},
     clap::{Parser, Subcommand},
     futures::stream::{self, StreamExt, TryStreamExt},
     indicatif::{MultiProgress, ProgressBar, ProgressStyle},
-    std::{collections::HashMap, env, path::PathBuf, process::ExitCode, time::Duration},
+    serde::Serialize,
+    std::{
+        collections::{BTreeMap, HashMap},
+        env, fs,
+        path::PathBuf,
+        process::ExitCode,
+        time::{Duration, Instant},
+    },
     yellowstone_grpc_intg_test::{
         config::Config,
         grpc::fetch_target_version,
@@ -23,6 +31,39 @@ mod build_info {
     pub const GIT: &str = env!("GIT_VERSION");
     pub const BUILD_TS: &str = env!("VERGEN_BUILD_TIMESTAMP");
     pub const RUSTC: &str = env!("VERGEN_RUSTC_SEMVER");
+}
+
+const SCHEMA_VERSION: u16 = 1;
+const MAX_DETAIL_BYTES: usize = 2 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum VerificationStatus {
+    Ok,
+    Critical,
+    Unknown,
+}
+
+#[derive(Debug, Serialize)]
+struct VerificationCheck {
+    name: String,
+    status: VerificationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    duration_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct VerificationResult {
+    schema_version: u16,
+    started: String,
+    duration_ms: u64,
+    status: VerificationStatus,
+    endpoint: String,
+    versions: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+    checks: Vec<VerificationCheck>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -87,6 +128,14 @@ struct Cli {
     /// TOML config file for scenario-specific parameters.
     #[arg(long, value_name = "PATH")]
     config_file: Option<PathBuf>,
+
+    /// Print one structured verification result after the scenarios finish.
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Write the structured verification result to this file.
+    #[arg(long, global = true, value_name = "PATH")]
+    json_file: Option<PathBuf>,
 }
 
 fn load_dotenv(dotenv_path_override: Option<&PathBuf>) -> HashMap<String, String> {
@@ -179,6 +228,31 @@ fn resolve_dial(cli: &Cli, dotenv_values: &HashMap<String, String>) -> Option<St
         .or_else(|| env::var("YELLOWSTONE_GRPC_DIAL").ok())
 }
 
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn run_status(checks: &[VerificationCheck]) -> VerificationStatus {
+    checks
+        .iter()
+        .map(|check| check.status)
+        .max()
+        .unwrap_or(VerificationStatus::Unknown)
+}
+
+fn bounded_detail(detail: String) -> String {
+    if detail.len() <= MAX_DETAIL_BYTES {
+        return detail;
+    }
+
+    let suffix = "…";
+    let mut end = MAX_DETAIL_BYTES.saturating_sub(suffix.len());
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &detail[..end], suffix)
+}
+
 fn matches_tags(scenario: &Scenario, tags: &[String]) -> bool {
     tags.is_empty() || tags.iter().any(|t| scenario.tags.contains(&t.as_str()))
 }
@@ -245,6 +319,50 @@ async fn run_scenario(
     res
 }
 
+async fn run_scenario_check(
+    scenario: &'static Scenario,
+    config: &RunConfig,
+    multi: &MultiProgress,
+) -> VerificationCheck {
+    let started = Instant::now();
+    match run_scenario(scenario, config, multi).await {
+        Ok(()) => VerificationCheck {
+            name: scenario.name.to_string(),
+            status: VerificationStatus::Ok,
+            detail: None,
+            duration_ms: duration_ms(started.elapsed()),
+        },
+        Err(err) => VerificationCheck {
+            name: scenario.name.to_string(),
+            status: VerificationStatus::Critical,
+            detail: Some(bounded_detail(format!("{err:#}"))),
+            duration_ms: duration_ms(started.elapsed()),
+        },
+    }
+}
+
+fn emit_verification_result(
+    result: &VerificationResult,
+    json_file: Option<&PathBuf>,
+) -> Result<()> {
+    let json = serde_json::to_string(result).context("failed to serialize verification result")?;
+    println!("VERIFICATION_RESULT {json}");
+
+    if let Some(path) = json_file {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create result directory '{}'", parent.display())
+            })?;
+        }
+        fs::write(path, format!("{json}\n"))
+            .with_context(|| format!("failed to write result file '{}'", path.display()))?;
+    }
+    Ok(())
+}
+
 async fn run(cli: Cli) -> Result<ExitCode> {
     init_log();
 
@@ -294,6 +412,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Some(path) => Config::from_file(path).context("failed to load config file")?,
         None => Config::default(),
     };
+    let structured = cli.json || cli.json_file.is_some();
     let run_config = RunConfig {
         endpoint,
         dial,
@@ -337,16 +456,84 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         };
     }
 
-    match fetch_target_version(&run_config).await {
-        Ok(target) => println!(
-            "target plugin version: version={} git={} proto={} solana={}",
-            target.version, target.git, target.proto, target.solana
-        ),
-        Err(err) => println!("⚠️ could not read target plugin version (GetVersion): {err:#}"),
+    let started_at = Utc::now();
+    let started = Instant::now();
+    let (target_version, notes) = match fetch_target_version(&run_config).await {
+        Ok(target) => {
+            println!(
+                "target plugin version: version={} git={} proto={} solana={}",
+                target.version, target.git, target.proto, target.solana
+            );
+            (Some(target), None)
+        }
+        Err(err) => {
+            let note = format!("GetVersion failed: {err:#}");
+            println!("⚠️ could not read target plugin version (GetVersion): {err:#}");
+            (None, Some(bounded_detail(note)))
+        }
+    };
+
+    if !structured {
+        return match &cli.command {
+            Commands::List { .. } | Commands::VerifyVersion { .. } => {
+                Ok(ExitCode::from(exit_code::OK))
+            }
+            Commands::All {
+                ref tags,
+                ref module,
+                num_threads,
+            } => {
+                let scenarios: Vec<&'static Scenario> = inventory::iter::<Scenario>
+                    .into_iter()
+                    .filter(|s| matches_tags(s, tags) && matches_module(s, module.as_str()))
+                    .collect();
+
+                let num_threads = (*num_threads).max(1);
+                let multi = MultiProgress::new();
+
+                stream::iter(scenarios)
+                    .map(Ok::<_, anyhow::Error>)
+                    .try_for_each_concurrent(Some(num_threads), |scenario| {
+                        let run_config = &run_config;
+                        let multi = &multi;
+                        async move {
+                            log::info!("running scenario: {}", scenario.name);
+                            run_scenario(scenario, run_config, multi)
+                                .await
+                                .with_context(|| format!("scenario '{}' failed", scenario.name))
+                        }
+                    })
+                    .await?;
+                Ok(ExitCode::from(exit_code::OK))
+            }
+            Commands::Run { scenario } => {
+                let entry = find_scenario(scenario)?;
+                let multi = MultiProgress::new();
+                let outcome = run_scenario(entry, &run_config, &multi).await;
+                Ok(ExitCode::from(if outcome.is_ok() {
+                    exit_code::OK
+                } else {
+                    exit_code::FAILED
+                }))
+            }
+        };
     }
 
-    match &cli.command {
-        Commands::List { .. } | Commands::VerifyVersion { .. } => Ok(ExitCode::from(exit_code::OK)),
+    let mut versions = BTreeMap::new();
+    if let Some(target) = target_version {
+        if !target.version.is_empty() {
+            versions.insert("yellowstone-grpc".to_string(), target.version);
+        }
+        if !target.proto.is_empty() {
+            versions.insert("proto".to_string(), target.proto);
+        }
+        if !target.solana.is_empty() {
+            versions.insert("solana".to_string(), target.solana);
+        }
+    }
+
+    let mut checks = match &cli.command {
+        Commands::List { .. } | Commands::VerifyVersion { .. } => Vec::new(),
         Commands::All {
             ref tags,
             ref module,
@@ -361,34 +548,45 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let multi = MultiProgress::new();
 
             stream::iter(scenarios)
-                .map(Ok::<_, anyhow::Error>)
-                .try_for_each_concurrent(Some(num_threads), |scenario| {
+                .map(|scenario| {
                     let run_config = &run_config;
                     let multi = &multi;
                     async move {
                         log::info!("running scenario: {}", scenario.name);
-                        run_scenario(scenario, run_config, multi)
-                            .await
-                            .with_context(|| format!("scenario '{}' failed", scenario.name))
+                        run_scenario_check(scenario, run_config, multi).await
                     }
                 })
-                .await?;
-            Ok(ExitCode::from(exit_code::OK))
+                .buffer_unordered(num_threads)
+                .collect()
+                .await
         }
         Commands::Run { scenario } => {
             let entry = find_scenario(scenario)?;
             let multi = MultiProgress::new();
-            // run_scenario already prints a "✅/❌ scenario '...'" line itself --
-            // don't also propagate the error via `?` up to `main()`, which would
-            // print it a second time (this time without the scenario-name prefix).
-            let outcome = run_scenario(entry, &run_config, &multi).await;
-            Ok(ExitCode::from(if outcome.is_ok() {
-                exit_code::OK
-            } else {
-                exit_code::FAILED
-            }))
+            vec![run_scenario_check(entry, &run_config, &multi).await]
         }
-    }
+    };
+    checks.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let status = run_status(&checks);
+    let result = VerificationResult {
+        schema_version: SCHEMA_VERSION,
+        started: started_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        duration_ms: duration_ms(started.elapsed()),
+        status,
+        endpoint: run_config.endpoint,
+        versions,
+        notes,
+        checks,
+    };
+    emit_verification_result(&result, cli.json_file.as_ref())?;
+
+    let code = match status {
+        VerificationStatus::Ok => exit_code::OK,
+        VerificationStatus::Critical => exit_code::FAILED,
+        VerificationStatus::Unknown => exit_code::CANNOT_VERIFY,
+    };
+    Ok(ExitCode::from(code))
 }
 
 #[tokio::main]
@@ -401,5 +599,49 @@ async fn main() -> ExitCode {
             eprintln!("{err:#}");
             ExitCode::from(exit_code::FAILED)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_json_flags_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "yellowstone-e2e",
+            "all",
+            "--json",
+            "--json-file",
+            "/tmp/result.json",
+        ])
+        .unwrap();
+
+        assert!(cli.json);
+        assert_eq!(
+            cli.json_file.as_deref(),
+            Some(std::path::Path::new("/tmp/result.json"))
+        );
+    }
+
+    #[test]
+    fn worst_check_sets_run_status() {
+        let checks = [
+            VerificationCheck {
+                name: "ok".to_string(),
+                status: VerificationStatus::Ok,
+                detail: None,
+                duration_ms: 1,
+            },
+            VerificationCheck {
+                name: "critical".to_string(),
+                status: VerificationStatus::Critical,
+                detail: Some("failed".to_string()),
+                duration_ms: 1,
+            },
+        ];
+
+        assert_eq!(run_status(&checks), VerificationStatus::Critical);
+        assert_eq!(run_status(&[]), VerificationStatus::Unknown);
     }
 }
