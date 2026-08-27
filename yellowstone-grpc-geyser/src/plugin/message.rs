@@ -151,11 +151,16 @@ pub struct MessageSlot {
     pub dead_error: Option<String>,
     pub created_at: Timestamp,
     // FIRST_SHRED_RECEIVED and COMPLETED does not have any bank id.
-    pub bank_id: Option<BankId>
+    pub bank_id: Option<BankId>,
 }
 
 impl MessageSlot {
-    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &GeyserSlotStatus, bank_id: Option<BankId>) -> Self {
+    pub fn from_geyser(
+        slot: Slot,
+        parent: Option<Slot>,
+        status: &GeyserSlotStatus,
+        bank_id: Option<BankId>,
+    ) -> Self {
         Self {
             slot,
             parent,
@@ -217,9 +222,17 @@ pub struct MessageAccount {
 }
 
 impl MessageAccount {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool, bank_id: Option<BankId>) -> Self {
+    pub fn from_geyser(
+        info: &ReplicaAccountInfoV3<'_>,
+        slot: Slot,
+        is_startup: bool,
+        bank_id: Option<BankId>,
+    ) -> Self {
         if is_startup {
-            assert!(bank_id.is_none(), "startup account update should have no bank id");
+            assert!(
+                bank_id.is_none(),
+                "startup account update should have no bank id"
+            );
         }
         Self {
             account: MessageAccountInfo::from_geyser(info),

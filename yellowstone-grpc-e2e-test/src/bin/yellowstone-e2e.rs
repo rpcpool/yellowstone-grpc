@@ -368,7 +368,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     let multi = &multi;
                     async move {
                         log::info!("running scenario: {}", scenario.name);
-                        (scenario.name, run_scenario(scenario, run_config, multi).await)
+                        (
+                            scenario.name,
+                            run_scenario(scenario, run_config, multi).await,
+                        )
                     }
                 })
                 .buffer_unordered(num_threads)

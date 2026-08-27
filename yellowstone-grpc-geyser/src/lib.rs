@@ -1,6 +1,6 @@
 pub(crate) mod auth;
 pub(crate) mod billing;
-mod block_reconstruction;
+mod block_reconstruction_v2;
 mod cache_ext;
 pub mod config;
 pub mod file_watcher;
@@ -13,7 +13,6 @@ pub mod stream;
 pub mod util;
 pub mod version;
 pub use agave_geyser_plugin_interface as plugin_interface;
-mod block_reconstruction_v2;
 
 pub fn get_thread_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
