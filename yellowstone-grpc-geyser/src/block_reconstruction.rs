@@ -49,6 +49,7 @@ pub struct ProcessingSlot {
     entries: Vec<Arc<MessageEntry>>,
     is_sealed: bool,
     musthave_sysvar_accounts_bitmask: u8,
+    stuck_on_sysvar_reason_logged: bool,
 }
 
 impl Default for ProcessingSlot {
@@ -62,6 +63,7 @@ impl Default for ProcessingSlot {
             entries: Vec::with_capacity(64),
             is_sealed: false,
             musthave_sysvar_accounts_bitmask: 0,
+            stuck_on_sysvar_reason_logged: false,
         }
     }
 }
@@ -108,7 +110,7 @@ impl ProcessingSlot {
         self.original_messages.push(event);
     }
 
-    fn try_seal(&mut self) -> Result<(), TrySealError> {
+    fn try_seal(&mut self, slot: u64) -> Result<(), TrySealError> {
         if self.is_sealed {
             return Err(TrySealError::AlreadySealed);
         }
@@ -122,7 +124,22 @@ impl ProcessingSlot {
         }
 
         if self.musthave_sysvar_accounts_bitmask != (1 << MUST_HAVE_SYSVAR_ACCOUNTS.len()) - 1 {
-            return Err(TrySealError::NotSealable);
+            // Best-effort only: log which sysvar(s) never showed up for this slot, but don't
+            // block sealing on it. Treating this as a hard precondition stalled sealing (and
+            // thus all Confirmed/Finalized delivery) for every slot indefinitely in practice --
+            // there's no guarantee all four are ever observed for a given slot.
+            if !self.stuck_on_sysvar_reason_logged {
+                self.stuck_on_sysvar_reason_logged = true;
+                let missing: Vec<String> = MUST_HAVE_SYSVAR_ACCOUNTS
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| self.musthave_sysvar_accounts_bitmask & (1 << i) == 0)
+                    .map(|(_, pubkey)| pubkey.to_string())
+                    .collect();
+                log::warn!(
+                    "slot {slot} sealing without having observed sysvar account update(s): {missing:?}",
+                );
+            }
         }
 
         let expected_entry_count = blockmeta.entries_count as usize;
@@ -405,7 +422,7 @@ impl BlockMachineStorage {
         let Some(outcome) = self
             .processing_slots
             .get_mut(&slot)
-            .map(|slot_buf| slot_buf.try_seal())
+            .map(|slot_buf| slot_buf.try_seal(slot))
         else {
             return;
         };
@@ -431,9 +448,22 @@ impl BlockMachineStorage {
     }
 
     fn handle_block_meta(&mut self, block_meta: Arc<MessageBlockMeta>) {
+        // Make sure any account/transaction/entry data still sitting in `pending_block_data`
+        // for this slot has been folded into `processing_slots` before we look up the slot
+        // and attempt to seal it below -- otherwise a completed flush that raced with this
+        // BlockMeta could leave `try_seal` looking at a stale, incomplete `ProcessingSlot`.
+        self.flush_pending_block_data(block_meta.slot);
         if let Some(block) = self.processing_slots.get_mut(&block_meta.slot) {
             block.blockmeta = Some(Arc::clone(&block_meta));
             self.try_seal(block_meta.slot);
+        } else {
+            // No ProcessingSlot entry exists yet for this slot -- unlike handle_block_data,
+            // there's no buffer to fall back to here, so this BlockMeta is lost for good and
+            // the slot can now never seal regardless of what else arrives for it.
+            log::warn!(
+                "Dropping block meta for slot {}: no processing slot entry exists (slot untracked, pruned, or never received any account/transaction/entry data)",
+                block_meta.slot
+            );
         }
     }
 
