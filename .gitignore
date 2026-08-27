@@ -40,3 +40,5 @@ yellowstone-grpc-geyser/config-test.json
 .env
 .env.local
 scripts
+
+target-ubuntu2204
