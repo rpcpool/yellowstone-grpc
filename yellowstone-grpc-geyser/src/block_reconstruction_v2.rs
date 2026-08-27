@@ -933,15 +933,12 @@ mod tests {
     use {
         super::*,
         crate::plugin::message::{
-            MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, MessageTransaction,
-            MessageTransactionInfo, SlotStatus,
+            MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, SlotStatus,
         },
         bytes::Bytes,
-        foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
-        solana_signature::Signature,
         std::{sync::OnceLock, time::SystemTime},
         yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     };
@@ -995,25 +992,6 @@ mod tests {
             is_startup: true,
             created_at: ts(),
             bank_id: None,
-        }))
-    }
-
-    fn make_transaction_msg(slot: u64, bank_id: BankId) -> Message {
-        Message::Transaction(Arc::new(MessageTransaction {
-            transaction: MessageTransactionInfo {
-                signature: Signature::default(),
-                is_vote: false,
-                transaction: Default::default(),
-                meta: Default::default(),
-                index: 0,
-                account_keys: FoldHashSet::new(),
-                pre_encoded: OnceLock::new(),
-                token_owners_all: OnceLock::new(),
-                token_owners_changed: OnceLock::new(),
-            },
-            slot,
-            created_at: ts(),
-            bank_id,
         }))
     }
 

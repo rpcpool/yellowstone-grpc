@@ -522,6 +522,7 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    #[allow(unused_variables)]
     fn notify_block_footer(
         &self,
         block_footer: ReplicaBlockFooterInfoVersions,
