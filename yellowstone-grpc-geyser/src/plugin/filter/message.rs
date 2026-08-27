@@ -387,6 +387,9 @@ impl prost::Message for FilteredUpdateAccount {
         if self.account.is_startup {
             ::prost::encoding::bool::encode(3u32, &self.account.is_startup, buf);
         }
+        if let ::core::option::Option::Some(ref value) = self.account.bank_id {
+            ::prost::encoding::uint64::encode(4u32, value, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -401,7 +404,9 @@ impl prost::Message for FilteredUpdateAccount {
             ::prost::encoding::bool::encoded_len(3u32, &self.account.is_startup)
         } else {
             0
-        }
+        } + self.account.bank_id.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(4u32, value)
+        })
     }
 
     fn merge_field(
@@ -557,6 +562,9 @@ impl prost::Message for FilteredUpdateSlot {
         if let Some(error) = &self.dead_error {
             ::prost::encoding::string::encode(4u32, error, buf);
         }
+        if let ::core::option::Option::Some(ref value) = self.bank_id {
+            ::prost::encoding::uint64::encode(5u32, value, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -576,7 +584,9 @@ impl prost::Message for FilteredUpdateSlot {
             ::prost::encoding::string::encoded_len(4u32, error)
         } else {
             0
-        }
+        } + self.bank_id.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(5u32, value)
+        })
     }
 
     fn merge_field(
@@ -606,12 +616,20 @@ impl prost::Message for FilteredUpdateTransaction {
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
+        if self.transaction.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(3u32, &self.transaction.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
         prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction.transaction))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+            + if self.transaction.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(3u32, &self.transaction.bank_id)
             } else {
                 0
             }
@@ -1184,6 +1202,9 @@ impl FilteredUpdateEntry {
         if entry.starting_transaction_index != 0u64 {
             ::prost::encoding::uint64::encode(6u32, &entry.starting_transaction_index, buf);
         }
+        if entry.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &entry.bank_id, buf);
+        }
     }
 
     fn entry_encoded_len(entry: &MessageEntry) -> usize {
@@ -1209,6 +1230,11 @@ impl FilteredUpdateEntry {
             }
             + if entry.starting_transaction_index != 0u64 {
                 ::prost::encoding::uint64::encoded_len(6u32, &entry.starting_transaction_index)
+            } else {
+                0
+            }
+            + if entry.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &entry.bank_id)
             } else {
                 0
             }
