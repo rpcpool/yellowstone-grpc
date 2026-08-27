@@ -230,8 +230,16 @@ async fn run_scenario(
     };
     // Print the final line to the scrollback and drop this bar, so the still-running
     // scenarios' spinners stay pinned as the trailing lines instead of being interleaved
-    // with finished ones sitting at their original position.
-    multi.println(&message).ok();
+    // with finished ones sitting at their original position. `multi.println` draws
+    // through indicatif's progress-bar machinery, which can silently no-op when
+    // stdout isn't a real TTY (e.g. redirected to a file/log) -- this is the one
+    // line a caller actually needs, so fall back to a plain `println!` whenever
+    // indicatif didn't actually manage to show it, rather than losing it outright.
+    if multi.is_hidden() {
+        println!("{message}");
+    } else {
+        multi.println(&message).ok();
+    }
     pb.finish_and_clear();
 
     res
@@ -388,10 +396,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Commands::Run { scenario } => {
             let entry = find_scenario(scenario)?;
             let multi = MultiProgress::new();
-            run_scenario(entry, &run_config, &multi)
-                .await
-                .with_context(|| format!("scenario '{}' failed", scenario))?;
-            Ok(ExitCode::from(exit_code::OK))
+            // run_scenario already prints a "✅/❌ scenario '...'" line itself --
+            // don't also propagate the error via `?` up to `main()`, which would
+            // print it a second time (this time without the scenario-name prefix).
+            let outcome = run_scenario(entry, &run_config, &multi).await;
+            Ok(ExitCode::from(if outcome.is_ok() {
+                exit_code::OK
+            } else {
+                exit_code::FAILED
+            }))
         }
     }
 }

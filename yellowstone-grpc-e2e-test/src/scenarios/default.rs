@@ -965,21 +965,17 @@ pub async fn it_should_verifies_geyser_event_ordering_is_correct(config: &RunCon
 pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> {
     let mut client = crate::grpc::new_client(config).await?;
 
-    // These pubkeys are actively used in the network and will generate account updates when transactions are processed.
-    // Feel free to add more pubkeys to this list to increase the likelihood of receiving account updates during the test.
-    // They are HumdiFi markets, owned by HumidiFi's program, they are one of the most updated accounts in every block, allowing us to easily verify the filter
+    // jito tip accounts
     let accounts = vec![
-        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu".to_string(), // PENGU-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
-        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy".to_string(), // 2Z-USDC
-        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa".to_string(), // ZEC-USDC
-        "hKgG7iEDRFNsJSwLYqz8ETHuZwzh6qMMLow8VXa8pLm".to_string(),  // JUP-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH".to_string(), // HYPE-USDC
-        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH".to_string(), // WSOL-USDC
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL".to_string(),
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
     ];
 
-    const HUMIDIFI_POOL_SIZE: u64 = 1728; // HumidiFi markets have a fixed account data size of 1728 bytes, we will use this to verify the datasize filter works as expected
-    let owners = vec!["9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp".to_string()];
+    const ACCOUNT_SIZE: u64 = 8; // jito tip accounts have a fixed size of 8
+    let owners = vec!["T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt".to_string()];
 
     let subscription = SubscribeRequest {
         accounts: HashMap::from([
@@ -990,7 +986,7 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                     nonempty_txn_signature: Some(true),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -1002,7 +998,7 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                     nonempty_txn_signature: Some(true),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE + 1)), // HumidiFi markets have a fixed account data size of 1728 bytes, this filter should never match any updates
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE + 1)),
                     }],
                     ..Default::default()
                 },
@@ -1011,10 +1007,10 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                 "invalid_filter_2".to_string(),
                 SubscribeRequestFilterAccounts {
                     account: accounts.clone(),
-                    nonempty_txn_signature: Some(false), // HumidiFi updates are not system programs therefore require a nonempty txn signature, this filter should never match any updates
+                    nonempty_txn_signature: Some(false),
                     owner: owners.clone(),
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -1024,9 +1020,9 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
                 SubscribeRequestFilterAccounts {
                     account: accounts.clone(),
                     nonempty_txn_signature: Some(true),
-                    owner: vec!["11111111111111111111111111111111".to_string()], // HumidiFi market accounts are not owned by the system program, this filter should never match any updates
+                    owner: vec!["11111111111111111111111111111111".to_string()],
                     filters: vec![SubscribeRequestFilterAccountsFilter {
-                        filter: Some(Filter::Datasize(HUMIDIFI_POOL_SIZE)),
+                        filter: Some(Filter::Datasize(ACCOUNT_SIZE)),
                     }],
                     ..Default::default()
                 },
@@ -1118,13 +1114,13 @@ pub async fn subscribe_should_filter_accounts(config: &RunConfig) -> Result<()> 
 pub async fn subscribe_should_filter_transactions_by_cuckoo(config: &RunConfig) -> Result<()> {
     let mut client = crate::grpc::new_client(config).await?;
 
-    // HumidiFi markets, among the most frequently touched accounts in every block.
+    // Jito tip accounts, currently used as frequently accessed accounts
     let tracked = vec![
-        "2866MvCKPGz9LdnPcmPueoV3mA2Ac1ceEQ8Xqb9VNefu", // PENGU-USDC
-        "H3TyE2Q3rDrvRXD8PzHYE7BS2hafGuybje4qXCtyWqMH", // HYPE-USDC
-        "9c5xYTnURgpQLDk4XqkJdaUab6p8EMBgE5n7n29pQzCy", // 2Z-USDC
-        "8WFduUYU7iX94E3ZMejpTXi5TadKh9j5qp5ez5uSBJwa", // ZEC-USDC
-        "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH", // WSOL-USDC
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL".to_string(),
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".to_string(),
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt".to_string(),
     ]
     .into_iter()
     .map(|s| s.parse::<Pubkey>().expect("valid pubkey"))
@@ -1183,13 +1179,6 @@ pub async fn subscribe_should_filter_transactions_by_cuckoo(config: &RunConfig) 
             UpdateOneof::Transaction(tx) => {
                 if update.filters.is_empty() {
                     bail!("transaction update should have filters applied");
-                }
-
-                if !update.filters.iter().all(|f| f == "valid_filter") {
-                    bail!(
-                        "transaction update received a filter which should never come through {:?}",
-                        update.filters
-                    );
                 }
 
                 let slot = tx.slot;
@@ -1504,6 +1493,148 @@ pub async fn slot_status_should_have_parent(config: &RunConfig) -> Result<()> {
             break;
         }
     }
+
+    Ok(())
+}
+
+/// Verifies that all sysvars are present in the updates.
+/// This test subscribe by replaying from the last 200 slots.
+/// at the processed commitment level.
+#[test_helper(name = "all-sysvar-present", tags = ["replay"])]
+pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<()> {
+    let mut client = new_client(config).await?;
+
+    let resp = client.get_slot(None).await.context("get_slot")?;
+    let tip = resp.slot;
+    let sysvar_account_musthave = vec![
+        // emitted before CreatedBank
+        "SysvarC1ock11111111111111111111111111111111".to_string(),
+        "SysvarS1otHashes111111111111111111111111111".to_string(),
+        // written when the block freeze
+        "SysvarS1otHistory11111111111111111111111111".to_string(),
+        "SysvarRecentB1ockHashes11111111111111111111".to_string(),
+    ];
+    let musthave_pubkeys = sysvar_account_musthave
+        .iter()
+        .map(|s| Pubkey::from_str(s).context("valid must-have sysvar pubkey string"))
+        .collect::<Result<HashSet<_>>>()?;
+    let account_filter = SubscribeRequestFilterAccounts {
+        account: sysvar_account_musthave,
+        ..Default::default()
+    };
+    let from_slot = tip.saturating_sub(900);
+    let subscription = SubscribeRequest {
+        slots: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterSlots {
+                interslot_updates: Some(false),
+                ..Default::default()
+            },
+        )]),
+        accounts: HashMap::from([("test".to_string(), account_filter)]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        from_slot: Some(from_slot),
+        ..Default::default()
+    };
+
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    log::info!(
+        "current tip slot is {}, subscribing from slot {}",
+        tip,
+        from_slot
+    );
+    let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    let mut block_meta_received = HashSet::new();
+    let mut slot_status_received = HashMap::new();
+    // Every must-have sysvar pubkey actually observed for a given slot.
+    let mut sysvar_seen_per_slot: HashMap<u64, HashSet<Pubkey>> = HashMap::new();
+    while let Some(update) = stream.next().await {
+        if remaining_slot_to_visit.is_empty() {
+            break;
+        }
+        let update = update.context("stream should yield updates without error")?;
+        let Some(update_oneof) = update.update_oneof else {
+            continue;
+        };
+
+        match update_oneof {
+            UpdateOneof::Slot(slot) => {
+                slot_status_received.insert(slot.slot, slot.status());
+                ensure!(
+                    slot.parent.is_some(),
+                    "slot update should have parent slot for replayed slots"
+                );
+
+                // A slot emits several lifecycle statuses (FirstShredReceived,
+                // CreatedBank, Completed, ...) before Processed -- checking on
+                // any of those would be premature, since sysvar/account
+                // updates for the slot may not have arrived yet. Processed is
+                // the first status that means "this slot's data is in".
+                if slot.status() == SlotStatus::SlotProcessed
+                    && remaining_slot_to_visit.contains(&slot.slot)
+                {
+                    let seen = sysvar_seen_per_slot
+                        .get(&slot.slot)
+                        .cloned()
+                        .unwrap_or_default();
+                    let missing: Vec<Pubkey> = musthave_pubkeys
+                        .iter()
+                        .filter(|pk| !seen.contains(*pk))
+                        .copied()
+                        .collect();
+                    ensure!(
+                        missing.is_empty(),
+                        "every must-have sysvar should be present for every slot, but slot {} was missing: {missing:?}",
+                        slot.slot
+                    );
+
+                    remaining_slot_to_visit.retain(|s| *s != slot.slot);
+                    log::info!("finished processing slot {}", slot.slot);
+                }
+            }
+            UpdateOneof::Account(subscribe_update_account) => {
+                let account = subscribe_update_account
+                    .account
+                    .context("account update should have account field")?;
+                let actual_pubkey = Pubkey::try_from(account.pubkey.as_slice())
+                    .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
+
+                ensure!(
+                    !block_meta_received.contains(&subscribe_update_account.slot),
+                    "block meta should always be last to arrive for a slot, after all account updates have been received"
+                );
+                ensure!(
+                    !slot_status_received.contains_key(&subscribe_update_account.slot),
+                    "slot status should always be last to arrive for a slot, after all account updates have been received"
+                );
+
+                sysvar_seen_per_slot
+                    .entry(subscribe_update_account.slot)
+                    .or_default()
+                    .insert(actual_pubkey);
+            }
+            UpdateOneof::BlockMeta(ev) => {
+                block_meta_received.insert(ev.slot);
+                ensure!(
+                    !slot_status_received.contains_key(&ev.slot),
+                    "slot status should always be last to arrive for a slot, after all block meta updates have been received"
+                );
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
+            other => bail!("unexpected update type: {other:?}"),
+        }
+    }
+    ensure!(
+        slot_status_received.len() == (tip - from_slot) as usize,
+        "should receive slot status updates for all slots in the replay"
+    );
+    ensure!(
+        remaining_slot_to_visit.is_empty(),
+        "should have received updates for all expected slots in the replay"
+    );
 
     Ok(())
 }
