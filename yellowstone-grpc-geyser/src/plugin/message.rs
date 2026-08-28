@@ -1,9 +1,10 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaDeshredTransactionInfo,
-        ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2,
-        ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
+        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
+        ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
+        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
+        SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
@@ -13,6 +14,7 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
+        net::SocketAddr,
         ops::{Deref, DerefMut},
         sync::{Arc, OnceLock},
         time::SystemTime,
@@ -538,6 +540,84 @@ impl MessageBlock {
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageContactInfo {
+    pub pubkey: Pubkey,
+    pub wallclock: u64,
+    pub outset: u64,
+    pub shred_version: u16,
+    pub version_major: u16,
+    pub version_minor: u16,
+    pub version_patch: u16,
+    pub version_commit: u32,
+    pub version_feature_set: u32,
+    pub version_client_id: u16,
+    pub gossip: Option<SocketAddr>,
+    pub tpu_quic: Option<SocketAddr>,
+    pub tpu_forwards_quic: Option<SocketAddr>,
+    pub tpu_vote_udp: Option<SocketAddr>,
+    pub tpu_vote_quic: Option<SocketAddr>,
+    pub tvu_udp: Option<SocketAddr>,
+    pub tvu_quic: Option<SocketAddr>,
+    pub serve_repair_udp: Option<SocketAddr>,
+    pub serve_repair_quic: Option<SocketAddr>,
+    pub rpc: Option<SocketAddr>,
+    pub rpc_pubsub: Option<SocketAddr>,
+    pub alpenglow: Option<SocketAddr>,
+    pub created_at: Timestamp,
+}
+
+impl MessageContactInfo {
+    pub fn from_geyser(info: &ReplicaContactInfoV0_0_1<'_>) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(info.pubkey).expect("valid pubkey"),
+            wallclock: info.wallclock,
+            outset: info.outset,
+            shred_version: info.shred_version,
+            version_major: info.version_major,
+            version_minor: info.version_minor,
+            version_patch: info.version_patch,
+            version_commit: info.version_commit,
+            version_feature_set: info.version_feature_set,
+            version_client_id: info.version_client_id,
+            gossip: info.gossip,
+            tpu_quic: info.tpu_quic,
+            tpu_forwards_quic: info.tpu_forwards_quic,
+            tpu_vote_udp: info.tpu_vote_udp,
+            tpu_vote_quic: info.tpu_vote_quic,
+            tvu_udp: info.tvu_udp,
+            tvu_quic: info.tvu_quic,
+            serve_repair_udp: info.serve_repair_udp,
+            serve_repair_quic: info.serve_repair_quic,
+            rpc: info.rpc,
+            rpc_pubsub: info.rpc_pubsub,
+            alpenglow: info.alpenglow,
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageContactInfoRemoved {
+    pub pubkey: Pubkey,
+    pub created_at: Timestamp,
+}
+
+impl MessageContactInfoRemoved {
+    pub fn from_geyser(pubkey: &[u8]) -> Self {
+        Self {
+            pubkey: Pubkey::try_from(pubkey).expect("valid pubkey"),
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContactInfoMessage {
+    Node(Arc<MessageContactInfo>),
+    Removed(Arc<MessageContactInfoRemoved>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

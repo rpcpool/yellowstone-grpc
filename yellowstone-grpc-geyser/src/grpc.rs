@@ -7,6 +7,7 @@ use {
         billing::{BillingMeteredManager, HttpBillingEventSink},
         block_reconstruction::BlockMachineStorage,
         config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
+        contact_info::{self, ContactInfoState},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
         metrics::{
@@ -59,7 +60,7 @@ use {
         time::{sleep, Duration},
     },
     tokio_rustls::{rustls, TlsAcceptor},
-    tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream},
+    tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream, UnixListenerStream},
     tokio_util::{sync::CancellationToken, task::TaskTracker},
     tonic::{
         metadata::AsciiMetadataValue,
@@ -75,8 +76,9 @@ use {
         CommitmentLevel as CommitmentLevelProto, GetBlockHeightRequest, GetBlockHeightResponse,
         GetLatestBlockhashRequest, GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse,
         GetVersionRequest, GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse,
-        PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeReplayInfoRequest,
-        SubscribeReplayInfoResponse, SubscribeRequest,
+        PingRequest, PongResponse, SubscribeDeshredRequest, SubscribeGossipRequest,
+        SubscribeReplayInfoRequest, SubscribeReplayInfoResponse, SubscribeRequest,
+        SubscribeUpdateGossip,
     },
     yellowstone_grpc_tools::server::{
         tcp::{TcpConfiguration, TcpIncoming as TritonTcpIncoming},
@@ -444,7 +446,7 @@ impl SubscriptionTracker {
 ///
 /// A permit that is owned by a subscriber. When the permit is dropped,
 /// it decrements the subscription count for the subscriber in the SubscriptionTracker.
-struct SubscriptionOwnedPermit {
+pub(crate) struct SubscriptionOwnedPermit {
     inner: Option<SubscriptionTracker>,
     key: String,
 }
@@ -677,6 +679,7 @@ pub struct GrpcService {
     snapshot_rx: Arc<Mutex<Option<crossbeam_channel::Receiver<Box<Message>>>>>,
     broadcast: SubscriberChannels,
     deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
+    contact_info_state: Arc<ContactInfoState>,
     replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
     replay_first_available_slot: Option<Arc<AtomicU64>>,
     cancellation_token: CancellationToken,
@@ -825,6 +828,7 @@ pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
+    pub(crate) contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
 }
@@ -1035,6 +1039,16 @@ impl GrpcService {
                 (Some(Arc::new(AtomicU64::new(u64::MAX))), Some(tx), Some(rx))
             };
 
+        // contact info subscribers
+        let contact_info_state = ContactInfoState::new(config.contact_info_channel_capacity);
+
+        let (contact_info_tx, contact_info_rx) = mpsc::unbounded_channel();
+
+        task_tracker.spawn(contact_info::contact_info_loop(
+            UnboundedReceiverStream::new(contact_info_rx),
+            Arc::clone(&contact_info_state),
+        ));
+
         // Capture traffic reporting threshold before config is moved
         let traffic_reporting_threshold = config
             .traffic_reporting_byte_threhsold
@@ -1062,6 +1076,7 @@ impl GrpcService {
             snapshot_rx: Arc::new(Mutex::new(snapshot_rx)),
             broadcast: broadcast.clone(),
             deshred_broadcast_tx: deshred_broadcast_tx.clone(),
+            contact_info_state: Arc::clone(&contact_info_state),
             replay_stored_slots_tx,
             replay_first_available_slot: replay_first_available_slot.clone(),
             cancellation_token: service_cancellation_token.clone(),
@@ -1186,6 +1201,7 @@ impl GrpcService {
         Ok(GrpcServiceResult {
             snapshot_tx,
             deshred_broadcast_tx,
+            contact_info_tx,
             block_reconstruction_tx,
             broadcast,
             blocks_meta_tx,
@@ -2034,6 +2050,7 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
     type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
+    type SubscribeGossipStream = ReceiverStream<TonicResult<SubscribeUpdateGossip>>;
 
     async fn subscribe(
         &self,
@@ -2361,6 +2378,57 @@ impl Geyser for GrpcService {
             client_cancellation_token,
             self.task_tracker.clone(),
         ));
+
+        Ok(Response::new(stream_rx))
+    }
+
+    async fn subscribe_gossip(
+        &self,
+        request: Request<SubscribeGossipRequest>,
+    ) -> TonicResult<Response<Self::SubscribeGossipStream>> {
+        incr_grpc_method_call_count("subscribe_gossip");
+
+        let subscriber_id = request
+            .extensions()
+            .get::<SubscriptionInfo>()
+            .cloned()
+            .map(|info| info.subscription_id)
+            .or_else(|| {
+                request
+                    .metadata()
+                    .get("x-subscription-id")
+                    .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+                    .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
+            });
+
+        let subscription_permit = if let Some(id) = subscriber_id.as_deref() {
+            match self.subscription_tracker.try_insert(id.to_owned()) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    return Err(Status::resource_exhausted(
+                        "max subscription limit exceeded",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        let id = self.next_subscribe_seq_id();
+        let client_cancellation_token = self.cancellation_token.child_token();
+        if client_cancellation_token.is_cancelled() {
+            return Err(Status::unavailable("server is shutting down"));
+        }
+
+        let stream_rx = contact_info::grpc::spawn_subscriber(
+            id,
+            subscriber_id,
+            subscription_permit,
+            self.config_channel_capacity,
+            Arc::clone(&self.contact_info_state),
+            client_cancellation_token,
+            self.task_tracker.clone(),
+        );
 
         Ok(Response::new(stream_rx))
     }

@@ -1,14 +1,16 @@
 use {
     crate::{
         config::Config,
+        contact_info::ContactInfoNotification,
         file_watcher::FileWatcher,
         grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                CommitmentLevel, Message, MessageAccount, MessageBlockMeta,
-                MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
+                CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockMeta,
+                MessageContactInfo, MessageContactInfoRemoved, MessageDeshredTransaction,
+                MessageEntry, MessageSlot, MessageTransaction,
             },
         },
         stream::tokio::BatchStreamUnboundedReceiver,
@@ -16,8 +18,9 @@ use {
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
-        ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+        ReplicaContactInfoVersions, ReplicaDeshredTransactionInfoVersions,
+        ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
+        SlotStatus,
     },
     solana_pubkey::Pubkey,
     std::{
@@ -44,6 +47,7 @@ pub struct PluginInner {
     filter_limits: FilterLimits,
     grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
     deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
+    contact_info_channel: mpsc::UnboundedSender<ContactInfoNotification>,
     block_reconstruction_channel: mpsc::UnboundedSender<BlockReconstructionMessage>, // block_reconstruction_loop
     broadcast_channel: SubscriberChannels,                                           // client_loop
     blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
@@ -84,6 +88,13 @@ impl PluginInner {
         if let Some(blocks_meta_tx) = &self.blocks_meta_tx {
             let _ = blocks_meta_tx.send(message);
         }
+    }
+
+    fn send_contact_info_message(&self, message: ContactInfoMessage, is_startup: bool) {
+        let _ = self.contact_info_channel.send(ContactInfoNotification {
+            message,
+            is_startup,
+        });
     }
 }
 
@@ -202,6 +213,7 @@ impl GeyserPlugin for Plugin {
             filter_limits,
             grpc_channel: grpc_channel_tx,
             deshred_channel: grpc_service_result.deshred_broadcast_tx,
+            contact_info_channel: grpc_service_result.contact_info_tx,
             block_reconstruction_channel: grpc_service_result.block_reconstruction_tx,
             broadcast_channel: grpc_service_result.broadcast,
             blocks_meta_tx: grpc_service_result.blocks_meta_tx,
@@ -221,6 +233,8 @@ impl GeyserPlugin for Plugin {
             inner.plugin_task_tracker.close();
             drop(inner.file_watcher);
             drop(inner.grpc_channel);
+            // Closes the channel so `contact_info_loop` drains what is queued and exits.
+            drop(inner.contact_info_channel);
             const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
             let now = std::time::Instant::now();
             log::info!(
@@ -428,6 +442,37 @@ impl GeyserPlugin for Plugin {
 
             Ok(())
         })
+    }
+
+    fn notify_contact_info(
+        &self,
+        info: ReplicaContactInfoVersions,
+        is_startup: bool,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
+            let info = match info {
+                ReplicaContactInfoVersions::V0_0_1(info) => info,
+            };
+            let message = ContactInfoMessage::Node(Arc::new(MessageContactInfo::from_geyser(info)));
+            inner.send_contact_info_message(message, is_startup);
+            Ok(())
+        })
+    }
+
+    fn notify_contact_info_removed(&self, pubkey: &[u8]) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let message = ContactInfoMessage::Removed(Arc::new(
+                MessageContactInfoRemoved::from_geyser(pubkey),
+            ));
+            // Removals only occur once the startup replay is done.
+            inner.send_contact_info_message(message, false);
+            Ok(())
+        })
+    }
+
+    fn contact_info_notifications_enabled(&self) -> bool {
+        true
     }
 
     fn account_data_notifications_enabled(&self) -> bool {
