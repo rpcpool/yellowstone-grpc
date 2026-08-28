@@ -29,7 +29,10 @@ pub async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
         .max_decoding_message_size(100_000_000)
         .initial_connection_window_size(10_000_000)
         .initial_stream_window_size(8_000_000)
-        .http2_adaptive_window(true)
+        // adaptive window overrides the explicit windows above down to the h2 default
+        // 65535, which deadlocks multiplexed subscribes behind haproxy while the
+        // firehose stream is unconsumed (haproxy mux-h2 parks HEADERS behind conn window)
+        .http2_adaptive_window(false)
         .accept_compressed(yellowstone_grpc_proto::tonic::codec::CompressionEncoding::Zstd);
 
     if let Some(dial) = config.dial.clone() {
