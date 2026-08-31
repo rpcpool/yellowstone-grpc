@@ -2,6 +2,7 @@ pub(crate) mod auth;
 pub(crate) mod billing;
 mod cache_ext;
 pub mod config;
+pub(crate) mod contact_info;
 pub mod file_watcher;
 pub mod grpc;
 pub mod metered;
