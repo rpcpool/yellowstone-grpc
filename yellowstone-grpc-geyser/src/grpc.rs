@@ -446,7 +446,7 @@ impl SubscriptionTracker {
 ///
 /// A permit that is owned by a subscriber. When the permit is dropped,
 /// it decrements the subscription count for the subscriber in the SubscriptionTracker.
-pub(crate) struct SubscriptionOwnedPermit {
+pub struct SubscriptionOwnedPermit {
     inner: Option<SubscriptionTracker>,
     key: String,
 }
@@ -828,7 +828,7 @@ pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
     pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
-    pub(crate) contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
+    pub contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
 }
