@@ -288,7 +288,9 @@ pub async fn reconnect_should_skip_missed_slots(config: &RunConfig) -> Result<()
 pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
     let (connector, request) = connector(
         config,
-        ReconnectionPolicy::RecoverMissedData { slot_retention: DEFAULT_SLOT_RETENTION },
+        ReconnectionPolicy::RecoverMissedData {
+            slot_retention: DEFAULT_SLOT_RETENTION,
+        },
         CommitmentLevel::Processed,
     )?;
     request.store(Arc::new(block_machine_request()));
