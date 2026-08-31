@@ -103,12 +103,12 @@ wincode = "0.6.1"
 notify = "8.2.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.2" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.2" }
+agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.2" }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.2" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.2" }
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
 
 # Solana SDK
 solana-message = "4.4.1"
@@ -132,7 +132,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.9.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.5.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "16.0.0-rc4+solana.4.3.0.beta.2" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "16.0.0-rc5+solana.4.3.0.beta.3" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "13.0.0-rc2", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
