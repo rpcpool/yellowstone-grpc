@@ -1,6 +1,5 @@
 use {
-    crate::grpc::E2EGeyserEventAdapter,
-    crate::scenarios::RunConfig,
+    crate::{grpc::E2EGeyserEventAdapter, scenarios::RunConfig},
     anyhow::{ensure, Context, Result},
     arc_swap::ArcSwap,
     futures::channel::mpsc,
@@ -21,11 +20,11 @@ use {
         DEFAULT_SLOT_RETENTION,
     },
     yellowstone_grpc_e2e_macros::test_helper,
-    yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     yellowstone_grpc_proto::{
         geyser::{
             subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
             SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots, SubscribeUpdate,
+            SubscribeUpdateBlockMeta,
         },
         tonic::{transport::Endpoint, Status},
     },
