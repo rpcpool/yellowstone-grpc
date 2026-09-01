@@ -240,6 +240,7 @@ message SubscribeUpdateTransactionStatus {
   bool is_vote = 3;
   uint64 index = 4;
   solana.storage.ConfirmedBlock.TransactionError err = 5;
+  uint64 bank_id = 6;
 }
 
 message SubscribeUpdateBlock {

@@ -209,6 +209,7 @@ impl FilteredUpdate {
                     is_vote: tx.transaction.is_vote,
                     index: tx.transaction.index as u64,
                     err: tx.transaction.meta.err.clone(),
+                    bank_id: tx.bank_id,
                 })
             }
             FilteredUpdateOneof::Block(msg) => UpdateOneof::Block(SubscribeUpdateBlock {
@@ -738,6 +739,9 @@ impl prost::Message for FilteredUpdateTransactionStatus {
         if let Some(msg) = &tx.meta.err {
             message::encode(5u32, msg, buf)
         }
+        if self.transaction.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(6u32, &self.transaction.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -763,6 +767,11 @@ impl prost::Message for FilteredUpdateTransactionStatus {
                 .err
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
+            + if self.transaction.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(6u32, &self.transaction.bank_id)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
