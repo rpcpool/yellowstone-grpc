@@ -11,31 +11,31 @@ use {
     tokio_stream::wrappers::BroadcastStream,
 };
 
-pub(crate) struct ContactInfoNotification {
+pub struct ContactInfoNotification {
     pub message: ContactInfoMessage,
     pub is_startup: bool,
 }
 
 #[derive(Clone)]
-pub(crate) struct ContactInfoEvent {
+pub struct ContactInfoEvent {
     /// Map version at which this change was applied.
     pub seq: u64,
     pub message: ContactInfoMessage,
 }
 
 /// The gossip table at one revision.
-pub(crate) struct TopologySnapshot {
+pub struct TopologySnapshot {
     /// Revision the copy was taken at. Updates with `seq <= rev` are already in `topology`.
     pub rev: u64,
     pub topology: Vec<MessageContactInfo>,
 }
 
-pub(crate) struct ContactInfoTable {
+pub struct ContactInfoTable {
     nodes: HashMap<Pubkey, Arc<MessageContactInfo>>,
     version: u64,
 }
 
-pub(crate) struct ContactInfoState {
+pub struct ContactInfoState {
     map: Mutex<ContactInfoTable>,
     tx: broadcast::Sender<ContactInfoEvent>,
     /// False until the startup replay is complete. Subscribers wait on this so no client is
@@ -44,7 +44,7 @@ pub(crate) struct ContactInfoState {
 }
 
 impl ContactInfoState {
-    pub(crate) fn new(capacity: usize) -> Arc<Self> {
+    pub fn new(capacity: usize) -> Arc<Self> {
         let (tx, _) = broadcast::channel(capacity);
         Arc::new(Self {
             map: Mutex::new(ContactInfoTable {
@@ -73,9 +73,7 @@ impl ContactInfoState {
     /// the lock breaks this function, however correct this function looks alone.
     ///
     /// Events at or below `rev` may still arrive; the caller drops them.
-    pub(crate) fn subscribe_and_snapshot(
-        &self,
-    ) -> (BroadcastStream<ContactInfoEvent>, TopologySnapshot) {
+    pub fn subscribe_and_snapshot(&self) -> (BroadcastStream<ContactInfoEvent>, TopologySnapshot) {
         let messages_rx = BroadcastStream::new(self.tx.subscribe());
         let table = self.map.lock().expect("contact info map mutex poisoned");
         (
@@ -92,7 +90,7 @@ impl ContactInfoState {
 ///
 /// Ends when `notifications` runs dry, which happens when the plugin drops its sender. That is
 /// the only exit, so the loop cannot stop with work still queued.
-pub(crate) async fn contact_info_loop<St>(mut notifications: St, state: Arc<ContactInfoState>)
+pub async fn contact_info_loop<St>(mut notifications: St, state: Arc<ContactInfoState>)
 where
     St: Stream<Item = ContactInfoNotification> + Unpin,
 {
@@ -125,7 +123,7 @@ where
 }
 
 /// gRPC subscriber side of the gossip contact info feed.
-pub(crate) mod grpc {
+pub mod grpc {
     use {
         super::ContactInfoState,
         crate::{grpc::SubscriptionOwnedPermit, metrics, plugin::convert_to},
@@ -185,7 +183,7 @@ pub(crate) mod grpc {
     /// so retrying forever would livelock instead of surfacing the problem.
     const MAX_RESNAPSHOT_ATTEMPTS: usize = 3;
 
-    pub(crate) fn spawn_subscriber(
+    pub fn spawn_subscriber(
         id: usize,
         subscriber_id: Option<String>,
         permit: Option<SubscriptionOwnedPermit>,

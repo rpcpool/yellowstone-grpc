@@ -280,7 +280,7 @@ impl FileBackedAuthConfig {
             };
             (key, mapping.subscription_info)
         });
-        Ok(ConstantSubscriptionRepository::from_iter(it))
+        Ok(ConstantSubscriptionRepository::create_from_iter(it))
     }
 }
 
@@ -297,7 +297,7 @@ impl ConstantSubscriptionRepository {
     ///
     /// Creates a new `ConstantSubscriptionRepository` from an iterator of `(SubscriptionKey, SubscriptionInfo)` pairs.
     ///
-    pub fn from_iter<IT>(hashmap: IT) -> Self
+    pub fn create_from_iter<IT>(hashmap: IT) -> Self
     where
         IT: IntoIterator<Item = (SubscriptionKey, SubscriptionInfo)>,
     {

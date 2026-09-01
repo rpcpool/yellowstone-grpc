@@ -1,14 +1,14 @@
 /// Slots per bucket.
-pub(crate) const ENTRIES_PER_BUCKET: usize = 4;
+pub const ENTRIES_PER_BUCKET: usize = 4;
 
 /// Target load factor. 95% occupancy is achievable with 4 entries/bucket.
-pub(crate) const LOAD_FACTOR: f64 = 0.95;
+pub const LOAD_FACTOR: f64 = 0.95;
 
 /// Maximum relocations before declaring table full.
-pub(crate) const MAX_KICKS: usize = 500;
+pub const MAX_KICKS: usize = 500;
 
 /// Fingerprint size in bits. 16 bits gives ~0.0001% false positive rate.
-pub(crate) const FINGERPRINT_BITS: u32 = 16;
+pub const FINGERPRINT_BITS: u32 = 16;
 
 /// Default seed for [`YellowstoneHasherBuilder`]. ASCII: "yllwstn!"
 ///

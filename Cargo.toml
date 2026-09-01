@@ -141,7 +141,6 @@ yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
 tokio-rustls = "0.26.0"
 x509-parser = "0.18.0"
 
-
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
 missing_const_for_fn = "deny"

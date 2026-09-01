@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-08-31
+
+- yellowstone-grpc-geyser 15.2.1
+
+### Misc
+
+- plugin: removed restrictive (crate) requirements
+
+## 2026-08-28
+
 - yellowstone-grpc-proto 12.7.0
 - yellowstone-grpc-geyser 15.2.0
 - yellowstone-grpc-client 13.5.0
