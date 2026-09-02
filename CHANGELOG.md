@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
+
 ## 2026-08-31
 
 - yellowstone-grpc-geyser 15.2.1

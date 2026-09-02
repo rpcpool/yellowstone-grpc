@@ -257,6 +257,7 @@ message SubscribeUpdateBlock {
   repeated SubscribeUpdateAccountInfo accounts = 11;
   uint64 entries_count = 12;
   repeated SubscribeUpdateEntry entries = 13;
+  uint64 bank_id = 14;
 }
 
 message SubscribeUpdateBlockMeta {

@@ -240,6 +240,7 @@ impl FilteredUpdate {
                     .iter()
                     .map(|entry| Self::as_subscribe_update_entry(entry.as_ref()))
                     .collect(),
+                bank_id: msg.meta.bank_id,
             }),
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
@@ -1084,6 +1085,9 @@ impl prost::Message for FilteredUpdateBlock {
             );
             FilteredUpdateEntry::entry_encode_raw(entry, buf);
         }
+        if self.meta.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(14u32, &self.meta.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -1147,6 +1151,11 @@ impl prost::Message for FilteredUpdateBlock {
             + prost_repeated_encoded_len_map!(13u32, self.entries, |entry| {
                 FilteredUpdateEntry::entry_encoded_len(entry)
             })
+            + if self.meta.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(14u32, &self.meta.bank_id)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
