@@ -147,6 +147,7 @@ pub(crate) enum DedupKey {
     TransactionStatus(u64),              // index
     Entry(u64),                          // index
     BlockMeta(String),                   // blockhash,
+    BlockFooter(u64),                    // bank_id
     Block(u64),
     DeshredTransaction([u8; 64]), // signature
 }
@@ -206,6 +207,8 @@ impl Dedupable for SubscribeUpdate {
             }
             UpdateOneof::Entry(m) => Some((m.slot, DedupKey::Entry(m.index))),
             UpdateOneof::BlockMeta(m) => Some((m.slot, DedupKey::BlockMeta(m.blockhash.clone()))),
+            // One footer per bank, so a fork can produce several in the same slot.
+            UpdateOneof::BlockFooter(m) => Some((m.slot, DedupKey::BlockFooter(m.bank_id))),
             UpdateOneof::Block(m) => Some((m.slot, DedupKey::Block(m.slot))),
             UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }

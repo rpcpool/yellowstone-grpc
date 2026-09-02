@@ -34,11 +34,11 @@ use {
             SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestAccountsDataSlice,
             SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
             SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccountInfo,
-            SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
+            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlockFooter,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+            SubscribeUpdateAccountInfo, SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
         },
         prost::Message,
     },
@@ -51,6 +51,7 @@ type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransac
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
+type BlockFooterFilterMap = HashMap<String, SubscribeRequestFilterBlockFooter>;
 type DeshredTransactionsFilterMap = HashMap<String, SubscribeRequestFilterDeshredTransactions>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -390,6 +391,10 @@ struct ActionSubscribe {
     #[clap(long)]
     blocks_meta: bool,
 
+    /// Subscribe on Alpenglow block footer updates
+    #[clap(long)]
+    block_footer: bool,
+
     /// Re-send message from slot
     #[clap(long)]
     from_slot: Option<u64>,
@@ -594,6 +599,11 @@ impl Action {
                     blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
                 }
 
+                let mut block_footer: BlockFooterFilterMap = HashMap::new();
+                if args.block_footer {
+                    block_footer.insert("client".to_owned(), SubscribeRequestFilterBlockFooter {});
+                }
+
                 let mut accounts_data_slice = Vec::new();
                 for data_slice in args.accounts_data_slice.iter() {
                     match data_slice.split_once(',') {
@@ -619,6 +629,7 @@ impl Action {
                         entry: entries,
                         blocks,
                         blocks_meta,
+                        block_footer,
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
                         ping,
@@ -826,6 +837,8 @@ async fn geyser_subscribe(
     let pb_entries = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("entries"))?;
     let mut pb_blocks_mt_c = 0;
     let pb_blocks_mt = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks meta"))?;
+    let mut pb_block_footer_c = 0;
+    let pb_block_footer = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("block footer"))?;
     let mut pb_blocks_c = 0;
     let pb_blocks = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks"))?;
     let mut pb_pp_c = 0;
@@ -849,6 +862,9 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::TransactionStatus(_)) => (&mut pb_txs_st_c, &pb_txs_st),
                         Some(UpdateOneof::Entry(_)) => (&mut pb_entries_c, &pb_entries),
                         Some(UpdateOneof::BlockMeta(_)) => (&mut pb_blocks_mt_c, &pb_blocks_mt),
+                        Some(UpdateOneof::BlockFooter(_)) => {
+                            (&mut pb_block_footer_c, &pb_block_footer)
+                        }
                         Some(UpdateOneof::Block(_)) => (&mut pb_blocks_c, &pb_blocks),
                         Some(UpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(UpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
@@ -946,6 +962,20 @@ async fn geyser_subscribe(
                             }),
                         );
                     }
+                    Some(UpdateOneof::BlockFooter(msg)) => {
+                        print_update(
+                            "blockfooter",
+                            created_at,
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "bankId": msg.bank_id,
+                                "bankHash": bs58::encode(msg.bank_hash).into_string(),
+                                "blockProducerTimeNanos": msg.block_producer_time_nanos,
+                                "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
+                            }),
+                        );
+                    }
                     Some(UpdateOneof::Block(msg)) => {
                         print_update(
                             "block",
@@ -1003,6 +1033,7 @@ async fn geyser_subscribe(
 
             subscribe_tx
                 .send(SubscribeRequest {
+                    block_footer: Default::default(),
                     slots: new_slots.clone(),
                     accounts: HashMap::default(),
                     transactions: HashMap::default(),
