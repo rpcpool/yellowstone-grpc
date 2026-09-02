@@ -48,6 +48,7 @@ message SubscribeRequest {
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
   optional uint64 from_slot = 11;
+  map<string, SubscribeRequestFilterBlockFooter> block_footer = 12;
 }
 
 // Hash algorithm used to build the filter. Carried on the wire so future
@@ -142,6 +143,8 @@ message SubscribeRequestFilterBlocksMeta {}
 
 message SubscribeRequestFilterEntry {}
 
+message SubscribeRequestFilterBlockFooter {}
+
 // Filter for deshred transactions (transactions received before execution).
 // Deshred transactions are received when entries are formed from shreds,
 // BEFORE any execution occurs. No TransactionStatusMeta is available.
@@ -187,6 +190,7 @@ message SubscribeUpdate {
     SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
+    SubscribeUpdateBlockFooter block_footer = 12;
   }
   google.protobuf.Timestamp created_at = 11;
 }
@@ -270,6 +274,19 @@ message SubscribeUpdateBlockMeta {
   uint64 executed_transaction_count = 8;
   uint64 entries_count = 9;
   uint64 bank_id = 10;
+}
+
+// The Alpenglow block footer, sent as its own update as soon as the validator
+// reports it. It does not wait for the block it belongs to. Consumers that need
+// it alongside other per-block updates join on (slot, bank_id).
+// The finalization, skip reward and notarization reward certificates are not
+// exposed yet.
+message SubscribeUpdateBlockFooter {
+  uint64 slot = 1;
+  uint64 bank_id = 2;
+  bytes bank_hash = 3;
+  uint64 block_producer_time_nanos = 4;
+  bytes block_user_agent = 5;
 }
 
 message SubscribeUpdateEntry {

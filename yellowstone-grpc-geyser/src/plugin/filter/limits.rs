@@ -27,6 +27,7 @@ pub struct FilterLimits {
     pub transactions_status: FilterLimitsTransactions,
     pub blocks: FilterLimitsBlocks,
     pub blocks_meta: FilterLimitsBlocksMeta,
+    pub block_footer: FilterLimitsBlockFooter,
     pub entries: FilterLimitsEntries,
     pub deshred_transactions: FilterLimitsDeshredTransactions,
 }
@@ -183,6 +184,19 @@ pub struct FilterLimitsBlocksMeta {
 }
 
 impl Default for FilterLimitsBlocksMeta {
+    fn default() -> Self {
+        Self { max: usize::MAX }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FilterLimitsBlockFooter {
+    #[serde(deserialize_with = "deserialize_usize_str")]
+    pub max: usize,
+}
+
+impl Default for FilterLimitsBlockFooter {
     fn default() -> Self {
         Self { max: usize::MAX }
     }

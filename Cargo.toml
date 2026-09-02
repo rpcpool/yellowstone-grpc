@@ -105,6 +105,7 @@ notify = "8.2.0"
 # Agave Monorepo
 agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
 solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
+solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
 solana-logger = "3.0.0"
 solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }
 solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.3.0-beta.3" }

@@ -65,6 +65,7 @@ notify = { workspace = true }
 
 # Agave Monorepo
 agave-geyser-plugin-interface = { workspace = true }
+solana-entry = { workspace = true }
 solana-logger = { workspace = true }
 
 # Solana SDK

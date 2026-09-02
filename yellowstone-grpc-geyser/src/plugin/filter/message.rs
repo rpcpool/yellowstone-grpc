@@ -8,9 +8,9 @@ use {
                 FilterAccountsDataSlice,
             },
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageDeshredTransaction,
-                MessageDeshredTransactionInfo, MessageEntry, MessageSlot, MessageTransaction,
-                MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
+                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
+                MessageSlot, MessageTransaction, MessageTransactionInfo,
             },
         },
     },
@@ -247,6 +247,9 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
+            FilteredUpdateOneof::BlockFooter(msg) => {
+                UpdateOneof::BlockFooter(msg.block_footer.clone())
+            }
         };
 
         SubscribeUpdate {
@@ -274,6 +277,7 @@ pub enum FilteredUpdateOneof {
     Pong(SubscribeUpdatePong),                          // 9
     BlockMeta(Arc<MessageBlockMeta>),                   // 7
     Entry(FilteredUpdateEntry),                         // 8
+    BlockFooter(Arc<MessageBlockFooter>),               // 12
 }
 
 impl FilteredUpdateOneof {
@@ -324,6 +328,10 @@ impl FilteredUpdateOneof {
     pub const fn entry(message: Arc<MessageEntry>) -> Self {
         Self::Entry(FilteredUpdateEntry(message))
     }
+
+    pub const fn block_footer(message: Arc<MessageBlockFooter>) -> Self {
+        Self::BlockFooter(message)
+    }
 }
 
 impl prost::Message for FilteredUpdateOneof {
@@ -341,6 +349,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encode(9u32, msg, buf),
             Self::BlockMeta(msg) => message::encode(7u32, &msg.block_meta, buf),
             Self::Entry(msg) => message::encode(8u32, msg, buf),
+            Self::BlockFooter(msg) => message::encode(12u32, &msg.block_footer, buf),
         }
     }
 
@@ -355,6 +364,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encoded_len(9u32, msg),
             Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.block_meta),
             Self::Entry(msg) => message::encoded_len(8u32, msg),
+            Self::BlockFooter(msg) => message::encoded_len(12u32, &msg.block_footer),
         }
     }
 
@@ -1270,8 +1280,8 @@ pub mod tests {
             convert_to,
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
+                MessageEntry, MessageTransaction, MessageTransactionInfo,
             },
         },
         bytes::Bytes,
@@ -1291,6 +1301,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
+        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockFooter,
         yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     };
 
@@ -1806,6 +1817,28 @@ pub mod tests {
     fn test_message_blockmeta() {
         for block_meta in load_predefined_blockmeta() {
             encode_decode_cmp(&["123"], FilteredUpdateOneof::block_meta(block_meta));
+        }
+    }
+
+    #[test]
+    fn test_message_block_footer() {
+        // An empty user agent and a maximal timestamp are the interesting edges
+        // for the hand-rolled encoder.
+        for (bank_hash, nanos, user_agent) in [
+            (vec![0u8; 32], 0u64, Vec::new()),
+            (vec![7u8; 32], u64::MAX, b"agave/3.0.0".to_vec()),
+        ] {
+            let message = Arc::new(MessageBlockFooter {
+                block_footer: SubscribeUpdateBlockFooter {
+                    slot: 42,
+                    bank_id: 7,
+                    bank_hash,
+                    block_producer_time_nanos: nanos,
+                    block_user_agent: user_agent,
+                },
+                created_at: Timestamp::default(),
+            });
+            encode_decode_cmp(&["123"], FilteredUpdateOneof::block_footer(message));
         }
     }
 

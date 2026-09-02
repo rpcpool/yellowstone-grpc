@@ -474,6 +474,7 @@ mod tests {
     entry.insert("entry_client".to_string(), SubscribeRequestFilterEntry {});
 
     SubscribeRequest {
+      block_footer: Default::default(),
       accounts,
       slots,
       transactions,
@@ -558,6 +559,7 @@ mod tests {
   #[test]
   fn accepts_request_when_accounts_map_is_empty() {
     let request = SubscribeRequest {
+      block_footer: Default::default(),
       accounts: HashMap::new(),
       slots: HashMap::new(),
       transactions: HashMap::new(),

@@ -7404,6 +7404,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-clock",
  "solana-commitment-config",
+ "solana-entry",
  "solana-hash",
  "solana-keypair",
  "solana-logger",
