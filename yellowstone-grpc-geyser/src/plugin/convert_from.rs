@@ -191,8 +191,16 @@ pub fn create_tx_meta(meta: proto::TransactionStatusMeta) -> CreateResult<Transa
         fee: meta.fee,
         pre_balances: meta.pre_balances,
         post_balances: meta.post_balances,
-        inner_instructions: Some(create_meta_inner_instructions(meta.inner_instructions)?),
-        log_messages: Some(meta.log_messages),
+        inner_instructions: if meta.inner_instructions_none {
+            None
+        } else {
+            Some(create_meta_inner_instructions(meta.inner_instructions)?)
+        },
+        log_messages: if meta.log_messages_none {
+            None
+        } else {
+            Some(meta.log_messages)
+        },
         pre_token_balances: Some(create_token_balances(meta.pre_token_balances)?),
         post_token_balances: Some(create_token_balances(meta.post_token_balances)?),
         rewards: Some(meta_rewards),
@@ -373,4 +381,44 @@ pub fn create_account(
         rent_epoch: account.rent_epoch,
     };
     Ok((pubkey, account))
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::create_tx_meta, yellowstone_grpc_proto::prelude as proto};
+
+    fn base_proto_meta() -> proto::TransactionStatusMeta {
+        proto::TransactionStatusMeta {
+            return_data_none: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tx_meta_respects_none_flags_set() {
+        let meta = create_tx_meta(proto::TransactionStatusMeta {
+            inner_instructions_none: true,
+            log_messages_none: true,
+            ..base_proto_meta()
+        })
+        .expect("failed to create meta");
+
+        assert_eq!(meta.inner_instructions, None);
+        assert_eq!(meta.log_messages, None);
+    }
+
+    #[test]
+    fn tx_meta_respects_none_flags_unset() {
+        let log_messages = vec!["Program log: hello".to_owned()];
+        let meta = create_tx_meta(proto::TransactionStatusMeta {
+            inner_instructions_none: false,
+            log_messages_none: false,
+            log_messages: log_messages.clone(),
+            ..base_proto_meta()
+        })
+        .expect("failed to create meta");
+
+        assert_eq!(meta.inner_instructions, Some(vec![]));
+        assert_eq!(meta.log_messages, Some(log_messages));
+    }
 }
