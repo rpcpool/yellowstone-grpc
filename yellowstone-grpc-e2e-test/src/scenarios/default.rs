@@ -1449,6 +1449,19 @@ pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<
                 if slot.status() == SlotStatus::SlotProcessed
                     && remaining_slot_to_visit.contains(&slot.slot)
                 {
+                    // We mark dead slots like this as replay is currently not sending DeadSlot notifications even when intra slot updates are enabled
+                    // Therefore we manually mark any skipped slots between the parent and the current slot as dead.
+                    // In order for this e2e not to hang
+                    if let Some(parent) = slot.parent {
+                        if parent + 1 != slot.slot {
+                            for dead_slot in parent + 1..slot.slot {
+                                log::info!("marking slot {} as dead", dead_slot);
+                                remaining_slot_to_visit.retain(|s| *s != dead_slot);
+                                slot_status_received.insert(dead_slot, SlotStatus::SlotDead);
+                            }
+                        }
+                    }
+
                     let seen = sysvar_seen_per_slot
                         .get(&slot.slot)
                         .cloned()
