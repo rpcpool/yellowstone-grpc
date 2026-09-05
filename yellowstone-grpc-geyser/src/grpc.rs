@@ -1947,11 +1947,15 @@ impl GrpcService {
     async fn deshred_client_loop(
         mut session: DeshredClientSession,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
-        mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
+        mut inbound: Streaming<SubscribeDeshredRequest>,  
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
+        config_filter_limits: Arc<FilterLimits>,
+        mut filter_names: FilterNames,  
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
+        let mut inbound_done = false;  
+
         'outer: loop {
             observe_subscriber_queue_size(
                 &session.subscriber_id,
@@ -1966,36 +1970,43 @@ impl GrpcService {
                     session.disconnect_reason = "server_shutdown";
                     break 'outer;
                 }
-                mut message = client_rx.recv() => {
-                    // forward to latest filter
-                    loop {
-                        match client_rx.try_recv() {
-                            Ok(message_new) => {
-                                message = Some(message_new);
-                            }
-                            Err(mpsc::error::TryRecvError::Empty) => break,
-                            Err(mpsc::error::TryRecvError::Disconnected) => {
-                                message = None;
-                                break;
-                            }
-                        }
-                    }
+                message = inbound.message(), if !inbound_done => match message {
+                    Ok(Some(req)) => {
+                        filter_names.try_clean();
 
-                    match message {
-                        Some(Some(filter_new)) => {
-                            session.filter = filter_new;
-                            info!("deshred client #{}/{}: filter updated", session.subscriber_id, session.id);
-                        }
-                        Some(None) => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
-                        },
-                        None => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
+                        match DeshredFilter::new(&req, &config_filter_limits, &mut filter_names) {
+                            Ok(filter) => {
+                                if let Some(msg) = filter.get_pong_msg() {
+                                    if stream_tx.send(Ok(msg)).await.is_err() {
+                                        error!("deshred client #{}/{}: stream closed", session.subscriber_id, session.id);
+                                        session.disconnect_reason = "client_disconnect";
+                                        break 'outer;
+                                    }
+                                } else {
+                                    session.filter = filter;
+                                    info!("deshred client #{}/{}: filter updated", session.subscriber_id, session.id);
+                                }
+                            }
+                            Err(error) => {
+                                let err = Err(Status::invalid_argument(format!(
+                                    "failed to create deshred filter: {error}"
+                                )));
+                                if stream_tx.send(err).await.is_err() {
+                                    session.disconnect_reason = "client_disconnect";
+                                    break 'outer;
+                                }
+                            }
                         }
                     }
-                }
+                    Ok(None) => {
+                        info!("deshred client #{}/{}: client closed send stream", session.subscriber_id, session.id);
+                        inbound_done = true;          // stop reading, keep serving
+                    }
+                    Err(_error) => {
+                        session.disconnect_reason = "client_disconnect";
+                        break 'outer;
+                    }
+                },
                 message = messages_rx.recv() => {
                     let message = match message {
                         Ok(message) => message,
@@ -2261,7 +2272,7 @@ impl Geyser for GrpcService {
 
     async fn subscribe_deshred(
         &self,
-        mut request: Request<Streaming<SubscribeDeshredRequest>>,
+        request: Request<Streaming<SubscribeDeshredRequest>>,
     ) -> TonicResult<Response<Self::SubscribeDeshredStream>> {
         incr_grpc_method_call_count("subscribe_deshred");
 
@@ -2299,7 +2310,6 @@ impl Geyser for GrpcService {
         }
 
         let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
-        let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2311,64 +2321,11 @@ impl Geyser for GrpcService {
             .or(request.remote_addr().map(|addr| addr.ip().to_string()));
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
-        let mut filter_names = FilterNames::new(
+        let filter_names = FilterNames::new(
             self.filter_name_size_limit,
             self.filter_names_size_limit,
             self.filter_names_cleanup_interval,
         );
-        let incoming_stream_tx = stream_tx.clone();
-        let incoming_client_tx = client_tx;
-        let incoming_cancellation_token = client_cancellation_token.child_token();
-
-        self.task_tracker.spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = incoming_cancellation_token.cancelled() => {
-                        info!("deshred client #{id}: filter receiver cancelled");
-                        break;
-                    }
-                    message = request.get_mut().message() => match message {
-                        Ok(Some(request)) => {
-                            filter_names.try_clean();
-
-                            if let Err(error) = match DeshredFilter::new(&request, &config_filter_limits, &mut filter_names) {
-                                Ok(filter) => {
-                                    if let Some(msg) = filter.get_pong_msg() {
-                                        if incoming_stream_tx.send(Ok(msg)).await.is_err() {
-                                            error!("deshred client #{id}: stream closed");
-                                            let _ = incoming_client_tx.send(None);
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                    match incoming_client_tx.send(Some(filter)) {
-                                        Ok(()) => Ok(()),
-                                        Err(error) => Err(error.to_string()),
-                                    }
-                                },
-                                Err(error) => Err(error.to_string()),
-                            } {
-                                let err = Err(Status::invalid_argument(format!(
-                                    "failed to create deshred filter: {error}"
-                                )));
-                                if incoming_stream_tx.send(err).await.is_err() {
-                                    let _ = incoming_client_tx.send(None);
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            info!("deshred client #{id}: client closed send stream, waiting for cancellation");
-                            incoming_cancellation_token.cancelled().await;
-                            break;
-                        }
-                        Err(_error) => {
-                            let _ = incoming_client_tx.send(None);
-                            break;
-                        }
-                    }
-                }
-            }
-        });
 
         let session = DeshredClientSession::new(
             id,
@@ -2379,8 +2336,10 @@ impl Geyser for GrpcService {
         self.task_tracker.spawn(Self::deshred_client_loop(
             session,
             stream_tx,
-            client_rx,
+            request.into_inner(),
             self.deshred_broadcast_tx.subscribe(),
+            config_filter_limits,
+            filter_names,
             client_cancellation_token.clone(),
             self.task_tracker.clone(),
         ));
