@@ -31,7 +31,7 @@ use {
     },
     anyhow::Context as _,
     bytesize::ByteSize,
-    futures::Stream,
+    futures::{Stream, StreamExt},
     log::{error, info},
     prost_types::Timestamp,
     rustls::{
@@ -1498,23 +1498,30 @@ impl GrpcService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn client_loop(
+    async fn client_loop<In>(
         mut session: ClientSession,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
-        mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        mut inbound: In,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         broadcast: SubscriberChannels,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
+        config_filter_limits: Arc<FilterLimits>,
+        mut filter_names: FilterNames,
         task_tracker: TaskTracker,
-    ) {
+    ) where
+        In: Stream<Item = TonicResult<SubscribeRequest>> + Unpin,
+    {
         let cancellation_token = session.cancellation_token.clone();
+        let mut inbound_done = false;
 
         if let Some(snapshot_rx) = snapshot_rx.take() {
             info!("client #{}: snapshot requested", session.subscriber_id);
             let result = Self::client_loop_snapshot(
                 &mut session,
                 stream_tx.clone(),
-                &mut client_rx,
+                &mut inbound,
+                &config_filter_limits,
+                &mut filter_names,
                 snapshot_rx,
                 cancellation_token.clone(),
             )
@@ -1553,104 +1560,118 @@ impl GrpcService {
                     session.disconnect_reason = "server_shutdown";
                     break 'outer;
                 }
-                mut message = client_rx.recv() => {
-                    // forward to latest filter
-                    loop {
-                        match client_rx.try_recv() {
-                            Ok(message_new) => {
-                                message = Some(message_new);
-                            }
-                            Err(mpsc::error::TryRecvError::Empty) => break,
-                            Err(mpsc::error::TryRecvError::Disconnected) => {
-                                message = None;
-                                break;
-                            }
-                        }
-                    }
+                message = inbound.next(), if !inbound_done => match message {
+                    Some(Ok(req)) => {
+                        filter_names.try_clean();
 
-                    match message {
-                        Some(Some((from_slot, filter_new))) => {
-                            session.set_filter(filter_new);
-                            info!("client #{}: filter updated", session.subscriber_id);
-
-                            let commitment_new = session.filter.get_commitment_level();
-                            if commitment_new != commitment {
-                                commitment = commitment_new;
-                                messages_rx = broadcast.subscribe(commitment);
-                            }
-
-                            if let Some(from_slot) = from_slot {
-                                let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
-                                    info!("client #{}: from_slot is not supported", session.subscriber_id);
-                                    task_tracker.spawn(async move {
-                                        let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
-                                    });
-                                    session.disconnect_reason = "from_slot_unsupported";
+                        let filter_new = match Filter::new(&req, &config_filter_limits, &mut filter_names) {
+                            Ok(filter) => filter,
+                            Err(error) => {
+                                let err = Err(Status::invalid_argument(format!(
+                                    "failed to create filter: {error}"
+                                )));
+                                if stream_tx.send(err).await.is_err() {
+                                    session.disconnect_reason = "client_disconnect";
                                     break 'outer;
-                                };
+                                }
+                                continue 'outer;
+                            }
+                        };
 
-                                let (tx, rx) = oneshot::channel();
-                                if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
-                                    error!("client #{}: failed to send from_slot request", session.subscriber_id);
+                        // pongs never become the active filter
+                        if let Some(msg) = filter_new.get_pong_msg() {
+                            if stream_tx.send(Ok(msg)).await.is_err() {
+                                error!("client #{}: stream closed", session.subscriber_id);
+                                session.disconnect_reason = "client_disconnect";
+                                break 'outer;
+                            }
+                            continue 'outer;
+                        }
+
+                        let complexity_score = filter_new.get_filter_stats();
+                        metrics::observe_filter_complexity(&session.subscriber_id, &complexity_score);
+
+                        let from_slot = req.from_slot;
+                        session.set_filter(filter_new);
+                        info!("client #{}: filter updated", session.subscriber_id);
+
+                        let commitment_new = session.filter.get_commitment_level();
+                        if commitment_new != commitment {
+                            commitment = commitment_new;
+                            messages_rx = broadcast.subscribe(commitment);
+                        }
+
+                        if let Some(from_slot) = from_slot {
+                            let Some(replay_stored_slots_tx) = &replay_stored_slots_tx else {
+                                info!("client #{}: from_slot is not supported", session.subscriber_id);
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("from_slot is not supported"))).await;
+                                });
+                                session.disconnect_reason = "from_slot_unsupported";
+                                break 'outer;
+                            };
+
+                            let (tx, rx) = oneshot::channel();
+                            if let Err(_error) = replay_stored_slots_tx.send((commitment, from_slot, tx)).await {
+                                error!("client #{}: failed to send from_slot request", session.subscriber_id);
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
+                                });
+                                session.disconnect_reason = "replay_error";
+                                break 'outer;
+                            }
+
+                            let messages_batch = match rx.await {
+                                Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
+                                Ok(ReplayedResponse::Lagged(slot)) => {
+                                    info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
                                     task_tracker.spawn(async move {
-                                        let _ = stream_tx.send(Err(Status::internal("failed to send from_slot request"))).await;
+                                        let message = format!(
+                                            "broadcast from {from_slot} is not available, last available: {slot}"
+                                        );
+                                        let _ = stream_tx.send(Err(Status::out_of_range(message))).await;
+                                    });
+                                    session.disconnect_reason = "slot_unavailable";
+                                    break 'outer;
+                                },
+                                Err(_error) => {
+                                    error!("client #{}: failed to get replay response", session.subscriber_id);
+                                    task_tracker.spawn(async move {
+                                        let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
                                     });
                                     session.disconnect_reason = "replay_error";
                                     break 'outer;
                                 }
+                            };
 
-                                let messages_batch = match rx.await {
-                                    Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
-                                    Ok(ReplayedResponse::Lagged(slot)) => {
-                                        info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
-                                        task_tracker.spawn(async move {
-                                            let message = format!(
-                                                "broadcast from {from_slot} is not available, last available: {slot}"
-                                            );
-                                            let _ = stream_tx.send(Err(Status::out_of_range(message))).await;
-                                        });
-                                        session.disconnect_reason = "slot_unavailable";
-                                        break 'outer;
-                                    },
-                                    Err(_error) => {
-                                        error!("client #{}: failed to get replay response", session.subscriber_id);
-                                        task_tracker.spawn(async move {
-                                            let _ = stream_tx.send(Err(Status::internal("failed to get replay response"))).await;
-                                        });
-                                        session.disconnect_reason = "replay_error";
-                                        break 'outer;
+                            let replay_it = messages_batch
+                                .iter()
+                                .flatten()
+                                .flat_map(|message| session.filter.get_updates(message, Some(commitment)));
+
+                            for filtered_message in replay_it {
+                                match stream_tx.send(Ok(filtered_message)).await {
+                                    Ok(()) => {
+                                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                     }
-                                };
-
-                                let replay_it = messages_batch
-                                    .iter()
-                                    .flatten()
-                                    .flat_map(|message| session.filter.get_updates(message, Some(commitment)));
-
-                                for filtered_message in replay_it {
-                                    match stream_tx.send(Ok(filtered_message)).await {
-                                        Ok(()) => {
-                                            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                        }
-                                        Err(mpsc::error::SendError(_)) => {
-                                            error!("client #{}: stream closed", session.subscriber_id);
-                                            session.disconnect_reason = "client_closed";
-                                            break 'outer;
-                                        }
+                                    Err(mpsc::error::SendError(_)) => {
+                                        error!("client #{}: stream closed", session.subscriber_id);
+                                        session.disconnect_reason = "client_closed";
+                                        break 'outer;
                                     }
                                 }
                             }
                         }
-                        Some(None) => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
-                        },
-                        None => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
-                        }
                     }
-                }
+                    Some(Err(_error)) => {
+                        session.disconnect_reason = "client_disconnect";
+                        break 'outer;
+                    }
+                    None => {
+                        info!("client #{}: client closed send stream", session.subscriber_id);
+                        inbound_done = true;
+                    }
+                },
                 message = messages_rx.recv() => {
                     let messages = match message {
                         Ok(messages) => messages,
@@ -1695,13 +1716,18 @@ impl GrpcService {
         }
     }
 
-    async fn client_loop_snapshot(
+    async fn client_loop_snapshot<In>(
         session: &mut ClientSession,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
-        client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        inbound: &mut In,
+        config_filter_limits: &FilterLimits,
+        filter_names: &mut FilterNames,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         cancellation_token: CancellationToken,
-    ) -> Result<(), ClientSnapshotReplayError> {
+    ) -> Result<(), ClientSnapshotReplayError>
+    where
+        In: Stream<Item = TonicResult<SubscribeRequest>> + Unpin,
+    {
         info!(
             "client #{}: going to receive snapshot data",
             session.subscriber_id
@@ -1714,9 +1740,22 @@ impl GrpcService {
                     info!("client #{}: cancelled", session.subscriber_id);
                     return Err(ClientSnapshotReplayError::Cancelled);
                 }
-                maybe = client_rx.recv() => {
+                maybe = inbound.next() => {
                     match maybe {
-                        Some(Some((_from_slot, filter_new))) => {
+                        Some(Ok(req)) => {
+                            let filter_new = match Filter::new(&req, config_filter_limits, filter_names) {
+                                Ok(f) => f,
+                                Err(error) => {
+                                    let err = Err(Status::invalid_argument(format!(
+                                        "failed to create filter: {error}"
+                                    )));
+                                    if stream_tx.send(err).await.is_err() {
+                                        return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                                    }
+                                    continue;
+                                }
+                            };
+
                             if let Some(msg) = filter_new.get_pong_msg() {
                                 if stream_tx.send(Ok(msg)).await.is_err() {
                                     error!("client #{}: stream closed", session.subscriber_id);
@@ -1730,15 +1769,11 @@ impl GrpcService {
                             info!("client #{}: filter updated", session.subscriber_id);
                             break;
                         }
-                        Some(None) => {
-                            return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
-                        }
-                        None => {
+                        Some(Err(_)) | None => {
                             return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
                         }
                     }
                 }
-
             }
         }
 
@@ -1944,17 +1979,19 @@ impl GrpcService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn deshred_client_loop(
+    async fn deshred_client_loop<In>(
         mut session: DeshredClientSession,
         stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
-        mut inbound: Streaming<SubscribeDeshredRequest>,  
+        mut inbound: In,
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
         config_filter_limits: Arc<FilterLimits>,
-        mut filter_names: FilterNames,  
+        mut filter_names: FilterNames,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) {
-        let mut inbound_done = false;  
+    ) where
+        In: Stream<Item = TonicResult<SubscribeDeshredRequest>> + Unpin,
+    {
+        let mut inbound_done = false;
 
         'outer: loop {
             observe_subscriber_queue_size(
@@ -1970,8 +2007,8 @@ impl GrpcService {
                     session.disconnect_reason = "server_shutdown";
                     break 'outer;
                 }
-                message = inbound.message(), if !inbound_done => match message {
-                    Ok(Some(req)) => {
+                message = inbound.next(), if !inbound_done => match message {
+                    Some(Ok(req))  => {
                         filter_names.try_clean();
 
                         match DeshredFilter::new(&req, &config_filter_limits, &mut filter_names) {
@@ -1998,11 +2035,11 @@ impl GrpcService {
                             }
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         info!("deshred client #{}/{}: client closed send stream", session.subscriber_id, session.id);
                         inbound_done = true;          // stop reading, keep serving
                     }
-                    Err(_error) => {
+                    Some(Err(_error)) => {
                         session.disconnect_reason = "client_disconnect";
                         break 'outer;
                     }
@@ -2120,7 +2157,7 @@ impl Geyser for GrpcService {
 
     async fn subscribe(
         &self,
-        mut request: Request<Streaming<SubscribeRequest>>,
+        request: Request<Streaming<SubscribeRequest>>,
     ) -> TonicResult<Response<Self::SubscribeStream>> {
         incr_grpc_method_call_count("subscribe");
 
@@ -2168,7 +2205,6 @@ impl Geyser for GrpcService {
         } else {
             self.config_channel_capacity
         });
-        let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2180,71 +2216,12 @@ impl Geyser for GrpcService {
             .unwrap_or_else(|| "".to_owned());
 
         let config_filter_limits = Arc::clone(&self.config_filter_limits);
-        let incoming_stream_tx = stream_tx.clone();
-        let incoming_client_tx = client_tx;
-        let incoming_cancellation_token = client_cancellation_token.child_token();
 
-        let mut filter_names = FilterNames::new(
+        let filter_names = FilterNames::new(
             self.filter_name_size_limit,
             self.filter_names_size_limit,
             self.filter_names_cleanup_interval,
         );
-
-        let subscriber_id2 = subscriber_id.clone();
-        self.task_tracker.spawn(async move {
-            let subscriber_id = subscriber_id2.unwrap_or("unknown".to_string());
-            loop {
-                tokio::select! {
-                    _ = incoming_cancellation_token.cancelled() => {
-                        info!("client #{subscriber_id:?}/{id}: filter receiver cancelled");
-                        break;
-                    }
-                    message = request.get_mut().message() => match message {
-                        Ok(Some(request)) => {
-                            filter_names.try_clean();
-
-                            if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
-                                Ok(filter) => {
-                                    if let Some(msg) = filter.get_pong_msg() {
-                                        if incoming_stream_tx.send(Ok(msg)).await.is_err() {
-                                            error!("client #{subscriber_id:?}/{id}: stream closed");
-                                            let _ = incoming_client_tx.send(None);
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                    let complexity_score = filter.get_filter_stats();
-                                    metrics::observe_filter_complexity(&subscriber_id, &complexity_score);
-                                    match incoming_client_tx.send(Some((request.from_slot, filter))) {
-                                        Ok(()) => Ok(()),
-                                        Err(error) => Err(error.to_string()),
-                                    }
-                                },
-                                Err(error) => Err(error.to_string()),
-                            } {
-                                let err = Err(Status::invalid_argument(format!(
-                                    "failed to create filter: {error}"
-                                )));
-                                if incoming_stream_tx.send(err).await.is_err() {
-                                    let _ = incoming_client_tx.send(None);
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                             // Client half-closed its send stream. Stop reading, but keep
-                             // incoming_client_tx alive so client_loop continues running.
-                            info!("client #{subscriber_id:?}/{id}: client closed send stream, waiting for cancellation");
-                            incoming_cancellation_token.cancelled().await;
-                            break;
-                        }
-                        Err(_error) => {
-                            let _ = incoming_client_tx.send(None);
-                            break;
-                        }
-                    }
-                }
-            }
-        });
 
         let client_session = ClientSession::new(
             id,
@@ -2256,10 +2233,12 @@ impl Geyser for GrpcService {
         self.task_tracker.spawn(Self::client_loop(
             client_session,
             stream_tx,
-            client_rx,
+            request.into_inner(),
             snapshot_rx,
             self.broadcast.clone(),
             self.replay_stored_slots_tx.clone(),
+            config_filter_limits,
+            filter_names,
             self.task_tracker.clone(),
         ));
 
@@ -2516,29 +2495,25 @@ mod tests {
     use {
         super::*,
         crate::{
-            plugin::filter::{limits::FilterLimits, name::FilterNames, Filter},
+            plugin::filter::{limits::FilterLimits, name::FilterNames},
             util::stream::load_aware_channel,
         },
         yellowstone_grpc_proto::prelude::{SubscribeRequest, SubscribeRequestFilterSlots},
     };
 
-    fn create_filter_with_slots() -> Filter {
-        let config = SubscribeRequest {
+    fn create_request_with_slots() -> SubscribeRequest {
+        SubscribeRequest {
             slots: HashMap::from([("test".into(), SubscribeRequestFilterSlots::default())]),
             ..Default::default()
-        };
-        let mut names = FilterNames::new(64, 1024, Duration::from_secs(1));
-        Filter::new(&config, &FilterLimits::default(), &mut names).unwrap()
+        }
     }
 
-    fn create_filter_at(commitment: CommitmentLevelProto) -> Filter {
-        let config = SubscribeRequest {
+    fn create_request_at(commitment: CommitmentLevelProto) -> SubscribeRequest {
+        SubscribeRequest {
             slots: HashMap::from([("test".into(), SubscribeRequestFilterSlots::default())]),
             commitment: Some(commitment as i32),
             ..Default::default()
-        };
-        let mut names = FilterNames::new(64, 1024, Duration::from_secs(1));
-        Filter::new(&config, &FilterLimits::default(), &mut names).unwrap()
+        }
     }
 
     fn slot_batch(slot: u64) -> BroadcastedMessage {
@@ -2575,7 +2550,7 @@ mod tests {
     }
 
     type ClientHandles = (
-        mpsc::UnboundedSender<Option<(Option<u64>, Filter)>>,
+        mpsc::UnboundedSender<TonicResult<SubscribeRequest>>,
         LoadAwareReceiver<TonicResult<FilteredUpdate>>,
     );
 
@@ -2586,10 +2561,12 @@ mod tests {
         tokio::spawn(GrpcService::client_loop(
             session,
             stream_tx,
-            client_rx,
+            UnboundedReceiverStream::new(client_rx),
             None,
             broadcast,
             None,
+            Arc::new(FilterLimits::default()),
+            FilterNames::new(64, 1024, Duration::from_secs(1)),
             TaskTracker::new(),
         ));
         (client_tx, stream_rx)
@@ -2601,12 +2578,7 @@ mod tests {
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
-        client_tx
-            .send(Some((
-                None,
-                create_filter_at(CommitmentLevelProto::Finalized),
-            )))
-            .unwrap();
+        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Finalized))).unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(100));
@@ -2625,23 +2597,13 @@ mod tests {
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
-        client_tx
-            .send(Some((
-                None,
-                create_filter_at(CommitmentLevelProto::Processed),
-            )))
-            .unwrap();
+        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Processed))).unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(100));
         expect_one(&mut stream_rx).await;
 
-        client_tx
-            .send(Some((
-                None,
-                create_filter_at(CommitmentLevelProto::Finalized),
-            )))
-            .unwrap();
+        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Finalized))).unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(101));
@@ -2653,73 +2615,41 @@ mod tests {
         ct.cancel();
     }
 
-    // Simulates the incoming handler task from subscribe(). Mirrors the
-    // real Ok(None) path: sends the filter, then on half-close awaits
-    // cancellation to keep the sender alive.
-    async fn incoming_handler(
-        client_tx: mpsc::UnboundedSender<Option<(Option<u64>, Filter)>>,
-        filter: Filter,
-        half_close: oneshot::Receiver<()>,
-        ct: CancellationToken,
-    ) {
-        client_tx.send(Some((None, filter))).unwrap();
-        let _ = half_close.await;
-        // this is the fix from #670: await cancellation instead of
-        // breaking, so client_tx stays alive and client_rx remains open.
-        ct.cancelled().await;
-    }
-
     // Regression test for #662 / #670.
     //
-    // #662 (91709fd) removed ping_client_tx, the clone of client_tx that
-    // lived in the ping task. before that patch two senders existed for
-    // client_rx: ping_client_tx and incoming_client_tx. when a client
-    // half-closed its send stream (Ok(None)), the incoming task dropped its
-    // sender but ping_client_tx kept client_rx open so client_loop survived.
-    //
-    // after #662 incoming_client_tx is the only sender. without the fix from
-    // #670 (awaiting cancellation in the Ok(None) handler instead of
-    // breaking), dropping it closes client_rx and tears down the connection
-    // on a normal grpc half-close.
-    //
-    // uses current_thread runtime so yield_now deterministically sequences
-    // filter processing before any broadcast.
+    // Half-closing the send stream must not tear down the subscription so the
+    // client can stop sending filters and keep receiving updates. Previously
+    // this depended on how many senders held client_rx open, which is what
+    // #662/#670 were about. With the inbound request stream read directly by
+    // client_loop, EOF is just `None` and the loop keeps serving.
     #[tokio::test]
-    async fn test_cancellation_on_client_disconnect_after_half_close() {
+   async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (stream_tx, stream_rx) = load_aware_channel(16);
-        let (half_close_tx, half_close_rx) = oneshot::channel();
-
-        // mirrors the incoming handler spawned in subscribe()
-        let incoming_ct = ct.child_token();
-        tokio::spawn(incoming_handler(
-            client_tx,
-            create_filter_with_slots(),
-            half_close_rx,
-            incoming_ct,
-        ));
 
         let session = ClientSession::new(0, Some("test".into()), "test".into(), ct.clone(), None);
 
         let handle = tokio::spawn(GrpcService::client_loop(
             session,
             stream_tx,
-            client_rx,
+            UnboundedReceiverStream::new(client_rx),
             None,
             broadcast.clone(),
             None,
+            Arc::new(FilterLimits::default()),
+            FilterNames::new(64, 1024, Duration::from_secs(1)),
             tt.clone(),
         ));
 
-        // yield so incoming_handler sends the filter and client_loop
-        // processes it (only client_rx is ready, no broadcast yet)
+        // client sends its filter
+        client_tx.send(Ok(create_request_with_slots())).unwrap();
         tokio::task::yield_now().await;
 
         // client half-closes its send stream
-        let _ = half_close_tx.send(());
+        drop(client_tx);
         tokio::task::yield_now().await;
 
         // client drops subscription rx
