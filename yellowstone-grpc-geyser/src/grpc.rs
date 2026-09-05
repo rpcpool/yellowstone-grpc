@@ -2051,7 +2051,7 @@ impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
     type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
     type SubscribeGossipStream =
-    contact_info::grpc::GossipStream<ReceiverStream<TonicResult<SubscribeUpdateGossip>>>;
+        contact_info::grpc::GossipStream<ReceiverStream<TonicResult<SubscribeUpdateGossip>>>;
 
     async fn subscribe(
         &self,

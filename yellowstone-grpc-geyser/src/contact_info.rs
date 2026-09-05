@@ -135,9 +135,7 @@ pub mod grpc {
         log::{error, info},
         std::{pin::Pin, sync::Arc, task::Poll, time::Duration},
         tokio::{sync::mpsc, time::Interval},
-        tokio_stream::wrappers::{
-            errors::BroadcastStreamRecvError, ReceiverStream,
-        },
+        tokio_stream::wrappers::{errors::BroadcastStreamRecvError, ReceiverStream},
         tokio_util::{
             sync::{CancellationToken, PollSender},
             task::TaskTracker,
@@ -217,7 +215,6 @@ pub mod grpc {
             self.cancellation_token.cancel();
         }
     }
-
 
     pub fn spawn_subscriber(
         id: usize,
@@ -355,6 +352,8 @@ mod tests {
         std::{collections::HashMap as Map, time::Duration},
         tokio::sync::mpsc,
         tokio_stream::wrappers::{errors::BroadcastStreamRecvError, UnboundedReceiverStream},
+        tokio_util::{sync::CancellationToken, task::TaskTracker},
+        yellowstone_grpc_proto::geyser::subscribe_update_gossip::UpdateOneof,
     };
 
     /// `shred_version` doubles as a marker so a reconstructed table can be compared field-wise
@@ -692,5 +691,54 @@ mod tests {
                 "subscriber {i} diverged from the writer's table"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_stream_ends_the_client_loop_without_traffic() {
+        let state = ContactInfoState::new(64);
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        tokio::spawn(contact_info_loop(
+            UnboundedReceiverStream::new(rx),
+            Arc::clone(&state),
+        ));
+
+        tx.send(live(node(Pubkey::new_unique(), 1))).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), state.wait_until_complete())
+            .await
+            .expect("state completes");
+
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let mut stream = grpc::spawn_subscriber(
+            0,
+            None,
+            None,
+            16,
+            Arc::clone(&state),
+            token.clone(),
+            tracker.clone(),
+        );
+
+        // drain until snapshot arrives
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(Ok(update)) = stream.next().await {
+                if matches!(update.update_oneof, Some(UpdateOneof::Snapshot(_))) {
+                    return;
+                }
+            }
+            panic!("stream ended before the snapshot");
+        })
+        .await
+        .expect("snapshot arrives");
+
+        // Client vanishes. No further gossip traffic will ever arrive.
+        drop(stream);
+
+        tracker.close();
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("client loop must exit when the stream drops, with no gossip traffic");
+        assert!(token.is_cancelled());
     }
 }
