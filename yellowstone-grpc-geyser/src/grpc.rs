@@ -57,7 +57,7 @@ use {
         io::{AsyncRead, AsyncWrite},
         net::UnixListener,
         sync::{broadcast, mpsc, oneshot, Mutex, RwLock, Semaphore},
-        time::{sleep, Duration},
+        time::{sleep, Duration, Interval},
     },
     tokio_rustls::{rustls, TlsAcceptor},
     tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream, UnixListenerStream},
@@ -2046,10 +2046,64 @@ impl GrpcService {
     }
 }
 
+pub struct DeshredStream {
+    inner: LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>,
+    interval: Interval,
+    cancellation_token: CancellationToken,
+}
+
+impl Stream for DeshredStream {
+    type Item = TonicResult<FilteredUpdateDeshred>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        if this.interval.poll_tick(cx).is_ready() {
+            return Poll::Ready(Some(Ok(FilteredUpdateDeshred::ping())));
+        }
+
+        Pin::new(&mut this.inner).poll_next(cx)
+    }
+}
+
+impl Drop for DeshredStream {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
+pub struct FilteredUpdateStream {
+    inner: LoadAwareReceiver<TonicResult<FilteredUpdate>>,
+    interval: Interval,
+    cancellation_token: CancellationToken,
+}
+
+impl Stream for FilteredUpdateStream {
+    type Item = TonicResult<FilteredUpdate>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        if this.interval.poll_tick(cx).is_ready() {
+            return Poll::Ready(Some(Ok(FilteredUpdate::new_empty(
+                FilteredUpdateOneof::ping(),
+            ))));
+        }
+
+        this.inner.poll_recv(cx)
+    }
+}
+
+impl Drop for FilteredUpdateStream {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
 #[tonic::async_trait]
 impl Geyser for GrpcService {
-    type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
-    type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
+    type SubscribeStream = FilteredUpdateStream;
+    type SubscribeDeshredStream = DeshredStream;
     type SubscribeGossipStream =
         contact_info::grpc::GossipStream<ReceiverStream<TonicResult<SubscribeUpdateGossip>>>;
 
@@ -2105,39 +2159,8 @@ impl Geyser for GrpcService {
         });
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
-        let ping_stream_tx = stream_tx.clone();
-        let ping_cancellation_token = client_cancellation_token.clone();
-        let ping_client_cancel = client_cancellation_token.clone();
-        let ping_subscriber_id = subscriber_id.clone();
-        self.task_tracker.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
-            loop {
-                tokio::select! {
-                    _ = ping_cancellation_token.cancelled() => {
-                        info!("client #{ping_subscriber_id:?}/{id}: ping cancelled");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let msg = FilteredUpdate::new_empty(FilteredUpdateOneof::ping());
-                        log::info!("client #{ping_subscriber_id:?}/{id}: sending ping");
-                        if ping_stream_tx.send(Ok(msg)).await.is_err() {
-                            //
-                            // It's really important to send cancel ping for one edge-case where someone
-                            // subscribe without any filter:
-                            //
-                            // When someone subscribe without any filter, this can create a "zombie" client loop that
-                            // does reject every geyser event thus we never write to the HTTP/2 stream and we never detect that the client TCP connection is closed.
-                            // By sending a ping every 10 seconds, we can detect if the client is still alive and if it's not,
-                            // we can cancel the client loop.
-                            ping_client_cancel.cancel();
-                            info!("detected dead client #{ping_subscriber_id:?}/{id}");
-                            break;
-                        }
-                    }
-                }
-            }
-            info!("client #{ping_subscriber_id:?}/{id}: ping task exiting");
-        });
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let endpoint = request
             .metadata()
@@ -2216,7 +2239,7 @@ impl Geyser for GrpcService {
             id,
             subscriber_id.clone(),
             endpoint.clone(),
-            client_cancellation_token,
+            client_cancellation_token.clone(),
             subscription_permit,
         );
         self.task_tracker.spawn(Self::client_loop(
@@ -2229,7 +2252,11 @@ impl Geyser for GrpcService {
             self.task_tracker.clone(),
         ));
 
-        Ok(Response::new(stream_rx))
+        Ok(Response::new(FilteredUpdateStream {
+            inner: stream_rx,
+            interval,
+            cancellation_token: client_cancellation_token,
+        }))
     }
 
     async fn subscribe_deshred(
@@ -2274,30 +2301,8 @@ impl Geyser for GrpcService {
         let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
-        let ping_stream_tx = stream_tx.clone();
-        let ping_cancellation_token = client_cancellation_token.clone();
-        let ping_client_cancel = client_cancellation_token.clone();
-        self.task_tracker.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
-            loop {
-                tokio::select! {
-                    _ = ping_cancellation_token.cancelled() => {
-                        info!("deshred client #{id}: ping cancelled");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let msg = FilteredUpdateDeshred::ping();
-                        info!("deshred client #{id}: sending ping");
-                        if ping_stream_tx.send(Ok(msg)).await.is_err() {
-                            ping_client_cancel.cancel();
-                            info!("detected dead deshred client #{id}");
-                            break;
-                        }
-                    }
-                }
-            }
-            info!("deshred client #{id}: ping task exiting");
-        });
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let subscriber_id = request
             .metadata()
@@ -2376,11 +2381,15 @@ impl Geyser for GrpcService {
             stream_tx,
             client_rx,
             self.deshred_broadcast_tx.subscribe(),
-            client_cancellation_token,
+            client_cancellation_token.clone(),
             self.task_tracker.clone(),
         ));
 
-        Ok(Response::new(stream_rx))
+        Ok(Response::new(DeshredStream {
+            inner: stream_rx,
+            interval,
+            cancellation_token: client_cancellation_token,
+        }))
     }
 
     async fn subscribe_gossip(
