@@ -2050,7 +2050,8 @@ impl GrpcService {
 impl Geyser for GrpcService {
     type SubscribeStream = LoadAwareReceiver<TonicResult<FilteredUpdate>>;
     type SubscribeDeshredStream = LoadAwareReceiver<TonicResult<FilteredUpdateDeshred>>;
-    type SubscribeGossipStream = ReceiverStream<TonicResult<SubscribeUpdateGossip>>;
+    type SubscribeGossipStream =
+    contact_info::grpc::GossipStream<ReceiverStream<TonicResult<SubscribeUpdateGossip>>>;
 
     async fn subscribe(
         &self,
@@ -2420,7 +2421,7 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let stream_rx = contact_info::grpc::spawn_subscriber(
+        let gossip_stream = contact_info::grpc::spawn_subscriber(
             id,
             subscriber_id,
             subscription_permit,
@@ -2430,7 +2431,7 @@ impl Geyser for GrpcService {
             self.task_tracker.clone(),
         );
 
-        Ok(Response::new(stream_rx))
+        Ok(Response::new(gossip_stream))
     }
 
     async fn subscribe_first_available_slot(

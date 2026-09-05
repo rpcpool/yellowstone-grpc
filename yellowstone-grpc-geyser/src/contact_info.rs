@@ -130,11 +130,14 @@ pub mod grpc {
         futures::{
             sink::{Sink, SinkExt},
             stream::StreamExt as _,
+            Stream,
         },
         log::{error, info},
-        std::{sync::Arc, time::Duration},
-        tokio::sync::mpsc,
-        tokio_stream::wrappers::{errors::BroadcastStreamRecvError, ReceiverStream},
+        std::{pin::Pin, sync::Arc, task::Poll, time::Duration},
+        tokio::{sync::mpsc, time::Interval},
+        tokio_stream::wrappers::{
+            errors::BroadcastStreamRecvError, ReceiverStream,
+        },
         tokio_util::{
             sync::{CancellationToken, PollSender},
             task::TaskTracker,
@@ -183,6 +186,39 @@ pub mod grpc {
     /// so retrying forever would livelock instead of surfacing the problem.
     const MAX_RESNAPSHOT_ATTEMPTS: usize = 3;
 
+    pub struct GossipStream<S> {
+        inner: S,
+        interval: Interval,
+        cancellation_token: CancellationToken,
+    }
+
+    impl<S> Stream for GossipStream<S>
+    where
+        S: Stream<Item = GossipItem> + Unpin,
+    {
+        type Item = GossipItem;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            let this = self.get_mut();
+
+            if this.interval.poll_tick(cx).is_ready() {
+                return Poll::Ready(Some(Ok(convert_to::create_gossip_ping())));
+            }
+
+            Pin::new(&mut this.inner).poll_next(cx)
+        }
+    }
+
+    impl<S> Drop for GossipStream<S> {
+        fn drop(&mut self) {
+            self.cancellation_token.cancel();
+        }
+    }
+
+
     pub fn spawn_subscriber(
         id: usize,
         subscriber_id: Option<String>,
@@ -191,31 +227,11 @@ pub mod grpc {
         state: Arc<ContactInfoState>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
-    ) -> ReceiverStream<GossipItem> {
+    ) -> GossipStream<ReceiverStream<GossipItem>> {
         let (stream_tx, stream_rx) = mpsc::channel(channel_capacity);
 
-        let ping_stream_tx = stream_tx.clone();
-        let ping_cancellation_token = cancellation_token.clone();
-        let ping_client_cancel = cancellation_token.clone();
-        task_tracker.spawn(async move {
-            let mut interval = tokio::time::interval(PING_INTERVAL);
-            loop {
-                tokio::select! {
-                    _ = ping_cancellation_token.cancelled() => {
-                        info!("contact info client #{id}: ping cancelled");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        if ping_stream_tx.send(Ok(convert_to::create_gossip_ping())).await.is_err() {
-                            ping_client_cancel.cancel();
-                            info!("detected dead contact info client #{id}");
-                            break;
-                        }
-                    }
-                }
-            }
-            info!("contact info client #{id}: ping task exiting");
-        });
+        let mut interval = tokio::time::interval(PING_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let session =
             ContactInfoClientSession::new(id, subscriber_id, cancellation_token.clone(), permit);
@@ -224,10 +240,14 @@ pub mod grpc {
             session,
             PollSender::new(stream_tx),
             state,
-            cancellation_token,
+            cancellation_token.clone(),
         ));
 
-        ReceiverStream::new(stream_rx)
+        GossipStream {
+            inner: ReceiverStream::new(stream_rx),
+            interval,
+            cancellation_token,
+        }
     }
 
     async fn contact_info_client_loop<S>(
