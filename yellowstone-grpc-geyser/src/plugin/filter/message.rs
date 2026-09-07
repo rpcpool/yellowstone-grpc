@@ -1310,8 +1310,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockFooter,
-        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
+        yellowstone_grpc_proto::geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {

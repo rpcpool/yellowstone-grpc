@@ -12,7 +12,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- proto/plugin/client: added `SubscribeUpdateBlockFooter`, a standalone update carrying the Alpenglow block footer scalars (`bank_hash`, `block_producer_time_nanos`, `block_user_agent`) with its `slot` and `bank_id`. Subscribe with the new `block_footer` filter. The plugin emits it as soon as the validator reports the footer, without waiting for the block, so consumers that need it alongside other per-block updates join on `(slot, bank_id)`. The finalization, skip reward and notarization reward certificates are not exposed yet.
+- proto/plugin/client: added `SubscribeUpdateBlockFooter`, a standalone update carrying the Alpenglow block footer scalars, emitted on its own `block_footer` filter.
 
 - proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
 
