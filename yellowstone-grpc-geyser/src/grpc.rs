@@ -2578,7 +2578,9 @@ mod tests {
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
-        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Finalized))).unwrap();
+        client_tx
+            .send(Ok(create_request_at(CommitmentLevelProto::Finalized)))
+            .unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(100));
@@ -2597,13 +2599,17 @@ mod tests {
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
-        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Processed))).unwrap();
+        client_tx
+            .send(Ok(create_request_at(CommitmentLevelProto::Processed)))
+            .unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(100));
         expect_one(&mut stream_rx).await;
 
-        client_tx.send(Ok(create_request_at(CommitmentLevelProto::Finalized))).unwrap();
+        client_tx
+            .send(Ok(create_request_at(CommitmentLevelProto::Finalized)))
+            .unwrap();
         settle().await;
 
         broadcast.send(CommitmentLevel::Processed, slot_batch(101));
@@ -2623,7 +2629,7 @@ mod tests {
     // #662/#670 were about. With the inbound request stream read directly by
     // client_loop, EOF is just `None` and the loop keeps serving.
     #[tokio::test]
-   async fn test_cancellation_on_client_disconnect_after_half_close() {
+    async fn test_cancellation_on_client_disconnect_after_half_close() {
         let ct = CancellationToken::new();
         let tt = TaskTracker::new();
         let broadcast = SubscriberChannels::new(16, 16, 16);
