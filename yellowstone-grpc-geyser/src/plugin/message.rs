@@ -1,7 +1,7 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
+        ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
         ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
         ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
         SlotStatus as GeyserSlotStatus,
@@ -10,6 +10,7 @@ use {
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::{BankId, Slot},
+    solana_entry::block_component::VersionedBlockFooter,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -22,7 +23,7 @@ use {
     yellowstone_grpc_proto::{
         geyser::{
             CommitmentLevel as CommitmentLevelProto, SlotStatus as SlotStatusProto,
-            SubscribeUpdateBlockMeta,
+            SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
         },
         solana::storage::confirmed_block,
     },
@@ -489,6 +490,37 @@ impl MessageEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MessageBlockFooter {
+    pub block_footer: SubscribeUpdateBlockFooter,
+    pub created_at: Timestamp,
+}
+
+impl Deref for MessageBlockFooter {
+    type Target = SubscribeUpdateBlockFooter;
+
+    fn deref(&self) -> &Self::Target {
+        &self.block_footer
+    }
+}
+
+impl MessageBlockFooter {
+    pub fn from_geyser(info: &ReplicaBlockFooterInfo<'_>, bank_id: BankId) -> Self {
+        let VersionedBlockFooter::V1(footer) = info.block_footer;
+
+        Self {
+            block_footer: SubscribeUpdateBlockFooter {
+                slot: info.slot,
+                bank_id,
+                bank_hash: footer.bank_hash.to_bytes().to_vec(),
+                block_producer_time_nanos: footer.block_producer_time_nanos,
+                block_user_agent: footer.block_user_agent.clone(),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlockMeta {
     pub block_meta: SubscribeUpdateBlockMeta,
     pub created_at: Timestamp,
@@ -654,6 +686,7 @@ pub enum Message {
     Transaction(Arc<MessageTransaction>),
     DeshredTransaction(Arc<MessageDeshredTransaction>),
     Entry(Arc<MessageEntry>),
+    BlockFooter(Arc<MessageBlockFooter>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
 }
@@ -667,6 +700,7 @@ impl Message {
             Self::Transaction(msg) => msg.slot,
             Self::DeshredTransaction(msg) => msg.slot,
             Self::Entry(msg) => msg.slot,
+            Self::BlockFooter(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
         }

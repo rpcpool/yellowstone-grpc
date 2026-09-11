@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- proto/plugin/client: added `SubscribeUpdateBlockFooter`, a standalone update carrying the Alpenglow block footer scalars, emitted on its own `block_footer` filter.
+
 - proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
 
 ## 2026-08-31

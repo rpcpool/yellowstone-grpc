@@ -717,6 +717,7 @@ mod tests {
     );
 
     SubscribeRequest {
+      block_footer: Default::default(),
       accounts,
       slots: HashMap::new(),
       transactions: HashMap::new(),

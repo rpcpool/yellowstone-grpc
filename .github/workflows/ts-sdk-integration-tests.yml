@@ -16,7 +16,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  NODE_VERSION: '20.18.0'
+  NODE_VERSION: '24.20.0'
 
 jobs:
   # Linux x64 GNU (glibc) - Ubuntu

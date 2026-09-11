@@ -8,9 +8,9 @@ use {
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockMeta,
-                MessageContactInfo, MessageContactInfoRemoved, MessageDeshredTransaction,
-                MessageEntry, MessageSlot, MessageTransaction,
+                CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockFooter,
+                MessageBlockMeta, MessageContactInfo, MessageContactInfoRemoved,
+                MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
             },
         },
         stream::tokio::BatchStreamUnboundedReceiver,
@@ -535,13 +535,23 @@ impl GeyserPlugin for Plugin {
         })
     }
 
-    #[allow(unused_variables)]
     fn notify_block_footer(
         &self,
         block_footer: ReplicaBlockFooterInfoVersions,
         bank_id: BankId,
     ) -> PluginResult<()> {
-        Ok(())
+        self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
+            let info = match block_footer {
+                ReplicaBlockFooterInfoVersions::V0_0_1(info) => info,
+            };
+
+            let message =
+                Message::BlockFooter(Arc::new(MessageBlockFooter::from_geyser(info, bank_id)));
+            inner.send_message(message);
+
+            Ok(())
+        })
     }
 
     fn notify_contact_info(

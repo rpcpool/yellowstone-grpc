@@ -155,6 +155,8 @@ impl GeyserEventAdapter for E2EGeyserEventAdapter {
                 Some(GeyserEventInfo::Transaction { slot: tx.slot })
             }
             UpdateOneof::Block(block) => Some(GeyserEventInfo::Other { slot: block.slot }),
+            // A footer joins no block, so it only counts towards per-slot traffic.
+            UpdateOneof::BlockFooter(footer) => Some(GeyserEventInfo::Other { slot: footer.slot }),
             UpdateOneof::Ping(_) => None,
             UpdateOneof::Pong(_) => None,
         }

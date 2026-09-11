@@ -387,7 +387,8 @@ impl BlockMachineStorage {
             Message::BlockMeta(block_meta) => self.handle_block_meta(block_meta),
             _ => {
                 // Message::Block is synthesized internally and never fed back in;
-                // Message::DeshredTransaction goes through a separate pipeline entirely.
+                // Message::DeshredTransaction goes through a separate pipeline entirely;
+                // Message::BlockFooter is streamed on its own and joins no block.
             }
         }
     }

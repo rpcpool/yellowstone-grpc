@@ -92,6 +92,9 @@
       "blocks_meta": {
         "max": 1
       },
+      "block_footer": {
+        "max": 1
+      },
       "entries": {
         "max": 1
       }

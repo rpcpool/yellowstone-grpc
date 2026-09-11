@@ -110,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
             entry: HashMap::new(),
             blocks: HashMap::new(),
             blocks_meta: hashmap! { "".to_owned() => SubscribeRequestFilterBlocksMeta {} },
+            block_footer: Default::default(),
             commitment: Some(commitment as i32),
             accounts_data_slice: vec![],
             ping: None,
