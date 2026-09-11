@@ -84,6 +84,7 @@ describeLive("Client.subscribe", () => {
           },
         },
         blocksMeta: { blocksMetaClient: {} },
+        blockFooter: { blockFooterClient: {} },
         entry: { entryClient: {} },
         commitment: CommitmentLevel.PROCESSED,
         accountsDataSlice: [{ offset: "0", length: "1" }],
@@ -97,6 +98,7 @@ describeLive("Client.subscribe", () => {
         transactionsStatus: {},
         blocks: {},
         blocksMeta: {},
+        blockFooter: {},
         entry: {},
         accountsDataSlice: [],
         ping: { id: 1 },
@@ -113,6 +115,7 @@ describeLive("Client.subscribe", () => {
         ping: false,
         pong: false,
         blockMeta: false,
+        blockFooter: false,
         entry: false,
       };
 
@@ -163,6 +166,7 @@ describeLive("Client.subscribe", () => {
             seen.ping ||= update.ping !== undefined;
             seen.pong ||= update.pong !== undefined;
             seen.blockMeta ||= update.blockMeta !== undefined;
+            seen.blockFooter ||= update.blockFooter !== undefined;
             seen.entry ||= update.entry !== undefined;
 
             if (missingTypes().length === 0) {
