@@ -568,6 +568,7 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
         UpdateOneof::Block(m) => Some(m.slot),
         UpdateOneof::BlockMeta(m) => Some(m.slot),
         UpdateOneof::Entry(m) => Some(m.slot),
+        UpdateOneof::BlockFooter(m) => Some(m.slot),
         UpdateOneof::TransactionStatus(m) => Some(m.slot),
         UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
     }

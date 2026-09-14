@@ -524,7 +524,8 @@ impl BlockMachineStorage {
             }
             Message::BlockMeta(message_block_meta) => self.handle_block_meta(message_block_meta),
             _ => {
-                // Handle other message types if necessary
+                // Handle other message types if necessary.
+                // Message::BlockFooter is streamed on its own and joins no block.
             }
         }
         while let Some(output) = self.state.pop_next_unprocess_blockstore_update() {

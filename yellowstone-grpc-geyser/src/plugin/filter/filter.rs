@@ -2,9 +2,9 @@ use {
     crate::plugin::{
         filter::{
             limits::{
-                FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
-                FilterLimitsCheckError, FilterLimitsDeshredTransactions, FilterLimitsEntries,
-                FilterLimitsSlots, FilterLimitsTransactions,
+                FilterLimits, FilterLimitsAccounts, FilterLimitsBlockFooter, FilterLimitsBlocks,
+                FilterLimitsBlocksMeta, FilterLimitsCheckError, FilterLimitsDeshredTransactions,
+                FilterLimitsEntries, FilterLimitsSlots, FilterLimitsTransactions,
             },
             message::{
                 FilteredUpdate, FilteredUpdateBlock, FilteredUpdateDeshred,
@@ -15,8 +15,8 @@ use {
         },
         message::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
-            MessageBlockMeta, MessageDeshredTransaction, MessageEntry, MessageSlot,
-            MessageTransaction, SlotStatus,
+            MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
+            MessageSlot, MessageTransaction, SlotStatus,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -38,10 +38,10 @@ use {
             CommitmentLevel as CommitmentLevelProto, SubscribeDeshredRequest, SubscribeRequest,
             SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            TokenAccountExpansionControlFlag,
+            SubscribeRequestFilterBlockFooter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
         },
         solana::storage::confirmed_block,
     },
@@ -152,6 +152,7 @@ pub struct Filter {
     entries: FilterEntries,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
+    block_footer: FilterBlockFooter,
     commitment: CommitmentLevel,
     accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
@@ -173,6 +174,7 @@ impl Default for Filter {
             entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
+            block_footer: FilterBlockFooter::default(),
             commitment: CommitmentLevel::Processed,
             accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
@@ -253,6 +255,11 @@ impl Filter {
             entries: FilterEntries::new(&config.entry, &limits.entries, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limits.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limits.blocks_meta, names)?,
+            block_footer: FilterBlockFooter::new(
+                &config.block_footer,
+                &limits.block_footer,
+                names,
+            )?,
             commitment: Self::decode_commitment(config.commitment)?,
             accounts_data_slice: FilterAccountsDataSlice::new(
                 &config.accounts_data_slice,
@@ -425,6 +432,7 @@ impl Filter {
             }
             Message::DeshredTransaction(_) => FilteredUpdates::new(),
             Message::Entry(message) => self.entries.get_updates(message),
+            Message::BlockFooter(message) => self.block_footer.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
         }
@@ -2301,6 +2309,37 @@ impl FilterBlocksMeta {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct FilterBlockFooter {
+    filters: Vec<FilterName>,
+}
+
+impl FilterBlockFooter {
+    fn new(
+        configs: &HashMap<String, SubscribeRequestFilterBlockFooter>,
+        limits: &FilterLimitsBlockFooter,
+        names: &mut FilterNames,
+    ) -> FilterResult<Self> {
+        FilterLimits::check_max(configs.len(), limits.max)?;
+
+        Ok(Self {
+            filters: configs
+                .keys()
+                .map(|name| names.get(name))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    fn get_updates(&self, message: &Arc<MessageBlockFooter>) -> FilteredUpdates {
+        let filters = self.filters.as_slice();
+        filtered_updates_once_ref!(
+            filters,
+            FilteredUpdateOneof::block_footer(Arc::clone(message)),
+            message.created_at
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FilterAccountsDataSlice(Arc<[Range<usize>]>);
 
@@ -2583,6 +2622,7 @@ mod tests {
     fn test_filters_all_empty() {
         // ensure Filter can be created with empty values
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -2616,6 +2656,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -2654,6 +2695,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2691,6 +2733,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2734,6 +2777,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -2801,6 +2845,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -2868,6 +2913,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2921,6 +2967,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -3325,6 +3372,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -4764,6 +4812,48 @@ mod filter_kind_coverage {
             .is_empty());
     }
 
+    #[test]
+    fn block_footer_filter_matches_and_reports_every_subscribed_name() {
+        let filter = build(SubscribeRequest {
+            block_footer: HashMap::from([
+                ("a".to_owned(), SubscribeRequestFilterBlockFooter {}),
+                ("b".to_owned(), SubscribeRequestFilterBlockFooter {}),
+            ]),
+            ..Default::default()
+        });
+
+        let updates = filter.get_updates(
+            &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+            None,
+        );
+        assert_eq!(updates.len(), 1, "one update carrying both filter names");
+        assert_eq!(matched_names(&updates), ["a", "b"]);
+
+        let empty = build(SubscribeRequest::default());
+        assert!(empty
+            .get_updates(
+                &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+                None
+            )
+            .is_empty());
+    }
+
+    // A footer must not reach a subscriber who only asked for block meta.
+    #[test]
+    fn blocks_meta_filter_does_not_match_a_block_footer() {
+        let filter = build(SubscribeRequest {
+            blocks_meta: HashMap::from([("a".to_owned(), SubscribeRequestFilterBlocksMeta {})]),
+            ..Default::default()
+        });
+
+        assert!(filter
+            .get_updates(
+                &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+                None
+            )
+            .is_empty());
+    }
+
     fn blocks_request(
         include_transactions: Option<bool>,
         include_accounts: Option<bool>,
@@ -5049,6 +5139,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5109,6 +5200,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5161,6 +5253,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5217,6 +5310,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5409,6 +5503,7 @@ mod cuckoo_tests {
             tx_filters: HashMap<String, SubscribeRequestFilterTransactions>,
         ) -> Filter {
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,
@@ -5948,6 +6043,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: HashMap::new(),
@@ -5994,6 +6090,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,
@@ -6035,6 +6132,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,
