@@ -10,6 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 13.5.1
+
+### Fixes
+
+- client: fix duplicate events when replaying partial slots after reconnect.
+
 ## 2026-08-31
 
 - yellowstone-grpc-geyser 15.2.1
