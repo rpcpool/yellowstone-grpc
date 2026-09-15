@@ -280,6 +280,7 @@ pub fn create_reward(reward: proto::Reward) -> CreateResult<Reward> {
             proto::RewardType::Staking => Some(RewardType::Staking),
             proto::RewardType::Voting => Some(RewardType::Voting),
             proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
+            proto::RewardType::VatDebit => Some(RewardType::VATDebit),
         },
         commission: if reward.commission.is_empty() {
             None
