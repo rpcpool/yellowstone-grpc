@@ -45,7 +45,7 @@ struct ReconnectProgress {
 }
 
 impl ReconnectProgress {
-    fn resumed(&self) -> bool {
+    const fn resumed(&self) -> bool {
         self.disconnects > 0 && !self.cursors.is_empty()
     }
 
@@ -636,10 +636,12 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use yellowstone_grpc_proto::geyser::{
-        SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateSlot,
-        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+    use {
+        super::*,
+        yellowstone_grpc_proto::geyser::{
+            SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateSlot,
+            SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        },
     };
 
     fn slot(number: u64) -> Result<SubscribeUpdate, Status> {
