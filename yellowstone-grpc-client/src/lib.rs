@@ -11,11 +11,9 @@ use {
         stream::Stream,
     },
     std::{
-        path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
     },
-    tokio::net::UnixStream,
     tonic::{
         codec::{CompressionEncoding, Streaming},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataValue, MetadataValue},
@@ -37,6 +35,9 @@ use {
         SubscribeUpdateGossip,
     },
 };
+#[cfg(unix)]
+use {std::path::PathBuf, tokio::net::UnixStream};
+
 pub use {
     crate::{
         dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
@@ -855,6 +856,9 @@ impl GeyserGrpcBuilder {
     /// The `path` is the filesystem path to the socket (e.g. "/tmp/yellowstone.sock").
     /// tonic requires a dummy HTTP URI for the channel, but the actual transport
     /// goes through the UDS connector.
+    ///
+    /// Unix-only. Tokio's `UnixStream` is not available on `cfg(windows)`.
+    #[cfg(unix)]
     pub async fn connect_uds(
         self,
         path: impl Into<PathBuf>,
