@@ -301,7 +301,12 @@ impl GeyserPlugin for Plugin {
 
     fn notify_end_of_startup(&self) -> PluginResult<()> {
         self.with_inner(|inner| {
-            let _snapshot_channel = inner.snapshot_channel.lock().unwrap().take();
+            if let Some(snapshot_channel) = inner.snapshot_channel.lock().unwrap().take() {
+                let count = snapshot_channel.len();
+                if count > 0 {
+                    metrics::message_queue_size_dec_by(count as i64);
+                }
+            }
             Ok(())
         })
     }
