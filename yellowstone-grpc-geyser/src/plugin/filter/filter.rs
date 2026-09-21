@@ -430,7 +430,17 @@ impl Filter {
                 updates.append(&mut self.transactions_status.get_updates(message));
                 updates
             }
-            Message::DeshredTransaction(_) => FilteredUpdates::new(),
+            Message::DeshredTransaction(_) | Message::DeshredUpdateParent(_) => {
+                FilteredUpdates::new()
+            }
+            Message::EntryUpdateParent(message) => {
+                let filters = self.entries.filters.as_slice();
+                filtered_updates_once_ref!(
+                    filters,
+                    FilteredUpdateOneof::EntryUpdateParent(Arc::clone(message)),
+                    message.created_at
+                )
+            }
             Message::Entry(message) => self.entries.get_updates(message),
             Message::BlockFooter(message) => self.block_footer.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
@@ -2003,6 +2013,23 @@ impl DeshredFilter {
     ) -> FilteredUpdatesDeshred {
         match message {
             Message::DeshredTransaction(message) => self.deshred_transactions.get_updates(message),
+            Message::DeshredUpdateParent(message) => {
+                let filters = self
+                    .deshred_transactions
+                    .filters
+                    .keys()
+                    .cloned()
+                    .collect::<FilteredUpdateFilters>();
+                let mut updates = FilteredUpdatesDeshred::new();
+                if !filters.is_empty() {
+                    updates.push(FilteredUpdateDeshred::new(
+                        filters,
+                        FilteredUpdateDeshredOneof::DeshredUpdateParent(Arc::clone(message)),
+                        message.created_at,
+                    ));
+                }
+                updates
+            }
             Message::Slot(message) => self.get_slot_updates(message, commitment),
             _ => FilteredUpdatesDeshred::new(),
         }
@@ -3049,6 +3076,105 @@ mod tests {
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
         })
+    }
+
+    #[test]
+    fn test_update_parent_filters_and_wire_encoding() {
+        use {
+            crate::plugin::message::{MessageDeshredUpdateParent, MessageEntryUpdateParent},
+            agave_geyser_plugin_interface::geyser_plugin_interface::{
+                ReplicaDeshredUpdateParentInfo, ReplicaEntryUpdateParentInfo,
+            },
+            prost::Message as _,
+            solana_hash::Hash,
+            yellowstone_grpc_proto::geyser::{
+                subscribe_update, subscribe_update_deshred, SubscribeRequestFilterEntry,
+                SubscribeUpdate, SubscribeUpdateDeshred,
+            },
+        };
+        let hash = Hash::new_from_array([7; 32]);
+        for (slot, bank_id, fec_index) in [(0, 0, 0), (u64::MAX, u64::MAX, u32::MAX)] {
+            let entry = Arc::new(MessageEntryUpdateParent::from_geyser(
+                &ReplicaEntryUpdateParentInfo {
+                    slot,
+                    cleared_bank_id: bank_id,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_block_id: &hash,
+                },
+            ));
+            let deshred = Arc::new(MessageDeshredUpdateParent::from_geyser(
+                &ReplicaDeshredUpdateParentInfo {
+                    slot,
+                    update_parent_fec_set_index: fec_index,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_block_id: &hash,
+                },
+            ));
+            assert_eq!(entry.update_parent.parent_block_id, vec![7; 32]);
+            assert_eq!(deshred.update_parent.parent_block_id, vec![7; 32]);
+            let entry_msg = Message::EntryUpdateParent(entry.clone());
+            let deshred_msg = Message::DeshredUpdateParent(deshred.clone());
+            for subscribed in [false, true] {
+                let mut request = SubscribeRequest::default();
+                let mut deshred_request = SubscribeDeshredRequest::default();
+                if subscribed {
+                    request
+                        .entry
+                        .insert("entries".into(), SubscribeRequestFilterEntry {});
+                    deshred_request.deshred_transactions.insert(
+                        "transactions".into(),
+                        SubscribeRequestFilterDeshredTransactions {
+                            vote: Some(true),
+                            account_include: vec![Pubkey::new_unique().to_string()],
+                            ..Default::default()
+                        },
+                    );
+                }
+                let filter = Filter::new(
+                    &request,
+                    &FilterLimits::default(),
+                    &mut create_filter_names(),
+                )
+                .unwrap();
+                let deshred_filter = DeshredFilter::new(
+                    &deshred_request,
+                    &FilterLimits::default(),
+                    &mut create_filter_names(),
+                )
+                .unwrap();
+                assert!(filter.get_updates(&deshred_msg, None).is_empty());
+                assert!(deshred_filter.get_updates(&entry_msg, None).is_empty());
+                let updates = filter.get_updates(&entry_msg, None);
+                let deshred_updates = deshred_filter.get_updates(&deshred_msg, None);
+                assert_eq!(updates.len(), usize::from(subscribed));
+                assert_eq!(deshred_updates.len(), usize::from(subscribed));
+                if subscribed {
+                    let bytes = updates[0].encode_to_vec();
+                    assert_eq!(bytes.len(), updates[0].encoded_len());
+                    let decoded = SubscribeUpdate::decode(bytes.as_slice()).unwrap();
+                    assert_eq!(decoded.filters, vec!["entries"]);
+                    assert_eq!(decoded.created_at, Some(entry.created_at));
+                    assert_eq!(
+                        decoded.update_oneof,
+                        Some(subscribe_update::UpdateOneof::EntryUpdateParent(
+                            entry.update_parent.clone()
+                        ))
+                    );
+                    assert_eq!(updates[0].as_subscribe_update(), decoded);
+                    let bytes = deshred_updates[0].encode_to_vec();
+                    assert_eq!(bytes.len(), deshred_updates[0].encoded_len());
+                    let decoded = SubscribeUpdateDeshred::decode(bytes.as_slice()).unwrap();
+                    assert_eq!(decoded.filters, vec!["transactions"]);
+                    assert_eq!(decoded.created_at, Some(deshred.created_at));
+                    assert_eq!(
+                        decoded.update_oneof,
+                        Some(subscribe_update_deshred::UpdateOneof::DeshredUpdateParent(
+                            deshred.update_parent.clone()
+                        ))
+                    );
+                }
+            }
+        }
     }
 
     #[test]

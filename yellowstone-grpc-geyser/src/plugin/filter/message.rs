@@ -9,8 +9,9 @@ use {
             },
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
-                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
+                MessageDeshredTransaction, MessageDeshredTransactionInfo,
+                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
     },
@@ -245,6 +246,9 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
             FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.block_meta.clone()),
+            FilteredUpdateOneof::EntryUpdateParent(msg) => {
+                UpdateOneof::EntryUpdateParent(msg.update_parent.clone())
+            }
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
@@ -269,16 +273,17 @@ pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateOneof {
-    Account(FilteredUpdateAccount),                     // 2
-    Slot(FilteredUpdateSlot),                           // 3
-    Transaction(FilteredUpdateTransaction),             // 4
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>), // tag 13
+    Account(FilteredUpdateAccount),                   // 2
+    Slot(FilteredUpdateSlot),                         // 3
+    Transaction(FilteredUpdateTransaction),           // 4
     TransactionStatus(FilteredUpdateTransactionStatus), // 10
-    Block(Box<FilteredUpdateBlock>),                    // 5
-    Ping,                                               // 6
-    Pong(SubscribeUpdatePong),                          // 9
-    BlockMeta(Arc<MessageBlockMeta>),                   // 7
-    Entry(FilteredUpdateEntry),                         // 8
-    BlockFooter(Arc<MessageBlockFooter>),               // 12
+    Block(Box<FilteredUpdateBlock>),                  // 5
+    Ping,                                             // 6
+    Pong(SubscribeUpdatePong),                        // 9
+    BlockMeta(Arc<MessageBlockMeta>),                 // 7
+    Entry(FilteredUpdateEntry),                       // 8
+    BlockFooter(Arc<MessageBlockFooter>),             // 12
 }
 
 impl FilteredUpdateOneof {
@@ -338,6 +343,7 @@ impl FilteredUpdateOneof {
 impl prost::Message for FilteredUpdateOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::EntryUpdateParent(msg) => message::encode(13u32, &msg.update_parent, buf),
             Self::Account(msg) => message::encode(2u32, msg, buf),
             Self::Slot(msg) => message::encode(3u32, msg, buf),
             Self::Transaction(msg) => message::encode(4u32, msg, buf),
@@ -356,6 +362,7 @@ impl prost::Message for FilteredUpdateOneof {
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::EntryUpdateParent(msg) => message::encoded_len(13u32, &msg.update_parent),
             Self::Account(msg) => message::encoded_len(2u32, msg),
             Self::Slot(msg) => message::encoded_len(3u32, msg),
             Self::Transaction(msg) => message::encoded_len(4u32, msg),
@@ -975,6 +982,7 @@ impl FilteredUpdateDeshred {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateDeshredOneof {
+    DeshredUpdateParent(Arc<MessageDeshredUpdateParent>), // tag 7
     DeshredTransaction(FilteredUpdateDeshredTransaction), // tag 2
     Ping,                                                 // tag 3
     Pong(SubscribeUpdatePong),                            // tag 4
@@ -1000,6 +1008,7 @@ impl FilteredUpdateDeshredOneof {
 impl prost::Message for FilteredUpdateDeshredOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encode(7u32, &msg.update_parent, buf),
             Self::DeshredTransaction(msg) => message::encode(2u32, msg, buf),
             Self::Ping => {
                 encode_key(3u32, WireType::LengthDelimited, buf);
@@ -1012,6 +1021,7 @@ impl prost::Message for FilteredUpdateDeshredOneof {
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encoded_len(7u32, &msg.update_parent),
             Self::DeshredTransaction(msg) => message::encoded_len(2u32, msg),
             Self::Ping => key_len(3u32) + encoded_len_varint(0),
             Self::Pong(msg) => message::encoded_len(4u32, msg),
