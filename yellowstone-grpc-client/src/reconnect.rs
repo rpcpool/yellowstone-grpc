@@ -27,6 +27,167 @@ const CHECKPOINT_SLOT_BUFFER: u64 = 2;
 
 pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
 
+/// Why previously delivered bank state must be removed by the consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscardReason {
+    /// Delivery was interrupted; the partial state cannot be joined across connections.
+    /// This does not establish that any of the discarded banks lost consensus.
+    IncompleteDelivery,
+}
+
+/// The replacement stream from which the consumer must rebuild discarded state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplacementReplay {
+    /// Inclusive replay boundary. Remove the listed banks before applying replacement updates.
+    pub from_slot: u64,
+    /// Connection generation supplying replacement updates; it does not identify a winner.
+    pub generation: u64,
+}
+
+/// Consensus outcome for one affected slot, independent of the replay source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotWinner {
+    /// The finalized chain skips this slot, so there is no winning blockhash to report.
+    Unknown { slot: u64 },
+    /// Finality establishes this block as the winner, using its cross-connection block identity.
+    /// A matching parent, bank ID, or replacement update alone cannot establish this outcome.
+    Finalized { slot: u64, blockhash: String },
+}
+
+const RECOVERY_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+const RECOVERY_BUFFER_MESSAGES: usize = 65_536;
+
+pub(crate) struct RecoveryDecision {
+    pub(crate) banks: Vec<crate::BankRef>,
+    pub(crate) replacement: ReplacementReplay,
+    outcomes: std::collections::BTreeMap<u64, Option<SlotWinner>>,
+    metadata: std::collections::HashMap<(u64, u64), (String, u64)>,
+    finalized: std::collections::HashSet<(u64, u64)>,
+    pub(crate) buffered: std::collections::VecDeque<SubscribeUpdate>,
+    buffered_bytes: usize,
+    evidence_limit: usize,
+}
+
+impl RecoveryDecision {
+    pub(crate) fn new(
+        banks: Vec<crate::BankRef>,
+        replacement: ReplacementReplay,
+        evidence_limit: usize,
+    ) -> Self {
+        Self {
+            outcomes: banks.iter().map(|bank| (bank.slot, None)).collect(),
+            banks,
+            replacement,
+            metadata: Default::default(),
+            finalized: Default::default(),
+            buffered: Default::default(),
+            buffered_bytes: 0,
+            evidence_limit,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, update: &SubscribeUpdate) -> Result<(), Status> {
+        use yellowstone_grpc_proto::prelude::SlotStatus;
+        let identity = match update.update_oneof.as_ref() {
+            Some(UpdateOneof::BlockMeta(m)) => {
+                Some((m.slot, m.bank_id, &m.blockhash, m.parent_slot))
+            }
+            Some(UpdateOneof::Block(m)) => Some((m.slot, m.bank_id, &m.blockhash, m.parent_slot)),
+            _ => None,
+        };
+        let key = if let Some((slot, bank_id, blockhash, parent_slot)) = identity {
+            if blockhash.is_empty() || blockhash.len() > 128 || (slot != 0 && parent_slot >= slot) {
+                return Err(Status::failed_precondition(
+                    "invalid block identity while resolving replay winners",
+                ));
+            }
+            let key = (slot, bank_id);
+            if let Some(previous) = self.metadata.get(&key) {
+                if previous != &(blockhash.clone(), parent_slot) {
+                    return Err(Status::failed_precondition(
+                        "conflicting block identity for one connection-local bank",
+                    ));
+                }
+            } else {
+                if self.metadata.len() >= self.evidence_limit {
+                    return Err(Status::resource_exhausted(
+                        "reconnect winner evidence limit reached",
+                    ));
+                }
+                self.metadata.insert(key, (blockhash.clone(), parent_slot));
+            }
+            Some(key)
+        } else if let Some(UpdateOneof::Slot(m)) = update.update_oneof.as_ref() {
+            if m.status != SlotStatus::SlotFinalized as i32 {
+                return Ok(());
+            }
+            let bank_id = m.bank_id.ok_or_else(|| {
+                Status::failed_precondition(
+                    "finalized slot has no bank_id to associate with a blockhash",
+                )
+            })?;
+            let key = (m.slot, bank_id);
+            if !self.finalized.contains(&key) && self.finalized.len() >= self.evidence_limit {
+                return Err(Status::resource_exhausted(
+                    "reconnect finality evidence limit reached",
+                ));
+            }
+            self.finalized.insert(key);
+            Some(key)
+        } else {
+            None
+        };
+
+        if let Some(key) = key.filter(|key| self.finalized.contains(key)) {
+            if let Some((blockhash, parent_slot)) = self.metadata.get(&key) {
+                for (&slot, outcome) in &mut self.outcomes {
+                    let decision = if slot == key.0 {
+                        Some(SlotWinner::Finalized {
+                            slot,
+                            blockhash: blockhash.clone(),
+                        })
+                    } else if *parent_slot < slot && slot < key.0 {
+                        // A finalized block's direct parent link excludes every intervening slot.
+                        Some(SlotWinner::Unknown { slot })
+                    } else {
+                        None
+                    };
+                    if let Some(decision) = decision {
+                        if outcome
+                            .as_ref()
+                            .is_some_and(|previous| previous != &decision)
+                        {
+                            return Err(Status::failed_precondition(
+                                "conflicting finalized outcomes during reconnect",
+                            ));
+                        }
+                        *outcome = Some(decision);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn buffer(&mut self, update: SubscribeUpdate) -> Result<(), Status> {
+        let bytes = yellowstone_grpc_proto::prost::Message::encoded_len(&update);
+        if self.buffered.len() >= RECOVERY_BUFFER_MESSAGES
+            || bytes > RECOVERY_BUFFER_BYTES.saturating_sub(self.buffered_bytes)
+        {
+            return Err(Status::resource_exhausted(
+                "replacement buffer full while waiting for finalized winners",
+            ));
+        }
+        self.buffered_bytes += bytes;
+        self.buffered.push_back(update);
+        Ok(())
+    }
+
+    pub(crate) fn winners(&self) -> Option<Vec<SlotWinner>> {
+        self.outcomes.values().cloned().collect()
+    }
+}
+
 type ConnectFuture<S> =
     Pin<Box<dyn Future<Output = Result<S, GeyserGrpcClientError>> + Send + 'static>>;
 
@@ -353,6 +514,9 @@ pub struct AutoReconnect<GrpcStream, Connector> {
     pending_connecting_task: Option<ConnectFuture<GrpcStream>>,
     reconnect_count: u32,
     resume_from_checkpoint: bool,
+    bank_replay: bool,
+    stream_retries: u32,
+    replay_from_slot: Option<u64>,
 }
 
 impl<S, Connector> AutoReconnect<S, Connector>
@@ -376,6 +540,9 @@ where
             backoff,
             reconnect_count: 0,
             resume_from_checkpoint: true,
+            bank_replay: false,
+            stream_retries: 0,
+            replay_from_slot: None,
         }
     }
 
@@ -396,9 +563,23 @@ impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
     fn reconnect_count(&self) -> u32 {
         self.reconnect_count
     }
+
+    fn replay_from_slot(&self) -> Option<u64> {
+        self.replay_from_slot
+    }
 }
 
 impl<S, Connector> AutoReconnect<S, Connector> {
+    /// Retain a replay checkpoint without assuming BlockMeta proves complete delivery.
+    pub(crate) const fn with_bank_replay(mut self) -> Self {
+        self.bank_replay = true;
+        self
+    }
+
+    pub(crate) const fn bank_replay_enabled(&self) -> bool {
+        self.bank_replay
+    }
+
     /// Never resume from a checkpoint. Reconnects start from the live head.
     pub const fn without_checkpoint(mut self) -> Self {
         self.resume_from_checkpoint = false;
@@ -413,13 +594,8 @@ where
 {
     type Item = Result<SubscribeUpdate, Status>;
 
-    /// State machine with two states:
-    /// - inner_stream is Some -> poll it for messages, checkpoint on BlockMeta
-    /// - pending_connecting_task is Some -> poll the reconnect future
-    ///
-    /// on recoverable error: extract dedup state, start reconnect, loop back.
-    /// on unrecoverable error or stream end: stop permanently.
-    /// the while loop avoids wake_by_ref(), state transitions fall through immediately.
+    /// Reconnects recoverable failures without clearing the replay checkpoint.
+    /// Bank replacement decisions belong to ReconnectStream.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.stop {
             return Poll::Ready(None);
@@ -428,45 +604,30 @@ where
         while !me.stop {
             if let Some(mut stream) = me.inner_stream.take() {
                 match Pin::new(&mut stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(mut msg))) => {
-                        if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
+                    Poll::Ready(Some(Ok(msg))) => {
+                        me.stream_retries = 0;
+                        if me.bank_replay {
                             if let Some(slot) = extract_slot(&msg) {
-                                // checkpoint a few slots behind the last fully built slot.
-                                // block_meta can arrive late and events within a slot
-                                // arrive in random order, replaying from a couple slots
-                                // back guarantees we don't miss data. dedup handles
-                                // the duplicates this creates.
+                                me.last_checkpoint = Some(
+                                    me.last_checkpoint
+                                        .map_or(slot, |checkpoint| checkpoint.min(slot)),
+                                );
+                            }
+                        } else if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
+                            if let Some(slot) = extract_slot(&msg) {
+                                // BlockMeta supplies a legacy heuristic, not proof of full delivery.
                                 me.last_checkpoint =
                                     Some(slot.saturating_sub(CHECKPOINT_SLOT_BUFFER));
                             }
                         }
 
-                        // The internal __autoreconnect filter is injected into slots/blocks_meta/entry
-                        // to guarantee the messages our invariants need (checkpointing, equivocation guard)
-
-                        if !msg.filters.is_empty()
-                            && msg.filters.iter().all(|f| f == AUTORECONNECT_FILTER_KEY)
-                        {
-                            // matched only our internal key (incl. empty) -> user never asked for this
-                            me.inner_stream = Some(stream);
-                            continue;
-                        }
-
-                        // matched a user filter too -> strip the internal key, forward the rest
-                        msg.filters.retain(|f| f != AUTORECONNECT_FILTER_KEY);
-
                         me.inner_stream = Some(stream);
                         return Poll::Ready(Some(Ok(msg)));
                     }
                     Poll::Ready(Some(Err(status))) if is_recoverable_status_code(status.code()) => {
-                        // If the server's replay buffer has moved past our checkpoint,
-                        // clear it so the next reconnect starts from "now" instead of
-                        // looping forever on an unavailable slot.
-                        if status.code() == Code::OutOfRange {
-                            me.last_checkpoint = None;
-                        }
-
-                        if me.backoff.max_retries == 0 {
+                        if me.backoff.max_retries == 0
+                            || (me.bank_replay && me.stream_retries >= me.backoff.max_retries)
+                        {
                             me.stop = true;
                             return Poll::Ready(Some(Err(status)));
                         }
@@ -480,15 +641,30 @@ where
                             }
                         );
 
+                        if me.bank_replay {
+                            me.stream_retries += 1;
+                        }
                         me.pending_connecting_task = Some(me.make_connection_future());
                     }
                     Poll::Ready(Some(Err(e))) => {
                         me.stop = true;
                         return Poll::Ready(Some(Err(e)));
                     }
+                    Poll::Ready(None)
+                        if me.bank_replay && me.stream_retries < me.backoff.max_retries =>
+                    {
+                        me.stream_retries += 1;
+                        me.pending_connecting_task = Some(me.make_connection_future());
+                    }
                     Poll::Ready(None) => {
                         me.stop = true;
-                        return Poll::Ready(None);
+                        return if me.bank_replay {
+                            Poll::Ready(Some(Err(Status::unavailable(
+                                "subscription closed and reconnect retries are exhausted or disabled",
+                            ))))
+                        } else {
+                            Poll::Ready(None)
+                        };
                     }
                     Poll::Pending => {
                         me.inner_stream = Some(stream);
@@ -502,13 +678,20 @@ where
                     Poll::Ready(result) => match result {
                         Ok(stream) => {
                             me.reconnect_count += 1;
+                            me.replay_from_slot = if me.resume_from_checkpoint {
+                                me.last_checkpoint
+                            } else {
+                                None
+                            };
                             me.inner_stream = Some(stream);
                         }
                         Err(error) => {
                             me.stop = true;
-                            return Poll::Ready(Some(Err(Status::internal(format!(
-                                "reconnect failed: {error}",
-                            )))));
+                            let status = match error {
+                                GeyserGrpcClientError::TonicStatus(status) => status,
+                                other => Status::unavailable(format!("reconnect failed: {other}")),
+                            };
+                            return Poll::Ready(Some(Err(status)));
                         }
                     },
                     Poll::Pending => {
@@ -555,7 +738,6 @@ const fn is_recoverable_status_code(code: Code) -> bool {
             | Code::Internal
             | Code::Unavailable
             | Code::DataLoss
-            | Code::OutOfRange
     )
 }
 
@@ -572,6 +754,25 @@ pub(crate) fn extract_slot(msg: &SubscribeUpdate) -> Option<u64> {
         UpdateOneof::TransactionStatus(m) => Some(m.slot),
         UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
     }
+}
+
+pub(crate) fn unverified_replay() -> Status {
+    Status::failed_precondition(
+        "recovery unavailable: the existing Subscribe protocol cannot certify complete replacement coverage",
+    )
+}
+
+// Hide control-only messages only after checkpoint and dedup machinery has seen them.
+pub(crate) fn visible_update(update: &mut SubscribeUpdate) -> bool {
+    let internal_only = !update.filters.is_empty()
+        && update
+            .filters
+            .iter()
+            .all(|filter| filter == AUTORECONNECT_FILTER_KEY);
+    update
+        .filters
+        .retain(|filter| filter != AUTORECONNECT_FILTER_KEY);
+    !internal_only
 }
 
 pub(crate) fn inject_autoreconnect_filter(req: &mut SubscribeRequest) {
@@ -835,7 +1036,7 @@ mod tests {
         assert!(is_recoverable_status_code(Code::ResourceExhausted));
         assert!(is_recoverable_status_code(Code::Aborted));
         assert!(is_recoverable_status_code(Code::DataLoss));
-        assert!(is_recoverable_status_code(Code::OutOfRange));
+        assert!(!is_recoverable_status_code(Code::OutOfRange));
 
         assert!(!is_recoverable_status_code(Code::InvalidArgument));
         assert!(!is_recoverable_status_code(Code::NotFound));
@@ -1331,5 +1532,1282 @@ mod tests {
             vec![None],
             "SkipMissedData must not replay even after a BlockMeta set a checkpoint"
         );
+    }
+    #[tokio::test]
+    async fn bank_recovery_reconnects_stream_error_and_eof_from_partial_slot() {
+        for disconnect in [Some(Status::unavailable("partial bank")), None] {
+            let mut initial = vec![Ok(make_account_msg(100)), Ok(make_block_meta_msg(105))];
+            if let Some(error) = disconnect {
+                initial.push(Err(error));
+            }
+            let replacement = make_account_msg(100);
+            let connector = MockGrpcConnector::new(vec![ConnectPlan {
+                expected_from_slot: Some(Some(100)),
+                result: Ok(vec![Ok(replacement.clone())]),
+            }]);
+            let mut stream = AutoReconnect::new(
+                stream::iter(initial).boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            )
+            .with_bank_replay();
+            assert!(stream.next().await.unwrap().is_ok());
+            assert!(stream.next().await.unwrap().is_ok());
+            assert_eq!(stream.next().await.unwrap().unwrap(), replacement);
+            assert_eq!(connector.calls(), vec![Some(100)]);
+            assert_eq!(stream.reconnect_count(), 1);
+            assert_eq!(stream.last_checkpoint, Some(100));
+        }
+    }
+
+    #[tokio::test]
+    async fn bank_recovery_keeps_checkpoint_on_another_replay_disconnect() {
+        let connector = MockGrpcConnector::new(vec![
+            ConnectPlan {
+                expected_from_slot: Some(Some(100)),
+                result: Ok(vec![
+                    Ok(make_account_msg(100)),
+                    Ok(make_block_meta_msg(110)),
+                    Err(Status::unavailable("disconnected during replay")),
+                ]),
+            },
+            ConnectPlan {
+                expected_from_slot: Some(Some(100)),
+                result: Ok(vec![Ok(make_account_msg(100))]),
+            },
+        ]);
+        let mut stream = AutoReconnect::new(
+            stream::iter(vec![
+                Ok(make_account_msg(100)),
+                Err(Status::unavailable("partial bank")),
+            ])
+            .boxed(),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        )
+        .with_bank_replay();
+        for _ in 0..4 {
+            assert!(stream.next().await.unwrap().is_ok());
+        }
+        assert_eq!(connector.calls(), vec![Some(100), Some(100)]);
+        assert_eq!(stream.reconnect_count(), 2);
+        assert_eq!(stream.last_checkpoint, Some(100));
+    }
+
+    #[tokio::test]
+    async fn bank_recovery_reports_unavailable_replay_after_attempting_reconnect() {
+        for in_stream in [false, true] {
+            let error = Status::out_of_range("replay expired");
+            let connector = MockGrpcConnector::new(vec![ConnectPlan {
+                expected_from_slot: Some(Some(100)),
+                result: if in_stream {
+                    Ok(vec![Err(error)])
+                } else {
+                    Err(GeyserGrpcClientError::TonicStatus(error))
+                },
+            }]);
+            let mut stream = AutoReconnect::new(
+                stream::iter(vec![
+                    Ok(make_account_msg(100)),
+                    Err(Status::unavailable("partial bank")),
+                ])
+                .boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            )
+            .with_bank_replay();
+            assert!(stream.next().await.unwrap().is_ok());
+            assert_eq!(
+                stream.next().await.unwrap().unwrap_err().code(),
+                Code::OutOfRange
+            );
+            assert!(stream.next().await.is_none());
+            assert_eq!(connector.calls(), vec![Some(100)]);
+            assert_eq!(stream.last_checkpoint, Some(100));
+        }
+    }
+
+    #[tokio::test]
+    async fn bank_recovery_bounds_retries_when_replay_streams_make_no_progress() {
+        for disconnect in [Some(Status::internal("from_slot is not supported")), None] {
+            let failed_stream = || disconnect.clone().map(Err).into_iter().collect();
+            let connector = MockGrpcConnector::new(vec![ConnectPlan {
+                expected_from_slot: Some(Some(100)),
+                result: Ok(failed_stream()),
+            }]);
+            let mut initial = vec![Ok(make_account_msg(100))];
+            initial.extend(failed_stream());
+            let mut stream = AutoReconnect::new(
+                stream::iter(initial).boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            )
+            .with_bank_replay();
+            assert!(stream.next().await.unwrap().is_ok());
+            let error = stream.next().await.unwrap().unwrap_err();
+            assert_eq!(
+                error.code(),
+                disconnect.as_ref().map_or(Code::Unavailable, Status::code)
+            );
+            assert!(stream.next().await.is_none());
+            assert_eq!(connector.calls(), vec![Some(100)]);
+            assert_eq!(stream.last_checkpoint, Some(100));
+        }
+    }
+
+    #[tokio::test]
+    async fn bank_recovery_respects_disabled_retries() {
+        for disconnect in [Some(Status::unavailable("partial bank")), None] {
+            let mut initial = vec![Ok(make_account_msg(100))];
+            if let Some(error) = disconnect {
+                initial.push(Err(error));
+            }
+            let connector = MockGrpcConnector::new(vec![]);
+            let mut stream = AutoReconnect::new(
+                stream::iter(initial).boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(0),
+            )
+            .with_bank_replay();
+            assert!(stream.next().await.unwrap().is_ok());
+            assert_eq!(
+                stream.next().await.unwrap().unwrap_err().code(),
+                Code::Unavailable
+            );
+            assert!(stream.next().await.is_none());
+            assert!(connector.calls().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_replay_is_terminal_without_clearing_checkpoint() {
+        let connector = MockGrpcConnector::new(vec![]);
+        let mut stream = AutoReconnect::new(
+            stream::iter(vec![Err(Status::out_of_range("replay expired"))]).boxed(),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        );
+        stream.last_checkpoint = Some(42);
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            Code::OutOfRange
+        );
+        assert_eq!(stream.last_checkpoint, Some(42));
+        assert!(connector.calls().is_empty());
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn another_disconnect_during_replay_drops_previous_connection_buffer() {
+        let mut stale = make_account_msg(100);
+        if let Some(UpdateOneof::Account(account)) = &mut stale.update_oneof {
+            account.account.as_mut().unwrap().lamports = 200;
+        }
+        let connector = MockGrpcConnector::new(vec![
+            ConnectPlan {
+                expected_from_slot: None,
+                result: Ok(vec![
+                    Ok(stale),
+                    Err(Status::unavailable("interrupted replay")),
+                ]),
+            },
+            ConnectPlan {
+                expected_from_slot: None,
+                result: Ok(vec![
+                    Ok(make_account_msg(100)),
+                    Ok(make_block_meta_msg(100)),
+                ]),
+            },
+        ]);
+        let mut stream = DedupStream::new(
+            AutoReconnect::new(
+                stream::iter(vec![
+                    Ok(make_account_msg(100)),
+                    Err(Status::unavailable("disconnect")),
+                ])
+                .boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            ),
+            DedupState::default(),
+        );
+        assert!(stream.next().await.unwrap().is_ok());
+        let replacement = stream.next().await.unwrap().unwrap();
+        let Some(UpdateOneof::Account(account)) = replacement.update_oneof else {
+            panic!("expected account")
+        };
+        assert_ne!(account.account.unwrap().lamports, 200);
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap().update_oneof,
+            Some(UpdateOneof::BlockMeta(_))
+        ));
+        assert!(stream.next().await.is_none());
+        assert_eq!(connector.calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn internal_metadata_reaches_dedup_before_being_hidden() {
+        let mut metadata = make_block_meta_msg(100);
+        metadata.filters = vec![AUTORECONNECT_FILTER_KEY.into()];
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: None,
+            result: Ok(vec![Ok(make_account_msg(100)), Ok(metadata)]),
+        }]);
+        let mut stream = DedupStream::new(
+            AutoReconnect::new(
+                stream::iter(vec![
+                    Ok(make_account_msg(100)),
+                    Err(Status::unavailable("disconnect")),
+                ])
+                .boxed(),
+                connector,
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            ),
+            DedupState::default(),
+        );
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap().update_oneof,
+            Some(UpdateOneof::Account(_))
+        ));
+        let mut metadata = stream.next().await.unwrap().unwrap();
+        assert!(!visible_update(&mut metadata));
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_stream_tests {
+    use {
+        crate::dedup::ReconnectCounter,
+        crate::*,
+        futures::{FutureExt, StreamExt},
+        std::collections::VecDeque,
+        yellowstone_grpc_proto::prelude::{subscribe_update::UpdateOneof, SubscribeUpdateAccount},
+    };
+
+    struct Source {
+        generation: u32,
+        replay_from_slot: Option<u64>,
+        steps: VecDeque<(
+            u32,
+            std::task::Poll<Option<Result<SubscribeUpdate, Status>>>,
+        )>,
+    }
+
+    impl ReconnectCounter for Source {
+        fn reconnect_count(&self) -> u32 {
+            self.generation
+        }
+
+        fn replay_from_slot(&self) -> Option<u64> {
+            self.replay_from_slot
+        }
+    }
+
+    impl Stream for Source {
+        type Item = Result<SubscribeUpdate, Status>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            let this = self.get_mut();
+            match this.steps.pop_front() {
+                Some((generation, polled)) => {
+                    this.generation = generation;
+                    polled
+                }
+                None => std::task::Poll::Ready(None),
+            }
+        }
+    }
+
+    fn account(slot: u64, bank_id: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                slot,
+                bank_id: Some(bank_id),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn metadata(slot: u64, bank_id: u64, blockhash: &str, parent_slot: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
+            update_oneof: Some(UpdateOneof::BlockMeta(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta {
+                    slot,
+                    bank_id,
+                    blockhash: blockhash.into(),
+                    parent_slot,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn finalized(slot: u64, bank_id: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
+            update_oneof: Some(UpdateOneof::Slot(
+                yellowstone_grpc_proto::prelude::SubscribeUpdateSlot {
+                    slot,
+                    bank_id: Some(bank_id),
+                    status: yellowstone_grpc_proto::prelude::SlotStatus::SlotFinalized as i32,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn source(updates: Vec<(u32, SubscribeUpdate)>) -> Source {
+        Source {
+            generation: 0,
+            replay_from_slot: Some(42),
+            steps: updates
+                .into_iter()
+                .map(|(generation, update)| (generation, std::task::Poll::Ready(Some(Ok(update)))))
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_bank_reconnect_discards_before_each_replacement() {
+        for replacement_id in [7, 99] {
+            let mut stream = ReconnectStream::new(source(vec![
+                (0, account(41, 6)),
+                (0, account(42, 7)),
+                (0, account(42, 8)),
+                (1, account(42, replacement_id)),
+                (1, metadata(42, replacement_id, "winner", 41)),
+                (1, finalized(42, replacement_id)),
+                (2, account(42, 7)),
+                (2, finalized(42, 7)),
+                (2, metadata(42, 7, "winner", 41)),
+            ]));
+            for _ in 0..3 {
+                assert!(stream.next().await.unwrap().is_ok());
+            }
+            for generation in 1..=2 {
+                let ReconnectEvent::DiscardBanks {
+                    banks,
+                    reason,
+                    replacement,
+                    winners,
+                } = stream.next().await.unwrap().unwrap()
+                else {
+                    panic!("expected discard before replacement")
+                };
+                let ids = if generation == 1 {
+                    vec![7, 8]
+                } else {
+                    vec![replacement_id]
+                };
+                assert_eq!(
+                    banks,
+                    ids.into_iter()
+                        .map(|bank_id| BankRef {
+                            generation: generation - 1,
+                            slot: 42,
+                            bank_id,
+                        })
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(reason, DiscardReason::IncompleteDelivery);
+                assert_eq!(
+                    replacement,
+                    ReplacementReplay {
+                        from_slot: 42,
+                        generation
+                    }
+                );
+                assert_eq!(
+                    winners,
+                    vec![SlotWinner::Finalized {
+                        slot: 42,
+                        blockhash: "winner".into()
+                    }]
+                );
+                assert!(matches!(stream.next().await.unwrap().unwrap(),
+                    ReconnectEvent::Update { generation: actual, update }
+                    if actual == generation && update == account(42, if generation == 1 { replacement_id } else { 7 })));
+            }
+            assert!(stream.delivered_banks.contains(&BankRef {
+                generation: 0,
+                slot: 41,
+                bank_id: 6
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnect_without_replay_boundary_is_an_error() {
+        let mut inner = source(vec![(0, account(42, 7)), (1, account(42, 99))]);
+        inner.replay_from_slot = None;
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert_eq!(stream.delivered_banks.len(), 1);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn replay_error_is_preserved_when_connection_generation_changes() {
+        let mut inner = source(vec![(0, account(42, 7))]);
+        inner.steps.push_back((
+            1,
+            std::task::Poll::Ready(Some(Err(Status::out_of_range("replay expired")))),
+        ));
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::OutOfRange
+        );
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn multiple_banks_and_repeated_writes_are_delivered_immediately() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, account(42, 8)),
+            (0, account(42, 7)),
+        ]));
+        for expected in [7, 8, 7] {
+            let event = stream.next().now_or_never().unwrap().unwrap().unwrap();
+            let ReconnectEvent::Update { update, .. } = event else {
+                panic!("unexpected discard")
+            };
+            let Some(UpdateOneof::Account(update)) = update.update_oneof else {
+                panic!("expected account")
+            };
+            assert_eq!(update.bank_id, Some(expected));
+        }
+        assert_eq!(stream.delivered_banks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn generation_change_waits_for_finality_before_discard_and_replacement() {
+        let mut inner = source(vec![(0, account(42, 7))]);
+        inner.steps.push_back((1, std::task::Poll::Pending));
+        for update in [account(42, 99), metadata(42, 99, "winner", 41)] {
+            inner
+                .steps
+                .push_back((1, std::task::Poll::Ready(Some(Ok(update)))));
+        }
+        inner.steps.push_back((1, std::task::Poll::Pending));
+        inner
+            .steps
+            .push_back((1, std::task::Poll::Ready(Some(Ok(finalized(42, 99))))));
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().now_or_never().is_none());
+        assert!(stream.next().now_or_never().is_none());
+        assert_eq!(stream.delivered_banks.len(), 1);
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::DiscardBanks { .. }
+        ));
+        assert!(matches!(stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 1, update } if update == account(42, 99)));
+    }
+
+    #[tokio::test]
+    async fn finalized_parent_gap_reports_skipped_slot_as_unknown() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (1, account(44, 8)),
+            (1, metadata(44, 8, "child", 41)),
+            (1, finalized(44, 8)),
+        ]));
+        assert!(stream.next().await.unwrap().is_ok());
+        let ReconnectEvent::DiscardBanks { winners, .. } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard")
+        };
+        assert_eq!(winners, vec![SlotWinner::Unknown { slot: 42 }]);
+        assert!(matches!(stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 1, update } if update == account(44, 8)));
+    }
+
+    #[tokio::test]
+    async fn finality_requires_matching_bank_and_does_not_infer_skip_from_slot_height() {
+        let mut inner = source(vec![
+            (0, account(42, 7)),
+            (1, account(42, 8)),
+            (1, metadata(42, 8, "loser", 41)),
+            (1, finalized(42, 9)),
+            (1, metadata(44, 10, "child", 42)),
+            (1, finalized(44, 10)),
+        ]);
+        inner.steps.push_back((1, std::task::Poll::Pending));
+        inner.steps.push_back((
+            1,
+            std::task::Poll::Ready(Some(Ok(metadata(42, 9, "winner", 41)))),
+        ));
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().now_or_never().is_none());
+        let ReconnectEvent::DiscardBanks { winners, .. } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard")
+        };
+        assert_eq!(
+            winners,
+            vec![SlotWinner::Finalized {
+                slot: 42,
+                blockhash: "winner".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_while_waiting_drops_buffer_and_does_not_reuse_finality() {
+        let mut inner = source(vec![
+            (0, account(42, 7)),
+            (1, account(42, 8)),
+            (1, finalized(42, 8)),
+            (2, account(42, 8)),
+            (2, metadata(42, 8, "new-server", 41)),
+        ]);
+        inner.steps.push_back((2, std::task::Poll::Pending));
+        inner
+            .steps
+            .push_back((2, std::task::Poll::Ready(Some(Ok(finalized(42, 8))))));
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().now_or_never().is_none());
+        let ReconnectEvent::DiscardBanks {
+            banks,
+            winners,
+            replacement,
+            ..
+        } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard")
+        };
+        assert_eq!(
+            banks,
+            vec![BankRef {
+                generation: 0,
+                slot: 42,
+                bank_id: 7
+            }]
+        );
+        assert_eq!(replacement.generation, 2);
+        assert_eq!(
+            winners,
+            vec![SlotWinner::Finalized {
+                slot: 42,
+                blockhash: "new-server".into()
+            }]
+        );
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 2, .. }
+        ));
+        assert!(stream.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_finalized_bank_identity_errors_without_discard() {
+        let mut status = finalized(42, 7);
+        if let Some(UpdateOneof::Slot(slot)) = status.update_oneof.as_mut() {
+            slot.bank_id = None;
+        }
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (1, account(42, 8)),
+            (1, status),
+        ]));
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert_eq!(stream.delivered_banks.len(), 1);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn all_affected_slots_must_resolve_before_discard() {
+        let mut inner = source(vec![
+            (0, account(42, 7)),
+            (0, account(43, 8)),
+            (1, account(42, 9)),
+            (1, metadata(42, 9, "winner", 41)),
+            (1, finalized(42, 9)),
+        ]);
+        inner.steps.push_back((1, std::task::Poll::Pending));
+        for update in [metadata(44, 10, "child", 42), finalized(44, 10)] {
+            inner
+                .steps
+                .push_back((1, std::task::Poll::Ready(Some(Ok(update)))));
+        }
+        let mut stream = ReconnectStream::new(inner);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().now_or_never().is_none());
+        assert_eq!(stream.delivered_banks.len(), 2);
+        let ReconnectEvent::DiscardBanks { winners, banks, .. } =
+            stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard")
+        };
+        assert_eq!(banks.len(), 2);
+        assert_eq!(
+            winners,
+            vec![
+                SlotWinner::Finalized {
+                    slot: 42,
+                    blockhash: "winner".into()
+                },
+                SlotWinner::Unknown { slot: 43 },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn conflicting_identity_and_evidence_limits_preserve_old_banks() {
+        for (limit, second_id, expected) in [
+            (10, 8, tonic::Code::FailedPrecondition),
+            (1, 9, tonic::Code::ResourceExhausted),
+        ] {
+            let mut stream = ReconnectStream::with_bank_limit(
+                source(vec![
+                    (0, account(42, 7)),
+                    (1, account(42, 8)),
+                    (1, metadata(42, 8, "first", 41)),
+                    (1, metadata(42, second_id, "different", 41)),
+                ]),
+                limit,
+            );
+            assert!(stream.next().await.unwrap().is_ok());
+            assert_eq!(stream.next().await.unwrap().unwrap_err().code(), expected);
+            assert!(stream.delivered_banks.contains(&BankRef {
+                generation: 0,
+                slot: 42,
+                bank_id: 7
+            }));
+            assert!(stream.next().await.is_none());
+        }
+    }
+
+    #[test]
+    fn recovery_buffer_limits_messages_and_bytes() {
+        let mut recovery = crate::reconnect::RecoveryDecision::new(
+            vec![BankRef {
+                generation: 0,
+                slot: 42,
+                bank_id: 7,
+            }],
+            ReplacementReplay {
+                from_slot: 42,
+                generation: 1,
+            },
+            10,
+        );
+        for _ in 0..super::RECOVERY_BUFFER_MESSAGES {
+            recovery.buffer(SubscribeUpdate::default()).unwrap();
+        }
+        assert_eq!(
+            recovery
+                .buffer(SubscribeUpdate::default())
+                .unwrap_err()
+                .code(),
+            tonic::Code::ResourceExhausted
+        );
+        recovery.buffered.clear();
+        recovery.buffered_bytes = super::RECOVERY_BUFFER_BYTES;
+        assert_eq!(
+            recovery.buffer(account(42, 7)).unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+    }
+
+    #[tokio::test]
+    async fn tracking_limit_errors_without_evicting_banks_or_delivering_untracked_data() {
+        let mut stream = ReconnectStream::with_bank_limit(
+            source(vec![
+                (0, account(42, 7)),
+                (0, account(42, 7)),
+                (0, account(42, 8)),
+            ]),
+            1,
+        );
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+        assert_eq!(stream.delivered_banks.len(), 1);
+        assert!(stream.delivered_banks.contains(&BankRef {
+            generation: 0,
+            slot: 42,
+            bank_id: 7
+        }));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn internal_controls_are_hidden_without_tracking_undelivered_banks() {
+        let mut internal = account(1, 1);
+        internal.filters = vec![AUTORECONNECT_FILTER_KEY.into()];
+        let mut visible = account(42, 7);
+        visible.filters = vec![AUTORECONNECT_FILTER_KEY.into(), "user".into()];
+        let mut stream = ReconnectStream::new(source(vec![(0, internal), (0, visible)]));
+        let ReconnectEvent::Update { update, .. } = stream.next().await.unwrap().unwrap() else {
+            panic!("unexpected discard")
+        };
+        assert_eq!(update.filters, vec!["user"]);
+        assert_eq!(stream.delivered_banks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn eof_is_a_recovery_error_and_fused() {
+        let mut stream = ReconnectStream::new(source(vec![(0, account(42, 7))]));
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn account_without_bank_identity_is_rejected() {
+        let mut update = account(42, 7);
+        if let Some(UpdateOneof::Account(account)) = &mut update.update_oneof {
+            account.bank_id = None;
+        }
+        let mut stream = ReconnectStream::new(source(vec![(0, update)]));
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert!(stream.delivered_banks.is_empty());
+    }
+
+    #[test]
+    fn bank_identity_includes_generation() {
+        let first = BankRef {
+            generation: 0,
+            slot: 42,
+            bank_id: 7,
+        };
+        let second = BankRef {
+            generation: 1,
+            ..first
+        };
+        assert_ne!(first, second);
+        let mut inner = source(vec![(1, account(42, 7))]);
+        inner.generation = 1;
+        assert_eq!(ReconnectStream::new(inner).generation, 1);
+    }
+
+    #[tokio::test]
+    async fn api_rejects_non_processed_commitment_before_connecting() {
+        let mut client = GeyserGrpcClient::build_from_static("http://127.0.0.1:1")
+            .connect_lazy()
+            .unwrap();
+        let result = client
+            .subscribe_with_reconnect(Some(SubscribeRequest {
+                commitment: Some(1),
+                ..Default::default()
+            }))
+            .await;
+        assert!(
+            matches!(result, Err(GeyserGrpcClientError::TonicStatus(status)) if status.code() == tonic::Code::FailedPrecondition)
+        );
+    }
+
+    #[tokio::test]
+    async fn strict_sink_rejects_replay_before_changing_request_or_sending() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let shared = Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default())));
+        let mut sink = SubscribeRequestSink {
+            verified_recovery: true,
+            inner: Arc::new(Mutex::new(tx)),
+            shared: Arc::clone(&shared),
+        };
+        assert!(sink
+            .send(SubscribeRequest {
+                from_slot: Some(42),
+                ..Default::default()
+            })
+            .await
+            .is_err());
+        assert!(shared.load().from_slot.is_none());
+        assert!(rx.next().now_or_never().is_none());
+        sink.send(SubscribeRequest {
+            ping: Some(yellowstone_grpc_proto::prelude::SubscribeRequestPing { id: 1 }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(rx.next().await.is_some());
+    }
+
+    struct SubscribeService {
+        updates: Mutex<Option<mpsc::UnboundedReceiver<Result<SubscribeUpdate, Status>>>>,
+        replay_requests: Arc<Mutex<Vec<u64>>>,
+        accept_replay: bool,
+    }
+
+    #[tonic::async_trait]
+    impl yellowstone_grpc_proto::geyser::geyser_server::Geyser for SubscribeService {
+        type SubscribeStream = futures::stream::BoxStream<'static, Result<SubscribeUpdate, Status>>;
+
+        async fn subscribe(
+            &self,
+            mut request: Request<tonic::Streaming<SubscribeRequest>>,
+        ) -> Result<Response<Self::SubscribeStream>, Status> {
+            let request = request.get_mut().message().await?.unwrap();
+            assert!(request.blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY));
+            assert_eq!(
+                request
+                    .slots
+                    .get(AUTORECONNECT_FILTER_KEY)
+                    .unwrap()
+                    .filter_by_commitment,
+                Some(false)
+            );
+            if let Some(slot) = request.from_slot {
+                self.replay_requests.lock().unwrap().push(slot);
+                if !self.accept_replay {
+                    return Err(Status::failed_precondition(
+                        "test server has no replay coverage",
+                    ));
+                }
+            }
+            Ok(Response::new(
+                self.updates.lock().unwrap().take().unwrap().boxed(),
+            ))
+        }
+        type SubscribeDeshredStream = futures::stream::BoxStream<
+            'static,
+            Result<yellowstone_grpc_proto::geyser::SubscribeUpdateDeshred, Status>,
+        >;
+        async fn subscribe_deshred(
+            &self,
+            _: Request<tonic::Streaming<yellowstone_grpc_proto::geyser::SubscribeDeshredRequest>>,
+        ) -> Result<Response<Self::SubscribeDeshredStream>, Status> {
+            Err(Status::unimplemented("unused"))
+        }
+        type SubscribeGossipStream = futures::stream::BoxStream<
+            'static,
+            Result<yellowstone_grpc_proto::geyser::SubscribeUpdateGossip, Status>,
+        >;
+        async fn subscribe_gossip(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::SubscribeGossipRequest>,
+        ) -> Result<Response<Self::SubscribeGossipStream>, Status> {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn subscribe_replay_info(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::SubscribeReplayInfoRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::SubscribeReplayInfoResponse>, Status>
+        {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn ping(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::PingRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::PongResponse>, Status> {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn get_latest_blockhash(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::GetLatestBlockhashRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::GetLatestBlockhashResponse>, Status>
+        {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn get_block_height(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::GetBlockHeightRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::GetBlockHeightResponse>, Status>
+        {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn get_slot(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::GetSlotRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::GetSlotResponse>, Status> {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn is_blockhash_valid(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::IsBlockhashValidRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::IsBlockhashValidResponse>, Status>
+        {
+            Err(Status::unimplemented("unused"))
+        }
+        async fn get_version(
+            &self,
+            _: Request<yellowstone_grpc_proto::geyser::GetVersionRequest>,
+        ) -> Result<Response<yellowstone_grpc_proto::geyser::GetVersionResponse>, Status> {
+            Err(Status::unimplemented("unused"))
+        }
+    }
+
+    #[tokio::test]
+    async fn public_api_bypasses_dedup_for_every_builder_policy() {
+        for config in [
+            None,
+            Some(ReconnectConfig::default()),
+            Some(ReconnectConfig {
+                policy: ReconnectionPolicy::SkipMissedData,
+                ..Default::default()
+            }),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let incoming = futures::stream::unfold(listener, |listener| async move {
+                Some((listener.accept().await.map(|(stream, _)| stream), listener))
+            });
+            let (tx, rx) = mpsc::unbounded();
+            let replay_requests = Arc::new(Mutex::new(Vec::new()));
+            let server = tokio::spawn(
+                tonic::transport::Server::builder()
+                    .add_service(
+                        yellowstone_grpc_proto::geyser::geyser_server::GeyserServer::new(
+                            SubscribeService {
+                                updates: Mutex::new(Some(rx)),
+                                replay_requests: Arc::clone(&replay_requests),
+                                accept_replay: false,
+                            },
+                        ),
+                    )
+                    .serve_with_incoming(incoming),
+            );
+            let mut builder = GeyserGrpcClient::build_from_shared(endpoint).unwrap();
+            if let Some(config) = config {
+                builder = builder.set_reconnect_config(config);
+            }
+            let mut client = builder.connect().await.unwrap();
+            let (_sink, mut stream) = client.subscribe_with_reconnect(None).await.unwrap();
+            assert!(matches!(stream.inner.inner, InnerStream::NoReplay(_)));
+            let metadata = SubscribeUpdate {
+                filters: vec!["user".into()],
+                update_oneof: Some(UpdateOneof::BlockMeta(Default::default())),
+                ..Default::default()
+            };
+            // Metadata cannot quarantine subsequent writes or another bank in that slot.
+            for update in [metadata, account(0, 7), account(0, 8), account(0, 7)] {
+                tx.unbounded_send(Ok(update.clone())).unwrap();
+                let item = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let ReconnectEvent::Update {
+                    generation,
+                    update: delivered,
+                } = item
+                else {
+                    panic!("unexpected discard")
+                };
+                assert_eq!(generation, 0);
+                assert_eq!(delivered, update);
+            }
+            tx.unbounded_send(Err(Status::unavailable("disconnect mid-bank")))
+                .unwrap();
+            let error = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert!(stream.next().await.is_none());
+            assert_eq!(*replay_requests.lock().unwrap(), vec![0]);
+            server.abort();
+            let _ = server.await;
+        }
+    }
+    #[tokio::test]
+    async fn public_api_reconnects_to_another_server_and_discards_before_replacement() {
+        for config in [
+            None,
+            Some(ReconnectConfig::default()),
+            Some(ReconnectConfig {
+                policy: ReconnectionPolicy::SkipMissedData,
+                ..Default::default()
+            }),
+        ] {
+            let mut servers = Vec::new();
+            for _ in 0..2 {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let endpoint = format!("http://{}", listener.local_addr().unwrap());
+                let incoming = futures::stream::unfold(listener, |listener| async move {
+                    Some((listener.accept().await.map(|(stream, _)| stream), listener))
+                });
+                let (tx, rx) = mpsc::unbounded();
+                let requests = Arc::new(Mutex::new(Vec::new()));
+                let handle = tokio::spawn(
+                    tonic::transport::Server::builder()
+                        .add_service(
+                            yellowstone_grpc_proto::geyser::geyser_server::GeyserServer::new(
+                                SubscribeService {
+                                    updates: Mutex::new(Some(rx)),
+                                    replay_requests: Arc::clone(&requests),
+                                    accept_replay: true,
+                                },
+                            ),
+                        )
+                        .serve_with_incoming(incoming),
+                );
+                servers.push((endpoint, tx, requests, handle));
+            }
+            let mut builder = GeyserGrpcClient::build_from_shared(servers[0].0.clone()).unwrap();
+            if let Some(config) = config {
+                builder = builder.set_reconnect_config(config);
+            }
+            let mut client = builder.connect().await.unwrap();
+            // Route reconnects to a different server while the initial channel remains on the first.
+            client.reconnect_endpoint =
+                Some(tonic::transport::Endpoint::from_shared(servers[1].0.clone()).unwrap());
+            let (_sink, mut stream) = client.subscribe_with_reconnect(None).await.unwrap();
+            for bank_id in [7, 8] {
+                servers[0]
+                    .1
+                    .unbounded_send(Ok(account(42, bank_id)))
+                    .unwrap();
+                let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(
+                    event,
+                    ReconnectEvent::Update { generation: 0, .. }
+                ));
+            }
+            // Queue identical data on the replacement server before the first server disconnects.
+            for bank_id in [7, 99, 7] {
+                servers[1]
+                    .1
+                    .unbounded_send(Ok(account(42, bank_id)))
+                    .unwrap();
+            }
+            servers[0]
+                .1
+                .unbounded_send(Err(Status::unavailable("mid-slot disconnect")))
+                .unwrap();
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(30), stream.next())
+                    .await
+                    .is_err()
+            );
+            servers[1].1.unbounded_send(Ok(finalized(42, 99))).unwrap();
+            servers[1]
+                .1
+                .unbounded_send(Ok(metadata(42, 99, "winner", 41)))
+                .unwrap();
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let ReconnectEvent::DiscardBanks {
+                banks,
+                reason,
+                replacement,
+                winners,
+            } = event
+            else {
+                panic!("replacement arrived before discard")
+            };
+            assert_eq!(
+                banks,
+                vec![
+                    BankRef {
+                        generation: 0,
+                        slot: 42,
+                        bank_id: 7
+                    },
+                    BankRef {
+                        generation: 0,
+                        slot: 42,
+                        bank_id: 8
+                    },
+                ]
+            );
+            assert_eq!(reason, DiscardReason::IncompleteDelivery);
+            assert_eq!(
+                replacement,
+                ReplacementReplay {
+                    from_slot: 42,
+                    generation: 1
+                }
+            );
+            assert_eq!(
+                winners,
+                vec![SlotWinner::Finalized {
+                    slot: 42,
+                    blockhash: "winner".into()
+                }]
+            );
+            for bank_id in [7, 99, 7] {
+                let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    matches!(event, ReconnectEvent::Update { generation: 1, update }
+                    if update == account(42, bank_id))
+                );
+            }
+            assert_eq!(*servers[1].2.lock().unwrap(), vec![42]);
+            for (_, _, _, handle) in servers {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+    }
+    struct LiveInterruptStream {
+        inner: tonic::Streaming<SubscribeUpdate>,
+        interrupt: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Stream for LiveInterruptStream {
+        type Item = Result<SubscribeUpdate, Status>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            let this = self.get_mut();
+            if this
+                .interrupt
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return std::task::Poll::Ready(Some(Err(Status::unavailable(
+                    "live e2e mid-slot disconnect",
+                ))));
+            }
+            std::pin::Pin::new(&mut this.inner).poll_next(cx)
+        }
+    }
+
+    #[derive(Clone)]
+    struct LiveReconnectConnector {
+        inner: TonicGrpcConnector,
+        interrupt: Arc<std::sync::atomic::AtomicBool>,
+        requests: Arc<Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl GrpcConnector for LiveReconnectConnector {
+        type Stream = LiveInterruptStream;
+        type ConnectError = GeyserGrpcClientError;
+        type ConnectFuture = std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Self::Stream, Self::ConnectError>> + Send>,
+        >;
+
+        fn connect(
+            &self,
+            request: Arc<SubscribeRequest>,
+            from_slot: Option<u64>,
+        ) -> Self::ConnectFuture {
+            self.requests.lock().unwrap().push(from_slot);
+            let future = self.inner.connect(request, from_slot);
+            let interrupt = Arc::clone(&self.interrupt);
+            Box::pin(async move {
+                Ok(LiveInterruptStream {
+                    inner: future.await?,
+                    interrupt,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires YELLOWSTONE_RECONNECT_ENDPOINT pointing to a live bank-aware replay server"]
+    async fn live_reconnect_discards_partial_bank_and_replays_entries() {
+        tokio::time::timeout(std::time::Duration::from_secs(90), async {
+            use std::collections::{HashMap, HashSet};
+            let endpoint = std::env::var("YELLOWSTONE_RECONNECT_ENDPOINT").expect("set live endpoint");
+            let mut client = GeyserGrpcClient::build_from_shared(endpoint.clone()).unwrap().connect().await.unwrap();
+            eprintln!("LIVE_RECONNECT endpoint={endpoint} version={:?}", client.get_version().await.unwrap());
+            let request = SubscribeRequest {
+                entry: [("entries".into(), Default::default())].into(),
+                blocks_meta: [("metadata".into(), Default::default())].into(),
+                ..Default::default()
+            };
+            let (_sink, public_stream) = client.subscribe_with_reconnect(Some(request)).await.unwrap();
+            let InnerStream::NoReplay(auto) = public_stream.inner.inner else { panic!("expected bank reconnect source") };
+            let interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let mut stream = ReconnectStream::new(AutoReconnect::new(
+                LiveInterruptStream { inner: auto.inner_stream.unwrap(), interrupt: Arc::clone(&interrupt) },
+                LiveReconnectConnector { inner: auto.connector, interrupt: Arc::clone(&interrupt), requests: Arc::clone(&requests) },
+                auto.request, auto.backoff,
+            ).with_bank_replay());
+            let mut completed = HashSet::new();
+            let partial = loop {
+                let ReconnectEvent::Update { generation, update } = stream.next().await.unwrap().unwrap()
+                else { panic!("unexpected discard before interruption") };
+                match update.update_oneof {
+                    Some(UpdateOneof::BlockMeta(m)) => { completed.insert((m.slot, m.bank_id)); }
+                    Some(UpdateOneof::Entry(e)) if e.index == 0 && !completed.contains(&(e.slot, e.bank_id)) => {
+                        break BankRef { generation, slot: e.slot, bank_id: e.bank_id };
+                    }
+                    _ => {}
+                }
+            };
+            eprintln!("LIVE_RECONNECT interrupt={partial:?} delivered_entries=1");
+            interrupt.store(true, std::sync::atomic::Ordering::SeqCst);
+            let event = stream.next().await.unwrap().unwrap();
+            let ReconnectEvent::DiscardBanks { banks, replacement, winners, .. } = event
+            else { panic!("replacement arrived before discard: {event:?}") };
+            assert!(banks.contains(&partial));
+            assert!(replacement.generation > partial.generation);
+            assert!(replacement.from_slot <= partial.slot);
+            assert_eq!(*requests.lock().unwrap(), vec![Some(replacement.from_slot)]);
+            let winner = winners.iter().find_map(|winner| match winner {
+                SlotWinner::Finalized { slot, blockhash } if *slot == partial.slot => Some(blockhash.clone()),
+                _ => None,
+            }).expect("live partial slot must finalize to verify replacement entries");
+            eprintln!("LIVE_RECONNECT discard_banks={} replacement={replacement:?} winner_slot={} winner_blockhash={winner}", banks.len(), partial.slot);
+            let mut entries: HashMap<(u64, u64), HashSet<u64>> = HashMap::new();
+            loop {
+                let event = stream.next().await.unwrap().unwrap();
+                let ReconnectEvent::Update { generation, update } = event
+                else { panic!("unexpected additional discard") };
+                assert_eq!(generation, replacement.generation);
+                match update.update_oneof {
+                    Some(UpdateOneof::Entry(e)) => { entries.entry((e.slot, e.bank_id)).or_default().insert(e.index); }
+                    Some(UpdateOneof::BlockMeta(m)) if m.slot == partial.slot && m.blockhash == winner => {
+                        let delivered = entries.get(&(m.slot, m.bank_id)).expect("replacement entries precede metadata");
+                        assert!(m.entries_count > 1, "interruption did not split bank entry delivery");
+                        assert_eq!(delivered.len() as u64, m.entries_count);
+                        assert!((0..m.entries_count).all(|index| delivered.contains(&index)));
+                        eprintln!("LIVE_RECONNECT PASS slot={} generation={} bank_id={} replayed_entries={} winner_blockhash={winner}", m.slot, generation, m.bank_id, delivered.len());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }).await.expect("live reconnect e2e timed out after 90 seconds");
     }
 }
